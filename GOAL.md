@@ -34,13 +34,15 @@ Ein System, das **hierarchische AI-Entwicklung** ermöglicht durch **Plan-Propag
 - ❌ Alt: "Mach alles autonom" (Zu riskant)
 - ✅ Neu: "Plane hierarchisch, ich entscheide die Tiefe" (Controlled Autonomy)
 
-**Hierarchie:**
+**Adaptive Hierarchie (Registry-basiert):**
 ```
-Level 0: MASTER_PLAN.md     → "Was über alle Projekte?"
-Level 1: PROJECT_PLAN.md    → "Was in diesem Projekt?"
-Level 2: FEATURE_PLAN.md    → "Wie dieses Feature?"
-Level 3: TASK_EXECUTION     → "Code schreiben"
+Autopilot scannt Registry (projects/)
+     │
+     ├── werkflow/CONFIG.yaml    → 4 Levels: Vision → Module → Features → Tasks
+     └── teufel-ai/CONFIG.yaml   → 3 Levels: PoC → Phasen → Details
 ```
+
+Levels sind **NICHT global fixiert** - jedes Projekt definiert eigene Struktur!
 
 **Approval Gates:**
 - Nach jedem Level: STOPP und warte auf "Go!" oder "Deeper"
@@ -49,11 +51,11 @@ Level 3: TASK_EXECUTION     → "Code schreiben"
 
 **Komponenten:**
 1. **CONTEXT.md** - Wer bin ich, was ist mein Business, Tech-Stack
-2. **GOAL.md pro Projekt** - Was soll entstehen (langfristig)
-3. **PLAN.md pro Projekt** - Was jetzt zu tun ist (kurzfristig)
+2. **CONFIG.yaml pro Projekt** - Levels, Prompts, Git-Settings (NEU!)
+3. **GOAL.md pro Projekt** - Was soll entstehen (langfristig)
 4. **SYSTEM.md** - AI-Rolle als Planner (nicht autonom!)
-5. **HIERARCHY.md** - Die 4 Ebenen erklärt
-6. **GIT_STRATEGY.md** - Branch-Logik für saubere Commits
+5. **HIERARCHY.md** - Adaptive Levels erklärt
+6. **plan.sh** - Registry-Scanner mit interaktiven Befehlen
 
 ---
 
@@ -72,13 +74,13 @@ Level 3: TASK_EXECUTION     → "Code schreiben"
 - [x] GIT_STRATEGY.md - Branch-Logik für hierarchische Pläne
 
 ### Phase 2: Basic Implementation
-- [ ] plan.sh - Erstellt MASTER_PLAN aus allen GOAL.md
-- [ ] Interaktive Befehle: "Go!", "Deeper [projekt]", "Adjust"
-- [ ] PROJECT_PLAN Generierung bei "Deeper"
-- [ ] FEATURE_PLAN Generierung bei nochmal "Deeper"
-- [ ] Execution bei "Go!" mit Git Branching
-- [ ] Logs werden geschrieben
-- [ ] Status-Tracking pro Ebene
+- [x] plan.sh - Registry-Scanner mit adaptiven Levels
+- [x] Interaktive Befehle: list, show, deeper, go, status
+- [x] CONFIG.yaml pro Projekt für Level-Definition
+- [x] Projekt-spezifische Prompts in CONFIG.yaml
+- [x] Logs werden geschrieben
+- [x] Status-Tracking pro Projekt/Level
+- [ ] Git Branching bei "go" automatisieren
 
 ### Phase 3: Kontext-Automatisierung
 - [ ] Coach MCP Integration für Emails
@@ -133,8 +135,10 @@ Als AI der dieses Repo weiterentwickeln soll:
 
 ## Aktueller Status
 
-**Phase**: 1 (Definition) ✅ ABGESCHLOSSEN
-**Nächster Schritt**: Phase 2 - loop.sh implementieren
+**Phase**: 2 (Basic Implementation) 🔄 IN PROGRESS
+**Nächster Schritt**: Git Branching automatisieren, dann Phase 3
 **Blocker**: Keine
+
+**Architektur-Änderung**: Levels sind jetzt **adaptiv** und **registry-basiert**!
 
 **GitHub**: https://github.com/engelmannrafaelo-source/werkingflow-autopilot
