@@ -73,14 +73,14 @@ Levels sind **NICHT global fixiert** - jedes Projekt definiert eigene Struktur!
 - [x] HIERARCHY.md - 4 Ebenen mit Approval Gates
 - [x] GIT_STRATEGY.md - Branch-Logik für hierarchische Pläne
 
-### Phase 2: Basic Implementation
+### Phase 2: Basic Implementation ✅
 - [x] plan.sh - Registry-Scanner mit adaptiven Levels
-- [x] Interaktive Befehle: list, show, deeper, go, status
+- [x] Interaktive Befehle: list, show, deeper, go, branch, status
 - [x] CONFIG.yaml pro Projekt für Level-Definition
 - [x] Projekt-spezifische Prompts in CONFIG.yaml
 - [x] Logs werden geschrieben
 - [x] Status-Tracking pro Projekt/Level
-- [ ] Git Branching bei "go" automatisieren
+- [x] Git Branching bei "go" und "branch" automatisiert
 
 ### Phase 3: Kontext-Automatisierung
 - [ ] Coach MCP Integration für Emails
@@ -135,10 +135,10 @@ Als AI der dieses Repo weiterentwickeln soll:
 
 ## Aktueller Status
 
-**Phase**: 2 (Basic Implementation) 🔄 IN PROGRESS
-**Nächster Schritt**: Git Branching automatisieren, dann Phase 3
+**Phase**: 2 (Basic Implementation) ✅ ABGESCHLOSSEN
+**Nächster Schritt**: Phase 3 - Kontext-Automatisierung
 **Blocker**: Keine
 
-**Architektur-Änderung**: Levels sind jetzt **adaptiv** und **registry-basiert**!
+**Architektur**: Adaptive Levels, Registry-basiert, Git Branching automatisiert
 
 **GitHub**: https://github.com/engelmannrafaelo-source/werkingflow-autopilot

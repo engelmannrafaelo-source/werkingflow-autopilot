@@ -33,13 +33,15 @@ Opus 4.5 ist intelligent genug zum Planen. Aber **DU entscheidest**:
 2. **"Deeper"** → Mehr Details zeigen (nächste Ebene)
 3. **"Adjust"** → Plan anpassen
 
-## Die 4 Ebenen
+## Adaptive Levels (Registry-basiert)
+
+Levels sind **NICHT global fixiert** - jedes Projekt definiert eigene Struktur!
 
 ```
-Level 0: MASTER_PLAN.md     → "Was über alle Projekte?"      → "Go!" oder "Deeper"
-Level 1: PROJECT_PLAN.md    → "Was in diesem Projekt?"       → "Go!" oder "Deeper"
-Level 2: FEATURE_PLAN.md    → "Wie dieses Feature?"          → "Go!" oder "Deeper"
-Level 3: TASK_EXECUTION     → Code schreiben                 → Automatisch
+Autopilot scannt Registry (projects/)
+     │
+     ├── werkflow/CONFIG.yaml    → 4 Levels: Vision → Module → Features → Tasks
+     └── teufel-ai/CONFIG.yaml   → 3 Levels: PoC → Phasen → Details
 ```
 
 Siehe [orchestrator/HIERARCHY.md](orchestrator/HIERARCHY.md) für Details.
@@ -53,50 +55,63 @@ werkingflow-autopilot/
 ├── sources/
 │   └── SOURCES.md          # Quellen für automatische Kontext-Updates
 ├── orchestrator/
+│   ├── plan.sh             # 🚀 Interaktiver Registry-Scanner
 │   ├── SYSTEM.md           # AI Rolle: Hierarchischer Planner
-│   ├── HIERARCHY.md        # Die 4 Ebenen erklärt
-│   ├── GIT_STRATEGY.md     # Branch-Logik pro Ebene
-│   └── LOOP.md             # Loop-Definition
+│   ├── HIERARCHY.md        # Adaptive Levels erklärt
+│   └── GIT_STRATEGY.md     # Branch-Logik pro Ebene
 ├── projects/               # = REGISTRY (Ordner = Projekt)
 │   ├── _template/          # Template für neue Projekte
 │   ├── werkflow/
+│   │   ├── CONFIG.yaml     # 🆕 Levels, Prompts, Git-Settings
 │   │   ├── GOAL.md         # Erfolgskriterien
-│   │   ├── repo.txt        # Pfad zum echten Repository
-│   │   └── context/        # Emails, Meeting-Notes, etc.
+│   │   └── repo.txt        # Pfad zum echten Repository
 │   └── teufel-ai/
-│       ├── GOAL.md
-│       └── context/
+│       ├── CONFIG.yaml     # 🆕 Projekt-spezifische Konfiguration
+│       └── GOAL.md
 └── logs/                   # Was wurde gemacht?
 ```
 
 ## Quick Start
 
 ```bash
-# 1. Neues Projekt anlegen
-mkdir -p projects/neuer-kunde/context
+# 1. Starten
+./orchestrator/plan.sh
 
-# 2. Email/Kontext reinkopieren
-echo "Email von Kunde..." > projects/neuer-kunde/context/email.md
+# 2. Interaktive Befehle
+autopilot> list                    # Registry Overview
+autopilot> show werkflow           # Projekt-Details
+autopilot> deeper werkflow         # Nächstes Level
+autopilot> branch werkflow auth    # Feature-Branch erstellen
+autopilot> go werkflow             # Projekt starten (mit optionalem Branch)
+```
 
-# 3. Ziel definieren
+### Neues Projekt anlegen
+
+```bash
+# 1. Ordner erstellen
+mkdir -p projects/neuer-kunde
+
+# 2. CONFIG.yaml anlegen (definiert Levels + Prompts)
+cat > projects/neuer-kunde/CONFIG.yaml << 'EOF'
+name: "neuer-kunde"
+repo: "/path/to/repo"
+levels:
+  - name: "Ziel"
+    file: "GOAL.md"
+  - name: "Features"
+    file: "FEATURES.md"
+priority: 1
+EOF
+
+# 3. GOAL.md anlegen
 cat > projects/neuer-kunde/GOAL.md << 'EOF'
 # Projekt: Neuer Kunde
-
-## Was
-App für Energieberater
-
 ## Wann fertig
 - [ ] Login funktioniert
 - [ ] Reports generierbar
 EOF
 
-# 4. Starten - AI erstellt MASTER_PLAN
-./orchestrator/plan.sh
-
-# 5. Entscheiden
-# → "Go!" für Ausführung
-# → "Deeper werkflow" für mehr Details
-# → "Adjust [was]" für Änderungen
+# 4. Fertig - erscheint automatisch in der Registry!
 ```
 
 ## Git-Strategie
@@ -134,7 +149,13 @@ Wenn du dieses Repo weiterentwickeln sollst:
 
 ## Status
 
-**Phase**: 1 - Definition (nur Markdown) ✅
-**Nächste Phase**: 2 - Basic Implementation (plan.sh + Interaktion)
+**Phase**: 2 - Basic Implementation ✅
+**Nächste Phase**: 3 - Kontext-Automatisierung
+
+Features:
+- ✅ `plan.sh` - Interaktiver Registry-Scanner
+- ✅ Adaptive Levels pro Projekt (CONFIG.yaml)
+- ✅ Git Branching Automation
+- ✅ Projekt-spezifische Prompts
 
 Siehe [GOAL.md](GOAL.md) für detaillierte Erfolgskriterien.

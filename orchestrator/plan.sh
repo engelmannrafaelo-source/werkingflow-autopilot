@@ -173,6 +173,85 @@ analyze_repo() {
 }
 
 #######################################
+# Git Operations
+#######################################
+get_git_branch_prefix() {
+    local project=$1
+    local config_file="$PROJECTS_DIR/$project/CONFIG.yaml"
+
+    if [ -f "$config_file" ]; then
+        grep "branch_prefix:" "$config_file" 2>/dev/null | sed 's/.*branch_prefix: *//' | tr -d '"' | head -1
+    else
+        echo "$project"
+    fi
+}
+
+get_git_main_branch() {
+    local project=$1
+    local config_file="$PROJECTS_DIR/$project/CONFIG.yaml"
+
+    if [ -f "$config_file" ]; then
+        local main=$(grep "main_branch:" "$config_file" 2>/dev/null | sed 's/.*main_branch: *//' | tr -d '"' | head -1)
+        echo "${main:-main}"
+    else
+        echo "main"
+    fi
+}
+
+create_feature_branch() {
+    local project=$1
+    local feature_name=$2
+    local repo_path=$(get_project_repo "$project")
+
+    if [ -z "$repo_path" ] || [ ! -d "$repo_path" ]; then
+        log ERROR "Repository nicht gefunden: $repo_path"
+        return 1
+    fi
+
+    cd "$repo_path" || return 1
+
+    local prefix=$(get_git_branch_prefix "$project")
+    local main_branch=$(get_git_main_branch "$project")
+    local branch_name="${prefix}/${feature_name}"
+
+    # Check for uncommitted changes
+    local changes=$(git status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$changes" -gt 0 ]; then
+        log WARN "Uncommitted changes detected ($changes files)"
+        echo -ne "${YELLOW}Trotzdem Branch erstellen? [y/N]:${NC} "
+        read -r confirm
+        if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+            log INFO "Abgebrochen"
+            return 1
+        fi
+    fi
+
+    # Ensure we're on main and up to date
+    log INFO "Checkout $main_branch..."
+    git checkout "$main_branch" 2>/dev/null || {
+        log ERROR "Konnte nicht auf $main_branch wechseln"
+        return 1
+    }
+
+    log INFO "Pull latest..."
+    git pull origin "$main_branch" 2>/dev/null || log WARN "Pull fehlgeschlagen (offline?)"
+
+    # Create and checkout feature branch
+    log INFO "Erstelle Branch: $branch_name"
+    git checkout -b "$branch_name" 2>/dev/null || {
+        # Branch exists, just checkout
+        log INFO "Branch existiert bereits, wechsle..."
+        git checkout "$branch_name" 2>/dev/null || {
+            log ERROR "Konnte Branch nicht erstellen/wechseln"
+            return 1
+        }
+    }
+
+    log OK "Branch erstellt: $branch_name"
+    return 0
+}
+
+#######################################
 # Display Functions
 #######################################
 show_registry_overview() {
@@ -271,13 +350,14 @@ show_project_detail() {
 show_menu() {
     echo -e "${CYAN}───────────────────────────────────────────────────────────────────${NC}"
     echo "Befehle:"
-    echo -e "  ${GREEN}list${NC}              - Registry Overview anzeigen"
-    echo -e "  ${GREEN}show [projekt]${NC}    - Projekt-Details anzeigen"
-    echo -e "  ${GREEN}deeper [projekt]${NC}  - Nächstes Level für Projekt"
-    echo -e "  ${GREEN}go [projekt]${NC}      - Projekt ausführen (öffnet Repo)"
-    echo -e "  ${GREEN}status${NC}            - Aktuellen Status anzeigen"
-    echo -e "  ${GREEN}help${NC}              - Diese Hilfe"
-    echo -e "  ${GREEN}exit${NC}              - Beenden"
+    echo -e "  ${GREEN}list${NC}                      - Registry Overview anzeigen"
+    echo -e "  ${GREEN}show [projekt]${NC}            - Projekt-Details anzeigen"
+    echo -e "  ${GREEN}deeper [projekt]${NC}          - Nächstes Level für Projekt"
+    echo -e "  ${GREEN}branch [projekt] [name]${NC}   - Feature-Branch erstellen"
+    echo -e "  ${GREEN}go [projekt]${NC}              - Projekt ausführen (öffnet Repo)"
+    echo -e "  ${GREEN}status${NC}                    - Aktuellen Status anzeigen"
+    echo -e "  ${GREEN}help${NC}                      - Diese Hilfe"
+    echo -e "  ${GREEN}exit${NC}                      - Beenden"
     echo -e "${CYAN}───────────────────────────────────────────────────────────────────${NC}"
     echo ""
 }
@@ -316,16 +396,41 @@ interactive_mode() {
                 fi
                 ;;
 
+            branch|Branch|BRANCH|b)
+                local project=$(echo "$args" | awk '{print $1}')
+                local feature=$(echo "$args" | awk '{print $2}')
+
+                if [ -n "$project" ] && [ -n "$feature" ]; then
+                    create_feature_branch "$project" "$feature"
+                else
+                    echo "Usage: branch [projekt] [feature-name]"
+                    echo "Beispiel: branch werkflow auth-refactor"
+                fi
+                ;;
+
             go|Go|GO|g)
                 if [ -n "$args" ]; then
                     local repo=$(get_project_repo "$args")
                     if [ -n "$repo" ] && [ -d "$repo" ]; then
                         log OK "Starte Arbeit an: $args"
+
+                        # Ask if user wants to create a branch
+                        echo ""
+                        echo -ne "${YELLOW}Feature-Branch erstellen? [name/N]:${NC} "
+                        read -r branch_name
+
+                        if [ -n "$branch_name" ] && [ "$branch_name" != "n" ] && [ "$branch_name" != "N" ]; then
+                            create_feature_branch "$args" "$branch_name"
+                        fi
+
                         echo ""
                         echo -e "${GREEN}Nächste Schritte:${NC}"
                         echo "  1. cd $repo"
                         echo "  2. claude  # Starte Claude Code"
                         echo ""
+
+                        local current_branch=$(cd "$repo" && git branch --show-current 2>/dev/null || echo "?")
+                        echo -e "${BLUE}Aktueller Branch: $current_branch${NC}"
                         echo -e "${YELLOW}Claude wird automatisch GOAL.md und CONFIG.yaml lesen.${NC}"
                     else
                         log ERROR "Repository nicht gefunden: $repo"
