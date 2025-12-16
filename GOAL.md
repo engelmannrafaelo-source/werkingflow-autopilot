@@ -82,11 +82,39 @@ Levels sind **NICHT global fixiert** - jedes Projekt definiert eigene Struktur!
 - [x] Status-Tracking pro Projekt/Level
 - [x] Git Branching bei "go" und "branch" automatisiert
 
-### Phase 3: Kontext-Automatisierung
-- [ ] Coach MCP Integration für Emails
-- [ ] Git Integration für Repo-Änderungen
-- [ ] Automatische CONTEXT.md Updates
-- [ ] Cron-Job für tägliche Ausführung
+### Phase 3: No-Code Platform Vision 🚀
+
+**Paradigmenwechsel**: "Claude IST die No-Code Umgebung"
+
+Statt komplexe visuelle Workflow-Builder zu bauen, nutzen wir Claude als Development Engine.
+Kunden definieren was sie wollen → Claude entwickelt autonom.
+
+**Evolution:**
+```
+HEUTE (Phase 2):     Du entwickelst Workflows → Partner nutzen sie
+MORGEN (Phase 3):    Partner definieren → Claude entwickelt
+ÜBERMORGEN:          Kunden definieren selbst → Cloud-Endpoint entwickelt
+```
+
+**Erfolgskriterien:**
+- [ ] Claude Code API vs CLI evaluiert
+- [ ] Sandbox-Konzept für isolierte Entwicklung (Docker)
+- [ ] Workflow-Definition Schema (YAML → GOAL.md)
+- [ ] Proof-of-Concept: Ein Workflow automatisch generieren
+- [ ] Requirement Parser: Kunden-Input → GOAL.md Generator
+- [ ] REST API: POST /workflows/create
+- [ ] Automatisiertes Testing der generierten Workflows
+- [ ] Integration mit Werkflow Partner-Modellen (A/B/C)
+
+**Verbindung zu Werkflow Business:**
+- Model A (Eigennutzung): 100% Kosten, 0% Revenue → Unbegrenzte Nutzung
+- Model B (Beteiligung): 100% Kosten, 20-30% Revenue → Platform Listing
+- Model C (Co-Finanzierung): 50% Kosten, 40-50% Revenue → Co-Development
+
+**Was NICHT gebaut wird:**
+- ❌ Kein visueller Workflow-Builder (Claude versteht Text!)
+- ❌ Keine Drag-and-Drop UI (YAML-Definition reicht)
+- ❌ Kein eigenes AI-Training (Claude ist out-of-the-box gut genug)
 
 ### Phase 4: Intelligence
 - [ ] AI erkennt wann Ziel erreicht
@@ -135,10 +163,14 @@ Als AI der dieses Repo weiterentwickeln soll:
 
 ## Aktueller Status
 
-**Phase**: 2 (Basic Implementation) ✅ ABGESCHLOSSEN
-**Nächster Schritt**: Phase 3 - Kontext-Automatisierung
+**Phase**: 2 ✅ → Phase 3 📋 (Konzept definiert)
+**Nächster Schritt**: Phase 3 MVP - Claude Code API evaluieren, Sandbox-Konzept
 **Blocker**: Keine
 
-**Architektur**: Adaptive Levels, Registry-basiert, Git Branching automatisiert
+**Architektur**:
+- Phase 2: Adaptive Levels, Registry-basiert, Git Branching automatisiert
+- Phase 3: No-Code Platform mit Claude als Development Engine
+
+**Detailierter Plan**: Siehe `~/.claude/plans/foamy-tickling-petal.md`
 
 **GitHub**: https://github.com/engelmannrafaelo-source/werkingflow-autopilot
