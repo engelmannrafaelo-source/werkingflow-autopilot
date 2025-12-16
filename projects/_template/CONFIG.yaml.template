@@ -1,0 +1,44 @@
+# Projekt-Konfiguration
+# Definiert die Struktur und Levels für DIESES Projekt
+
+name: "[PROJEKT-NAME]"
+repo: "/Users/rafael/Documents/GitHub/[projekt-name]"
+
+# Adaptive Levels - definiere so viele wie nötig
+# Autopilot scannt diese und zeigt sie hierarchisch
+levels:
+  - name: "Überblick"
+    file: "GOAL.md"
+    description: "Was soll das Projekt werden?"
+
+  - name: "Features"
+    file: "FEATURES.md"        # Optional - wenn nicht existiert, wird generiert
+    description: "Welche Features sind geplant?"
+
+  - name: "Tasks"
+    file: "TASKS.md"           # Optional
+    description: "Konkrete Aufgaben"
+
+# Prompts für dieses Projekt (optional)
+# Wenn nicht definiert, verwendet Autopilot Standard-Prompts
+prompts:
+  analyze: |
+    Analysiere das Repository und den aktuellen Stand.
+    Vergleiche mit GOAL.md - was fehlt noch?
+
+  plan: |
+    Erstelle einen Plan für die nächsten Schritte.
+    Berücksichtige die Erfolgskriterien aus GOAL.md.
+
+  execute: |
+    Führe den genehmigten Plan aus.
+    Committe mit conventional commits.
+
+# Git-Einstellungen für dieses Projekt
+git:
+  branch_prefix: "[projekt-name]"
+  main_branch: "main"
+  auto_branch: true            # Automatisch Feature-Branches erstellen?
+
+# Priorität (für Sortierung im MASTER_PLAN)
+priority: 1                    # 1 = höchste

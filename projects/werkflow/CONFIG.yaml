@@ -1,0 +1,51 @@
+# Werkflow Projekt-Konfiguration
+
+name: "werkflow"
+repo: "/Users/rafael/Documents/GitHub/werkflow"
+
+# Adaptive Levels für werkflow
+levels:
+  - name: "Vision"
+    file: "GOAL.md"
+    description: "Langfristige Ziele der Plattform"
+
+  - name: "Module"
+    file: "MODULES.md"
+    description: "Welche Module/Bereiche gibt es?"
+
+  - name: "Features"
+    file: "FEATURES.md"
+    description: "Geplante Features pro Modul"
+
+  - name: "Tasks"
+    file: "TASKS.md"
+    description: "Konkrete Implementierungsaufgaben"
+
+# Werkflow-spezifische Prompts
+prompts:
+  analyze: |
+    Analysiere werkflow als Multi-Tenant SaaS Plattform.
+    Fokus: Auth, Billing, Tenant-Isolation, Workflow-Engine.
+    Vergleiche mit GOAL.md - welche Erfolgskriterien sind offen?
+
+  plan: |
+    Plane die nächsten Schritte für werkflow.
+    Berücksichtige:
+    - Multi-Tenant Architektur
+    - Supabase Integration
+    - TypeScript strict mode
+    Erstelle konkrete, testbare Tasks.
+
+  execute: |
+    Implementiere den genehmigten Plan.
+    - Feature Branch erstellen
+    - TypeScript ohne any
+    - Tests für kritische Pfade
+    - Conventional commits
+
+git:
+  branch_prefix: "werkflow"
+  main_branch: "main"
+  auto_branch: true
+
+priority: 1

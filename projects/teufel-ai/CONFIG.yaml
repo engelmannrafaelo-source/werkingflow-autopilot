@@ -1,0 +1,48 @@
+# Teufel-AI Projekt-Konfiguration
+
+name: "teufel-ai"
+repo: "/Users/rafael/Documents/GitHub/teufel-ai"
+
+# Adaptive Levels für teufel-ai (folgt der 4-Phasen-Architektur)
+levels:
+  - name: "PoC Status"
+    file: "GOAL.md"
+    description: "PoC Ziele und Erfolgskriterien"
+
+  - name: "Phasen"
+    file: "PHASES.md"
+    description: "Die 4 Analyse-Phasen (PDF → Norm → Hazard → Report)"
+
+  - name: "Phase Details"
+    file: "PHASE_DETAILS.md"
+    description: "Details pro Phase"
+
+# Teufel-AI spezifische Prompts
+prompts:
+  analyze: |
+    Analysiere teufel-ai als Safety-Engineering PoC.
+    Fokus: Vision-First Architektur, 4-Phasen Pipeline.
+    Test Case: Staurollenförderer
+    Was funktioniert? Was fehlt?
+
+  plan: |
+    Plane die nächste Phase/Iteration.
+    Berücksichtige:
+    - Vision API für Bildanalyse
+    - Haiku 4.5 für Text (via ai-bridge)
+    - LLM-basierte Norm-Suche (kein RAG!)
+    Erstelle testbare Schritte.
+
+  execute: |
+    Implementiere den genehmigten Plan.
+    - Python mit Type Hints
+    - Defensive Programming
+    - Checkpoints für Resume
+    - Logs in projects/staurollenförderer/
+
+git:
+  branch_prefix: "teufel-ai"
+  main_branch: "main"
+  auto_branch: true
+
+priority: 1
