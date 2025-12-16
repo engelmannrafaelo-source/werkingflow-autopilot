@@ -7,9 +7,14 @@
 
 ## Vision
 
-Ein System, das **autonome AI-Entwicklung** ermöglicht durch **Goal-Oriented Prompting**.
+Ein System, das **hierarchische AI-Entwicklung** ermöglicht durch **Plan-Propagation mit Approval Gates**.
 
-**Kernidee**: Du wirfst Projekt-Definitionen rein (Emails, Kontext, Ziele) → Opus 4.5 entwickelt autonom bis das Ziel erreicht ist.
+**Kernidee**:
+- Du sagst "Entwickle weiter!"
+- AI erstellt **MASTER_PLAN** (Top-Level)
+- Du entscheidest: **"Go!"** oder **"Deeper"** für mehr Details
+- Pläne propagieren von High → Low Level
+- Du behältst **volle Kontrolle** über die Tiefe
 
 ---
 
@@ -26,13 +31,29 @@ Ein System, das **autonome AI-Entwicklung** ermöglicht durch **Goal-Oriented Pr
 
 **Paradigmenwechsel:**
 - ❌ Alt: "Tu genau das" (Prescriptive)
-- ✅ Neu: "Das ist das Ziel, finde heraus wie" (Goal-Oriented)
+- ❌ Alt: "Mach alles autonom" (Zu riskant)
+- ✅ Neu: "Plane hierarchisch, ich entscheide die Tiefe" (Controlled Autonomy)
+
+**Hierarchie:**
+```
+Level 0: MASTER_PLAN.md     → "Was über alle Projekte?"
+Level 1: PROJECT_PLAN.md    → "Was in diesem Projekt?"
+Level 2: FEATURE_PLAN.md    → "Wie dieses Feature?"
+Level 3: TASK_EXECUTION     → "Code schreiben"
+```
+
+**Approval Gates:**
+- Nach jedem Level: STOPP und warte auf "Go!" oder "Deeper"
+- Du entscheidest wie tief du gehen willst
+- Mehr Vertrauen = weniger Tiefe nötig
 
 **Komponenten:**
 1. **CONTEXT.md** - Wer bin ich, was ist mein Business, Tech-Stack
-2. **GOAL.md pro Projekt** - Was soll entstehen, Erfolgskriterien als Checkboxen
-3. **SYSTEM.md** - AI-Rolle, Autonomie, Grenzen
-4. **Loop** - Assess → Plan → Execute → Validate → Log → Repeat
+2. **GOAL.md pro Projekt** - Was soll entstehen (langfristig)
+3. **PLAN.md pro Projekt** - Was jetzt zu tun ist (kurzfristig)
+4. **SYSTEM.md** - AI-Rolle als Planner (nicht autonom!)
+5. **HIERARCHY.md** - Die 4 Ebenen erklärt
+6. **GIT_STRATEGY.md** - Branch-Logik für saubere Commits
 
 ---
 
@@ -41,19 +62,23 @@ Ein System, das **autonome AI-Entwicklung** ermöglicht durch **Goal-Oriented Pr
 ### Phase 1: Definition (Markdown Only)
 - [x] README.md erklärt Vision
 - [x] CONTEXT.md mit dynamischen Quellen-Konzept
-- [x] SYSTEM.md definiert AI-Rolle
+- [x] SYSTEM.md definiert AI-Rolle (Planner, nicht autonom)
 - [x] GOAL.md für Autopilot selbst (dieses File)
 - [x] Beispiel-Projekte (werkflow, teufel-ai)
 - [x] SOURCES.md für Kontext-Quellen
 - [x] _template/ für neue Projekte
 - [x] GitHub Repository erstellt
+- [x] HIERARCHY.md - 4 Ebenen mit Approval Gates
+- [x] GIT_STRATEGY.md - Branch-Logik für hierarchische Pläne
 
 ### Phase 2: Basic Implementation
-- [ ] loop.sh funktioniert mit Claude Code CLI
-- [ ] Projekt ohne Repo → Repo wird erstellt
-- [ ] Projekt mit Repo → AI arbeitet daran
+- [ ] plan.sh - Erstellt MASTER_PLAN aus allen GOAL.md
+- [ ] Interaktive Befehle: "Go!", "Deeper [projekt]", "Adjust"
+- [ ] PROJECT_PLAN Generierung bei "Deeper"
+- [ ] FEATURE_PLAN Generierung bei nochmal "Deeper"
+- [ ] Execution bei "Go!" mit Git Branching
 - [ ] Logs werden geschrieben
-- [ ] Status-Tracking (success/blocked/timeout)
+- [ ] Status-Tracking pro Ebene
 
 ### Phase 3: Kontext-Automatisierung
 - [ ] Coach MCP Integration für Emails
@@ -88,12 +113,21 @@ Ein System, das **autonome AI-Entwicklung** ermöglicht durch **Goal-Oriented Pr
 
 Als AI der dieses Repo weiterentwickeln soll:
 
-1. **Lies alle Markdown-Files** in diesem Repo
-2. **Verstehe die Vision** aus diesem GOAL.md
+1. **Lies diese Files in Reihenfolge:**
+   - GOAL.md (dieses File) - Was soll entstehen
+   - CONTEXT.md - Wer ist Rafael
+   - orchestrator/SYSTEM.md - Deine Rolle
+   - orchestrator/HIERARCHY.md - Die 4 Ebenen
+   - orchestrator/GIT_STRATEGY.md - Branch-Logik
+
+2. **Verstehe das Prinzip:**
+   - Du bist PLANNER, nicht autonomer Executor
+   - Erstelle Pläne, warte auf Approval
+   - "Go!" = ausführen, "Deeper" = mehr Details
+
 3. **Check die Erfolgskriterien** - Was fehlt noch?
-4. **Entwickle den nächsten Schritt** - Eine Phase nach der anderen
-5. **Teste** - Funktioniert der Loop?
-6. **Iterate** - Bis alle Checkboxen ✅
+
+4. **Entwickle Phase 2** - plan.sh und interaktive Befehle
 
 ---
 
