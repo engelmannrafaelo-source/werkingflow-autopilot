@@ -1,7 +1,11 @@
 #!/bin/bash
 # WerkingFlow Autopilot - Registry-Based Hierarchical Planner
 #
-# Usage: ./orchestrator/plan.sh
+# Usage:
+#   ./orchestrator/plan.sh              # Interaktiver Modus
+#   ./orchestrator/plan.sh --auto       # Automatisch Pläne für alle Projekte
+#   ./orchestrator/plan.sh --auto werkflow  # Nur für ein Projekt
+#   ./orchestrator/plan.sh --review     # Generierte Pläne reviewen
 #
 # Der Autopilot scannt die Registry (projects/) und zeigt
 # alle Projekte mit ihren adaptiven Levels.
@@ -9,6 +13,11 @@
 # Levels werden PRO PROJEKT in CONFIG.yaml definiert.
 
 set -e
+
+# Mode flags
+AUTO_MODE=false
+REVIEW_MODE=false
+SINGLE_PROJECT=""
 
 # Colors
 RED='\033[0;31m'
@@ -352,6 +361,8 @@ show_menu() {
     echo "Befehle:"
     echo -e "  ${GREEN}list${NC}                      - Registry Overview anzeigen"
     echo -e "  ${GREEN}show [projekt]${NC}            - Projekt-Details anzeigen"
+    echo -e "  ${GREEN}plan [projekt|all]${NC}        - Plan generieren (Claude)"
+    echo -e "  ${GREEN}review${NC}                    - Generierte Pläne reviewen"
     echo -e "  ${GREEN}deeper [projekt]${NC}          - Nächstes Level für Projekt"
     echo -e "  ${GREEN}branch [projekt] [name]${NC}   - Feature-Branch erstellen"
     echo -e "  ${GREEN}go [projekt]${NC}              - Projekt ausführen (öffnet Repo)"
@@ -382,6 +393,28 @@ interactive_mode() {
                     echo "Usage: show [projekt-name]"
                     echo "Verfügbar: $(scan_registry)"
                 fi
+                ;;
+
+            plan|Plan|PLAN|p)
+                if ! check_claude; then
+                    echo "Claude CLI nicht verfügbar"
+                else
+                    if [ "$args" = "all" ] || [ "$args" = "alle" ]; then
+                        local projects=($(scan_registry))
+                        for project in "${projects[@]}"; do
+                            generate_plan_for_project "$project"
+                        done
+                    elif [ -n "$args" ]; then
+                        generate_plan_for_project "$args"
+                    else
+                        echo "Usage: plan [projekt-name|all]"
+                        echo "Verfügbar: $(scan_registry)"
+                    fi
+                fi
+                ;;
+
+            review|Review|REVIEW|r)
+                review_mode
                 ;;
 
             deeper|Deeper|DEEPER|d)
@@ -469,13 +502,321 @@ interactive_mode() {
 }
 
 #######################################
+# Claude Integration
+#######################################
+check_claude() {
+    if ! command -v claude &> /dev/null; then
+        log ERROR "Claude CLI nicht gefunden. Installiere mit: npm install -g @anthropic-ai/claude-code"
+        return 1
+    fi
+    return 0
+}
+
+generate_plan_for_project() {
+    local project=$1
+    local goal_file="$PROJECTS_DIR/$project/GOAL.md"
+    local config_file="$PROJECTS_DIR/$project/CONFIG.yaml"
+    local plan_file="$PROJECTS_DIR/$project/PLAN.md"
+    local repo=$(get_project_repo "$project")
+
+    if [ ! -f "$goal_file" ]; then
+        log ERROR "$project: GOAL.md nicht gefunden"
+        return 1
+    fi
+
+    log PLAN "$project: Generiere Plan..."
+
+    # Build context for Claude
+    local context_file="$AUTOPILOT_DIR/CONTEXT.md"
+    local system_file="$AUTOPILOT_DIR/orchestrator/SYSTEM.md"
+
+    # Read project-specific prompts if available
+    local analyze_prompt=""
+    if [ -f "$config_file" ]; then
+        analyze_prompt=$(sed -n '/prompts:/,/^[^ ]/p' "$config_file" | grep -A20 "analyze:" | tail -n +2 | sed '/^[^ ]/,$d' | sed 's/^    //')
+    fi
+
+    # Default analyze prompt if none defined
+    if [ -z "$analyze_prompt" ]; then
+        analyze_prompt="Analysiere dieses Projekt basierend auf GOAL.md. Was ist der aktuelle Stand? Was fehlt noch? Erstelle einen konkreten Plan für die nächsten Schritte."
+    fi
+
+    # Prepare the prompt
+    local full_prompt="
+Du bist der WerkingFlow Autopilot.
+
+## Deine Aufgabe
+Erstelle einen PLAN.md für das Projekt '$project'.
+
+## Kontext
+$(cat "$context_file" 2>/dev/null || echo "Kein CONTEXT.md gefunden")
+
+## Projekt-Ziel (GOAL.md)
+$(cat "$goal_file")
+
+## Projekt-Konfiguration
+$(cat "$config_file" 2>/dev/null || echo "Keine CONFIG.yaml")
+
+## Repository-Status
+Pfad: $repo
+$(analyze_repo "$repo")
+
+## Projekt-spezifischer Analyse-Prompt
+$analyze_prompt
+
+## Output-Format
+Erstelle einen strukturierten Plan im Markdown-Format:
+
+\`\`\`markdown
+# Plan: $project - $(date +%Y-%m-%d)
+
+## Analyse
+### Aktueller Stand
+[Was existiert bereits]
+
+### Lücken zu GOAL.md
+[Was fehlt noch laut Erfolgskriterien]
+
+## Geplante Arbeit
+
+### Priorität 1 (Kritisch)
+- [ ] [Task 1]
+- [ ] [Task 2]
+
+### Priorität 2 (Wichtig)
+- [ ] [Task 3]
+
+### Priorität 3 (Nice-to-have)
+- [ ] [Task 4]
+
+## Empfohlene Reihenfolge
+1. [Zuerst]
+2. [Dann]
+3. [Danach]
+
+## Geschätzte Komplexität
+[Einfach/Mittel/Komplex] - [Begründung]
+
+## Nächster konkreter Schritt
+[Ein einzelner, sofort ausführbarer Schritt]
+\`\`\`
+
+Antworte NUR mit dem Markdown-Plan, keine Erklärungen drumherum.
+"
+
+    # Call Claude CLI
+    local plan_output
+    plan_output=$(cd "$repo" 2>/dev/null && claude --print "$full_prompt" 2>&1) || {
+        log ERROR "$project: Claude-Aufruf fehlgeschlagen"
+        echo "$plan_output" >> "$LOGS_DIR/$DATE.log"
+        return 1
+    }
+
+    # Save plan
+    echo "$plan_output" > "$plan_file"
+    log OK "$project: PLAN.md erstellt"
+
+    return 0
+}
+
+#######################################
+# Auto Mode
+#######################################
+auto_mode() {
+    echo ""
+    echo -e "${CYAN}╔═══════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║           WerkingFlow Autopilot - Automatischer Modus             ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+
+    # Check Claude is available
+    if ! check_claude; then
+        exit 1
+    fi
+
+    # Get projects to process
+    local projects
+    if [ -n "$SINGLE_PROJECT" ]; then
+        projects=("$SINGLE_PROJECT")
+        log INFO "Verarbeite einzelnes Projekt: $SINGLE_PROJECT"
+    else
+        projects=($(scan_registry))
+        log INFO "Verarbeite alle ${#projects[@]} Projekte"
+    fi
+
+    echo ""
+
+    # Process each project
+    local success_count=0
+    local fail_count=0
+
+    for project in "${projects[@]}"; do
+        if generate_plan_for_project "$project"; then
+            ((success_count++))
+        else
+            ((fail_count++))
+        fi
+    done
+
+    echo ""
+    echo -e "${CYAN}───────────────────────────────────────────────────────────────────${NC}"
+    echo ""
+    log OK "Fertig! $success_count Pläne erstellt"
+    if [ $fail_count -gt 0 ]; then
+        log WARN "$fail_count Projekte fehlgeschlagen"
+    fi
+
+    echo ""
+    echo -e "${GREEN}Nächste Schritte:${NC}"
+    echo "  ./plan.sh --review          # Pläne reviewen"
+    echo "  ./plan.sh                   # Interaktiv weiterarbeiten"
+    echo ""
+}
+
+#######################################
+# Review Mode
+#######################################
+review_mode() {
+    echo ""
+    echo -e "${CYAN}╔═══════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║           WerkingFlow Autopilot - Plan Review                     ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+
+    local projects=($(scan_registry))
+    local plans_found=0
+
+    for project in "${projects[@]}"; do
+        local plan_file="$PROJECTS_DIR/$project/PLAN.md"
+        if [ -f "$plan_file" ]; then
+            ((plans_found++))
+            local mod_time=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M" "$plan_file" 2>/dev/null || stat -c "%y" "$plan_file" 2>/dev/null | cut -d'.' -f1)
+            echo -e "${GREEN}▸ $project${NC} - PLAN.md vorhanden (${mod_time})"
+        else
+            echo -e "${YELLOW}○ $project${NC} - Kein Plan"
+        fi
+    done
+
+    echo ""
+
+    if [ $plans_found -eq 0 ]; then
+        log WARN "Keine Pläne gefunden. Führe zuerst --auto aus."
+        return
+    fi
+
+    echo -e "${CYAN}───────────────────────────────────────────────────────────────────${NC}"
+    echo ""
+    echo -ne "${YELLOW}Welchen Plan anzeigen? [projekt-name/alle/exit]:${NC} "
+    read -r choice
+
+    case $choice in
+        alle|all|a)
+            for project in "${projects[@]}"; do
+                local plan_file="$PROJECTS_DIR/$project/PLAN.md"
+                if [ -f "$plan_file" ]; then
+                    echo ""
+                    echo -e "${CYAN}════════════════════════════════════════════════════════════════════${NC}"
+                    echo -e "${GREEN}$project${NC}"
+                    echo -e "${CYAN}════════════════════════════════════════════════════════════════════${NC}"
+                    cat "$plan_file"
+                fi
+            done
+            ;;
+        exit|e|q)
+            return
+            ;;
+        "")
+            return
+            ;;
+        *)
+            local plan_file="$PROJECTS_DIR/$choice/PLAN.md"
+            if [ -f "$plan_file" ]; then
+                echo ""
+                cat "$plan_file"
+                echo ""
+                echo -e "${CYAN}───────────────────────────────────────────────────────────────────${NC}"
+                echo -ne "${YELLOW}Optionen: [go] Ausführen | [deeper] Mehr Details | [edit] Bearbeiten | [exit]:${NC} "
+                read -r action
+                case $action in
+                    go|g)
+                        log OK "Starte Ausführung für $choice"
+                        local repo=$(get_project_repo "$choice")
+                        echo -e "${GREEN}Nächste Schritte:${NC}"
+                        echo "  1. cd $repo"
+                        echo "  2. claude  # Claude wird PLAN.md lesen und ausführen"
+                        ;;
+                    deeper|d)
+                        log INFO "Generiere detaillierten Plan für $choice..."
+                        # Could call generate_plan with deeper flag
+                        ;;
+                    edit|e)
+                        ${EDITOR:-nano} "$plan_file"
+                        ;;
+                esac
+            else
+                log ERROR "Plan nicht gefunden: $choice"
+            fi
+            ;;
+    esac
+}
+
+#######################################
 # Main
 #######################################
+show_usage() {
+    echo "Usage: ./plan.sh [OPTIONS] [PROJECT]"
+    echo ""
+    echo "Options:"
+    echo "  --auto [projekt]    Automatisch Pläne generieren (alle oder einzeln)"
+    echo "  --review            Generierte Pläne reviewen"
+    echo "  --help              Diese Hilfe anzeigen"
+    echo ""
+    echo "Ohne Optionen: Interaktiver Modus"
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --auto|-a)
+                AUTO_MODE=true
+                if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+                    SINGLE_PROJECT="$2"
+                    shift
+                fi
+                shift
+                ;;
+            --review|-r)
+                REVIEW_MODE=true
+                shift
+                ;;
+            --help|-h)
+                show_usage
+                exit 0
+                ;;
+            *)
+                # Unknown option or project name
+                if [ -d "$PROJECTS_DIR/$1" ]; then
+                    SINGLE_PROJECT="$1"
+                fi
+                shift
+                ;;
+        esac
+    done
+}
+
 main() {
+    parse_args "$@"
+
     log INFO "WerkingFlow Autopilot gestartet"
     log SCAN "Registry: $PROJECTS_DIR"
 
-    interactive_mode
+    if [ "$AUTO_MODE" = true ]; then
+        auto_mode
+    elif [ "$REVIEW_MODE" = true ]; then
+        review_mode
+    else
+        interactive_mode
+    fi
 }
 
 # Run
