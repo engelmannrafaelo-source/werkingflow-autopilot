@@ -1,0 +1,68 @@
+# Projekt: [NAME]
+
+## Ursprung
+
+> Woher kommt dieses Projekt? Email, Gespräch, eigene Idee?
+
+[Hier den Ursprung beschreiben oder Email einfügen]
+
+---
+
+## Was soll entstehen?
+
+> Beschreibe in 2-3 Sätzen was das Endergebnis sein soll.
+
+[Beschreibung]
+
+---
+
+## Erfolgskriterien
+
+> Wann ist das Projekt "fertig"? Checkboxen die der AI abhaken kann.
+
+### Must Have
+- [ ] [Kriterium 1]
+- [ ] [Kriterium 2]
+- [ ] [Kriterium 3]
+
+### Nice to Have
+- [ ] [Optional 1]
+- [ ] [Optional 2]
+
+---
+
+## Constraints
+
+> Was muss beachtet werden? Tech-Stack, Budget, Deadline?
+
+- **Tech**: [z.B. Next.js, TypeScript, muss auf werkflow-Stack aufbauen]
+- **Budget**: [z.B. Max 10 Arbeitstage]
+- **Deadline**: [z.B. Ende Januar]
+- **Sonstiges**: [z.B. DSGVO-konform]
+
+---
+
+## Offene Fragen
+
+> Was muss noch geklärt werden bevor gestartet werden kann?
+
+- [ ] [Frage 1]
+- [ ] [Frage 2]
+
+---
+
+## Repository
+
+> Pfad zum Repository (wird in repo.txt gespeichert)
+
+```
+/Users/rafael/Documents/GitHub/[projekt-name]
+```
+
+---
+
+## Status
+
+**Phase**: Definition
+**Nächster Schritt**: [Was ist der erste Schritt?]
+**Blocker**: [Gibt es Blocker?]

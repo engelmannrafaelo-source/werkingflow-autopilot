@@ -2,6 +2,10 @@
 
 **Autonome AI-Entwicklung durch Goal-Oriented Prompting**
 
+> **AI Agent?** Start hier: [GOAL.md](GOAL.md) - Definiert was dieses Repo werden soll und wie du es weiterentwickeln kannst.
+
+---
+
 ## Vision
 
 Ein System wo du nur **Projekt-Definitionen** reinwirfst (Emails, Kontext, Ziele) und Opus 4.5 **autonom entwickelt** bis das Ziel erreicht ist.
@@ -28,14 +32,17 @@ Der Rest passiert autonom.
 
 ```
 werkingflow-autopilot/
+├── GOAL.md                 # ⭐ META: Was soll der Autopilot selbst werden?
 ├── CONTEXT.md              # Deine Situation (dynamisch aus Quellen!)
-├── sources/                # Quellen für automatische Kontext-Updates
-│   └── SOURCES.md          # Welche Quellen sollen verwendet werden?
+├── sources/
+│   └── SOURCES.md          # Quellen für automatische Kontext-Updates
 ├── orchestrator/
-│   └── SYSTEM.md           # AI Rolle und Autonomie
-├── projects/               # Projekt-Definitionen
+│   ├── SYSTEM.md           # AI Rolle und Autonomie
+│   └── LOOP.md             # Loop-Definition
+├── projects/               # = REGISTRY (Ordner = Projekt)
+│   ├── _template/          # Template für neue Projekte
 │   ├── werkflow/
-│   │   ├── GOAL.md         # Was soll entstehen?
+│   │   ├── GOAL.md         # Erfolgskriterien
 │   │   ├── repo.txt        # Pfad zum echten Repository
 │   │   └── context/        # Emails, Meeting-Notes, etc.
 │   └── teufel-ai/
@@ -88,7 +95,19 @@ EOF
 4. **Autonomie** - Er entscheidet selbst den besten Weg
 5. **Skalierbar** - Neue Projekte = neuer Ordner + GOAL.md
 
+## Für AI Agents
+
+Wenn du dieses Repo weiterentwickeln sollst:
+
+1. **Lies [GOAL.md](GOAL.md)** - Was soll der Autopilot werden?
+2. **Lies [CONTEXT.md](CONTEXT.md)** - Wer ist Rafael, was ist sein Stack?
+3. **Lies [orchestrator/SYSTEM.md](orchestrator/SYSTEM.md)** - Wie sollst du arbeiten?
+4. **Check Erfolgskriterien** in GOAL.md - Was fehlt noch?
+5. **Entwickle** - Eine Phase nach der anderen
+
 ## Status
 
-**Phase**: Definition (nur Markdown)
-**Nächste Phase**: Implementierung (loop.sh, Integration mit Claude Code CLI)
+**Phase**: 1 - Definition (nur Markdown)
+**Nächste Phase**: 2 - Basic Implementation (loop.sh)
+
+Siehe [GOAL.md](GOAL.md) für detaillierte Erfolgskriterien.
