@@ -17,6 +17,9 @@ set -e
 # Mode flags
 AUTO_MODE=false
 REVIEW_MODE=false
+DAILY_MODE=false
+MORNING_MODE=false
+EXECUTE_MODE=false
 SINGLE_PROJECT=""
 
 # Colors
@@ -769,9 +772,18 @@ show_usage() {
     echo "Options:"
     echo "  --auto [projekt]    Automatisch Pläne generieren (alle oder einzeln)"
     echo "  --review            Generierte Pläne reviewen"
+    echo "  --daily             Daily Routine ausführen (Cleanup, Health Checks)"
+    echo "  --morning           Morning Workflow (Daily + Branch Review + Merge Fragen)"
+    echo "  --execute [projekt] Plan generieren UND ausführen (autonom)"
     echo "  --help              Diese Hilfe anzeigen"
     echo ""
     echo "Ohne Optionen: Interaktiver Modus"
+    echo ""
+    echo "Beispiele:"
+    echo "  ./plan.sh                    # Interaktiv"
+    echo "  ./plan.sh --morning          # Morgendlicher Workflow"
+    echo "  ./plan.sh --auto werkflow    # Plan für werkflow erstellen"
+    echo "  ./plan.sh --execute werkflow # Plan erstellen und autonom ausführen"
 }
 
 parse_args() {
@@ -789,6 +801,22 @@ parse_args() {
                 REVIEW_MODE=true
                 shift
                 ;;
+            --daily|-d)
+                DAILY_MODE=true
+                shift
+                ;;
+            --morning|-m)
+                MORNING_MODE=true
+                shift
+                ;;
+            --execute|-e)
+                EXECUTE_MODE=true
+                if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+                    SINGLE_PROJECT="$2"
+                    shift
+                fi
+                shift
+                ;;
             --help|-h)
                 show_usage
                 exit 0
@@ -804,13 +832,109 @@ parse_args() {
     done
 }
 
+daily_mode() {
+    log INFO "Starting Daily Routine..."
+    "$SCRIPT_DIR/daily.sh" $SINGLE_PROJECT
+}
+
+morning_mode() {
+    echo ""
+    echo -e "${CYAN}╔═══════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║              WerkingFlow Autopilot - Morning Workflow              ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    log INFO "Starting Morning Workflow..."
+
+    # 1. Run Daily Routine
+    "$SCRIPT_DIR/daily.sh" $SINGLE_PROJECT
+
+    echo ""
+    echo -e "${CYAN}───────────────────────────────────────────────────────────────────${NC}"
+    echo ""
+
+    # 2. Ask what to do next
+    echo -e "${YELLOW}Was möchtest du als nächstes tun?${NC}"
+    echo ""
+    echo "  [1] Branches mergen (interactive)"
+    echo "  [2] Autonome Entwicklung starten (loop.sh)"
+    echo "  [3] Plan für Projekt erstellen"
+    echo "  [4] Interaktiver Modus"
+    echo "  [5] Beenden"
+    echo ""
+    echo -ne "${YELLOW}Auswahl [1-5]:${NC} "
+    read -r choice
+
+    case $choice in
+        1)
+            echo "Merge-Mode wird gestartet..."
+            review_mode
+            ;;
+        2)
+            echo "Welches Projekt? ($(scan_registry))"
+            read -r project
+            if [ -n "$project" ]; then
+                "$SCRIPT_DIR/loop.sh" "$project"
+            fi
+            ;;
+        3)
+            echo "Welches Projekt? ($(scan_registry))"
+            read -r project
+            if [ -n "$project" ]; then
+                generate_plan_for_project "$project"
+            fi
+            ;;
+        4)
+            interactive_mode
+            ;;
+        5)
+            log INFO "Morning Workflow beendet"
+            ;;
+        *)
+            log WARN "Ungültige Auswahl"
+            ;;
+    esac
+}
+
+execute_mode() {
+    log INFO "Starting Execute Mode..."
+
+    if [ -z "$SINGLE_PROJECT" ]; then
+        echo "Error: Projekt angeben für --execute"
+        echo "Verfügbar: $(scan_registry)"
+        exit 1
+    fi
+
+    # 1. Generate plan first
+    log INFO "Generiere Plan für $SINGLE_PROJECT..."
+    generate_plan_for_project "$SINGLE_PROJECT"
+
+    # 2. Ask for confirmation
+    echo ""
+    echo -e "${YELLOW}Plan erstellt. Autonom ausführen?${NC}"
+    echo -ne "[y/N]: "
+    read -r confirm
+
+    if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+        # 3. Execute via loop.sh
+        "$SCRIPT_DIR/loop.sh" "$SINGLE_PROJECT"
+    else
+        log INFO "Ausführung abgebrochen. Plan ist in PLAN.md gespeichert."
+    fi
+}
+
 main() {
     parse_args "$@"
 
     log INFO "WerkingFlow Autopilot gestartet"
     log SCAN "Registry: $PROJECTS_DIR"
 
-    if [ "$AUTO_MODE" = true ]; then
+    if [ "$MORNING_MODE" = true ]; then
+        morning_mode
+    elif [ "$DAILY_MODE" = true ]; then
+        daily_mode
+    elif [ "$EXECUTE_MODE" = true ]; then
+        execute_mode
+    elif [ "$AUTO_MODE" = true ]; then
         auto_mode
     elif [ "$REVIEW_MODE" = true ]; then
         review_mode
