@@ -1,0 +1,16 @@
+// Syncthing Ignore - NIEMALS .git synchronisieren!
+.git
+.next
+node_modules
+node_modules/.cache
+.turbo
+*.tmp
+.syncthing.*
+.venv*
+__pycache__
+playwright-report
+test-results
+.pytest_cache
+dist
+build
+.DS_Store
