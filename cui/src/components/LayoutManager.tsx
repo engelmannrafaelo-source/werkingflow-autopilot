@@ -224,7 +224,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     saveLayout(newModel);
   }, [workDir, saveLayout]);
 
-  const addTab = useCallback((type: 'cui' | 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office', config: Record<string, string>, targetId: string) => {
+  const addTab = useCallback((type: 'cui' | 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr', config: Record<string, string>, targetId: string) => {
     if (!model) return;
     const names: Record<string, string> = {
       cui: config.accountId ? config.accountId.charAt(0).toUpperCase() + config.accountId.slice(1) : 'CUI',
@@ -234,6 +234,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       images: 'Images',
       mission: 'Mission Control',
       office: 'Virtual Office',
+      'admin-wr': 'Werking Report Admin',
     };
     if (type === 'preview' && !config.watchPath) {
       config.watchPath = activeDirRef.current || workDir;
@@ -259,7 +260,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           if (val.startsWith('cui:')) {
             addTab('cui', { accountId: val.split(':')[1] }, node.getId());
           } else {
-            addTab(val as 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office', {}, node.getId());
+            addTab(val as 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr', {}, node.getId());
           }
           e.target.value = '';
         }}
@@ -289,6 +290,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         <option value="images">Images</option>
         <option value="mission">Mission Control</option>
         <option value="office">Virtual Office 👥</option>
+        <option value="admin-wr">Werking Report Admin</option>
       </select>
     );
   }, [addTab]);
