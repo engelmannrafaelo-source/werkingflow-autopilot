@@ -1,0 +1,49 @@
+{
+  "name": "workspace",
+  "version": "1.0.0",
+  "description": "",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "dev:server": "tsx server/index.ts",
+    "dev:all": "tsx server/index.ts & vite & wait",
+    "build": "vite build",
+    "preview": "vite preview",
+    "electron": "vite build && electron .",
+    "electron:dev": "electron . --dev"
+  },
+  "dependencies": {
+    "@types/http-proxy": "^1.17.17",
+    "chokidar": "^5.0.0",
+    "express": "^5.2.1",
+    "flexlayout-react": "^0.8.18",
+    "http-proxy": "^1.18.1",
+    "lucide-react": "^0.574.0",
+    "mammoth": "^1.11.0",
+    "mime-types": "^3.0.2",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "react-markdown": "^10.1.0",
+    "react-pdf": "^10.3.0",
+    "remark-gfm": "^4.0.1",
+    "ws": "^8.19.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.18",
+    "@types/express": "^5.0.6",
+    "@types/mime-types": "^3.0.1",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^5.1.4",
+    "electron": "^33.4.11",
+    "electron-builder": "^26.7.0",
+    "esbuild": "^0.27.3",
+    "tailwindcss": "^4.1.18",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.1"
+  }
+}

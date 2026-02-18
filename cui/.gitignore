@@ -1,0 +1,13 @@
+node_modules/
+dist/
+dist-server/
+*.tsbuildinfo
+
+# Runtime data (user-specific)
+data/uploads/
+data/active/
+data/layouts/
+data/notes/
+
+# OS files
+.DS_Store
