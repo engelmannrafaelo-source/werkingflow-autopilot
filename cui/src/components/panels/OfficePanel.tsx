@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import TaskBoard from './TaskBoard';
 import PersonaChat from './PersonaChat';
+import ReviewQueue from './ReviewQueue';
 
 const API = '/api';
 
@@ -26,7 +27,7 @@ export default function OfficePanel({ projectId, workDir }: OfficePanelProps) {
   const [worklist, setWorklist] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [view, setView] = useState<'grid' | 'tasks' | 'chat'>('grid');
+  const [view, setView] = useState<'grid' | 'tasks' | 'chat' | 'reviews'>('grid');
 
   // Load personas on mount
   useEffect(() => {
@@ -133,6 +134,21 @@ export default function OfficePanel({ projectId, workDir }: OfficePanelProps) {
             👥 Team
           </button>
           <button
+            onClick={() => setView('reviews')}
+            style={{
+              padding: '6px 12px',
+              background: view === 'reviews' ? 'var(--tn-blue)' : 'var(--tn-bg)',
+              color: view === 'reviews' ? 'white' : 'var(--tn-text-muted)',
+              border: '1px solid var(--tn-border)',
+              borderRadius: 4,
+              cursor: 'pointer',
+              fontSize: 12,
+              fontWeight: view === 'reviews' ? 600 : 400,
+            }}
+          >
+            📝 Reviews
+          </button>
+          <button
             onClick={() => setView('tasks')}
             style={{
               padding: '6px 12px',
@@ -231,6 +247,10 @@ export default function OfficePanel({ projectId, workDir }: OfficePanelProps) {
 
       {view === 'chat' && selected && (
         <PersonaChat personaId={selected.id} personaName={selected.name} />
+      )}
+
+      {view === 'reviews' && (
+        <ReviewQueue />
       )}
     </div>
   );

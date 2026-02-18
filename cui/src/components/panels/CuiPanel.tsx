@@ -61,13 +61,13 @@ export default function CuiPanel({ accountId, projectId, workDir, panelId }: Cui
           savedRouteRef.current = pathname;
           setCuiOnHome(false);
           setShowQueue(false);
-          try { sessionStorage.setItem(routeKey, pathname); } catch {}
+          try { localStorage.setItem(routeKey, pathname); } catch {}
         } else {
           // On home/overview page - show queue overlay
           savedRouteRef.current = '';
           setCuiOnHome(true);
           setShowQueue(true);
-          try { sessionStorage.removeItem(routeKey); } catch {}
+          try { localStorage.removeItem(routeKey); } catch {}
         }
       }
     }
@@ -83,7 +83,7 @@ export default function CuiPanel({ accountId, projectId, workDir, panelId }: Cui
     const baseUrl = getCuiUrl(account);
 
     // Restore saved route for THIS specific panel (accountId + projectId)
-    const savedRoute = sessionStorage.getItem(routeKey) || '';
+    const savedRoute = localStorage.getItem(routeKey) || '';
     savedRouteRef.current = savedRoute;
 
     fetch(`${baseUrl}/api/config`)
@@ -252,7 +252,7 @@ export default function CuiPanel({ accountId, projectId, workDir, panelId }: Cui
     savedRouteRef.current = '';
     setCuiOnHome(true);
     setShowQueue(true);
-    try { sessionStorage.removeItem(routeKey); } catch {}
+    try { localStorage.removeItem(routeKey); } catch {}
     const baseUrl = getCuiUrl(account);
     setIframeSrc('');
     setTimeout(() => setIframeSrc(buildIframeUrl(baseUrl)), 50);

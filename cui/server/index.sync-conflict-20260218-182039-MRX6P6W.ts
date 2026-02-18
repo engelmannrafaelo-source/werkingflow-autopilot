@@ -493,9 +493,6 @@ wss.on('connection', (ws) => {
   clients.add(ws);
   ws.on('close', () => clients.delete(ws));
 
-  // Register for Document Manager broadcasts
-  registerWebSocketClient(ws);
-
   ws.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw.toString());
@@ -1512,7 +1509,7 @@ function parsePersona(filename: string, content: string): any {
 
   // Parse markdown for Name, Rolle, MBTI
   const nameMatch = content.match(/# (.+?) - (.+)/);
-  const mbtiMatch = content.match(/\*\*MBTI\*\*:\s*(\w+)/i) || content.match(/MBTI:\s*(\w+)/i);
+  const mbtiMatch = content.match(/MBTI:\s*(\w+)/i);
 
   return {
     id,
@@ -1524,172 +1521,6 @@ function parsePersona(filename: string, content: string): any {
     lastUpdated: new Date().toISOString(),
   };
 }
-
-// --- Task Management ---
-interface Task {
-  id: string;
-  title: string;
-  description: string;
-  assignee: string;        // Persona ID
-  status: 'backlog' | 'in_progress' | 'review' | 'done';
-  priority: 'low' | 'medium' | 'high';
-  documentRef?: string;    // Optional: Business-Doc Path
-  createdAt: string;
-  updatedAt: string;
-}
-
-let tasks: Task[] = [];  // In-Memory für MVP - später DB
-
-// GET /api/team/tasks
-app.get('/api/team/tasks', (req, res) => {
-  const { assignee, status } = req.query;
-  let filtered = tasks;
-
-  if (assignee) filtered = filtered.filter(t => t.assignee === assignee);
-  if (status) filtered = filtered.filter(t => t.status === status);
-
-  res.json(filtered);
-});
-
-// POST /api/team/tasks
-app.post('/api/team/tasks', (req, res) => {
-  const task: Task = {
-    id: Date.now().toString(),
-    ...req.body,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  };
-  tasks.push(task);
-  res.json(task);
-});
-
-// PATCH /api/team/tasks/:id
-app.patch('/api/team/tasks/:id', (req, res) => {
-  const task = tasks.find(t => t.id === req.params.id);
-  if (!task) return res.status(404).send('Task not found');
-
-  Object.assign(task, req.body);
-  task.updatedAt = new Date().toISOString();
-  res.json(task);
-});
-
-// DELETE /api/team/tasks/:id
-app.delete('/api/team/tasks/:id', (req, res) => {
-  const index = tasks.findIndex(t => t.id === req.params.id);
-  if (index === -1) return res.status(404).send('Task not found');
-
-  tasks.splice(index, 1);
-  res.json({ ok: true });
-});
-
-// --- Persona Chat via AI-Bridge ---
-// POST /api/team/chat/:personaId
-app.post('/api/team/chat/:personaId', async (req, res) => {
-  const { personaId } = req.params;
-  const { message } = req.body;
-
-  if (!message) {
-    return res.status(400).json({ error: 'message required' });
-  }
-
-  try {
-    // Load Persona System Prompt
-    const personasPath = '/root/projekte/orchestrator/team/personas';
-    const files = await readdir(personasPath);
-    const personaFile = files.find(f => f.startsWith(personaId + '-') && f.endsWith('.md'));
-
-    if (!personaFile) {
-      return res.status(404).json({ error: 'Persona not found' });
-    }
-
-    const content = await readFile(join(personasPath, personaFile), 'utf-8');
-    const systemPrompt = `Du bist ${personaId.toUpperCase()}.
-
-${content}
-
-Antworte im Stil dieser Persona. Beziehe dich auf deine Worklist und aktuelle Aufgaben.`;
-
-    // Session ID: rafael-max (User-Persona)
-    const sessionId = `rafael-${personaId}`;
-
-    // Call Bridge with Session
-    const BRIDGE_URL = process.env.AI_BRIDGE_URL || 'http://49.12.72.66:8000';
-    const BRIDGE_KEY = process.env.AI_BRIDGE_API_KEY;
-
-    if (!BRIDGE_KEY) {
-      return res.status(500).json({ error: 'AI_BRIDGE_API_KEY not set' });
-    }
-
-    const bridgeResp = await fetch(`${BRIDGE_URL}/v1/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${BRIDGE_KEY}`,
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-5-20250929',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: message },
-        ],
-        max_tokens: 2048,
-        temperature: 0.7,
-        extra_body: { session_id: sessionId },
-      }),
-    });
-
-    if (!bridgeResp.ok) {
-      const errText = await bridgeResp.text();
-      console.error('[Team Chat] Bridge error:', errText);
-      return res.status(bridgeResp.status).json({ error: `Bridge error: ${errText}` });
-    }
-
-    const data = await bridgeResp.json();
-    const assistantMessage = data.choices?.[0]?.message?.content || '';
-
-    res.json({
-      message: assistantMessage,
-      sessionId,
-    });
-  } catch (err: any) {
-    console.error('[Team Chat] Error:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// GET /api/team/chat/:personaId/history
-app.get('/api/team/chat/:personaId/history', async (req, res) => {
-  const { personaId } = req.params;
-  const sessionId = `rafael-${personaId}`;
-
-  try {
-    const BRIDGE_URL = process.env.AI_BRIDGE_URL || 'http://49.12.72.66:8000';
-    const BRIDGE_KEY = process.env.AI_BRIDGE_API_KEY;
-
-    if (!BRIDGE_KEY) {
-      return res.json({ messages: [] });
-    }
-
-    const response = await fetch(
-      `${BRIDGE_URL}/v1/sessions/${sessionId}`,
-      { headers: { Authorization: `Bearer ${BRIDGE_KEY}` }}
-    );
-
-    if (!response.ok) {
-      return res.json({ messages: [] });
-    }
-
-    const session = await response.json();
-    res.json({ messages: session.messages || [] });
-  } catch (err: any) {
-    console.error('[Team Chat History] Error:', err);
-    res.json({ messages: [] });
-  }
-});
-
-// --- Document Manager (Phase 3) ---
-import documentManager, { registerWebSocketClient } from './document-manager';
-app.use('/api/team', documentManager);
 
 // --- File Operations API ---
 
@@ -1852,9 +1683,9 @@ app.post('/api/cui-sync', async (_req, res) => {
 });
 
 // --- Continuous Auto-Sync: Watch src/ and server/ for changes, auto-rebuild ---
-const AUTO_SYNC_DEBOUNCE = 3000;
+const AUTO_SYNC_DEBOUNCE = 3000; // 3s debounce after last change
 let _autoSyncTimer: ReturnType<typeof setTimeout> | null = null;
-let _autoSyncEnabled = true;
+let _autoSyncEnabled = true; // On by default
 
 function triggerAutoSync() {
   if (!_autoSyncEnabled || _syncInProgress) return;
@@ -1864,15 +1695,16 @@ function triggerAutoSync() {
   broadcast({ type: 'cui-sync', status: 'started', auto: true });
 
   const PATH_PREFIX = '/opt/homebrew/bin:/usr/local/bin:' + (process.env.PATH || '');
-  // Force NODE_ENV=development so npm installs devDependencies (vite, tsx, etc.)
-  const execOpts = { cwd: WORKSPACE_ROOT, env: { ...process.env, PATH: PATH_PREFIX, NODE_ENV: 'development' }, timeout: 120_000 };
+  const execOpts = { cwd: WORKSPACE_ROOT, env: { ...process.env, PATH: PATH_PREFIX }, timeout: 120_000 };
 
   (async () => {
     try {
+      // 1. npm install (quick, --prefer-offline)
       await execAsync('npm install --prefer-offline 2>&1', execOpts);
       broadcast({ type: 'cui-sync', status: 'installing', auto: true });
 
-      const { stdout: buildOut } = await execAsync('npm run build 2>&1', { ...execOpts, env: { ...execOpts.env, NODE_ENV: 'production' } });
+      // 2. Build frontend
+      const { stdout: buildOut } = await execAsync('npm run build 2>&1', execOpts);
       const builtMatch = buildOut.match(/built in ([\d.]+s)/);
       const elapsed = ((Date.now() - startTs) / 1000).toFixed(1);
       console.log(`[AutoSync] Build complete in ${elapsed}s (vite: ${builtMatch?.[1] || 'ok'})`);
@@ -1880,6 +1712,7 @@ function triggerAutoSync() {
 
       _syncInProgress = false;
 
+      // 3. pm2 restart (server will come back up automatically)
       setTimeout(async () => {
         try {
           await execAsync('pm2 restart cui-workspace', { env: { ...process.env, PATH: PATH_PREFIX } });
@@ -1896,6 +1729,7 @@ function triggerAutoSync() {
   })();
 }
 
+// Watch src/ and server/ for changes
 const autoSyncWatcher = watch([
   join(WORKSPACE_ROOT, 'src'),
   join(WORKSPACE_ROOT, 'server'),
@@ -1911,15 +1745,21 @@ autoSyncWatcher.on('error', (err) => {
 });
 
 autoSyncWatcher.on('all', (event, filePath) => {
+  // Only react to actual source file changes
   if (!/\.(ts|tsx|css|html|json)$/.test(filePath)) return;
+  // Ignore build output
   if (filePath.includes('/dist/') || filePath.includes('/node_modules/')) return;
+
   console.log(`[AutoSync] ${event}: ${relative(WORKSPACE_ROOT, filePath)}`);
+
+  // Debounce: reset timer on each change, trigger after quiet period
   if (_autoSyncTimer) clearTimeout(_autoSyncTimer);
   _autoSyncTimer = setTimeout(triggerAutoSync, AUTO_SYNC_DEBOUNCE);
 });
 
 console.log(`[AutoSync] Watching src/ and server/ for changes (debounce: ${AUTO_SYNC_DEBOUNCE}ms)`);
 
+// API to toggle auto-sync
 app.get('/api/cui-sync/auto', (_req, res) => {
   res.json({ enabled: _autoSyncEnabled, syncing: _syncInProgress });
 });
