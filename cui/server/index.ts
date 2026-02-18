@@ -1317,6 +1317,18 @@ app.post('/api/notes/:projectId', (req, res) => {
   res.json({ ok: true });
 });
 
+// Shared notes (read-only, auto-generated)
+app.get('/api/shared-notes', (_req, res) => {
+  const sharedPath = join(NOTES_DIR, 'shared.md');
+  if (!existsSync(sharedPath)) {
+    res.json({
+      content: '# 🔐 Shared Notes\n\n*Run `npm run generate:shared-notes` to populate*\n\nThis tab shows auto-generated credentials from:\n- Supabase seed files\n- Test scenarios\n\n**Note:** This is read-only. Credentials are synced from source files.'
+    });
+    return;
+  }
+  res.json({ content: readFileSync(sharedPath, 'utf8') });
+});
+
 // --- Layout API ---
 app.get('/api/layouts/:projectId', (req, res) => {
   const layoutPath = join(LAYOUTS_DIR, `${req.params.projectId}.json`);
@@ -1630,6 +1642,100 @@ app.post('/api/files/move', async (req, res) => {
 
 // --- Control API ---
 // All endpoints under /api/control/ for automated workspace steering
+// ============================================================
+// ADMIN APIS - Werking Report Proxy
+// ============================================================
+
+app.get('/api/admin/wr/users', async (req, res) => {
+  try {
+    const response = await fetch('https://werking-report.vercel.app/api/admin/users', {
+      headers: { 'Cookie': req.headers.cookie || '' },
+    });
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (err: any) {
+    console.error('[Admin Proxy] GET /api/admin/wr/users error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/wr/users/:id/approve', async (req, res) => {
+  try {
+    const response = await fetch(`https://werking-report.vercel.app/api/admin/users/${req.params.id}/approve`, {
+      method: 'POST',
+      headers: {
+        'Cookie': req.headers.cookie || '',
+        'Content-Type': 'application/json',
+      },
+    });
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (err: any) {
+    console.error('[Admin Proxy] POST /api/admin/wr/users/:id/approve error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/wr/users/:id/verify', async (req, res) => {
+  try {
+    const response = await fetch(`https://werking-report.vercel.app/api/admin/users/${req.params.id}/verify`, {
+      method: 'POST',
+      headers: {
+        'Cookie': req.headers.cookie || '',
+        'Content-Type': 'application/json',
+      },
+    });
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (err: any) {
+    console.error('[Admin Proxy] POST /api/admin/wr/users/:id/verify error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/wr/billing/overview', async (req, res) => {
+  try {
+    const response = await fetch('https://werking-report.vercel.app/api/admin/billing/overview', {
+      headers: { 'Cookie': req.headers.cookie || '' },
+    });
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (err: any) {
+    console.error('[Admin Proxy] GET /api/admin/wr/billing/overview error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/wr/usage/stats', async (req, res) => {
+  try {
+    const period = req.query.period || 'month';
+    const response = await fetch(`https://werking-report.vercel.app/api/admin/usage/stats?period=${period}`, {
+      headers: { 'Cookie': req.headers.cookie || '' },
+    });
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (err: any) {
+    console.error('[Admin Proxy] GET /api/admin/wr/usage/stats error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/wr/feedback', async (req, res) => {
+  try {
+    const response = await fetch('https://werking-report.vercel.app/api/admin/feedback', {
+      headers: { 'Cookie': req.headers.cookie || '' },
+    });
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (err: any) {
+    console.error('[Admin Proxy] GET /api/admin/wr/feedback error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// Control API
+// ============================================================
 
 app.get('/api/control/health', (_req, res) => {
   res.json({

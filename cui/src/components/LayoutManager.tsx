@@ -9,6 +9,7 @@ import FilePreview from './panels/FilePreview';
 import NotesPanel from './panels/NotesPanel';
 import MissionControl from './panels/MissionControl';
 import OfficePanel from './panels/OfficePanel';
+import WerkingReportAdmin from './panels/WerkingReportAdmin/WerkingReportAdmin';
 import LayoutBuilder from './LayoutBuilder';
 import '../styles/office.css';
 
@@ -172,6 +173,8 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         return <MissionControl projectId={config.projectId || projectId} workDir={config.workDir || workDir} />;
       case 'office':
         return <OfficePanel projectId={projectId} workDir={workDir} />;
+      case 'admin-wr':
+        return <WerkingReportAdmin />;
       default:
         return (
           <div style={{ padding: 20, color: 'var(--tn-text-muted)' }}>

@@ -11,7 +11,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "electron": "vite build && electron .",
-    "electron:dev": "electron . --dev"
+    "electron:dev": "electron . --dev",
+    "aggregate:credentials": "tsx scripts/aggregate-credentials.ts",
+    "generate:shared-notes": "npm run aggregate:credentials && tsx scripts/generate-shared-notes.ts"
   },
   "dependencies": {
     "@types/http-proxy": "^1.17.17",
@@ -26,6 +28,7 @@
     "react-dom": "^19.2.4",
     "react-markdown": "^10.1.0",
     "react-pdf": "^10.3.0",
+    "recharts": "^3.7.0",
     "remark-gfm": "^4.0.1",
     "ws": "^8.19.0",
     "xlsx": "^0.18.5"
@@ -41,6 +44,7 @@
     "electron": "^33.4.11",
     "electron-builder": "^26.7.0",
     "esbuild": "^0.27.3",
+    "glob": "^10.5.0",
     "tailwindcss": "^4.1.18",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",

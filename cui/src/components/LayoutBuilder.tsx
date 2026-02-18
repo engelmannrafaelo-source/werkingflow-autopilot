@@ -17,6 +17,7 @@ const PANEL_OPTIONS = [
   { value: 'notes', label: 'Notes' },
   { value: 'mission', label: 'Mission Control' },
   { value: 'office', label: 'Virtual Office 👥' },
+  { value: 'admin-wr', label: 'Werking Report Admin' },
 ];
 
 const CELL_DEFAULTS = [
@@ -90,13 +91,14 @@ function panelFromValue(value: string, workDir: string): PanelConfig {
     return { component: 'chat', name: `Chat: ${accountId.charAt(0).toUpperCase() + accountId.slice(1)}`, config: { accountId } };
   }
   switch (value) {
-    case 'images':  return { component: 'images', name: 'Images', config: {} };
-    case 'browser': return { component: 'browser', name: 'Browser', config: { url: '' } };
-    case 'preview': return { component: 'preview', name: 'File Preview', config: { watchPath: workDir } };
-    case 'notes':   return { component: 'notes', name: 'Notes', config: {} };
-    case 'mission': return { component: 'mission', name: 'Mission Control', config: {} };
-    case 'office':  return { component: 'office', name: 'Virtual Office', config: {} };
-    default:        throw new Error(`Unknown panel type: ${value}`);
+    case 'images':   return { component: 'images', name: 'Images', config: {} };
+    case 'browser':  return { component: 'browser', name: 'Browser', config: { url: '' } };
+    case 'preview':  return { component: 'preview', name: 'File Preview', config: { watchPath: workDir } };
+    case 'notes':    return { component: 'notes', name: 'Notes', config: {} };
+    case 'mission':  return { component: 'mission', name: 'Mission Control', config: {} };
+    case 'office':   return { component: 'office', name: 'Virtual Office', config: {} };
+    case 'admin-wr': return { component: 'admin-wr', name: 'Werking Report Admin', config: {} };
+    default:         throw new Error(`Unknown panel type: ${value}`);
   }
 }
 
