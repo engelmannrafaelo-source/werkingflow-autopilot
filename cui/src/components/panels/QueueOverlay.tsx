@@ -199,7 +199,7 @@ export default function QueueOverlay({ accountId, projectId, workDir, onNavigate
         // Filter: this account + this workspace
         const filtered = convs.filter(c => {
           if (c.accountId !== accountId) return false;
-          if (workDir && !c.projectPath.includes(workDir.split('/').pop()!)) return false;
+          if (workDir && c.projectPath !== workDir && !c.projectPath.startsWith(workDir + '/')) return false;
           return true;
         });
         setConversations(filtered);

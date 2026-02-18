@@ -9,7 +9,8 @@ interface NotesPanelProps {
 export default function NotesPanel({ projectId }: NotesPanelProps) {
   const [commonNotes, setCommonNotes] = useState('');
   const [projectNotes, setProjectNotes] = useState('');
-  const [activeTab, setActiveTab] = useState<'common' | 'project'>('project');
+  const [sharedNotes, setSharedNotes] = useState('');
+  const [activeTab, setActiveTab] = useState<'common' | 'project' | 'shared'>('project');
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'idle'>('idle');
   const commonTimer = useRef<ReturnType<typeof setTimeout>>(null);
   const projectTimer = useRef<ReturnType<typeof setTimeout>>(null);
@@ -17,6 +18,7 @@ export default function NotesPanel({ projectId }: NotesPanelProps) {
   // Load notes on mount / project change
   useEffect(() => {
     fetch(`${API}/common-notes`).then((r) => r.json()).then((d) => setCommonNotes(d.content ?? ''));
+    fetch(`${API}/shared-notes`).then((r) => r.json()).then((d) => setSharedNotes(d.content ?? ''));
   }, []);
 
   useEffect(() => {
@@ -86,6 +88,17 @@ export default function NotesPanel({ projectId }: NotesPanelProps) {
         >
           Common Notes
         </button>
+        <button
+          onClick={() => setActiveTab('shared')}
+          style={{
+            flex: 1, background: activeTab === 'shared' ? 'var(--tn-surface)' : 'transparent',
+            color: activeTab === 'shared' ? 'var(--tn-cyan)' : 'var(--tn-text-muted)',
+            border: 'none', borderBottom: activeTab === 'shared' ? '2px solid var(--tn-cyan)' : '2px solid transparent',
+            padding: '4px 8px', fontSize: 11, cursor: 'pointer',
+          }}
+        >
+          🔐 Shared
+        </button>
         {statusText && (
           <span style={{ fontSize: 10, color: statusColor, padding: '0 8px', whiteSpace: 'nowrap' }}>
             {statusText}
@@ -111,7 +124,7 @@ export default function NotesPanel({ projectId }: NotesPanelProps) {
             fontSize: 12, lineHeight: 1.6,
           }}
         />
-      ) : (
+      ) : activeTab === 'common' ? (
         <textarea
           value={commonNotes}
           onChange={(e) => {
@@ -126,6 +139,22 @@ export default function NotesPanel({ projectId }: NotesPanelProps) {
             border: 'none', outline: 'none',
             fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
             fontSize: 12, lineHeight: 1.6,
+          }}
+        />
+      ) : (
+        <textarea
+          value={sharedNotes}
+          readOnly
+          placeholder="Auto-generated credentials from seed data...\n\nRun: npm run generate:shared-notes"
+          spellCheck={false}
+          style={{
+            flex: 1, resize: 'none', padding: '10px 12px',
+            background: 'var(--tn-bg)', color: 'var(--tn-text-muted)',
+            border: 'none', outline: 'none',
+            fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
+            fontSize: 12, lineHeight: 1.6,
+            cursor: 'default',
+            userSelect: 'text',
           }}
         />
       )}

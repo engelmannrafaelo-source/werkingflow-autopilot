@@ -1317,6 +1317,18 @@ app.post('/api/notes/:projectId', (req, res) => {
   res.json({ ok: true });
 });
 
+// Shared notes (read-only, auto-generated)
+app.get('/api/shared-notes', (_req, res) => {
+  const sharedPath = join(NOTES_DIR, 'shared.md');
+  if (!existsSync(sharedPath)) {
+    res.json({
+      content: '# 🔐 Shared Notes\n\n*Run `npm run generate:shared-notes` to populate*\n\nThis tab shows auto-generated credentials from:\n- Supabase seed files\n- Test scenarios\n\n**Note:** This is read-only. Credentials are synced from source files.'
+    });
+    return;
+  }
+  res.json({ content: readFileSync(sharedPath, 'utf8') });
+});
+
 // --- Layout API ---
 app.get('/api/layouts/:projectId', (req, res) => {
   const layoutPath = join(LAYOUTS_DIR, `${req.params.projectId}.json`);
@@ -1522,168 +1534,6 @@ function parsePersona(filename: string, content: string): any {
   };
 }
 
-// --- Task Management ---
-interface Task {
-  id: string;
-  title: string;
-  description: string;
-  assignee: string;        // Persona ID
-  status: 'backlog' | 'in_progress' | 'review' | 'done';
-  priority: 'low' | 'medium' | 'high';
-  documentRef?: string;    // Optional: Business-Doc Path
-  createdAt: string;
-  updatedAt: string;
-}
-
-let tasks: Task[] = [];  // In-Memory für MVP - später DB
-
-// GET /api/team/tasks
-app.get('/api/team/tasks', (req, res) => {
-  const { assignee, status } = req.query;
-  let filtered = tasks;
-
-  if (assignee) filtered = filtered.filter(t => t.assignee === assignee);
-  if (status) filtered = filtered.filter(t => t.status === status);
-
-  res.json(filtered);
-});
-
-// POST /api/team/tasks
-app.post('/api/team/tasks', (req, res) => {
-  const task: Task = {
-    id: Date.now().toString(),
-    ...req.body,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  };
-  tasks.push(task);
-  res.json(task);
-});
-
-// PATCH /api/team/tasks/:id
-app.patch('/api/team/tasks/:id', (req, res) => {
-  const task = tasks.find(t => t.id === req.params.id);
-  if (!task) return res.status(404).send('Task not found');
-
-  Object.assign(task, req.body);
-  task.updatedAt = new Date().toISOString();
-  res.json(task);
-});
-
-// DELETE /api/team/tasks/:id
-app.delete('/api/team/tasks/:id', (req, res) => {
-  const index = tasks.findIndex(t => t.id === req.params.id);
-  if (index === -1) return res.status(404).send('Task not found');
-
-  tasks.splice(index, 1);
-  res.json({ ok: true });
-});
-
-// --- Persona Chat via AI-Bridge ---
-// POST /api/team/chat/:personaId
-app.post('/api/team/chat/:personaId', async (req, res) => {
-  const { personaId } = req.params;
-  const { message } = req.body;
-
-  if (!message) {
-    return res.status(400).json({ error: 'message required' });
-  }
-
-  try {
-    // Load Persona System Prompt
-    const personasPath = '/root/projekte/orchestrator/team/personas';
-    const files = await readdir(personasPath);
-    const personaFile = files.find(f => f.startsWith(personaId + '-') && f.endsWith('.md'));
-
-    if (!personaFile) {
-      return res.status(404).json({ error: 'Persona not found' });
-    }
-
-    const content = await readFile(join(personasPath, personaFile), 'utf-8');
-    const systemPrompt = `Du bist ${personaId.toUpperCase()}.
-
-${content}
-
-Antworte im Stil dieser Persona. Beziehe dich auf deine Worklist und aktuelle Aufgaben.`;
-
-    // Session ID: rafael-max (User-Persona)
-    const sessionId = `rafael-${personaId}`;
-
-    // Call Bridge with Session
-    const BRIDGE_URL = process.env.AI_BRIDGE_URL || 'http://49.12.72.66:8000';
-    const BRIDGE_KEY = process.env.AI_BRIDGE_API_KEY;
-
-    if (!BRIDGE_KEY) {
-      return res.status(500).json({ error: 'AI_BRIDGE_API_KEY not set' });
-    }
-
-    const bridgeResp = await fetch(`${BRIDGE_URL}/v1/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${BRIDGE_KEY}`,
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-5-20250929',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: message },
-        ],
-        max_tokens: 2048,
-        temperature: 0.7,
-        extra_body: { session_id: sessionId },
-      }),
-    });
-
-    if (!bridgeResp.ok) {
-      const errText = await bridgeResp.text();
-      console.error('[Team Chat] Bridge error:', errText);
-      return res.status(bridgeResp.status).json({ error: `Bridge error: ${errText}` });
-    }
-
-    const data = await bridgeResp.json();
-    const assistantMessage = data.choices?.[0]?.message?.content || '';
-
-    res.json({
-      message: assistantMessage,
-      sessionId,
-    });
-  } catch (err: any) {
-    console.error('[Team Chat] Error:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// GET /api/team/chat/:personaId/history
-app.get('/api/team/chat/:personaId/history', async (req, res) => {
-  const { personaId } = req.params;
-  const sessionId = `rafael-${personaId}`;
-
-  try {
-    const BRIDGE_URL = process.env.AI_BRIDGE_URL || 'http://49.12.72.66:8000';
-    const BRIDGE_KEY = process.env.AI_BRIDGE_API_KEY;
-
-    if (!BRIDGE_KEY) {
-      return res.json({ messages: [] });
-    }
-
-    const response = await fetch(
-      `${BRIDGE_URL}/v1/sessions/${sessionId}`,
-      { headers: { Authorization: `Bearer ${BRIDGE_KEY}` }}
-    );
-
-    if (!response.ok) {
-      return res.json({ messages: [] });
-    }
-
-    const session = await response.json();
-    res.json({ messages: session.messages || [] });
-  } catch (err: any) {
-    console.error('[Team Chat History] Error:', err);
-    res.json({ messages: [] });
-  }
-});
-
 // --- File Operations API ---
 
 // Move/copy file to workspace (stage operation)
@@ -1790,62 +1640,102 @@ app.post('/api/files/move', async (req, res) => {
   }
 });
 
-// --- CUI Sync (build + pm2 restart, optional git pull) ---
-const WORKSPACE_ROOT = resolve(import.meta.dirname ?? __dirname, '..');
-let _syncInProgress = false;
+// --- Control API ---
+// All endpoints under /api/control/ for automated workspace steering
+// ============================================================
+// ADMIN APIS - Werking Report Proxy
+// ============================================================
 
-app.post('/api/cui-sync', async (_req, res) => {
-  if (_syncInProgress) {
-    res.status(409).json({ error: 'Sync already in progress' });
-    return;
-  }
-  _syncInProgress = true;
-  broadcast({ type: 'cui-sync', status: 'started' });
-
-  const PATH_PREFIX = '/opt/homebrew/bin:/usr/local/bin:' + (process.env.PATH || '');
-  const execOpts = { cwd: WORKSPACE_ROOT, env: { ...process.env, PATH: PATH_PREFIX }, timeout: 120_000 };
-
-  let gitResult = 'skipped';
+app.get('/api/admin/wr/users', async (req, res) => {
   try {
-    // 1. Git pull (best-effort: skip if dirty tree or no remote)
-    try {
-      const { stdout } = await execAsync('git pull 2>&1', execOpts);
-      gitResult = stdout.trim();
-    } catch {
-      gitResult = 'skipped (uncommitted changes)';
-    }
-    broadcast({ type: 'cui-sync', status: 'pulled', detail: gitResult });
-
-    // 2. npm install (in case dependencies changed)
-    await execAsync('npm install --prefer-offline 2>&1', execOpts);
-    broadcast({ type: 'cui-sync', status: 'installing' });
-
-    // 3. Build frontend
-    const { stdout: buildOut } = await execAsync('npm run build 2>&1', execOpts);
-    const builtMatch = buildOut.match(/built in ([\d.]+s)/);
-    broadcast({ type: 'cui-sync', status: 'built', detail: builtMatch?.[1] || 'ok' });
-
-    _syncInProgress = false;
-    res.json({ ok: true, git: gitResult, build: builtMatch?.[1] || 'ok' });
-
-    // 4. Schedule pm2 restart (after response is sent)
-    setTimeout(async () => {
-      try {
-        await execAsync('pm2 restart cui-workspace', { env: { ...process.env, PATH: PATH_PREFIX } });
-      } catch (err: any) {
-        console.error('[Sync] pm2 restart failed:', err.message);
-      }
-    }, 500);
-
+    const response = await fetch('https://werking-report.vercel.app/api/admin/users', {
+      headers: { 'Cookie': req.headers.cookie || '' },
+    });
+    const data = await response.json();
+    res.status(response.status).json(data);
   } catch (err: any) {
-    _syncInProgress = false;
-    broadcast({ type: 'cui-sync', status: 'error', detail: err.message });
+    console.error('[Admin Proxy] GET /api/admin/wr/users error:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// --- Control API ---
-// All endpoints under /api/control/ for automated workspace steering
+app.post('/api/admin/wr/users/:id/approve', async (req, res) => {
+  try {
+    const response = await fetch(`https://werking-report.vercel.app/api/admin/users/${req.params.id}/approve`, {
+      method: 'POST',
+      headers: {
+        'Cookie': req.headers.cookie || '',
+        'Content-Type': 'application/json',
+      },
+    });
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (err: any) {
+    console.error('[Admin Proxy] POST /api/admin/wr/users/:id/approve error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/wr/users/:id/verify', async (req, res) => {
+  try {
+    const response = await fetch(`https://werking-report.vercel.app/api/admin/users/${req.params.id}/verify`, {
+      method: 'POST',
+      headers: {
+        'Cookie': req.headers.cookie || '',
+        'Content-Type': 'application/json',
+      },
+    });
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (err: any) {
+    console.error('[Admin Proxy] POST /api/admin/wr/users/:id/verify error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/wr/billing/overview', async (req, res) => {
+  try {
+    const response = await fetch('https://werking-report.vercel.app/api/admin/billing/overview', {
+      headers: { 'Cookie': req.headers.cookie || '' },
+    });
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (err: any) {
+    console.error('[Admin Proxy] GET /api/admin/wr/billing/overview error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/wr/usage/stats', async (req, res) => {
+  try {
+    const period = req.query.period || 'month';
+    const response = await fetch(`https://werking-report.vercel.app/api/admin/usage/stats?period=${period}`, {
+      headers: { 'Cookie': req.headers.cookie || '' },
+    });
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (err: any) {
+    console.error('[Admin Proxy] GET /api/admin/wr/usage/stats error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/wr/feedback', async (req, res) => {
+  try {
+    const response = await fetch('https://werking-report.vercel.app/api/admin/feedback', {
+      headers: { 'Cookie': req.headers.cookie || '' },
+    });
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (err: any) {
+    console.error('[Admin Proxy] GET /api/admin/wr/feedback error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// Control API
+// ============================================================
 
 app.get('/api/control/health', (_req, res) => {
   res.json({

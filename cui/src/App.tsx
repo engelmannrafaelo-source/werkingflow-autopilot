@@ -236,6 +236,10 @@ export default function App() {
         if (msg.type === 'control:project-switch' && msg.projectId) {
           setActiveId(msg.projectId);
         }
+        // Forward auto-sync messages to ProjectTabs via window.postMessage
+        if (msg.type === 'cui-sync' && msg.auto) {
+          window.postMessage(e.data, '*');
+        }
       } catch { /* ignore */ }
     };
     return () => ws.close();
@@ -335,13 +339,16 @@ export default function App() {
     setDialogMode('edit');
   }, [projects]);
 
-  const handleDialogSubmit = useCallback((name: string, workDir: string) => {
+  const handleDialogSubmit = useCallback(async (name: string, workDir: string) => {
     if (dialogMode === 'create') {
       const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
       const newProject: Project = { id, name, workDir, lastOpened: new Date().toISOString() };
       setProjects(prev => [...prev, newProject]);
-      saveProject(newProject);
       setActiveId(id);
+      // Save to server (auto-generates workDir for remote workspace), then re-fetch to get it
+      await saveProject(newProject);
+      const updated = await fetchProjects();
+      setProjects(updated);
     } else if (dialogMode === 'edit' && editTarget) {
       const updated: Project = { ...editTarget, name, workDir, lastOpened: new Date().toISOString() };
       setProjects(prev => prev.map(p => p.id === editTarget.id ? updated : p));

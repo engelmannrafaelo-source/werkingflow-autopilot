@@ -8,6 +8,7 @@ data/uploads/
 data/active/
 data/layouts/
 data/notes/
+data/credentials.json
 
 # OS files
 .DS_Store
