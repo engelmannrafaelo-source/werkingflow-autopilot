@@ -7,6 +7,7 @@ import { homedir } from 'os';
 import { watch } from 'chokidar';
 import mime from 'mime-types';
 import httpProxy from 'http-proxy';
+import documentManager, { registerWebSocketClient } from './document-manager.js';
 
 const PORT = parseInt(process.env.PORT ?? '4005', 10);
 const PROD = process.env.NODE_ENV === 'production';
@@ -1320,6 +1321,16 @@ app.post('/api/notes/:projectId', (req, res) => {
   res.json({ ok: true });
 });
 
+// Shared notes (read-only, auto-generated)
+app.get('/api/shared-notes', (_req, res) => {
+  const sharedPath = join(NOTES_DIR, 'shared.md');
+  if (!existsSync(sharedPath)) {
+    res.json({ content: '# Shared Notes\n\n*Run `npm run generate:shared-notes` to populate*' });
+    return;
+  }
+  res.json({ content: readFileSync(sharedPath, 'utf8') });
+});
+
 // --- Layout API ---
 app.get('/api/layouts/:projectId', (req, res) => {
   const layoutPath = join(LAYOUTS_DIR, `${req.params.projectId}.json`);
@@ -1687,8 +1698,7 @@ app.get('/api/team/chat/:personaId/history', async (req, res) => {
   }
 });
 
-// --- Document Manager (Phase 3) ---
-import documentManager, { registerWebSocketClient } from './document-manager';
+// --- Document Manager (Phase 3) - Registered at top-level imports ---
 app.use('/api/team', documentManager);
 
 // --- File Operations API ---
