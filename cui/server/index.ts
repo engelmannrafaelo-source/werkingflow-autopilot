@@ -1,7 +1,6 @@
 import { readFileSync as _readEnvFile, existsSync as _envExists } from 'fs';
-import { resolve as _resolveEnv } from 'path';
-// Load .env from CUI root (manual dotenv — no dep needed)
-const _envPath = _resolveEnv(import.meta.dirname ?? __dirname, '..', '.env');
+// Load .env from CUI root (manual dotenv — fixed absolute path)
+const _envPath = '/root/projekte/werkingflow/autopilot/cui/.env';
 if (_envExists(_envPath)) {
   const _lines = _readEnvFile(_envPath, 'utf8').split('\n');
   for (const _line of _lines) {
@@ -2306,7 +2305,7 @@ app.post('/api/control/cui/cwd', (req, res) => {
 // ADMIN APIS - Werking Report Proxy
 // ============================================================
 
-const WR_BASE = 'https://werking-report.vercel.app';
+const WR_BASE = process.env.WERKING_REPORT_URL ?? 'https://werking-report.vercel.app';
 const WR_ADMIN_SECRET = process.env.WERKING_REPORT_ADMIN_SECRET ?? process.env.ADMIN_SECRET ?? '';
 
 function wrAdminHeaders(): Record<string, string> {
