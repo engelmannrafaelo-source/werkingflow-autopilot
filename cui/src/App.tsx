@@ -236,9 +236,25 @@ export default function App() {
         if (msg.type === 'control:project-switch' && msg.projectId) {
           setActiveId(msg.projectId);
         }
-        // Forward auto-sync messages to ProjectTabs via window.postMessage
-        if (msg.type === 'cui-sync' && msg.auto) {
+        // Forward sync-related messages to ProjectTabs via window.postMessage
+        if (msg.type === 'cui-update-available' || (msg.type === 'cui-sync' && msg.auto)) {
           window.postMessage(e.data, '*');
+        }
+        // Snapshot request: fetch panel data and POST back to server
+        if (msg.type === 'control:snapshot-request' && msg.panel) {
+          (async () => {
+            try {
+              const panelRes = await fetch(`/api/admin/wr/${msg.panel}`);
+              const panelData = await panelRes.json();
+              await fetch(`/api/snapshot/${msg.panel}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(panelData),
+              });
+            } catch (err) {
+              console.warn('[Snapshot] Failed to capture panel:', msg.panel, err);
+            }
+          })();
         }
       } catch { /* ignore */ }
     };
@@ -408,17 +424,15 @@ export default function App() {
             <MissionControl />
           </div>
         )}
-        {projects.filter(p => mounted.has(p.id)).map((p) => (
+        {projects.filter(p => p.id === activeId).map((p) => (
           <div
             key={p.id}
             style={{
               position: 'absolute',
               inset: 0,
+              zIndex: 1,
               display: 'flex',
               flexDirection: 'column',
-              visibility: p.id === activeId ? 'visible' : 'hidden',
-              zIndex: p.id === activeId ? 1 : 0,
-              pointerEvents: p.id === activeId ? 'auto' : 'none',
             }}
           >
             <LayoutManager

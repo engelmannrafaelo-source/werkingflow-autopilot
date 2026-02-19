@@ -1,3 +1,15 @@
+import { readFileSync as _readEnvFile, existsSync as _envExists } from 'fs';
+import { resolve as _resolveEnv } from 'path';
+// Load .env from CUI root (manual dotenv — no dep needed)
+const _envPath = _resolveEnv(import.meta.dirname ?? __dirname, '..', '.env');
+if (_envExists(_envPath)) {
+  const _lines = _readEnvFile(_envPath, 'utf8').split('\n');
+  for (const _line of _lines) {
+    const _m = _line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
+    if (_m && !process.env[_m[1]]) process.env[_m[1]] = _m[2].trim();
+  }
+}
+
 import express from 'express';
 import { createServer, request as httpRequest, IncomingMessage, ServerResponse } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -315,20 +327,6 @@ const CUI_INJECT_SCRIPT = `<script>(function(){
   setTimeout(notifyParent,500);
   setTimeout(notifyParent,2000);
   setInterval(notifyParent,30000);
-
-  // --- Rate Limit Detection ---
-  var _rlNotified=false;
-  function _checkRateLimit(){
-    if(_rlNotified) return;
-    var text=(document.body&&document.body.innerText)||'';
-    if(text.indexOf("hit your limit")>-1||text.indexOf("rate limit")>-1){
-      _rlNotified=true;
-      try{window.parent.postMessage({type:'cui-rate-limit'},'*');}catch(e){}
-    }
-  }
-  setInterval(_checkRateLimit,3000);
-  var _origNotify=notifyParent;
-  notifyParent=function(){_rlNotified=false;_origNotify();};
 
   // Handle commands from parent
   var _lastRefresh=0;
@@ -2304,6 +2302,142 @@ app.post('/api/control/cui/cwd', (req, res) => {
   res.json({ ok: true, cuiId, cwd });
 });
 
+// ============================================================
+// ADMIN APIS - Werking Report Proxy
+// ============================================================
+
+const WR_BASE = 'https://werking-report.vercel.app';
+const WR_ADMIN_SECRET = process.env.WERKING_REPORT_ADMIN_SECRET ?? process.env.ADMIN_SECRET ?? '';
+
+function wrAdminHeaders(): Record<string, string> {
+  if (!WR_ADMIN_SECRET) throw new Error('WERKING_REPORT_ADMIN_SECRET not set');
+  return { 'x-admin-secret': WR_ADMIN_SECRET, 'Content-Type': 'application/json' };
+}
+
+app.get('/api/admin/wr/users', async (_req, res) => {
+  try {
+    const response = await fetch(`${WR_BASE}/api/admin/users`, { headers: wrAdminHeaders() });
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (err: any) {
+    console.error('[Admin Proxy] GET /api/admin/wr/users error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/wr/users/:id/approve', async (req, res) => {
+  try {
+    const response = await fetch(`${WR_BASE}/api/admin/users/${req.params.id}/approve`, {
+      method: 'POST', headers: wrAdminHeaders(),
+    });
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (err: any) {
+    console.error('[Admin Proxy] POST /api/admin/wr/users/:id/approve error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/wr/users/:id/verify', async (req, res) => {
+  try {
+    const response = await fetch(`${WR_BASE}/api/admin/users/${req.params.id}/verify`, {
+      method: 'POST', headers: wrAdminHeaders(),
+    });
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (err: any) {
+    console.error('[Admin Proxy] POST /api/admin/wr/users/:id/verify error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/wr/billing/overview', async (_req, res) => {
+  try {
+    const response = await fetch(`${WR_BASE}/api/admin/billing/overview`, { headers: wrAdminHeaders() });
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (err: any) {
+    console.error('[Admin Proxy] GET /api/admin/wr/billing/overview error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/wr/usage/stats', async (req, res) => {
+  try {
+    const period = req.query.period || 'month';
+    const response = await fetch(`${WR_BASE}/api/admin/usage/stats?period=${period}`, { headers: wrAdminHeaders() });
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (err: any) {
+    console.error('[Admin Proxy] GET /api/admin/wr/usage/stats error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/wr/feedback', async (_req, res) => {
+  try {
+    const response = await fetch(`${WR_BASE}/api/admin/feedback`, { headers: wrAdminHeaders() });
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (err: any) {
+    console.error('[Admin Proxy] GET /api/admin/wr/feedback error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// Snapshot API - Capture current state of a panel as JSON
+// ============================================================
+
+interface PanelSnapshot {
+  panel: string;
+  capturedAt: string;
+  data: unknown;
+}
+
+const panelSnapshots = new Map<string, PanelSnapshot>();
+
+// POST /api/snapshot/:panel  — store snapshot from frontend
+app.post('/api/snapshot/:panel', (req, res) => {
+  const { panel } = req.params;
+  const snapshot: PanelSnapshot = {
+    panel,
+    capturedAt: new Date().toISOString(),
+    data: req.body,
+  };
+  panelSnapshots.set(panel, snapshot);
+  broadcast({ type: 'snapshot-stored', panel, capturedAt: snapshot.capturedAt });
+  res.json({ ok: true, panel, capturedAt: snapshot.capturedAt });
+});
+
+// GET /api/snapshot/:panel  — retrieve latest snapshot
+app.get('/api/snapshot/:panel', (req, res) => {
+  const { panel } = req.params;
+  const snapshot = panelSnapshots.get(panel);
+  if (!snapshot) {
+    res.status(404).json({ error: `No snapshot for panel: ${panel}` });
+    return;
+  }
+  res.json(snapshot);
+});
+
+// GET /api/snapshot  — list all stored panel snapshots
+app.get('/api/snapshot', (_req, res) => {
+  const list = Array.from(panelSnapshots.values()).map(s => ({
+    panel: s.panel,
+    capturedAt: s.capturedAt,
+  }));
+  res.json({ snapshots: list });
+});
+
+// POST /api/control/snapshot/request  — tell frontend to capture + POST a snapshot
+app.post('/api/control/snapshot/request', (req, res) => {
+  const { panel } = req.body;
+  if (!panel) { res.status(400).json({ error: 'panel required' }); return; }
+  broadcast({ type: 'control:snapshot-request', panel });
+  res.json({ ok: true, panel, message: 'Snapshot request sent to frontend' });
+});
+
 app.post('/api/control/panel/add', (req, res) => {
   const { component, config, name } = req.body;
   if (!component) { res.status(400).json({ error: 'component required' }); return; }
@@ -2333,7 +2467,9 @@ app.post('/api/rebuild', (_req, res) => {
       if (err) { console.error('[Rebuild] Build failed:', err.message); return; }
       console.log('[Rebuild] Build done:', stdout.trim().split('\n').pop());
       console.log('[Rebuild] Restarting server...');
-      exec('cd /root/projekte/werkingflow/autopilot/cui && NODE_ENV=production PORT=4005 nohup npx tsx server/index.ts > /tmp/cui-server.log 2>&1 &', () => {
+      const wrSecret = process.env.WERKING_REPORT_ADMIN_SECRET ?? '';
+      const restartCmd = `cd /root/projekte/werkingflow/autopilot/cui && WERKING_REPORT_ADMIN_SECRET="${wrSecret}" NODE_ENV=production PORT=4005 nohup npx tsx server/index.ts > ~/cui-server.log 2>&1 &`;
+      exec(restartCmd, () => {
         setTimeout(() => process.exit(0), 500);
       });
     });
