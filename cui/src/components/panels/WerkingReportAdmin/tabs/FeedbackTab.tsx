@@ -12,7 +12,7 @@ interface Feedback {
   timestamp: string;
 }
 
-export default function FeedbackTab() {
+export default function FeedbackTab({ envMode }: { envMode?: string }) {
   const [feedbacks, setFeedbacks] = useState<Feedback[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -34,7 +34,7 @@ export default function FeedbackTab() {
 
   useEffect(() => {
     fetchFeedback();
-  }, [fetchFeedback]);
+  }, [fetchFeedback, envMode]);
 
   return (
     <div style={{ padding: 12 }}>

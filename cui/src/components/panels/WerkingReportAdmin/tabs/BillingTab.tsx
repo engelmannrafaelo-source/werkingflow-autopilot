@@ -31,7 +31,7 @@ interface BillingOverview {
   };
 }
 
-export default function BillingTab() {
+export default function BillingTab({ envMode }: { envMode?: string }) {
   const [data, setData] = useState<BillingOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -53,7 +53,7 @@ export default function BillingTab() {
 
   useEffect(() => {
     fetchBilling();
-  }, [fetchBilling]);
+  }, [fetchBilling, envMode]);
 
   return (
     <div style={{ padding: 12 }}>

@@ -19,11 +19,29 @@ interface UsageStats {
 interface MonthSummary { month: string; tokens: number; cost: number; requests: number; }
 interface TrendData { months: MonthSummary[]; totalTokens: number; totalCost: number; totalRequests: number; }
 
-type ViewMode = 'current' | 'trend';
+interface TenantActivity {
+  tenantId: string;
+  tenantName?: string;
+  quotaUsed: number;
+  quotaIncluded: number;
+  quotaPercentUsed: number;
+  requestsThisMonth: number;
+  requestsLastMonth: number;
+  uploadCount: number;
+}
+interface ActivityData {
+  tenants: TenantActivity[];
+  activeTenants: number;
+  totalTenants: number;
+  month: string;
+}
 
-export default function UsageTab() {
+type ViewMode = 'current' | 'trend' | 'activity';
+
+export default function UsageTab({ envMode }: { envMode?: string }) {
   const [data, setData] = useState<UsageStats | null>(null);
   const [trend, setTrend] = useState<TrendData | null>(null);
+  const [activity, setActivity] = useState<ActivityData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [view, setView] = useState<ViewMode>('current');
@@ -32,14 +50,20 @@ export default function UsageTab() {
     setLoading(true);
     setError('');
     try {
-      const [statsRes, trendRes] = await Promise.all([
+      const [statsRes, trendRes, activityRes] = await Promise.all([
         fetch('/api/admin/wr/usage/stats?period=month'),
         fetch('/api/admin/wr/usage/trend'),
+        fetch('/api/admin/wr/usage/activity'),
       ]);
       if (!statsRes.ok) throw new Error(await statsRes.text());
-      const [statsData, trendData] = await Promise.all([statsRes.json(), trendRes.json()]);
+      const [statsData, trendData, activityData] = await Promise.all([
+        statsRes.json(),
+        trendRes.ok ? trendRes.json() : null,
+        activityRes.ok ? activityRes.json() : null,
+      ]);
       setData(statsData);
-      if (trendRes.ok) setTrend(trendData);
+      if (trendData) setTrend(trendData);
+      if (activityData) setActivity(activityData);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -47,19 +71,19 @@ export default function UsageTab() {
     }
   }, []);
 
-  useEffect(() => { fetchAll(); }, [fetchAll]);
+  useEffect(() => { fetchAll(); }, [fetchAll, envMode]);
 
   const chartData = data?.tenants
     .filter(t => t.cost > 0)
     .sort((a, b) => b.cost - a.cost)
     .slice(0, 10)
     .map(t => ({
-      name: t.tenantName || (t.tenantId.length > 12 ? t.tenantId.slice(0, 12) + '…' : t.tenantId),
+      name: t.tenantName || (t.tenantId.length > 12 ? t.tenantId.slice(0, 12) + '\u2026' : t.tenantId),
       cost: Math.round(t.cost * 100) / 100,
     })) || [];
 
   const trendChartData = trend?.months.map(m => ({
-    month: m.month.slice(5), // MM only
+    month: m.month.slice(5),
     cost: Math.round(m.cost * 100) / 100,
     requests: m.requests,
   })) || [];
@@ -71,18 +95,22 @@ export default function UsageTab() {
     </div>
   );
 
+  const viewLabels: Record<ViewMode, string> = {
+    current: 'This Month',
+    trend: '6-Month Trend',
+    activity: 'Activity',
+  };
+
   return (
     <div style={{ padding: 12 }}>
-      {/* Header bar */}
       <div style={{ display: 'flex', gap: 6, marginBottom: 12, alignItems: 'center' }}>
-        {(['current', 'trend'] as ViewMode[]).map(v => (
+        {(['current', 'trend', 'activity'] as ViewMode[]).map(v => (
           <button key={v} onClick={() => setView(v)} style={{
             padding: '3px 10px', borderRadius: 3, fontSize: 10, fontWeight: 600, cursor: 'pointer',
             background: view === v ? 'rgba(122,162,247,0.2)' : 'var(--tn-bg)',
             border: `1px solid ${view === v ? 'var(--tn-blue)' : 'var(--tn-border)'}`,
             color: view === v ? 'var(--tn-blue)' : 'var(--tn-text-muted)',
-            textTransform: 'capitalize',
-          }}>{v === 'current' ? 'This Month' : '6-Month Trend'}</button>
+          }}>{viewLabels[v]}</button>
         ))}
         <div style={{ flex: 1 }} />
         <button onClick={fetchAll} style={{ padding: '3px 10px', borderRadius: 3, fontSize: 10, cursor: 'pointer', background: 'var(--tn-bg)', border: '1px solid var(--tn-border)', color: 'var(--tn-text-muted)' }}>Refresh</button>
@@ -93,15 +121,13 @@ export default function UsageTab() {
 
       {!loading && view === 'current' && data && (
         <>
-          {/* Summary Cards */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 16 }}>
-            {statCard('Cost (EUR)', `€${data.totals.cost.toFixed(2)}`, 'var(--tn-green)')}
-            {statCard('Tokens', `${(data.totals.tokens / 1000).toFixed(1)}K`, 'var(--tn-blue)')}
-            {statCard('Requests', `${data.totals.requests}`, 'var(--tn-orange)')}
-            {statCard('Gutachten', `${data.totals.gutachten}`, 'var(--tn-purple, #bb9af7)')}
+            {statCard('Cost (EUR)', '\u20ac' + data.totals.cost.toFixed(2), 'var(--tn-green)')}
+            {statCard('Tokens', (data.totals.tokens / 1000).toFixed(1) + 'K', 'var(--tn-blue)')}
+            {statCard('Requests', '' + data.totals.requests, 'var(--tn-orange)')}
+            {statCard('Gutachten', '' + data.totals.gutachten, 'var(--tn-purple, #bb9af7)')}
           </div>
 
-          {/* Bar Chart */}
           {chartData.length > 0 && (
             <div style={{ marginBottom: 16 }}>
               <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6, fontWeight: 600 }}>TOP TENANTS BY COST</div>
@@ -109,14 +135,13 @@ export default function UsageTab() {
                 <BarChart data={chartData} margin={{ top: 0, right: 0, bottom: 0, left: 0 }}>
                   <XAxis dataKey="name" tick={{ fontSize: 9, fill: 'var(--tn-text-muted)' }} />
                   <YAxis tick={{ fontSize: 9, fill: 'var(--tn-text-muted)' }} width={32} />
-                  <Tooltip contentStyle={{ background: 'var(--tn-bg-dark)', border: '1px solid var(--tn-border)', fontSize: 10 }} formatter={(v: number | undefined) => [`€${v ?? 0}`, 'Cost']} />
+                  <Tooltip contentStyle={{ background: 'var(--tn-bg-dark)', border: '1px solid var(--tn-border)', fontSize: 10 }} formatter={(v: number | undefined) => ['\u20ac' + (v ?? 0), 'Cost']} />
                   <Bar dataKey="cost" fill="var(--tn-blue)" radius={[2, 2, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
           )}
 
-          {/* Tenant Table */}
           <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6, fontWeight: 600 }}>ALL TENANTS</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 70px 70px 60px 50px', gap: 6, padding: '5px 8px', background: 'var(--tn-bg-dark)', borderRadius: 4, fontSize: 9, fontWeight: 600, color: 'var(--tn-text-muted)', marginBottom: 4 }}>
             <div>Tenant</div><div>Cost</div><div>Tokens</div><div>Req</div><div>Docs</div>
@@ -124,10 +149,10 @@ export default function UsageTab() {
           {data.tenants.filter(t => t.tokens > 0 || t.requests > 0).sort((a, b) => b.cost - a.cost).map(t => (
             <div key={t.tenantId} style={{ display: 'grid', gridTemplateColumns: '1fr 70px 70px 60px 50px', gap: 6, padding: '6px 8px', borderBottom: '1px solid var(--tn-border)', fontSize: 10, alignItems: 'center' }}>
               <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                <span style={{ color: 'var(--tn-text)' }}>{t.tenantName || '–'}</span>
+                <span style={{ color: 'var(--tn-text)' }}>{t.tenantName || '--'}</span>
                 <span style={{ color: 'var(--tn-text-muted)', fontSize: 9, marginLeft: 4 }}>{t.tenantId.slice(0, 8)}</span>
               </div>
-              <div style={{ color: 'var(--tn-green)' }}>€{t.cost.toFixed(2)}</div>
+              <div style={{ color: 'var(--tn-green)' }}>{'\u20ac' + t.cost.toFixed(2)}</div>
               <div style={{ color: 'var(--tn-blue)' }}>{(t.tokens / 1000).toFixed(1)}K</div>
               <div style={{ color: 'var(--tn-text-muted)' }}>{t.requests}</div>
               <div style={{ color: 'var(--tn-text-muted)' }}>{t.gutachtenCount}</div>
@@ -142,9 +167,9 @@ export default function UsageTab() {
       {!loading && view === 'trend' && trend && (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 16 }}>
-            {statCard('Total Cost (6M)', `€${trend.totalCost.toFixed(2)}`, 'var(--tn-green)')}
-            {statCard('Total Tokens (6M)', `${(trend.totalTokens / 1000).toFixed(1)}K`, 'var(--tn-blue)')}
-            {statCard('Total Requests (6M)', `${trend.totalRequests}`, 'var(--tn-orange)')}
+            {statCard('Total Cost (6M)', '\u20ac' + trend.totalCost.toFixed(2), 'var(--tn-green)')}
+            {statCard('Total Tokens (6M)', (trend.totalTokens / 1000).toFixed(1) + 'K', 'var(--tn-blue)')}
+            {statCard('Total Requests (6M)', '' + trend.totalRequests, 'var(--tn-orange)')}
           </div>
           <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6, fontWeight: 600 }}>COST TREND (EUR/MONTH)</div>
           <ResponsiveContainer width="100%" height={140}>
@@ -152,7 +177,7 @@ export default function UsageTab() {
               <CartesianGrid strokeDasharray="3 3" stroke="var(--tn-border)" />
               <XAxis dataKey="month" tick={{ fontSize: 9, fill: 'var(--tn-text-muted)' }} />
               <YAxis tick={{ fontSize: 9, fill: 'var(--tn-text-muted)' }} width={36} />
-              <Tooltip contentStyle={{ background: 'var(--tn-bg-dark)', border: '1px solid var(--tn-border)', fontSize: 10 }} formatter={(v: number | undefined) => [`€${v ?? 0}`, 'Cost']} />
+              <Tooltip contentStyle={{ background: 'var(--tn-bg-dark)', border: '1px solid var(--tn-border)', fontSize: 10 }} formatter={(v: number | undefined) => ['\u20ac' + (v ?? 0), 'Cost']} />
               <Line type="monotone" dataKey="cost" stroke="var(--tn-green)" strokeWidth={2} dot={{ r: 3, fill: 'var(--tn-green)' }} />
             </LineChart>
           </ResponsiveContainer>
@@ -165,6 +190,58 @@ export default function UsageTab() {
               <Bar dataKey="requests" fill="var(--tn-blue)" radius={[2, 2, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
+        </>
+      )}
+
+      {!loading && view === 'activity' && activity && (
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8, marginBottom: 16 }}>
+            {statCard('Active Tenants', activity.activeTenants + '/' + activity.totalTenants, 'var(--tn-blue)')}
+            {statCard('Month', activity.month, 'var(--tn-text-muted)')}
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 140px 70px 70px 60px', gap: 6, padding: '5px 8px', background: 'var(--tn-bg-dark)', borderRadius: 4, fontSize: 9, fontWeight: 600, color: 'var(--tn-text-muted)', marginBottom: 4 }}>
+            <div>Tenant</div>
+            <div>Quota (Gutachten/Jahr)</div>
+            <div>This Mo.</div>
+            <div>Last Mo.</div>
+            <div>Uploads</div>
+          </div>
+
+          {activity.tenants
+            .sort((a, b) => (b.quotaUsed + b.requestsThisMonth) - (a.quotaUsed + a.requestsThisMonth))
+            .map(t => {
+              const pct = Math.min(100, t.quotaPercentUsed);
+              const barColor = pct > 80 ? 'var(--tn-red)' : pct > 50 ? 'var(--tn-orange)' : 'var(--tn-green)';
+              return (
+                <div key={t.tenantId} style={{ borderBottom: '1px solid var(--tn-border)', padding: '7px 8px', fontSize: 10 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 140px 70px 70px 60px', gap: 6, alignItems: 'center', marginBottom: 4 }}>
+                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <span style={{ color: 'var(--tn-text)' }}>{t.tenantName || '--'}</span>
+                      <span style={{ color: 'var(--tn-text-muted)', fontSize: 9, marginLeft: 4 }}>{t.tenantId.slice(0, 8)}</span>
+                    </div>
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
+                        <span style={{ color: barColor, fontWeight: 600 }}>{t.quotaUsed}</span>
+                        <span style={{ color: 'var(--tn-text-muted)' }}>/ {t.quotaIncluded}</span>
+                        <span style={{ color: 'var(--tn-text-muted)', fontSize: 9, marginLeft: 2 }}>({pct.toFixed(0)}%)</span>
+                      </div>
+                      <div style={{ height: 4, background: 'var(--tn-border)', borderRadius: 2, overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: pct + '%', background: barColor, borderRadius: 2 }} />
+                      </div>
+                    </div>
+                    <div style={{ color: 'var(--tn-blue)' }}>{t.requestsThisMonth}</div>
+                    <div style={{ color: 'var(--tn-text-muted)' }}>{t.requestsLastMonth}</div>
+                    <div style={{ color: t.uploadCount > 0 ? 'var(--tn-orange)' : 'var(--tn-text-muted)' }}>
+                      {t.uploadCount > 0 ? t.uploadCount + ' files' : '--'}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          {activity.tenants.length === 0 && (
+            <div style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 11 }}>No activity data</div>
+          )}
         </>
       )}
     </div>

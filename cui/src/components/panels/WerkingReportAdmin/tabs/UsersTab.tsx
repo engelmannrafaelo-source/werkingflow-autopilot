@@ -15,7 +15,7 @@ interface AdminUser {
 
 type FilterType = 'all' | 'pending' | 'unverified';
 
-export default function UsersTab() {
+export default function UsersTab({ envMode }: { envMode?: string }) {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -39,7 +39,7 @@ export default function UsersTab() {
 
   useEffect(() => {
     fetchUsers();
-  }, [fetchUsers]);
+  }, [fetchUsers, envMode]);
 
   const handleApprove = async (userId: string) => {
     setProcessingIds(prev => new Set(prev).add(userId));

@@ -32,67 +32,43 @@ const CUI_PROXIES = [
   { id: 'local',     localPort: 5004, target: 'http://localhost:4004' },
 ];
 
-// Manual SSE proxy: http-proxy buffers SSE events internally, so we bypass it for /api/stream/
-// cuiId is optional - when provided, tracks processing/done state
-// SSE throttle interval: buffer chunks and flush periodically to reduce CPU load
-const SSE_THROTTLE_MS = 30000; // Flush buffered chunks every 30s
-const SSE_INITIAL_PASSTHROUGH_MS = 5000; // First 5s: relay immediately (page load)
-
+// SSE proxy: blocks data relay to browser (no continuous streaming).
+// Still connects upstream to detect attention markers (plan/question/done).
+// Browser gets an open SSE connection with heartbeat comments only.
 function sseProxy(targetBase: string, req: IncomingMessage, res: ServerResponse, cuiId?: string) {
   const streamId = req.url!.split('/api/stream/')[1]?.slice(0, 8) ?? '?';
-  console.log(`[SSE] → Connect ${streamId} to ${targetBase}${cuiId ? ` (${cuiId})` : ''}`);
+  console.log(`[SSE] → Monitor-only ${streamId} (${cuiId || 'no-id'})`);
   const url = new URL(req.url!, targetBase);
   const headers: Record<string, string> = {};
   for (const [k, v] of Object.entries(req.headers)) {
     if (v && typeof v === 'string') headers[k] = v;
   }
   headers.host = url.host;
-  delete headers['accept-encoding']; // no compression for SSE
+  delete headers['accept-encoding'];
 
+  // Send SSE headers to browser but NO data — just heartbeat to keep alive
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Credentials': 'true',
+  });
+  res.write(':ok\n\n'); // Initial comment to confirm connection
+  const heartbeat = setInterval(() => { res.write(':\n\n'); }, 30000);
+
+  // Connect to upstream SSE silently — only for attention detection
   const proxyReq = httpRequest(url, { method: req.method, headers }, (proxyRes) => {
-    console.log(`[SSE] ← Upstream ${streamId} status=${proxyRes.statusCode}`);
-    res.writeHead(proxyRes.statusCode ?? 200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Credentials': 'true',
-    });
-    res.socket?.setNoDelay(true);
     let chunkCount = 0;
-    const startTime = Date.now();
-    const buffer: Buffer[] = [];
-
-    // Periodic flush timer: sends buffered chunks every 30s
-    const flushTimer = setInterval(() => {
-      if (buffer.length > 0) {
-        const combined = Buffer.concat(buffer);
-        buffer.length = 0;
-        res.write(combined);
-      }
-    }, SSE_THROTTLE_MS);
-
-    // Flush buffer immediately (for attention markers or stream end)
-    function flushNow() {
-      if (buffer.length > 0) {
-        const combined = Buffer.concat(buffer);
-        buffer.length = 0;
-        res.write(combined);
-      }
-    }
 
     proxyRes.on('data', (chunk: Buffer) => {
       chunkCount++;
-      const isInitialPhase = (Date.now() - startTime) < SSE_INITIAL_PASSTHROUGH_MS;
-
-      // Detect attention markers BEFORE buffering (always need immediate state updates)
-      let hasAttention = false;
+      // Detect attention markers (plan/question/done) — no data relay
       if (cuiId) {
         const text = chunk.toString();
         const attention = detectAttentionMarkers(text);
         if (attention) {
-          hasAttention = true;
           console.log(`[SSE] ${streamId} attention: ${attention.state}/${attention.reason ?? '-'}`);
           if (attention.state === 'idle') {
             broadcast({ type: 'cui-state', cuiId, state: 'done' });
@@ -103,20 +79,11 @@ function sseProxy(targetBase: string, req: IncomingMessage, res: ServerResponse,
           }
         }
       }
-
-      // Initial phase or attention marker: relay immediately (flush buffer + this chunk)
-      if (isInitialPhase || hasAttention) {
-        flushNow();
-        res.write(chunk);
-      } else {
-        // Throttle phase: buffer the chunk
-        buffer.push(chunk);
-      }
     });
+
     proxyRes.on('end', () => {
-      clearInterval(flushTimer);
-      flushNow(); // Flush any remaining buffered chunks
-      console.log(`[SSE] End ${streamId} (${chunkCount} chunks)`);
+      clearInterval(heartbeat);
+      console.log(`[SSE] End ${streamId} (${chunkCount} chunks monitored)`);
       if (cuiId && chunkCount > 0) {
         broadcast({ type: 'cui-state', cuiId, state: 'done' });
         broadcast({ type: 'cui-response-ready', cuiId });
@@ -128,16 +95,20 @@ function sseProxy(targetBase: string, req: IncomingMessage, res: ServerResponse,
       res.end();
     });
   });
+
   proxyReq.on('error', (err) => {
+    clearInterval(heartbeat);
     console.error(`[SSE] ✗ Error ${streamId}:`, err.message);
     if (cuiId) broadcast({ type: 'cui-state', cuiId, state: 'done' });
-    if (!res.headersSent) res.writeHead(502);
     res.end();
   });
+
   req.on('close', () => {
+    clearInterval(heartbeat);
     console.log(`[SSE] Client disconnected ${streamId}`);
     proxyReq.destroy();
   });
+
   proxyReq.end();
 }
 
@@ -2552,17 +2523,41 @@ app.post('/api/control/cui/cwd', (req, res) => {
 // ADMIN APIS - Werking Report Proxy
 // ============================================================
 
-const WR_BASE = process.env.WERKING_REPORT_URL ?? 'https://werking-report.vercel.app';
+const WR_PROD_URL = process.env.WERKING_REPORT_URL ?? 'https://werking-report.vercel.app';
+const WR_STAGING_URL = process.env.WERKING_REPORT_STAGING_URL ?? 'https://werking-report-git-develop-rafael-engelmanns-projects.vercel.app';
 const WR_ADMIN_SECRET = process.env.WERKING_REPORT_ADMIN_SECRET ?? process.env.ADMIN_SECRET ?? '';
+
+// Runtime-switchable env mode (persists until server restart)
+type WrEnvMode = 'production' | 'staging';
+let wrEnvMode: WrEnvMode = 'production';
+function wrBase(): string { return wrEnvMode === 'staging' ? WR_STAGING_URL : WR_PROD_URL; }
 
 function wrAdminHeaders(): Record<string, string> {
   if (!WR_ADMIN_SECRET) throw new Error('WERKING_REPORT_ADMIN_SECRET not set');
   return { 'x-admin-secret': WR_ADMIN_SECRET, 'Content-Type': 'application/json' };
 }
 
+// GET /api/admin/wr/env — current env mode
+app.get('/api/admin/wr/env', (_req, res) => {
+  res.json({ mode: wrEnvMode, urls: { production: WR_PROD_URL, staging: WR_STAGING_URL } });
+});
+
+// POST /api/admin/wr/env — switch env mode
+app.post('/api/admin/wr/env', (req, res) => {
+  const { mode } = req.body as { mode?: string };
+  if (mode !== 'production' && mode !== 'staging') {
+    res.status(400).json({ error: 'mode must be "production" or "staging"' });
+    return;
+  }
+  wrEnvMode = mode;
+  console.log(`[Admin Proxy] WR env switched to: ${wrEnvMode} → ${wrBase()}`);
+  broadcast({ type: 'wr-env-changed', mode: wrEnvMode });
+  res.json({ ok: true, mode: wrEnvMode, url: wrBase() });
+});
+
 app.get('/api/admin/wr/users', async (_req, res) => {
   try {
-    const response = await fetch(`${WR_BASE}/api/admin/users`, { headers: wrAdminHeaders() });
+    const response = await fetch(`${wrBase()}/api/admin/users`, { headers: wrAdminHeaders() });
     const data = await response.json();
     res.status(response.status).json(data);
   } catch (err: any) {
@@ -2573,7 +2568,7 @@ app.get('/api/admin/wr/users', async (_req, res) => {
 
 app.post('/api/admin/wr/users/:id/approve', async (req, res) => {
   try {
-    const response = await fetch(`${WR_BASE}/api/admin/users/${req.params.id}/approve`, {
+    const response = await fetch(`${wrBase()}/api/admin/users/${req.params.id}/approve`, {
       method: 'POST', headers: wrAdminHeaders(),
     });
     const data = await response.json();
@@ -2586,7 +2581,7 @@ app.post('/api/admin/wr/users/:id/approve', async (req, res) => {
 
 app.post('/api/admin/wr/users/:id/verify', async (req, res) => {
   try {
-    const response = await fetch(`${WR_BASE}/api/admin/users/${req.params.id}/verify`, {
+    const response = await fetch(`${wrBase()}/api/admin/users/${req.params.id}/verify`, {
       method: 'POST', headers: wrAdminHeaders(),
     });
     const data = await response.json();
@@ -2599,7 +2594,7 @@ app.post('/api/admin/wr/users/:id/verify', async (req, res) => {
 
 app.get('/api/admin/wr/billing/overview', async (_req, res) => {
   try {
-    const response = await fetch(`${WR_BASE}/api/admin/billing/overview`, { headers: wrAdminHeaders() });
+    const response = await fetch(`${wrBase()}/api/admin/billing/overview`, { headers: wrAdminHeaders() });
     const data = await response.json();
     res.status(response.status).json(data);
   } catch (err: any) {
@@ -2611,7 +2606,7 @@ app.get('/api/admin/wr/billing/overview', async (_req, res) => {
 app.get('/api/admin/wr/usage/stats', async (req, res) => {
   try {
     const period = req.query.period || 'month';
-    const response = await fetch(`${WR_BASE}/api/admin/usage/stats?period=${period}`, { headers: wrAdminHeaders() });
+    const response = await fetch(`${wrBase()}/api/admin/usage/stats?period=${period}`, { headers: wrAdminHeaders() });
     const data = await response.json();
     res.status(response.status).json(data);
   } catch (err: any) {
@@ -2620,9 +2615,20 @@ app.get('/api/admin/wr/usage/stats', async (req, res) => {
   }
 });
 
+app.get('/api/admin/wr/usage/activity', async (_req, res) => {
+  try {
+    const response = await fetch(`${wrBase()}/api/admin/usage/activity`, { headers: wrAdminHeaders() });
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (err: any) {
+    console.error('[Admin Proxy] GET /api/admin/wr/usage/activity error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/admin/wr/feedback', async (_req, res) => {
   try {
-    const response = await fetch(`${WR_BASE}/api/admin/feedback`, { headers: wrAdminHeaders() });
+    const response = await fetch(`${wrBase()}/api/admin/feedback`, { headers: wrAdminHeaders() });
     const data = await response.json();
     res.status(response.status).json(data);
   } catch (err: any) {
@@ -2633,7 +2639,7 @@ app.get('/api/admin/wr/feedback', async (_req, res) => {
 
 app.get('/api/admin/wr/system-health', async (_req, res) => {
   try {
-    const response = await fetch(`${WR_BASE}/api/admin/system-health`, { headers: wrAdminHeaders() });
+    const response = await fetch(`${wrBase()}/api/admin/system-health`, { headers: wrAdminHeaders() });
     const data = await response.json();
     res.status(response.status).json(data);
   } catch (err: any) {
@@ -2644,7 +2650,7 @@ app.get('/api/admin/wr/system-health', async (_req, res) => {
 
 app.get('/api/admin/wr/usage/trend', async (_req, res) => {
   try {
-    const response = await fetch(`${WR_BASE}/api/admin/usage/trend`, { headers: wrAdminHeaders() });
+    const response = await fetch(`${wrBase()}/api/admin/usage/trend`, { headers: wrAdminHeaders() });
     const data = await response.json();
     res.status(response.status).json(data);
   } catch (err: any) {
@@ -2783,7 +2789,10 @@ app.post('/api/rebuild', (_req, res) => {
       console.log('[Rebuild] Build done:', stdout.trim().split('\n').pop());
       console.log('[Rebuild] Restarting server...');
       const wrSecret = process.env.WERKING_REPORT_ADMIN_SECRET ?? '';
-      const restartCmd = `cd /root/projekte/werkingflow/autopilot/cui && WERKING_REPORT_ADMIN_SECRET="${wrSecret}" NODE_ENV=production PORT=4005 nohup npx tsx server/index.ts > ~/cui-server.log 2>&1 &`;
+      const wrUrl = process.env.WERKING_REPORT_URL ?? '';
+      const wrStagingUrl = process.env.WERKING_REPORT_STAGING_URL ?? '';
+      const vercelToken = process.env.VERCEL_TOKEN ?? '';
+      const restartCmd = `cd /root/projekte/werkingflow/autopilot/cui && WERKING_REPORT_ADMIN_SECRET="${wrSecret}" WERKING_REPORT_URL="${wrUrl}" WERKING_REPORT_STAGING_URL="${wrStagingUrl}" VERCEL_TOKEN="${vercelToken}" NODE_ENV=production PORT=4005 nohup npx tsx server/index.ts > ~/cui-server.log 2>&1 &`;
       exec(restartCmd, () => {
         setTimeout(() => process.exit(0), 500);
       });
@@ -2794,6 +2803,114 @@ app.post('/api/rebuild', (_req, res) => {
 // --- Knowledge Registry (Document Knowledge System) ---
 import knowledgeRegistryRouter from './knowledge-registry.js';
 app.use('/api/team/knowledge', knowledgeRegistryRouter);
+
+// --- Agent Monitoring & Control ---
+import { spawn } from 'child_process';
+import { promises as fsAgentPromises } from 'fs';
+
+const AGENTS_DIR = '/root/projekte/werkingflow/team-agents';
+const AGENT_REGISTRY: Record<string, { persona_id: string; persona_name: string; schedule: string }> = {
+  kai: { persona_id: 'kai-hoffmann', persona_name: 'Kai Hoffmann', schedule: 'Mo 09:00' },
+};
+const runningAgents = new Set<string>();
+
+async function agentReadJsonlLastN(filePath: string, n: number): Promise<any[]> {
+  try {
+    const content = await fsAgentPromises.readFile(filePath, 'utf-8');
+    const lines = content.trim().split('\n').filter(Boolean);
+    return lines.slice(-n).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  } catch { return []; }
+}
+
+app.get('/api/agents/status', async (_req, res) => {
+  const agents = await Promise.all(Object.entries(AGENT_REGISTRY).map(async ([id, info]) => {
+    const memory = await agentReadJsonlLastN(`${AGENTS_DIR}/memory/${info.persona_id}.jsonl`, 1);
+    const last = memory[0] ?? null;
+    let inboxCount = 0;
+    try { const inbox = await fsAgentPromises.readFile(`${AGENTS_DIR}/inbox/${info.persona_id}.md`, 'utf-8'); inboxCount = inbox.split('---').filter(s => s.trim()).length; } catch { /**/ }
+    let approvalsCount = 0;
+    try { const raw = await fsAgentPromises.readFile(`${AGENTS_DIR}/approvals/pending.jsonl`, 'utf-8'); approvalsCount = raw.trim().split('\n').filter(Boolean).filter(l => { try { return JSON.parse(l).persona?.toLowerCase().includes(id.toLowerCase()); } catch { return false; } }).length; } catch { /**/ }
+    let status: 'idle' | 'working' | 'error' = 'idle';
+    if (runningAgents.has(id)) status = 'working';
+    else if (last?.response_preview?.startsWith('ERROR:')) status = 'error';
+    const now = new Date();
+    const daysUntilMonday = now.getDay() === 1 ? 7 : (8 - now.getDay()) % 7 || 7;
+    const nextRun = new Date(now); nextRun.setDate(now.getDate() + daysUntilMonday); nextRun.setHours(9, 0, 0, 0);
+    return { id, persona_id: info.persona_id, persona_name: info.persona_name, schedule: info.schedule, status, last_run: last?.timestamp ?? null, last_actions: last?.actions ?? 0, last_action_types: last?.action_types ?? [], last_trigger: last?.trigger ?? null, next_run: nextRun.toISOString(), has_pending_approvals: approvalsCount > 0, approvals_count: approvalsCount, inbox_count: inboxCount };
+  }));
+  res.json({ agents });
+});
+
+app.get('/api/agents/memory/:personaId', async (req, res) => {
+  const safe = req.params.personaId.replace(/[^a-z0-9-]/g, '');
+  const n = Math.min(parseInt(String(req.query.n ?? '10'), 10), 50);
+  const entries = await agentReadJsonlLastN(`${AGENTS_DIR}/memory/${safe}.jsonl`, n);
+  res.json({ persona_id: safe, entries: entries.reverse() });
+});
+
+app.get('/api/agents/inbox/:personaId', async (req, res) => {
+  const safe = req.params.personaId.replace(/[^a-z0-9-]/g, '');
+  try {
+    const content = await fsAgentPromises.readFile(`${AGENTS_DIR}/inbox/${safe}.md`, 'utf-8');
+    const messages = content.split('\n---\n').filter(s => s.trim()).map(block => {
+      const vonMatch = block.match(/\*\*Von:\*\*\s*(.+)/);
+      const datumMatch = block.match(/\*\*Datum:\*\*\s*(.+)/);
+      const body = block.replace(/\*\*Von:\*\*[^\n]+\n?/, '').replace(/\*\*Datum:\*\*[^\n]+\n?/, '').trim();
+      return { from: vonMatch?.[1]?.trim() ?? 'Unknown', date: datumMatch?.[1]?.trim() ?? '', body };
+    });
+    res.json({ persona_id: safe, messages });
+  } catch { res.json({ persona_id: safe, messages: [] }); }
+});
+
+app.get('/api/agents/approvals', async (_req, res) => {
+  try {
+    const raw = await fsAgentPromises.readFile(`${AGENTS_DIR}/approvals/pending.jsonl`, 'utf-8');
+    const approvals = raw.trim().split('\n').filter(Boolean).map((l, i) => { try { return { index: i, ...JSON.parse(l) }; } catch { return null; } }).filter(Boolean);
+    res.json({ approvals });
+  } catch { res.json({ approvals: [] }); }
+});
+
+app.post('/api/agents/approve', async (req, res) => {
+  const { index, execute } = req.body as { index: number; execute: boolean };
+  try {
+    const raw = await fsAgentPromises.readFile(`${AGENTS_DIR}/approvals/pending.jsonl`, 'utf-8');
+    const lines = raw.trim().split('\n').filter(Boolean);
+    if (index < 0 || index >= lines.length) return res.status(400).json({ error: 'Invalid index' });
+    const entry = JSON.parse(lines[index]);
+    lines.splice(index, 1);
+    await fsAgentPromises.writeFile(`${AGENTS_DIR}/approvals/pending.jsonl`, lines.join('\n') + (lines.length ? '\n' : ''));
+    if (execute && entry.type === 'bash') execAsync(entry.payload, { cwd: AGENTS_DIR, timeout: 30000 }).then(({stdout, stderr}) => console.log('[Approval] OK:', stdout || stderr)).catch(e => console.error('[Approval]', e.message));
+    res.json({ ok: true, executed: execute && entry.type === 'bash' });
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/agents/trigger/:id', (req, res) => {
+  const { id } = req.params;
+  if (!AGENT_REGISTRY[id]) return res.status(404).json({ error: `Unknown agent: ${id}` });
+  if (runningAgents.has(id)) return res.status(409).json({ error: 'Agent already running' });
+  runningAgents.add(id);
+  console.log(`[AgentTrigger] Starting: ${id}`);
+  const proc = spawn('python3', ['scheduler.py', '--once', id], { cwd: AGENTS_DIR, detached: false, stdio: ['ignore', 'pipe', 'pipe'] });
+  proc.stdout?.on('data', (d: Buffer) => console.log(`[Agent:${id}]`, d.toString().trim()));
+  proc.stderr?.on('data', (d: Buffer) => console.error(`[Agent:${id}]`, d.toString().trim()));
+  proc.on('close', (code) => { runningAgents.delete(id); console.log(`[Agent:${id}] done (exit ${code})`); });
+  res.json({ ok: true, agent_id: id, started_at: new Date().toISOString() });
+});
+
+app.get('/api/agents/briefs', async (_req, res) => {
+  try {
+    const files = await fsAgentPromises.readdir(`${AGENTS_DIR}/shared/weekly-briefs`);
+    res.json({ briefs: files.filter(f => f.endsWith('.md')).sort().reverse().map(f => ({ name: f })) });
+  } catch { res.json({ briefs: [] }); }
+});
+
+app.get('/api/agents/brief/:name', async (req, res) => {
+  const safe = req.params.name.replace(/[^a-zA-Z0-9._-]/g, '');
+  if (!safe.endsWith('.md')) return res.status(400).json({ error: 'Only .md files' });
+  try {
+    res.type('text/plain').send(await fsAgentPromises.readFile(`${AGENTS_DIR}/shared/weekly-briefs/${safe}`, 'utf-8'));
+  } catch { res.status(404).json({ error: 'Not found' }); }
+});
 
 // --- Serve Frontend in Production ---
 if (PROD) {
