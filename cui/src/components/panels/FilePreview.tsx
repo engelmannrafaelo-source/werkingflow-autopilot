@@ -23,6 +23,28 @@ interface FilePreviewProps {
 
 const API = '/api';
 
+// Maps local watchPath to its SSH equivalent (mirror path on server)
+const SSH_ROOT = '/root/projekte/werkingflow';
+
+function isSSHPath(p: string): boolean {
+  return p.startsWith('/root/');
+}
+
+function toSSHPath(localPath: string): string {
+  // e.g. /Users/rafael/Documents/GitHub/werkingflow/autopilot/cui/data/active/werking-report
+  //   → /root/projekte/werkingflow/autopilot/cui/data/active/werking-report
+  const match = localPath.match(/\/werkingflow(.*)/);
+  if (match) return `${SSH_ROOT}${match[1]}`;
+  return SSH_ROOT;
+}
+
+function toLocalPath(sshPath: string, localBase: string): string {
+  const match = sshPath.match(/\/root\/projekte\/werkingflow(.*)/);
+  if (!match) return localBase;
+  const localRoot = localBase.match(/^(.*\/werkingflow)/)?.[1] ?? localBase;
+  return `${localRoot}${match[1]}`;
+}
+
 export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
   const [currentDir, setCurrentDir] = useState(watchPath ?? '');
   const [entries, setEntries] = useState<FileEntry[]>([]);
@@ -31,7 +53,9 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
   const [inputPath, setInputPath] = useState(watchPath ?? '');
   const [stageLoading, setStageLoading] = useState(false);
   const [stageSuccess, setStageSuccess] = useState(false);
+  const [sshMode, setSSHMode] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
+  const localBaseRef = useRef(watchPath ?? '');
 
   // WebSocket for file changes
   useEffect(() => {
@@ -112,6 +136,9 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
   }, []);
 
   useEffect(() => {
+    if (watchPath && !isSSHPath(watchPath)) {
+      localBaseRef.current = watchPath;
+    }
     if (currentDir) loadDir(currentDir);
   }, []);
 
@@ -128,6 +155,17 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
     setInputPath(parent);
     loadDir(parent);
     setSelectedFile(null);
+  }
+
+  function toggleSSH() {
+    const nextSSH = !sshMode;
+    setSSHMode(nextSSH);
+    setSelectedFile(null);
+    const newPath = nextSSH
+      ? toSSHPath(currentDir || localBaseRef.current)
+      : toLocalPath(currentDir, localBaseRef.current);
+    setInputPath(newPath);
+    loadDir(newPath);
   }
 
   async function stageFile() {
@@ -292,6 +330,19 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
             border: '1px solid var(--tn-border)', borderRadius: 4, padding: '2px 8px', fontSize: 11,
           }}
         />
+        <button
+          onClick={toggleSSH}
+          title={sshMode ? 'SSH (Server) – klicken für Lokal' : 'Lokal – klicken für SSH (Server)'}
+          style={{
+            padding: '2px 7px', fontSize: 10, borderRadius: 3, flexShrink: 0,
+            background: sshMode ? 'var(--tn-blue)' : 'var(--tn-bg-highlight)',
+            color: sshMode ? 'white' : 'var(--tn-text-muted)',
+            border: `1px solid ${sshMode ? 'var(--tn-blue)' : 'var(--tn-border)'}`,
+            cursor: 'pointer', fontFamily: 'monospace',
+          }}
+        >
+          {sshMode ? 'SSH' : 'Lokal'}
+        </button>
       </div>
 
       {error && (
