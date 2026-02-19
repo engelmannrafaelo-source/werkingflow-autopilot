@@ -129,6 +129,8 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(null);
   const activeDirRef = useRef<string>(workDir);
   const controlWsRef = useRef<WebSocket | null>(null);
+  const modelRef = useRef<Model | null>(null);
+  modelRef.current = model;
 
   // Load layout + template + ACTIVE folder from server, fall back to default
   useEffect(() => {
@@ -154,13 +156,26 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     return () => { cancelled = true; };
   }, [projectId, workDir]);
 
+  // Update a tab node's config and trigger debounced layout save
+  const updateNodeConfig = useCallback((nodeId: string, patch: Record<string, string>) => {
+    const m = modelRef.current;
+    if (!m) return;
+    try {
+      const node = m.getNodeById(nodeId) as TabNode | null;
+      if (!node) return;
+      const existing = node.getConfig() ?? {};
+      m.doAction(Actions.updateNodeAttributes(nodeId, { config: { ...existing, ...patch } }));
+    } catch {}
+  }, []);
+
   const factory = useCallback((node: TabNode) => {
     const component = node.getComponent();
     const config = node.getConfig() ?? {};
 
     switch (component) {
       case 'cui':
-        return <CuiPanel accountId={config.accountId} projectId={projectId} workDir={workDir} panelId={node.getId()} isTabVisible={node.isVisible()} />;
+        return <CuiPanel accountId={config.accountId} projectId={projectId} workDir={workDir} panelId={node.getId()} isTabVisible={node.isVisible()}
+          onRouteChange={(route) => updateNodeConfig(node.getId(), { _route: route })} />;
       case 'chat': {
         const accountId = config.accountId || 'rafael';
         const PROXY_PORTS: Record<string, number> = {
@@ -174,7 +189,8 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       case 'images':
         return <ImageDrop />;
       case 'browser':
-        return <BrowserPanel initialUrl={config.url} panelId={node.getId()} />;
+        return <BrowserPanel initialUrl={config.url} panelId={node.getId()}
+          onUrlChange={(url) => updateNodeConfig(node.getId(), { url })} />;
       case 'preview':
         return <FilePreview watchPath={config.watchPath || activeDirRef.current || workDir} stageDir={activeDirRef.current} />;
       case 'notes':
