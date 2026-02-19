@@ -219,6 +219,7 @@ export default function App() {
   const [cuiStates, setCuiStates] = useState<CuiStates>({});
   const [projectAttention, setProjectAttention] = useState<Set<string>>(new Set());
   const [showMission, setShowMission] = useState(false);
+  const [pendingActivation, setPendingActivation] = useState<Array<{ projectId: string; conversations: Array<{ sessionId: string; accountId: string }> }> | null>(null);
 
   // Global WebSocket for CUI state tracking + Control API
   const wsRef = useRef<WebSocket | null>(null);
@@ -235,6 +236,15 @@ export default function App() {
         // Control API: switch project
         if (msg.type === 'control:project-switch' && msg.projectId) {
           setActiveId(msg.projectId);
+        }
+        // Activation: switch to target project, hide MC, pass plan as prop
+        if (msg.type === 'control:activate-conversations' && msg.plan?.length > 0) {
+          const firstProjectId = msg.plan[0].projectId;
+          if (firstProjectId) {
+            setPendingActivation(msg.plan);
+            setActiveId(firstProjectId);
+            setShowMission(false);
+          }
         }
         // Forward sync-related messages to ProjectTabs via window.postMessage
         if (msg.type === 'cui-update-available' || (msg.type === 'cui-sync' && msg.auto)) {
@@ -256,6 +266,50 @@ export default function App() {
             }
           })();
         }
+        // Screenshot request: capture DOM of matching panel via html2canvas
+        if (msg.type === 'control:screenshot-request' && msg.panel) {
+          (async () => {
+            try {
+              // Find panel container by data-panel-component or flexlayout tab content
+              const panelId: string = msg.panel;
+              // Try to find visible panel by component name in flexlayout DOM
+              let target: HTMLElement | null = null;
+              // flexlayout renders tab contents in divs with data attributes
+              // Try multiple selectors to find the right panel
+              const candidates = document.querySelectorAll<HTMLElement>(
+                `[data-layout-path], .flexlayout__tab_content, .flexlayout__tabset_content`
+              );
+              for (const el of candidates) {
+                if (el.querySelector(`[data-panel="${panelId}"]`)) { target = el; break; }
+              }
+              // Fallback: find by visible content heuristic (largest visible panel-like div)
+              if (!target) {
+                target = document.querySelector<HTMLElement>(`[data-panel="${panelId}"]`);
+              }
+              // Last resort: capture full app
+              if (!target) target = document.getElementById('root');
+              if (!target) throw new Error('No target element found');
+
+              const html2canvas = (await import('html2canvas')).default;
+              const canvas = await html2canvas(target, {
+                backgroundColor: '#1a1b26',
+                scale: 1,
+                useCORS: true,
+                logging: false,
+                allowTaint: true,
+              });
+              const dataUrl = canvas.toDataURL('image/png');
+              await fetch(`/api/screenshot/${panelId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ dataUrl, width: canvas.width, height: canvas.height }),
+              });
+              console.log(`[Screenshot] Captured ${panelId} (${canvas.width}x${canvas.height})`);
+            } catch (err) {
+              console.warn('[Screenshot] Failed:', msg.panel, err);
+            }
+          })();
+        }
       } catch { /* ignore */ }
     };
     return () => ws.close();
@@ -272,6 +326,10 @@ export default function App() {
 
   const handleCuiStateReset = useCallback((cuiId: string) => {
     setCuiStates(prev => ({ ...prev, [cuiId]: 'idle' }));
+  }, []);
+
+  const handleActivationProcessed = useCallback(() => {
+    setPendingActivation(null);
   }, []);
 
   // Load projects from server on mount
@@ -441,6 +499,8 @@ export default function App() {
               cuiStates={cuiStates}
               onAttentionChange={(needs) => handleAttentionChange(p.id, needs)}
               onCuiStateReset={handleCuiStateReset}
+              pendingActivation={pendingActivation}
+              onActivationProcessed={handleActivationProcessed}
             />
           </div>
         ))}

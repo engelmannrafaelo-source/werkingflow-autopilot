@@ -1,13 +1,21 @@
 import { readFileSync as _readEnvFile, existsSync as _envExists } from 'fs';
-// Load .env from CUI root (manual dotenv — fixed absolute path)
+// Load .env from CUI root (manual dotenv — fixed absolute path, always runs before const init)
 const _envPath = '/root/projekte/werkingflow/autopilot/cui/.env';
 if (_envExists(_envPath)) {
   const _lines = _readEnvFile(_envPath, 'utf8').split('\n');
   for (const _line of _lines) {
-    const _m = _line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
-    if (_m && !process.env[_m[1]]) { process.env[_m[1]] = _m[2].trim(); }
+    const _trimmed = _line.trim();
+    if (!_trimmed || _trimmed.startsWith('#')) continue;
+    const _eq = _trimmed.indexOf('=');
+    if (_eq < 1) continue;
+    const _key = _trimmed.slice(0, _eq).trim();
+    const _val = _trimmed.slice(_eq + 1).trim();
+    // Always set from .env (override empty/missing, but not if already explicitly set via env)
+    if (!process.env[_key]) process.env[_key] = _val;
   }
 }
+// Debug: verify secret loaded (only log presence, not value)
+console.log('[.env] WERKING_REPORT_ADMIN_SECRET:', process.env.WERKING_REPORT_ADMIN_SECRET ? `set (${process.env.WERKING_REPORT_ADMIN_SECRET.length} chars)` : 'MISSING');
 
 import express from 'express';
 import { createServer, request as httpRequest, IncomingMessage, ServerResponse } from 'http';
@@ -2757,6 +2765,97 @@ app.post('/api/control/snapshot/request', (req, res) => {
   if (!panel) { res.status(400).json({ error: 'panel required' }); return; }
   broadcast({ type: 'control:snapshot-request', panel });
   res.json({ ok: true, panel, message: 'Snapshot request sent to frontend' });
+});
+
+// ============================================================
+// Screenshot API — html2canvas-based panel screenshots
+// ============================================================
+
+const SCREENSHOT_DIR = '/tmp/cui-screenshots';
+if (!existsSync(SCREENSHOT_DIR)) mkdirSync(SCREENSHOT_DIR, { recursive: true });
+
+interface PanelScreenshot {
+  panel: string;
+  capturedAt: string;
+  width: number;
+  height: number;
+  filePath: string;
+}
+const panelScreenshots = new Map<string, PanelScreenshot>();
+
+// POST /api/screenshot/:panel — frontend posts PNG as base64
+app.post('/api/screenshot/:panel', (req, res) => {
+  const { panel } = req.params;
+  const { dataUrl, width, height } = req.body as { dataUrl?: string; width?: number; height?: number };
+  if (!dataUrl?.startsWith('data:image/png;base64,')) {
+    res.status(400).json({ error: 'dataUrl (PNG base64) required' });
+    return;
+  }
+  const base64 = dataUrl.replace('data:image/png;base64,', '');
+  const filePath = `${SCREENSHOT_DIR}/${panel}-${Date.now()}.png`;
+  // Keep only latest per panel — delete old one
+  const prev = panelScreenshots.get(panel);
+  if (prev?.filePath && existsSync(prev.filePath)) {
+    try { unlinkSync(prev.filePath); } catch {}
+  }
+  writeFileSync(filePath, Buffer.from(base64, 'base64'));
+  const meta: PanelScreenshot = { panel, capturedAt: new Date().toISOString(), width: width ?? 0, height: height ?? 0, filePath };
+  panelScreenshots.set(panel, meta);
+  broadcast({ type: 'screenshot-stored', panel, capturedAt: meta.capturedAt });
+  console.log(`[Screenshot] Stored: ${panel} (${width}x${height}) → ${filePath}`);
+  res.json({ ok: true, panel, capturedAt: meta.capturedAt, url: `/api/screenshot/${panel}.png` });
+});
+
+// GET /api/screenshot/:panel.png — serve PNG image directly
+app.get('/api/screenshot/:panel.png', (req, res) => {
+  const panel = req.params.panel;
+  const meta = panelScreenshots.get(panel);
+  if (!meta || !existsSync(meta.filePath)) {
+    res.status(404).send('No screenshot for panel: ' + panel);
+    return;
+  }
+  res.setHeader('Content-Type', 'image/png');
+  res.setHeader('Content-Disposition', `inline; filename="${panel}-${meta.capturedAt.slice(0,10)}.png"`);
+  res.send(readFileSync(meta.filePath));
+});
+
+// GET /api/screenshot/:panel — metadata only
+app.get('/api/screenshot/:panel', (req, res) => {
+  const { panel } = req.params;
+  const meta = panelScreenshots.get(panel);
+  if (!meta) { res.status(404).json({ error: 'No screenshot for panel: ' + panel }); return; }
+  res.json({ panel: meta.panel, capturedAt: meta.capturedAt, width: meta.width, height: meta.height, url: `/api/screenshot/${panel}.png` });
+});
+
+// GET /api/screenshot — list all screenshots
+app.get('/api/screenshot', (_req, res) => {
+  const list = Array.from(panelScreenshots.values()).map(m => ({
+    panel: m.panel, capturedAt: m.capturedAt, width: m.width, height: m.height,
+    url: `/api/screenshot/${m.panel}.png`,
+  }));
+  res.json({ screenshots: list });
+});
+
+// POST /api/control/screenshot/request — trigger frontend to capture a panel screenshot
+// panel: component name (e.g. "admin-wr") OR nodeId
+// timeout: optional ms to wait before responding (default 3000)
+app.post('/api/control/screenshot/request', async (req, res) => {
+  const { panel, wait } = req.body as { panel?: string; wait?: number };
+  if (!panel) { res.status(400).json({ error: 'panel required' }); return; }
+  const waitMs = Math.min(wait ?? 3000, 15000);
+  broadcast({ type: 'control:screenshot-request', panel });
+  // Wait for screenshot to arrive (poll panelScreenshots)
+  const before = panelScreenshots.get(panel)?.capturedAt;
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 200));
+    const current = panelScreenshots.get(panel);
+    if (current && current.capturedAt !== before) {
+      res.json({ ok: true, panel, capturedAt: current.capturedAt, url: `/api/screenshot/${panel}.png` });
+      return;
+    }
+  }
+  res.status(408).json({ error: `Screenshot timeout after ${waitMs}ms — panel may not be visible` });
 });
 
 app.post('/api/control/panel/add', (req, res) => {

@@ -56,7 +56,7 @@ export default function WerkingReportAdmin() {
   const isStaging = envMode === 'staging';
 
   return (
-    <div style={{
+    <div data-panel="admin-wr" style={{
       display: 'flex',
       flexDirection: 'column',
       height: '100%',
@@ -80,19 +80,8 @@ export default function WerkingReportAdmin() {
 
           {/* Env Toggle */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            {/* Staging badge */}
-            {isStaging && (
-              <span style={{
-                fontSize: 9, fontWeight: 700, letterSpacing: '0.05em',
-                background: 'rgba(224,175,104,0.2)', color: 'var(--tn-orange)',
-                border: '1px solid var(--tn-orange)', borderRadius: 3,
-                padding: '2px 5px', textTransform: 'uppercase',
-              }}>
-                STAGING
-              </span>
-            )}
             {/* Toggle buttons */}
-            <div style={{ display: 'flex', border: '1px solid var(--tn-border)', borderRadius: 4, overflow: 'hidden' }}>
+            <div style={{ display: 'flex', border: `1px solid ${isStaging ? 'var(--tn-orange)' : 'var(--tn-border)'}`, borderRadius: 4, overflow: 'hidden' }}>
               {(['production', 'staging'] as EnvMode[]).map(mode => (
                 <button
                   key={mode}
