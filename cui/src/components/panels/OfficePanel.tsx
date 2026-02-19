@@ -3,6 +3,9 @@ import TaskBoard from './TaskBoard';
 import PersonaChat from './PersonaChat';
 import ReviewQueue from './ReviewQueue';
 import MeetingRoomView from './MeetingRoomView';
+import KnowledgeGraphView from './KnowledgeGraphView';
+import ScanDocumentsButton from './ScanDocumentsButton';
+import PersonaDocumentList from './PersonaDocumentList';
 
 const API = '/api';
 
@@ -34,7 +37,7 @@ export default function OfficePanel({ projectId, workDir }: OfficePanelProps) {
   const [worklist, setWorklist] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [view, setView] = useState<'grid' | 'room' | 'tasks' | 'chat' | 'reviews'>('room');
+  const [view, setView] = useState<'grid' | 'room' | 'tasks' | 'chat' | 'reviews' | 'knowledge'>('room');
 
   // Load personas on mount
   useEffect(() => {
@@ -185,6 +188,21 @@ export default function OfficePanel({ projectId, workDir }: OfficePanelProps) {
           >
             📋 Tasks
           </button>
+          <button
+            onClick={() => setView('knowledge')}
+            style={{
+              padding: '6px 12px',
+              background: view === 'knowledge' ? 'var(--tn-blue)' : 'var(--tn-bg)',
+              color: view === 'knowledge' ? 'white' : 'var(--tn-text-muted)',
+              border: '1px solid var(--tn-border)',
+              borderRadius: 4,
+              cursor: 'pointer',
+              fontSize: 12,
+              fontWeight: view === 'knowledge' ? 600 : 400,
+            }}
+          >
+            📚 Knowledge
+          </button>
           {selected && (
             <button
               onClick={() => setView('chat')}
@@ -281,6 +299,21 @@ export default function OfficePanel({ projectId, workDir }: OfficePanelProps) {
           onSelectPersona={selectPersona}
           selected={selected}
         />
+      )}
+
+      {view === 'knowledge' && (
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'auto' }}>
+          <ScanDocumentsButton />
+          <KnowledgeGraphView
+            personas={personas}
+            onPersonaClick={(personaId) => {
+              const persona = personas.find((p) => p.id === personaId);
+              if (persona) selectPersona(persona);
+            }}
+            selected={selected}
+          />
+          {selected && <PersonaDocumentList personaId={selected.id} personaName={selected.name} />}
+        </div>
       )}
     </div>
   );

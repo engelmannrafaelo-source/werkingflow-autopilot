@@ -47,26 +47,19 @@ function sseProxy(targetBase: string, req: IncomingMessage, res: ServerResponse,
     // Disable Nagle so each chunk flushes immediately
     res.socket?.setNoDelay(true);
     let chunkCount = 0;
-    let stateSet = false;
     proxyRes.on('data', (chunk: Buffer) => {
       chunkCount++;
-      const text = chunk.toString();
-      const preview = text.slice(0, 80).replace(/\n/g, '\\n');
-      console.log(`[SSE] chunk#${chunkCount} ${streamId}: ${preview}`);
       res.write(chunk);
 
-      // Track CUI state from SSE data flow
-      if (cuiId && !stateSet) {
-        // First meaningful data chunk = actively processing
-        stateSet = true;
-        broadcast({ type: 'cui-state', cuiId, state: 'processing' });
-        setSessionState(cuiId, cuiId, 'working');
-      }
-
-      // Detect attention-requiring markers (plan, question, error, completion)
+      // Only detect attention markers (plan/question) — do NOT set 'working' state here.
+      // CUI SSE streams are long-lived and replay historical data on connect,
+      // which would falsely set 'working' on idle conversations.
+      // The 'working' state is set by messagePostProxy when a message is actually sent.
       if (cuiId) {
+        const text = chunk.toString();
         const attention = detectAttentionMarkers(text);
         if (attention) {
+          console.log(`[SSE] ${streamId} attention: ${attention.state}/${attention.reason ?? '-'}`);
           if (attention.state === 'idle') {
             broadcast({ type: 'cui-state', cuiId, state: 'done' });
             broadcast({ type: 'cui-response-ready', cuiId });
@@ -78,7 +71,7 @@ function sseProxy(targetBase: string, req: IncomingMessage, res: ServerResponse,
       }
     });
     proxyRes.on('end', () => {
-      console.log(`[SSE] ✓ End ${streamId} (${chunkCount} chunks)`);
+      console.log(`[SSE] End ${streamId} (${chunkCount} chunks)`);
       if (cuiId && chunkCount > 0) {
         broadcast({ type: 'cui-state', cuiId, state: 'done' });
         broadcast({ type: 'cui-response-ready', cuiId });
@@ -106,47 +99,61 @@ function sseProxy(targetBase: string, req: IncomingMessage, res: ServerResponse,
 
 // --- Auto-Refresh: Monitor CUI streams for response completion ---
 function monitorStream(targetBase: string, streamingId: string, cuiId: string, authHeaders: Record<string, string>) {
-  console.log(`[Monitor] Watching stream ${streamingId} for ${cuiId}`);
   const url = new URL(`/api/stream/${streamingId}`, targetBase);
   const headers: Record<string, string> = { 'Accept': 'text/event-stream' };
   if (authHeaders.authorization) headers['Authorization'] = authHeaders.authorization;
   if (authHeaders.cookie) headers['Cookie'] = authHeaders.cookie;
 
   const monitorReq = httpRequest(url, { method: 'GET', headers }, (monitorRes) => {
-    console.log(`[Monitor] Connected to stream ${streamingId}, status=${monitorRes.statusCode}`);
     if (monitorRes.statusCode !== 200) {
-      setTimeout(() => broadcast({ type: 'cui-response-ready', cuiId }), 8000);
+      // Stream not available — set idle after delay
+      setTimeout(() => {
+        broadcast({ type: 'cui-state', cuiId, state: 'done' });
+        broadcast({ type: 'cui-response-ready', cuiId });
+        setSessionState(cuiId, cuiId, 'idle', 'done');
+      }, 8000);
       return;
     }
     monitorRes.on('data', (chunk: Buffer) => {
-      const text = chunk.toString();
-      // Detect attention markers first (plan, question, etc.)
-      const attention = detectAttentionMarkers(text);
+      const attention = detectAttentionMarkers(chunk.toString());
       if (attention) {
         if (attention.state === 'idle') {
-          console.log(`[Monitor] Response complete for ${cuiId}`);
           broadcast({ type: 'cui-response-ready', cuiId });
           broadcast({ type: 'cui-state', cuiId, state: 'done' });
           setSessionState(cuiId, cuiId, 'idle', 'done');
           monitorReq.destroy();
         } else {
-          console.log(`[Monitor] Attention needed for ${cuiId}: ${attention.reason}`);
+          console.log(`[Monitor] ${cuiId}: ${attention.reason}`);
           setSessionState(cuiId, cuiId, attention.state, attention.reason);
         }
       }
     });
     monitorRes.on('end', () => {
-      console.log(`[Monitor] Stream ended for ${cuiId}`);
       broadcast({ type: 'cui-response-ready', cuiId });
       broadcast({ type: 'cui-state', cuiId, state: 'done' });
+      setSessionState(cuiId, cuiId, 'idle', 'done');
     });
   });
-  monitorReq.on('error', (err) => {
-    console.error(`[Monitor] Error: ${err.message}`);
-    setTimeout(() => broadcast({ type: 'cui-response-ready', cuiId }), 8000);
+  monitorReq.on('error', () => {
+    // Connection error — set idle after delay
+    setTimeout(() => {
+      broadcast({ type: 'cui-state', cuiId, state: 'done' });
+      broadcast({ type: 'cui-response-ready', cuiId });
+      setSessionState(cuiId, cuiId, 'idle', 'done');
+    }, 8000);
   });
   monitorReq.end();
-  setTimeout(() => monitorReq.destroy(), 120000);
+  // Safety timeout: if stream hasn't ended in 45s, set idle
+  setTimeout(() => {
+    const current = sessionStates.get(cuiId);
+    if (current?.state === 'working') {
+      console.log(`[Monitor] ${cuiId}: 45s timeout, setting idle`);
+      broadcast({ type: 'cui-state', cuiId, state: 'done' });
+      broadcast({ type: 'cui-response-ready', cuiId });
+      setSessionState(cuiId, cuiId, 'idle', 'done');
+    }
+    monitorReq.destroy();
+  }, 45000);
 }
 
 // Manual proxy for message POST to capture streamingId for auto-refresh
@@ -184,12 +191,20 @@ function messagePostProxy(targetBase: string, cuiId: string, req: IncomingMessag
           } else {
             console.log(`[${cuiId}] No streamingId found, keys:`, Object.keys(data).join(','));
             console.log(`[${cuiId}] Response preview:`, responseBody.toString().slice(0, 300));
-            // Fallback: broadcast after delay
-            setTimeout(() => broadcast({ type: 'cui-response-ready', cuiId }), 10000);
+            // Fallback: set idle after delay
+            setTimeout(() => {
+              broadcast({ type: 'cui-state', cuiId, state: 'done' });
+              broadcast({ type: 'cui-response-ready', cuiId });
+              setSessionState(cuiId, cuiId, 'idle', 'done');
+            }, 10000);
           }
         } catch {
           console.log(`[${cuiId}] Non-JSON POST response, fallback broadcast`);
-          setTimeout(() => broadcast({ type: 'cui-response-ready', cuiId }), 10000);
+          setTimeout(() => {
+            broadcast({ type: 'cui-state', cuiId, state: 'done' });
+            broadcast({ type: 'cui-response-ready', cuiId });
+            setSessionState(cuiId, cuiId, 'idle', 'done');
+          }, 10000);
         }
       });
     });
@@ -301,6 +316,20 @@ const CUI_INJECT_SCRIPT = `<script>(function(){
   setTimeout(notifyParent,2000);
   setInterval(notifyParent,30000);
 
+  // --- Rate Limit Detection ---
+  var _rlNotified=false;
+  function _checkRateLimit(){
+    if(_rlNotified) return;
+    var text=(document.body&&document.body.innerText)||'';
+    if(text.indexOf("hit your limit")>-1||text.indexOf("rate limit")>-1){
+      _rlNotified=true;
+      try{window.parent.postMessage({type:'cui-rate-limit'},'*');}catch(e){}
+    }
+  }
+  setInterval(_checkRateLimit,3000);
+  var _origNotify=notifyParent;
+  notifyParent=function(){_rlNotified=false;_origNotify();};
+
   // Handle commands from parent
   var _lastRefresh=0;
   window.addEventListener('message',function(e){
@@ -402,6 +431,19 @@ const CUI_INJECT_SCRIPT = `<script>(function(){
   document.addEventListener('scroll',schedulePF,true);
   // Fallback interval (reduced from 3s to 500ms)
   setInterval(schedulePF,500);
+
+  // --- Rate Limit Detection ---
+  var _rlLast=false;
+  function checkRateLimit(){
+    var t=(document.body&&document.body.innerText)||'';
+    var limited=t.indexOf("You've hit your limit")>-1||t.indexOf("you've hit your limit")>-1||t.indexOf("rate limit")>-1;
+    if(limited!==_rlLast){
+      _rlLast=limited;
+      try{window.parent.postMessage({type:'cui-rate-limit',limited:limited},'*');}catch(e){}
+    }
+  }
+  setInterval(checkRateLimit,3000);
+  setTimeout(checkRateLimit,2000);
 })();</script>`;
 
 // Inject script into CUI HTML for route persistence + auto-refresh
@@ -439,19 +481,33 @@ function serveInjectedHtml(targetBase: string, req: IncomingMessage, res: Server
   fetchReq.end();
 }
 
-// Log ALL requests for debugging
+// Log only POST requests (GETs are too noisy with 3-4 proxies)
 function logRequest(cuiId: string, req: IncomingMessage) {
-  const method = req.method;
-  const url = req.url?.slice(0, 80);
-  if (url?.includes('/api/')) {
-    console.log(`[${cuiId}] ${method} ${url}`);
+  if (req.method === 'POST') {
+    console.log(`[${cuiId}] POST ${req.url?.slice(0, 80)}`);
   }
 }
 
+// Rate-limit proxy error logging (1x/min per proxy) but always broadcast error state
+const proxyErrorLog: Record<string, number> = {};
+
 for (const cui of CUI_PROXIES) {
   const proxy = httpProxy.createProxyServer({ target: cui.target, ws: true });
-  proxy.on('error', (err) => {
-    console.error(`[Proxy ${cui.id}] Error:`, err.message);
+  proxy.on('error', (err, req, res) => {
+    const now = Date.now();
+    // Broadcast error to frontend so it's visible
+    broadcast({ type: 'cui-state', cuiId: cui.id, state: 'error', message: (err as Error).message });
+    // Rate-limit log output (max 1x per minute per proxy)
+    if (!proxyErrorLog[cui.id] || now - proxyErrorLog[cui.id] > 60000) {
+      console.error(`[Proxy ${cui.id}] Error: ${(err as Error).message}`);
+      proxyErrorLog[cui.id] = now;
+    }
+    // Send error response so the client doesn't hang forever
+    const response = res as ServerResponse;
+    if (response && !response.headersSent && typeof response.writeHead === 'function') {
+      response.writeHead(502, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ error: `CUI server ${cui.id} nicht erreichbar` }));
+    }
   });
 
   const proxyServer = createServer((req, res) => {
@@ -487,7 +543,10 @@ for (const cui of CUI_PROXIES) {
   });
 
   proxyServer.on('upgrade', (req, socket, head) => {
-    proxy.ws(req, socket, head);
+    proxy.ws(req, socket, head, undefined, (err) => {
+      console.error(`[Proxy ${cui.id}] WS upgrade error:`, (err as Error).message);
+      socket.destroy();
+    });
   });
 
   proxyServer.listen(cui.localPort, () => {
@@ -533,24 +592,19 @@ function getSessionStates(): Record<string, SessionState> {
 }
 
 // Detect attention-requiring markers in SSE text
+// IMPORTANT: Only match LIVE stream events, not historical conversation replay data.
+// Historical chunks contain "type":"result", "stop_reason" etc. for every past message.
 function detectAttentionMarkers(text: string): { state: ConvAttentionState; reason?: AttentionReason } | null {
   // Plan mode: ExitPlanMode or EnterPlanMode tool calls
-  if (text.includes('"name":"ExitPlanMode"') || text.includes('"name":"EnterPlanMode"') ||
-      text.includes('ExitPlanMode') && text.includes('"type":"tool_use"')) {
+  if (text.includes('"name":"ExitPlanMode"') || text.includes('"name":"EnterPlanMode"')) {
     return { state: 'needs_attention', reason: 'plan' };
   }
   // User question: AskUserQuestion tool call
-  if (text.includes('"name":"AskUserQuestion"') ||
-      text.includes('AskUserQuestion') && text.includes('"type":"tool_use"')) {
+  if (text.includes('"name":"AskUserQuestion"')) {
     return { state: 'needs_attention', reason: 'question' };
   }
-  // Error markers
-  if (text.includes('"type":"error"') || text.includes('"error":')) {
-    return { state: 'needs_attention', reason: 'error' };
-  }
-  // Completion markers
-  if (text.includes('"type":"result"') || text.includes('"stop_reason"') ||
-      text.includes('"type":"message_stop"') || text.includes('"type":"closed"')) {
+  // Stream-end markers (only these are reliable for live stream completion)
+  if (text.includes('"type":"closed"') || text.includes('"type":"message_stop"')) {
     return { state: 'idle', reason: 'done' };
   }
   return null;
@@ -597,6 +651,18 @@ function broadcast(data: Record<string, unknown>) {
   }
 }
 
+function cleanupOldWatchers() {
+  // Limit to 10 active watchers max to prevent resource exhaustion
+  if (watchers.size <= 10) return;
+  const entries = [...watchers.entries()];
+  const toRemove = entries.slice(0, entries.length - 10);
+  for (const [path, watcher] of toRemove) {
+    watcher.close();
+    watchers.delete(path);
+    console.log(`[Watcher] Cleaned up old watcher: ${path}`);
+  }
+}
+
 function startWatching(dirPath: string) {
   // Skip remote paths - can't watch via chokidar
   if (isRemotePath(dirPath)) return;
@@ -610,6 +676,8 @@ function startWatching(dirPath: string) {
     console.warn(`[Watcher] Blocked overly broad watch path: ${resolved}`);
     return;
   }
+
+  cleanupOldWatchers();
 
   const watcher = watch(resolved, {
     ignored: /(^|[\/\\])\.|node_modules|Library/,
@@ -2272,6 +2340,10 @@ app.post('/api/rebuild', (_req, res) => {
   }, 200);
 });
 
+// --- Knowledge Registry (Document Knowledge System) ---
+import knowledgeRegistryRouter from './knowledge-registry.js';
+app.use('/api/team/knowledge', knowledgeRegistryRouter);
+
 // --- Serve Frontend in Production ---
 if (PROD) {
   const distPath = resolve(import.meta.dirname ?? __dirname, '..', 'dist');
@@ -2283,6 +2355,21 @@ if (PROD) {
     });
   }
 }
+
+// --- Knowledge Watcher (File Monitoring) ---
+import { KnowledgeWatcher } from './knowledge-watcher.js';
+const knowledgeWatcher = new KnowledgeWatcher({
+  base_path: '/root/projekte/werkingflow/business',
+  ignore_patterns: ['**/archive/**', '**/_archiv/**', '**/.DS_Store', '**/*.pdf', '**/*.html'],
+  debounce_ms: 2000,
+  auto_scan_threshold: 5,
+});
+knowledgeWatcher.start();
+
+process.on('SIGTERM', () => {
+  knowledgeWatcher.stop();
+  process.exit(0);
+});
 
 // --- Start ---
 server.listen(PORT, () => {
