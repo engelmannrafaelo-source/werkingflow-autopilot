@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import UsersTab from './tabs/UsersTab';
 import BillingTab from './tabs/BillingTab';
 import UsageTab from './tabs/UsageTab';
@@ -7,7 +7,7 @@ import FeedbackTab from './tabs/FeedbackTab';
 interface Tab {
   key: string;
   label: string;
-  component: JSX.Element;
+  component: React.ReactElement;
 }
 
 export default function WerkingReportAdmin() {

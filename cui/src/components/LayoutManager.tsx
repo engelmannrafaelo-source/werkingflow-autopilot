@@ -10,6 +10,8 @@ import NotesPanel from './panels/NotesPanel';
 import MissionControl from './panels/MissionControl';
 import OfficePanel from './panels/OfficePanel';
 import WerkingReportAdmin from './panels/WerkingReportAdmin/WerkingReportAdmin';
+import LinkedInPanel from './panels/LinkedInPanel';
+import SystemHealth from './panels/SystemHealth';
 import LayoutBuilder from './LayoutBuilder';
 import '../styles/office.css';
 
@@ -104,21 +106,29 @@ function defaultLayout(workDir: string): IJsonModel {
   };
 }
 
+interface ActivationPlan {
+  projectId: string;
+  conversations: Array<{ sessionId: string; accountId: string }>;
+}
+
 interface LayoutManagerProps {
   projectId: string;
   workDir: string;
   cuiStates?: CuiStates;
   onAttentionChange?: (needsAttention: boolean) => void;
   onCuiStateReset?: (cuiId: string) => void;
+  pendingActivation?: ActivationPlan[] | null;
+  onActivationProcessed?: () => void;
 }
 
-export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAttentionChange, onCuiStateReset }: LayoutManagerProps) {
+export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAttentionChange, onCuiStateReset, pendingActivation, onActivationProcessed }: LayoutManagerProps) {
   const [model, setModel] = useState<Model | null>(null);
   const [showBuilder, setShowBuilder] = useState(false);
   const templateRef = useRef<IJsonModel | null>(null);
   const layoutRef = useRef<Layout>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(null);
   const activeDirRef = useRef<string>(workDir);
+  const controlWsRef = useRef<WebSocket | null>(null);
 
   // Load layout + template + ACTIVE folder from server, fall back to default
   useEffect(() => {
@@ -150,7 +160,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
 
     switch (component) {
       case 'cui':
-        return <CuiPanel accountId={config.accountId} projectId={projectId} workDir={workDir} panelId={node.getId()} />;
+        return <CuiPanel accountId={config.accountId} projectId={projectId} workDir={workDir} panelId={node.getId()} isTabVisible={node.isVisible()} />;
       case 'chat': {
         const accountId = config.accountId || 'rafael';
         const PROXY_PORTS: Record<string, number> = {
@@ -175,6 +185,10 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         return <OfficePanel projectId={projectId} workDir={workDir} />;
       case 'admin-wr':
         return <WerkingReportAdmin />;
+      case 'linkedin':
+        return <LinkedInPanel />;
+      case 'system-health':
+        return <SystemHealth />;
       default:
         return (
           <div style={{ padding: 20, color: 'var(--tn-text-muted)' }}>
@@ -224,7 +238,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     saveLayout(newModel);
   }, [workDir, saveLayout]);
 
-  const addTab = useCallback((type: 'cui' | 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr', config: Record<string, string>, targetId: string) => {
+  const addTab = useCallback((type: 'cui' | 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health', config: Record<string, string>, targetId: string) => {
     if (!model) return;
     const names: Record<string, string> = {
       cui: config.accountId ? config.accountId.charAt(0).toUpperCase() + config.accountId.slice(1) : 'CUI',
@@ -235,6 +249,8 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       mission: 'Mission Control',
       office: 'Virtual Office',
       'admin-wr': 'Werking Report Admin',
+      linkedin: 'LinkedIn Marketing 🔗',
+      'system-health': 'System Health',
     };
     if (type === 'preview' && !config.watchPath) {
       config.watchPath = activeDirRef.current || workDir;
@@ -260,7 +276,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           if (val.startsWith('cui:')) {
             addTab('cui', { accountId: val.split(':')[1] }, node.getId());
           } else {
-            addTab(val as 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr', {}, node.getId());
+            addTab(val as 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health', {}, node.getId());
           }
           e.target.value = '';
         }}
@@ -291,6 +307,8 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         <option value="mission">Mission Control</option>
         <option value="office">Virtual Office 👥</option>
         <option value="admin-wr">Werking Report Admin</option>
+        <option value="system-health">System Health</option>
+        <option value="linkedin">LinkedIn Marketing 🔗</option>
       </select>
     );
   }, [addTab]);
@@ -366,6 +384,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
   useEffect(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${protocol}://${window.location.host}/ws`);
+    controlWsRef.current = ws;
 
     function reportPanels() {
       if (!model || ws.readyState !== WebSocket.OPEN) return;
@@ -398,15 +417,214 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           model.doAction(Actions.deleteTab(msg.nodeId));
           reportPanels();
         }
+        // Close panels when a conversation is finished or deleted via Mission Control
+        if ((msg.type === 'control:conversation-finished' || msg.type === 'control:conversation-deleted') && msg.panelsToClose && model) {
+          const myPanels = (msg.panelsToClose as Array<{ panelId: string; projectId: string }>)
+            .filter(p => p.projectId === projectId);
+          for (const p of myPanels) {
+            try { model.doAction(Actions.deleteTab(p.panelId)); } catch {}
+          }
+          if (myPanels.length > 0) {
+            reportPanels();
+            saveLayout(model);
+          }
+        }
         if (msg.type === 'control:layout-reset') {
           handleResetLayout();
           setTimeout(reportPanels, 200);
         }
+        // --- Conversation Activation: open CUI panels for selected conversations ---
+        if (msg.type === 'control:activate-conversations' && model && msg.plan) {
+          const myPlan = (msg.plan as Array<{ projectId: string; conversations: Array<{ sessionId: string; accountId: string }> }>)
+            .find(p => p.projectId === projectId);
+          if (!myPlan) return;
+
+          // 1. Inventory existing CUI panels
+          const existingPanels: Array<{ nodeId: string; accountId: string }> = [];
+          model.visitNodes((node) => {
+            if (node.getType() === 'tab') {
+              const tab = node as TabNode;
+              if (tab.getComponent() === 'cui') {
+                existingPanels.push({ nodeId: tab.getId(), accountId: tab.getConfig()?.accountId || '' });
+              }
+            }
+          });
+
+          // 2. Match conversations to existing panels (same accountId first)
+          const assignments: Array<{ panelId: string; sessionId: string }> = [];
+          const usedPanels = new Set<string>();
+          const unmatched: Array<{ sessionId: string; accountId: string }> = [];
+
+          for (const conv of myPlan.conversations) {
+            const panel = existingPanels.find(p => p.accountId === conv.accountId && !usedPanels.has(p.nodeId));
+            if (panel) {
+              assignments.push({ panelId: panel.nodeId, sessionId: conv.sessionId });
+              usedPanels.add(panel.nodeId);
+            } else {
+              unmatched.push(conv);
+            }
+          }
+
+          // 3. Create new CUI panels for unmatched conversations (auto-split)
+          let tabsetCount = 0;
+          model.visitNodes((node) => { if (node.getType() === 'tabset') tabsetCount++; });
+
+          for (const conv of unmatched) {
+            // Find tabset with fewest children
+            let targetId = '';
+            let minTabs = Infinity;
+            model.visitNodes((node) => {
+              if (node.getType() === 'tabset') {
+                const ts = node as TabSetNode;
+                const count = ts.getChildren().length;
+                if (count < minTabs) { minTabs = count; targetId = ts.getId(); }
+              }
+            });
+            if (!targetId) continue;
+
+            const tabName = conv.accountId.charAt(0).toUpperCase() + conv.accountId.slice(1);
+            const dockLocation = tabsetCount < 6
+              ? (tabsetCount % 2 === 0 ? DockLocation.RIGHT : DockLocation.BOTTOM)
+              : DockLocation.CENTER;
+
+            model.doAction(Actions.addNode(
+              { type: 'tab', name: tabName, component: 'cui', config: { accountId: conv.accountId } },
+              targetId, dockLocation, -1
+            ));
+            tabsetCount++;
+
+            // Find the new node (last CUI tab with this accountId that isn't already assigned)
+            let newPanelId = '';
+            model.visitNodes((node) => {
+              if (node.getType() === 'tab') {
+                const tab = node as TabNode;
+                if (tab.getComponent() === 'cui' && tab.getConfig()?.accountId === conv.accountId
+                    && !usedPanels.has(tab.getId()) && !assignments.some(a => a.panelId === tab.getId())) {
+                  newPanelId = tab.getId();
+                }
+              }
+            });
+            if (newPanelId) {
+              assignments.push({ panelId: newPanelId, sessionId: conv.sessionId });
+              usedPanels.add(newPanelId);
+            }
+          }
+
+          // 4. Send navigate commands (staggered to avoid iframe race conditions)
+          assignments.forEach((a, i) => {
+            setTimeout(() => {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'navigate-request', panelId: a.panelId, sessionId: a.sessionId, projectId }));
+              }
+            }, i * 300);
+          });
+
+          // Save layout after modifications
+          saveLayout(model);
+          reportPanels();
+        }
       } catch { /* ignore */ }
     };
 
-    return () => ws.close();
+    return () => { controlWsRef.current = null; ws.close(); };
   }, [model, handleResetLayout]);
+
+  // Process pending activation plan (from prop, e.g. after project switch)
+  useEffect(() => {
+    if (!pendingActivation || !model) return;
+    const myPlan = pendingActivation.find(p => p.projectId === projectId);
+    if (!myPlan) return;
+
+    // Wait for WS to connect before sending navigate commands
+    const tryProcess = () => {
+      const ws = controlWsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        // WS not ready yet - retry shortly
+        setTimeout(tryProcess, 200);
+        return;
+      }
+
+      // Same logic as the WS handler: inventory, match, split, navigate
+      const existingPanels: Array<{ nodeId: string; accountId: string }> = [];
+      model.visitNodes((node) => {
+        if (node.getType() === 'tab') {
+          const tab = node as TabNode;
+          if (tab.getComponent() === 'cui') {
+            existingPanels.push({ nodeId: tab.getId(), accountId: tab.getConfig()?.accountId || '' });
+          }
+        }
+      });
+
+      const assignments: Array<{ panelId: string; sessionId: string }> = [];
+      const usedPanels = new Set<string>();
+      const unmatched: Array<{ sessionId: string; accountId: string }> = [];
+
+      for (const conv of myPlan.conversations) {
+        const panel = existingPanels.find(p => p.accountId === conv.accountId && !usedPanels.has(p.nodeId));
+        if (panel) {
+          assignments.push({ panelId: panel.nodeId, sessionId: conv.sessionId });
+          usedPanels.add(panel.nodeId);
+        } else {
+          unmatched.push(conv);
+        }
+      }
+
+      let tabsetCount = 0;
+      model.visitNodes((node) => { if (node.getType() === 'tabset') tabsetCount++; });
+
+      for (const conv of unmatched) {
+        let targetId = '';
+        let minTabs = Infinity;
+        model.visitNodes((node) => {
+          if (node.getType() === 'tabset') {
+            const ts = node as TabSetNode;
+            const count = ts.getChildren().length;
+            if (count < minTabs) { minTabs = count; targetId = ts.getId(); }
+          }
+        });
+        if (!targetId) continue;
+
+        const tabName = conv.accountId.charAt(0).toUpperCase() + conv.accountId.slice(1);
+        const dockLocation = tabsetCount < 6
+          ? (tabsetCount % 2 === 0 ? DockLocation.RIGHT : DockLocation.BOTTOM)
+          : DockLocation.CENTER;
+
+        model.doAction(Actions.addNode(
+          { type: 'tab', name: tabName, component: 'cui', config: { accountId: conv.accountId } },
+          targetId, dockLocation, -1
+        ));
+        tabsetCount++;
+
+        let newPanelId = '';
+        model.visitNodes((node) => {
+          if (node.getType() === 'tab') {
+            const tab = node as TabNode;
+            if (tab.getComponent() === 'cui' && tab.getConfig()?.accountId === conv.accountId
+                && !usedPanels.has(tab.getId()) && !assignments.some(a => a.panelId === tab.getId())) {
+              newPanelId = tab.getId();
+            }
+          }
+        });
+        if (newPanelId) {
+          assignments.push({ panelId: newPanelId, sessionId: conv.sessionId });
+          usedPanels.add(newPanelId);
+        }
+      }
+
+      assignments.forEach((a, i) => {
+        setTimeout(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'navigate-request', panelId: a.panelId, sessionId: a.sessionId, projectId }));
+          }
+        }, i * 300);
+      });
+
+      saveLayout(model);
+      onActivationProcessed?.();
+    };
+
+    tryProcess();
+  }, [pendingActivation, model, projectId, onActivationProcessed, saveLayout]);
 
   // Report attention state to parent (any CUI tab in 'done' state)
   useEffect(() => {

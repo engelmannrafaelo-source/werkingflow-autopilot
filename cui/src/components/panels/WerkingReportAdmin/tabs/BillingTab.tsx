@@ -203,6 +203,9 @@ export default function BillingTab() {
                   </div>
                   <div style={{ color: 'var(--tn-text-subtle)' }}>
                     {tenant.subscription?.planId || '-'}
+                    {tenant.subscription?.cancelAtPeriodEnd && (
+                      <span style={{ marginLeft: 4, fontSize: 9, background: 'rgba(247,118,142,0.2)', color: 'var(--tn-red)', padding: '1px 4px', borderRadius: 2, fontWeight: 600 }}>CANCELS</span>
+                    )}
                   </div>
                   <div>
                     {tenant.subscription ? (

@@ -5,7 +5,7 @@ if (_envExists(_envPath)) {
   const _lines = _readEnvFile(_envPath, 'utf8').split('\n');
   for (const _line of _lines) {
     const _m = _line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
-    if (_m && !process.env[_m[1]]) process.env[_m[1]] = _m[2].trim();
+    if (_m && !process.env[_m[1]]) { process.env[_m[1]] = _m[2].trim(); }
   }
 }
 
@@ -13,7 +13,7 @@ import express from 'express';
 import { createServer, request as httpRequest, IncomingMessage, ServerResponse } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { resolve, extname, relative, join } from 'path';
-import { readFileSync, readdirSync, statSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
+import { readFileSync, readdirSync, statSync, existsSync, mkdirSync, writeFileSync, unlinkSync, rmSync } from 'fs';
 import { homedir } from 'os';
 import { watch } from 'chokidar';
 import mime from 'mime-types';
@@ -34,6 +34,10 @@ const CUI_PROXIES = [
 
 // Manual SSE proxy: http-proxy buffers SSE events internally, so we bypass it for /api/stream/
 // cuiId is optional - when provided, tracks processing/done state
+// SSE throttle interval: buffer chunks and flush periodically to reduce CPU load
+const SSE_THROTTLE_MS = 30000; // Flush buffered chunks every 30s
+const SSE_INITIAL_PASSTHROUGH_MS = 5000; // First 5s: relay immediately (page load)
+
 function sseProxy(targetBase: string, req: IncomingMessage, res: ServerResponse, cuiId?: string) {
   const streamId = req.url!.split('/api/stream/')[1]?.slice(0, 8) ?? '?';
   console.log(`[SSE] → Connect ${streamId} to ${targetBase}${cuiId ? ` (${cuiId})` : ''}`);
@@ -55,21 +59,40 @@ function sseProxy(targetBase: string, req: IncomingMessage, res: ServerResponse,
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Credentials': 'true',
     });
-    // Disable Nagle so each chunk flushes immediately
     res.socket?.setNoDelay(true);
     let chunkCount = 0;
+    const startTime = Date.now();
+    const buffer: Buffer[] = [];
+
+    // Periodic flush timer: sends buffered chunks every 30s
+    const flushTimer = setInterval(() => {
+      if (buffer.length > 0) {
+        const combined = Buffer.concat(buffer);
+        buffer.length = 0;
+        res.write(combined);
+      }
+    }, SSE_THROTTLE_MS);
+
+    // Flush buffer immediately (for attention markers or stream end)
+    function flushNow() {
+      if (buffer.length > 0) {
+        const combined = Buffer.concat(buffer);
+        buffer.length = 0;
+        res.write(combined);
+      }
+    }
+
     proxyRes.on('data', (chunk: Buffer) => {
       chunkCount++;
-      res.write(chunk);
+      const isInitialPhase = (Date.now() - startTime) < SSE_INITIAL_PASSTHROUGH_MS;
 
-      // Only detect attention markers (plan/question) — do NOT set 'working' state here.
-      // CUI SSE streams are long-lived and replay historical data on connect,
-      // which would falsely set 'working' on idle conversations.
-      // The 'working' state is set by messagePostProxy when a message is actually sent.
+      // Detect attention markers BEFORE buffering (always need immediate state updates)
+      let hasAttention = false;
       if (cuiId) {
         const text = chunk.toString();
         const attention = detectAttentionMarkers(text);
         if (attention) {
+          hasAttention = true;
           console.log(`[SSE] ${streamId} attention: ${attention.state}/${attention.reason ?? '-'}`);
           if (attention.state === 'idle') {
             broadcast({ type: 'cui-state', cuiId, state: 'done' });
@@ -80,13 +103,23 @@ function sseProxy(targetBase: string, req: IncomingMessage, res: ServerResponse,
           }
         }
       }
+
+      // Initial phase or attention marker: relay immediately (flush buffer + this chunk)
+      if (isInitialPhase || hasAttention) {
+        flushNow();
+        res.write(chunk);
+      } else {
+        // Throttle phase: buffer the chunk
+        buffer.push(chunk);
+      }
     });
     proxyRes.on('end', () => {
+      clearInterval(flushTimer);
+      flushNow(); // Flush any remaining buffered chunks
       console.log(`[SSE] End ${streamId} (${chunkCount} chunks)`);
       if (cuiId && chunkCount > 0) {
         broadcast({ type: 'cui-state', cuiId, state: 'done' });
         broadcast({ type: 'cui-response-ready', cuiId });
-        // Only set idle if not already needs_attention (plan/question takes priority)
         const current = sessionStates.get(cuiId);
         if (!current || current.state !== 'needs_attention') {
           setSessionState(cuiId, cuiId, 'idle', 'done');
@@ -531,6 +564,8 @@ for (const cui of CUI_PROXIES) {
 
     // Intercept message POST for auto-refresh stream monitoring
     if (req.method === 'POST' && /\/api\/conversations\/(start|[^/]+\/messages)/.test(req.url || '')) {
+      const urlMatch = req.url?.match(/\/api\/conversations\/([^/]+)/);
+      if (urlMatch?.[1]) setLastPrompt(urlMatch[1]);
       broadcast({ type: 'cui-state', cuiId: cui.id, state: 'processing' });
       messagePostProxy(cui.target, cui.id, req, res);
       return;
@@ -561,6 +596,49 @@ const workspaceState = {
   cuiStates: {} as Record<string, string>,
   panels: [] as Array<{ id: string; component: string; config: Record<string, unknown>; name: string }>,
 };
+
+// --- Panel Visibility Registry ---
+// Tracks which conversations are currently visible in CUI panels
+interface PanelVisibility {
+  panelId: string;
+  projectId: string;
+  accountId: string;
+  sessionId: string;
+  route: string;
+  updatedAt: number;
+}
+
+const visibilityRegistry = new Map<string, PanelVisibility>();
+
+function updatePanelVisibility(data: { panelId: string; projectId: string; accountId: string; sessionId: string; route: string }): void {
+  const key = `${data.projectId}:${data.panelId}`;
+  const prev = visibilityRegistry.get(key);
+  visibilityRegistry.set(key, { ...data, updatedAt: Date.now() });
+  if (!prev || prev.sessionId !== data.sessionId) {
+    broadcast({ type: 'visibility-update', visibleSessionIds: [...getVisibleSessionIds()] });
+  }
+}
+
+function removePanelVisibility(projectId: string, panelId: string): void {
+  visibilityRegistry.delete(`${projectId}:${panelId}`);
+  broadcast({ type: 'visibility-update', visibleSessionIds: [...getVisibleSessionIds()] });
+}
+
+function getVisibleSessionIds(): Set<string> {
+  const ids = new Set<string>();
+  for (const entry of visibilityRegistry.values()) {
+    if (entry.sessionId) ids.add(entry.sessionId);
+  }
+  return ids;
+}
+
+// Cleanup stale entries every 60s (panels closed, browser refreshed)
+setInterval(() => {
+  const cutoff = Date.now() - 5 * 60 * 1000;
+  for (const [key, entry] of visibilityRegistry) {
+    if (entry.updatedAt < cutoff) visibilityRegistry.delete(key);
+  }
+}, 60000);
 
 // --- Per-Session Attention State Tracker ---
 // Tracks whether each conversation needs user attention (plan, question, permission, done)
@@ -628,6 +706,24 @@ wss.on('connection', (ws) => {
       if (msg.type === 'state-report') {
         if (msg.activeProjectId) workspaceState.activeProjectId = msg.activeProjectId;
         if (msg.panels) workspaceState.panels = msg.panels;
+      }
+      // Panel visibility reports from CuiPanel
+      if (msg.type === 'panel-visibility' && msg.panelId && msg.projectId) {
+        updatePanelVisibility({
+          panelId: msg.panelId,
+          projectId: msg.projectId,
+          accountId: msg.accountId || '',
+          sessionId: msg.sessionId || '',
+          route: msg.route || '',
+        });
+      }
+      // Panel removed from layout
+      if (msg.type === 'panel-removed' && msg.projectId && msg.panelId) {
+        removePanelVisibility(msg.projectId, msg.panelId);
+      }
+      // Navigate request from LayoutManager → broadcast to all CuiPanels
+      if (msg.type === 'navigate-request' && msg.panelId && msg.sessionId) {
+        broadcast({ type: 'control:cui-navigate-conversation', panelId: msg.panelId, sessionId: msg.sessionId, projectId: msg.projectId || '' });
       }
     } catch {
       // ignore malformed messages
@@ -978,6 +1074,38 @@ function getAssignment(sessionId: string): string {
   return loadAssignments()[sessionId] || '';
 }
 
+// --- Manual Finished Status ---
+// Lets users mark conversations as "finished" even if CUI still says "ongoing"
+const FINISHED_FILE = join(DATA_DIR, 'conv-finished.json');
+function loadFinished(): Record<string, boolean> {
+  if (!existsSync(FINISHED_FILE)) return {};
+  try { return JSON.parse(readFileSync(FINISHED_FILE, 'utf8')); } catch { return {}; }
+}
+function setFinished(sessionId: string, finished: boolean) {
+  const data = loadFinished();
+  if (finished) data[sessionId] = true;
+  else delete data[sessionId];
+  writeFileSync(FINISHED_FILE, JSON.stringify(data, null, 2));
+}
+function isFinished(sessionId: string): boolean {
+  return loadFinished()[sessionId] === true;
+}
+
+// Track when user last sent a prompt per conversation
+const LAST_PROMPT_FILE = join(DATA_DIR, 'conv-last-prompt.json');
+let _lastPromptCache: Record<string, string> | null = null;
+function loadLastPrompt(): Record<string, string> {
+  if (_lastPromptCache) return _lastPromptCache;
+  if (!existsSync(LAST_PROMPT_FILE)) { _lastPromptCache = {}; return _lastPromptCache; }
+  try { _lastPromptCache = JSON.parse(readFileSync(LAST_PROMPT_FILE, 'utf8')); return _lastPromptCache!; } catch { _lastPromptCache = {}; return _lastPromptCache; }
+}
+function setLastPrompt(sessionId: string) {
+  const data = loadLastPrompt();
+  data[sessionId] = new Date().toISOString();
+  _lastPromptCache = data;
+  writeFileSync(LAST_PROMPT_FILE, JSON.stringify(data, null, 2));
+}
+
 // Deduplicate conversations by sessionId (remote accounts share sessions)
 function deduplicateConversations(results: any[]): any[] {
   const assignments = loadAssignments();
@@ -1106,6 +1234,12 @@ app.get('/api/mission/conversations', async (req, res) => {
     }
   }));
 
+  // Enrich with lastPromptAt from local tracking
+  const promptTimes = loadLastPrompt();
+  for (const r of results) {
+    r.lastPromptAt = promptTimes[r.sessionId] || '';
+  }
+
   // Sort by updatedAt desc, ongoing first
   results.sort((a, b) => {
     if (a.status !== b.status) return a.status === 'ongoing' ? -1 : 1;
@@ -1133,6 +1267,20 @@ app.get('/api/mission/conversations', async (req, res) => {
       (conv as any).attentionState = stateInfo.state;
       (conv as any).attentionReason = stateInfo.reason;
     }
+  }
+
+  // Enrich with manualFinished status
+  const finished = loadFinished();
+  for (const conv of deduped) {
+    if (finished[conv.sessionId]) {
+      (conv as any).manualFinished = true;
+    }
+  }
+
+  // Enrich with visibility status
+  const visibleIds = getVisibleSessionIds();
+  for (const conv of deduped) {
+    (conv as any).isVisible = visibleIds.has(conv.sessionId);
   }
 
   res.json({ conversations: deduped, total: deduped.length });
@@ -1189,6 +1337,8 @@ app.post('/api/mission/send', async (req, res) => {
   });
 
   if (!result) { res.status(502).json({ error: 'CUI unreachable' }); return; }
+  saveAssignment(result.sessionId || sessionId, accountId);
+  setLastPrompt(result.sessionId || sessionId);
 
   // Track state
   broadcast({ type: 'cui-state', cuiId: accountId, state: 'processing' });
@@ -1238,6 +1388,102 @@ app.post('/api/mission/conversation/:sessionId/assign', (req, res) => {
   res.json({ ok: true, sessionId: req.params.sessionId, accountId });
 });
 
+// 5c. Get panel visibility (which conversations are open in which panels)
+app.get('/api/mission/visibility', (_req, res) => {
+  const panels: PanelVisibility[] = [];
+  for (const entry of visibilityRegistry.values()) panels.push(entry);
+  res.json({ panels, visibleSessionIds: [...getVisibleSessionIds()] });
+});
+
+// 5d. Mark conversation as finished (user override)
+app.post('/api/mission/conversation/:sessionId/finish', (req, res) => {
+  const finished = req.body.finished !== false;
+  const sid = req.params.sessionId;
+  setFinished(sid, finished);
+  if (finished) {
+    const panelsToClose: Array<{ panelId: string; projectId: string }> = [];
+    for (const entry of visibilityRegistry.values()) {
+      if (entry.sessionId === sid) {
+        panelsToClose.push({ panelId: entry.panelId, projectId: entry.projectId });
+      }
+    }
+    broadcast({ type: 'control:conversation-finished', sessionId: sid, panelsToClose });
+  }
+  res.json({ ok: true, sessionId: sid, finished });
+});
+
+// 5e. Delete conversation permanently (removes .jsonl from disk)
+app.delete('/api/mission/conversation/:sessionId', (req, res) => {
+  const sid = req.params.sessionId;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sid)) {
+    res.status(400).json({ error: 'Invalid sessionId format' });
+    return;
+  }
+  const cuiProjectsDir = join(homedir(), '.claude', 'projects');
+  if (!existsSync(cuiProjectsDir)) {
+    res.status(404).json({ error: 'CUI projects directory not found' });
+    return;
+  }
+  const deleted: string[] = [];
+  const errors: string[] = [];
+  try {
+    const projectDirs = readdirSync(cuiProjectsDir);
+    for (const dir of projectDirs) {
+      const dirPath = join(cuiProjectsDir, dir);
+      if (!statSync(dirPath).isDirectory()) continue;
+      const jsonlPath = join(dirPath, `${sid}.jsonl`);
+      if (existsSync(jsonlPath)) {
+        try { unlinkSync(jsonlPath); deleted.push(jsonlPath); } catch (e: any) { errors.push(e.message); }
+      }
+      const sessionDir = join(dirPath, sid);
+      if (existsSync(sessionDir) && statSync(sessionDir).isDirectory()) {
+        try { rmSync(sessionDir, { recursive: true }); deleted.push(sessionDir); } catch (e: any) { errors.push(e.message); }
+      }
+    }
+  } catch (e: any) {
+    res.status(500).json({ error: `Failed to scan projects: ${e.message}` });
+    return;
+  }
+  if (deleted.length === 0 && errors.length === 0) {
+    res.status(404).json({ error: 'Conversation not found on disk' });
+    return;
+  }
+  setFinished(sid, false);
+  const titles = loadTitles();
+  if (titles[sid]) { delete titles[sid]; writeFileSync(TITLES_FILE, JSON.stringify(titles, null, 2)); }
+  const prompts = loadLastPrompt();
+  if (prompts[sid]) { delete prompts[sid]; writeFileSync(LAST_PROMPT_FILE, JSON.stringify(prompts, null, 2)); }
+  console.log(`[Delete] Conversation ${sid}: ${deleted.length} files deleted`);
+  res.json({ ok: true, deleted, errors });
+});
+
+// 5f. Activate conversations in panels
+app.post('/api/mission/activate', (req, res) => {
+  const { conversations } = req.body;
+  if (!Array.isArray(conversations) || conversations.length === 0) {
+    res.status(400).json({ error: 'conversations array required' });
+    return;
+  }
+  // Group by projectName and resolve project IDs
+  const projectFiles = readdirSync(PROJECTS_DIR).filter(f => f.endsWith('.json'));
+  const projectsData = projectFiles.map(f => {
+    try { return JSON.parse(readFileSync(join(PROJECTS_DIR, f), 'utf8')); } catch { return null; }
+  }).filter(Boolean);
+  const plan: Array<{ projectId: string; conversations: Array<{ sessionId: string; accountId: string }> }> = [];
+  const byProject = new Map<string, Array<{ sessionId: string; accountId: string }>>();
+  for (const c of conversations) {
+    const list = byProject.get(c.projectName) || [];
+    list.push(c);
+    byProject.set(c.projectName, list);
+  }
+  for (const [projName, convs] of byProject) {
+    const proj = projectsData.find((p: any) => p.name === projName);
+    plan.push({ projectId: proj?.id || projName, conversations: convs });
+  }
+  broadcast({ type: 'control:activate-conversations', plan });
+  res.json({ ok: true, plan });
+});
+
 // 6. Start new conversation with subject
 app.post('/api/mission/start', async (req, res) => {
   const { accountId, workDir, subject, message } = req.body;
@@ -1263,8 +1509,9 @@ app.post('/api/mission/start', async (req, res) => {
   if (subject) {
     saveTitle(result.sessionId, subject);
   }
-  // Track account assignment
+  // Track account assignment + prompt time
   saveAssignment(result.sessionId, accountId);
+  setLastPrompt(result.sessionId);
 
   broadcast({ type: 'cui-state', cuiId: accountId, state: 'processing' });
   if (result.streamingId) {
@@ -2380,6 +2627,75 @@ app.get('/api/admin/wr/feedback', async (_req, res) => {
     res.status(response.status).json(data);
   } catch (err: any) {
     console.error('[Admin Proxy] GET /api/admin/wr/feedback error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/wr/system-health', async (_req, res) => {
+  try {
+    const response = await fetch(`${WR_BASE}/api/admin/system-health`, { headers: wrAdminHeaders() });
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (err: any) {
+    console.error('[Admin Proxy] GET /api/admin/wr/system-health error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/wr/usage/trend', async (_req, res) => {
+  try {
+    const response = await fetch(`${WR_BASE}/api/admin/usage/trend`, { headers: wrAdminHeaders() });
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (err: any) {
+    console.error('[Admin Proxy] GET /api/admin/wr/usage/trend error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/ops/deployments — Vercel deployment status for all tracked apps
+const VERCEL_APPS = [
+  { name: 'werking-report', projectSlug: 'werking-report' },
+  { name: 'werking-energy', projectSlug: 'werking-energy' },
+  { name: 'platform', projectSlug: 'platform-werkingflow' },
+  { name: 'engelmann', projectSlug: 'engelmann' },
+  { name: 'tecc-safety', projectSlug: 'tecc-safety' },
+];
+
+app.get('/api/ops/deployments', async (_req, res) => {
+  const VERCEL_TOKEN = process.env.VERCEL_TOKEN ?? '';
+  if (!VERCEL_TOKEN) {
+    res.status(500).json({ error: 'VERCEL_TOKEN not set' });
+    return;
+  }
+  try {
+    const results = await Promise.all(VERCEL_APPS.map(async (app) => {
+      try {
+        const url = `https://api.vercel.com/v6/deployments?projectId=${app.projectSlug}&limit=1&target=production`;
+        const response = await fetch(url, {
+          headers: { Authorization: `Bearer ${VERCEL_TOKEN}` },
+        });
+        if (!response.ok) {
+          return { name: app.name, state: 'ERROR', error: `HTTP ${response.status}` };
+        }
+        const data: any = await response.json();
+        const dep = data.deployments?.[0];
+        if (!dep) return { name: app.name, state: 'UNKNOWN' };
+        return {
+          name: app.name,
+          state: dep.state ?? 'UNKNOWN',
+          url: dep.url ? `https://${dep.url}` : undefined,
+          commitSha: dep.meta?.githubCommitSha?.slice(0, 7),
+          commitMessage: dep.meta?.githubCommitMessage,
+          ageMin: dep.createdAt ? Math.round((Date.now() - dep.createdAt) / 60000) : undefined,
+        };
+      } catch (err: any) {
+        return { name: app.name, state: 'ERROR', error: err.message };
+      }
+    }));
+    res.json({ deployments: results, checkedAt: new Date().toISOString() });
+  } catch (err: any) {
+    console.error('[Ops] GET /api/ops/deployments error:', err);
     res.status(500).json({ error: err.message });
   }
 });
