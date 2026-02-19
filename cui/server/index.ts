@@ -60,13 +60,21 @@ function sseProxy(targetBase: string, req: IncomingMessage, res: ServerResponse,
         // First meaningful data chunk = actively processing
         stateSet = true;
         broadcast({ type: 'cui-state', cuiId, state: 'processing' });
+        setSessionState(cuiId, cuiId, 'working');
       }
 
-      // Detect stream completion events
-      if (cuiId && (text.includes('"type":"result"') || text.includes('"stop_reason"') ||
-          text.includes('"type":"message_stop"') || text.includes('"type":"closed"'))) {
-        broadcast({ type: 'cui-state', cuiId, state: 'done' });
-        broadcast({ type: 'cui-response-ready', cuiId });
+      // Detect attention-requiring markers (plan, question, error, completion)
+      if (cuiId) {
+        const attention = detectAttentionMarkers(text);
+        if (attention) {
+          if (attention.state === 'idle') {
+            broadcast({ type: 'cui-state', cuiId, state: 'done' });
+            broadcast({ type: 'cui-response-ready', cuiId });
+            setSessionState(cuiId, cuiId, 'idle', 'done');
+          } else {
+            setSessionState(cuiId, cuiId, attention.state, attention.reason);
+          }
+        }
       }
     });
     proxyRes.on('end', () => {
@@ -74,6 +82,11 @@ function sseProxy(targetBase: string, req: IncomingMessage, res: ServerResponse,
       if (cuiId && chunkCount > 0) {
         broadcast({ type: 'cui-state', cuiId, state: 'done' });
         broadcast({ type: 'cui-response-ready', cuiId });
+        // Only set idle if not already needs_attention (plan/question takes priority)
+        const current = sessionStates.get(cuiId);
+        if (!current || current.state !== 'needs_attention') {
+          setSessionState(cuiId, cuiId, 'idle', 'done');
+        }
       }
       res.end();
     });
@@ -107,12 +120,19 @@ function monitorStream(targetBase: string, streamingId: string, cuiId: string, a
     }
     monitorRes.on('data', (chunk: Buffer) => {
       const text = chunk.toString();
-      if (text.includes('"type":"result"') || text.includes('"stop_reason"') ||
-          text.includes('"type":"message_stop"') || text.includes('"type":"closed"')) {
-        console.log(`[Monitor] Response complete for ${cuiId}`);
-        broadcast({ type: 'cui-response-ready', cuiId });
-        broadcast({ type: 'cui-state', cuiId, state: 'done' });
-        monitorReq.destroy();
+      // Detect attention markers first (plan, question, etc.)
+      const attention = detectAttentionMarkers(text);
+      if (attention) {
+        if (attention.state === 'idle') {
+          console.log(`[Monitor] Response complete for ${cuiId}`);
+          broadcast({ type: 'cui-response-ready', cuiId });
+          broadcast({ type: 'cui-state', cuiId, state: 'done' });
+          setSessionState(cuiId, cuiId, 'idle', 'done');
+          monitorReq.destroy();
+        } else {
+          console.log(`[Monitor] Attention needed for ${cuiId}: ${attention.reason}`);
+          setSessionState(cuiId, cuiId, attention.state, attention.reason);
+        }
       }
     });
     monitorRes.on('end', () => {
@@ -486,6 +506,56 @@ const workspaceState = {
   panels: [] as Array<{ id: string; component: string; config: Record<string, unknown>; name: string }>,
 };
 
+// --- Per-Session Attention State Tracker ---
+// Tracks whether each conversation needs user attention (plan, question, permission, done)
+type AttentionReason = 'plan' | 'question' | 'permission' | 'error' | 'done';
+type ConvAttentionState = 'working' | 'needs_attention' | 'idle';
+interface SessionState {
+  state: ConvAttentionState;
+  reason?: AttentionReason;
+  since: number;
+  accountId: string;
+  sessionId?: string;
+}
+const sessionStates = new Map<string, SessionState>();
+
+function setSessionState(key: string, accountId: string, state: ConvAttentionState, reason?: AttentionReason, sessionId?: string) {
+  const prev = sessionStates.get(key);
+  if (prev?.state === state && prev?.reason === reason) return; // no change
+  sessionStates.set(key, { state, reason, since: Date.now(), accountId, sessionId });
+  broadcast({ type: 'conv-attention', key, accountId, sessionId, state, reason });
+}
+
+function getSessionStates(): Record<string, SessionState> {
+  const out: Record<string, SessionState> = {};
+  for (const [k, v] of sessionStates) out[k] = v;
+  return out;
+}
+
+// Detect attention-requiring markers in SSE text
+function detectAttentionMarkers(text: string): { state: ConvAttentionState; reason?: AttentionReason } | null {
+  // Plan mode: ExitPlanMode or EnterPlanMode tool calls
+  if (text.includes('"name":"ExitPlanMode"') || text.includes('"name":"EnterPlanMode"') ||
+      text.includes('ExitPlanMode') && text.includes('"type":"tool_use"')) {
+    return { state: 'needs_attention', reason: 'plan' };
+  }
+  // User question: AskUserQuestion tool call
+  if (text.includes('"name":"AskUserQuestion"') ||
+      text.includes('AskUserQuestion') && text.includes('"type":"tool_use"')) {
+    return { state: 'needs_attention', reason: 'question' };
+  }
+  // Error markers
+  if (text.includes('"type":"error"') || text.includes('"error":')) {
+    return { state: 'needs_attention', reason: 'error' };
+  }
+  // Completion markers
+  if (text.includes('"type":"result"') || text.includes('"stop_reason"') ||
+      text.includes('"type":"message_stop"') || text.includes('"type":"closed"')) {
+    return { state: 'idle', reason: 'done' };
+  }
+  return null;
+}
+
 // --- File Watcher ---
 const watchers = new Map<string, ReturnType<typeof watch>>();
 const clients = new Set<WebSocket>();
@@ -790,6 +860,109 @@ function getTitle(sessionId: string): string {
   return loadTitles()[sessionId] || '';
 }
 
+// Auto-generate a clean title from summary text (no LLM needed)
+function autoTitleFromSummary(summary: string): string {
+  if (!summary) return '';
+  // Take first line, clean up
+  let title = summary.split('\n')[0].replace(/\s+/g, ' ').trim();
+  // Skip unhelpful summaries
+  if (title.startsWith('API Error') || title.startsWith('{') || title.startsWith('Error:')) return '';
+  // Remove common prefixes that aren't useful titles
+  title = title.replace(/^(Hey Chat|Hey Claude|Hi Claude|Hallo)[,\s-]*/i, '').trim();
+  // Skip if too short or too generic
+  if (title.length < 3) return '';
+  // Truncate
+  if (title.length > 60) title = title.slice(0, 57) + '...';
+  return title;
+}
+
+// Background: auto-title untitled conversations (runs async, no blocking)
+function autoTitleUntitled(results: Array<{ sessionId: string; summary: string; customName: string }>) {
+  const untitled = results.filter(r => !r.customName && r.summary);
+  if (untitled.length === 0) return;
+  const titles = loadTitles();
+  let saved = 0;
+  for (const r of untitled) {
+    if (titles[r.sessionId]) continue; // Already titled
+    const title = autoTitleFromSummary(r.summary);
+    if (title) {
+      titles[r.sessionId] = title;
+      saved++;
+    }
+  }
+  if (saved > 0) {
+    writeFileSync(TITLES_FILE, JSON.stringify(titles, null, 2));
+    console.log(`[AutoTitle] Generated ${saved} titles from summaries`);
+  }
+}
+
+// --- Conversation Account Assignment ---
+// Tracks which account a conversation belongs to (avoids duplicate display)
+const ASSIGNMENTS_FILE = join(DATA_DIR, 'conv-accounts.json');
+function loadAssignments(): Record<string, string> {
+  if (!existsSync(ASSIGNMENTS_FILE)) return {};
+  try { return JSON.parse(readFileSync(ASSIGNMENTS_FILE, 'utf8')); } catch { return {}; }
+}
+function saveAssignment(sessionId: string, accountId: string) {
+  const assignments = loadAssignments();
+  if (assignments[sessionId] === accountId) return; // No change
+  assignments[sessionId] = accountId;
+  writeFileSync(ASSIGNMENTS_FILE, JSON.stringify(assignments, null, 2));
+}
+function getAssignment(sessionId: string): string {
+  return loadAssignments()[sessionId] || '';
+}
+
+// Deduplicate conversations by sessionId (remote accounts share sessions)
+function deduplicateConversations(results: any[]): any[] {
+  const assignments = loadAssignments();
+  const bySessionId = new Map<string, any[]>();
+
+  for (const r of results) {
+    const existing = bySessionId.get(r.sessionId) || [];
+    existing.push(r);
+    bySessionId.set(r.sessionId, existing);
+  }
+
+  const deduped: any[] = [];
+  for (const [sessionId, entries] of bySessionId) {
+    if (entries.length === 1) {
+      deduped.push(entries[0]);
+      continue;
+    }
+
+    // Multiple accounts have this conversation — pick the best one
+    const assigned = assignments[sessionId];
+
+    // Priority: 1) streaming, 2) ongoing, 3) assigned account, 4) preferred order (rafael > engelmann > office)
+    const streaming = entries.find(e => e.streamingId);
+    const ongoing = entries.find(e => e.status === 'ongoing');
+    let best: any;
+
+    if (streaming) {
+      best = streaming;
+      saveAssignment(sessionId, streaming.accountId);
+    } else if (ongoing) {
+      best = ongoing;
+      saveAssignment(sessionId, ongoing.accountId);
+    } else if (assigned) {
+      best = entries.find(e => e.accountId === assigned) || entries[0];
+    } else {
+      // No assignment yet — prefer rafael > engelmann > office
+      const preferOrder = ['rafael', 'engelmann', 'office', 'local'];
+      best = entries[0];
+      for (const pref of preferOrder) {
+        const match = entries.find(e => e.accountId === pref);
+        if (match) { best = match; break; }
+      }
+    }
+
+    deduped.push(best);
+  }
+
+  return deduped;
+}
+
 // --- ACTIVE Folder API ---
 // Returns the ACTIVE folder path for a project (auto-creates it)
 app.get('/api/active-dir/:projectId', (req, res) => {
@@ -844,7 +1017,7 @@ app.get('/api/mission/conversations', async (req, res) => {
   const results: any[] = [];
 
   await Promise.all(CUI_PROXIES.map(async (proxy) => {
-    const data = await cuiFetch(proxy.localPort, '/api/conversations?limit=30&sortBy=updated&order=desc');
+    const data = await cuiFetch(proxy.localPort, '/api/conversations?limit=50&sortBy=updated&order=desc');
     if (!data?.conversations) return;
     for (const c of data.conversations) {
       if (filterProject && !c.projectPath?.includes(filterProject)) continue;
@@ -874,7 +1047,30 @@ app.get('/api/mission/conversations', async (req, res) => {
     return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
   });
 
-  res.json({ conversations: results, total: results.length });
+  // Auto-title untitled conversations in background (no blocking)
+  autoTitleUntitled(results);
+  // Re-read titles after auto-titling to include newly generated ones
+  const freshTitles = loadTitles();
+  for (const r of results) {
+    if (!r.customName && freshTitles[r.sessionId]) {
+      r.customName = freshTitles[r.sessionId];
+    }
+  }
+
+  // Deduplicate: remote accounts share sessions, show each conversation only once
+  const deduped = deduplicateConversations(results);
+
+  // Enrich with attention states
+  const states = getSessionStates();
+  for (const conv of deduped) {
+    const stateInfo = states[conv.accountId];
+    if (stateInfo) {
+      (conv as any).attentionState = stateInfo.state;
+      (conv as any).attentionReason = stateInfo.reason;
+    }
+  }
+
+  res.json({ conversations: deduped, total: deduped.length });
 });
 
 // 2. Get conversation detail (last N messages)
@@ -931,11 +1127,15 @@ app.post('/api/mission/send', async (req, res) => {
 
   // Track state
   broadcast({ type: 'cui-state', cuiId: accountId, state: 'processing' });
+  setSessionState(accountId, accountId, 'working', undefined, result.sessionId || sessionId);
 
   // Monitor the new stream
   if (result.streamingId) {
     monitorStream(`http://localhost:${port}`, result.streamingId, accountId, {});
   }
+
+  // Track account assignment for this conversation
+  saveAssignment(result.sessionId || sessionId, accountId);
 
   res.json({ ok: true, streamingId: result.streamingId, sessionId: result.sessionId || sessionId });
 });
@@ -953,11 +1153,24 @@ app.post('/api/mission/permissions/:accountId/:permissionId', async (req, res) =
   res.json(result || { error: 'failed' });
 });
 
+// 4b. Get all session attention states (for batch UI updates)
+app.get('/api/mission/states', (_req, res) => {
+  res.json(getSessionStates());
+});
+
 // 5. Set conversation name (Betreff) — saved locally (CUI API ignores custom_name)
 app.post('/api/mission/conversation/:accountId/:sessionId/name', async (req, res) => {
   const name = req.body.custom_name || '';
   saveTitle(req.params.sessionId, name);
   res.json({ ok: true, sessionId: req.params.sessionId, custom_name: name });
+});
+
+// 5b. Assign conversation to account (called when chat is opened in a CUI panel)
+app.post('/api/mission/conversation/:sessionId/assign', (req, res) => {
+  const { accountId } = req.body;
+  if (!accountId) { res.status(400).json({ error: 'accountId required' }); return; }
+  saveAssignment(req.params.sessionId, accountId);
+  res.json({ ok: true, sessionId: req.params.sessionId, accountId });
 });
 
 // 6. Start new conversation with subject
@@ -985,6 +1198,8 @@ app.post('/api/mission/start', async (req, res) => {
   if (subject) {
     saveTitle(result.sessionId, subject);
   }
+  // Track account assignment
+  saveAssignment(result.sessionId, accountId);
 
   broadcast({ type: 'cui-state', cuiId: accountId, state: 'processing' });
   if (result.streamingId) {
@@ -1321,14 +1536,56 @@ app.post('/api/notes/:projectId', (req, res) => {
   res.json({ ok: true });
 });
 
-// Shared notes (read-only, auto-generated)
+// Shared Notes: auto-generated credentials (read-only)
 app.get('/api/shared-notes', (_req, res) => {
   const sharedPath = join(NOTES_DIR, 'shared.md');
   if (!existsSync(sharedPath)) {
-    res.json({ content: '# Shared Notes\n\n*Run `npm run generate:shared-notes` to populate*' });
+    // Try generating on-the-fly
+    const credPath = join(DATA_DIR, 'credentials.json');
+    if (existsSync(credPath)) {
+      try {
+        const creds = JSON.parse(readFileSync(credPath, 'utf8'));
+        const now = new Date().toISOString().split('T')[0];
+        let md = `# Shared Notes - Zugangsdaten\n\n*Auto-generated: ${now}*\n\n---\n\n`;
+        for (const [_appId, appData] of Object.entries(creds) as [string, any][]) {
+          md += `## ${appData.name}`;
+          if (appData.productionUrl) md += ` — [${appData.productionUrl}](${appData.productionUrl})`;
+          md += `\n\n`;
+          if (!appData.users?.length) { md += `*No users*\n\n`; continue; }
+          md += `| Email | Password | Role | Notes |\n|-------|----------|------|-------|\n`;
+          for (const u of appData.users) {
+            md += `| ${u.email} | \`${u.password || '—'}\` | ${u.role || '—'} | ${u.notes || u.userId || '—'} |\n`;
+          }
+          if (appData.extras?.length) {
+            md += `\n`;
+            for (const e of appData.extras) md += `> ${e}\n`;
+          }
+          md += `\n---\n\n`;
+        }
+        md += `\n*Refresh: aggregate-credentials + generate-shared-notes*\n`;
+        res.json({ content: md });
+        return;
+      } catch {}
+    }
+    res.json({ content: '' });
     return;
   }
   res.json({ content: readFileSync(sharedPath, 'utf8') });
+});
+
+// Shared Notes: trigger regeneration
+app.post('/api/shared-notes/refresh', async (_req, res) => {
+  const { exec } = await import('child_process');
+  const cwd = process.cwd();
+  exec('npx tsx scripts/aggregate-credentials.ts && npx tsx scripts/generate-shared-notes.ts', { cwd, timeout: 30000 }, (err, stdout, stderr) => {
+    if (err) {
+      console.error('[SharedNotes] Refresh failed:', stderr || err.message);
+      res.status(500).json({ error: stderr || err.message });
+      return;
+    }
+    console.log('[SharedNotes] Refreshed:', stdout);
+    res.json({ ok: true, output: stdout });
+  });
 });
 
 // --- Layout API ---
@@ -1483,7 +1740,10 @@ import { basename } from 'path';
 // GET /api/team/personas
 // Returns: PersonaCard[]
 app.get('/api/team/personas', async (_req, res) => {
-  const personasPath = '/root/projekte/orchestrator/team/personas';
+  // Use local path on macOS, remote path on server
+  const personasPath = process.platform === 'darwin'
+    ? '/Users/rafael/Documents/GitHub/orchestrator/team/personas'
+    : '/root/projekte/orchestrator/team/personas';
   try {
     const files = await readdir(personasPath);
     const personaFiles = files.filter(f => f.endsWith('.md'));
@@ -1525,6 +1785,13 @@ function parsePersona(filename: string, content: string): any {
   const nameMatch = content.match(/# (.+?) - (.+)/);
   const mbtiMatch = content.match(/\*\*MBTI\*\*:\s*(\w+)/i) || content.match(/MBTI:\s*(\w+)/i);
 
+  // Parse Virtual Office Metadaten
+  const teamMatch = content.match(/- \*\*Team\*\*:\s*(.+)/);
+  const deptMatch = content.match(/- \*\*Department\*\*:\s*(.+)/);
+  const tableMatch = content.match(/- \*\*Table\*\*:\s*(.+)/);
+  const governanceMatch = content.match(/- \*\*Governance\*\*:\s*(.+)/);
+  const reportsToMatch = content.match(/- \*\*ReportsTo\*\*:\s*(.+)/);
+
   return {
     id,
     name: nameMatch?.[1] || id,
@@ -1533,6 +1800,12 @@ function parsePersona(filename: string, content: string): any {
     status: 'idle', // Default - später aus worklist parsen
     worklistPath: `/root/projekte/orchestrator/team/worklists/${id}.md`,
     lastUpdated: new Date().toISOString(),
+    // Virtual Office Metadaten
+    team: teamMatch?.[1]?.trim() || 'unassigned',
+    department: deptMatch?.[1]?.trim() || 'General',
+    table: tableMatch?.[1]?.trim() || 'general',
+    governance: governanceMatch?.[1]?.trim() as 'auto-commit' | 'review-required' | undefined,
+    reportsTo: reportsToMatch?.[1]?.trim() || null,
   };
 }
 
@@ -1605,7 +1878,10 @@ app.post('/api/team/chat/:personaId', async (req, res) => {
 
   try {
     // Load Persona System Prompt
-    const personasPath = '/root/projekte/orchestrator/team/personas';
+    // Use local path on macOS, remote path on server
+    const personasPath = process.platform === 'darwin'
+      ? '/Users/rafael/Documents/GitHub/orchestrator/team/personas'
+      : '/root/projekte/orchestrator/team/personas';
     const files = await readdir(personasPath);
     const personaFile = files.find(f => f.startsWith(personaId + '-') && f.endsWith('.md'));
 
@@ -1820,7 +2096,8 @@ app.post('/api/cui-sync', async (_req, res) => {
   broadcast({ type: 'cui-sync', status: 'started' });
 
   const PATH_PREFIX = '/opt/homebrew/bin:/usr/local/bin:' + (process.env.PATH || '');
-  const execOpts = { cwd: WORKSPACE_ROOT, env: { ...process.env, PATH: PATH_PREFIX }, timeout: 120_000 };
+  const devEnv = { ...process.env, PATH: PATH_PREFIX, NODE_ENV: 'development' };
+  const execOpts = { cwd: WORKSPACE_ROOT, env: devEnv, timeout: 120_000 };
 
   let gitResult = 'skipped';
   try {
@@ -1833,16 +2110,17 @@ app.post('/api/cui-sync', async (_req, res) => {
     }
     broadcast({ type: 'cui-sync', status: 'pulled', detail: gitResult });
 
-    // 2. npm install (in case dependencies changed)
+    // 2. npm install (NODE_ENV=development so devDependencies like vite get installed)
     await execAsync('npm install --prefer-offline 2>&1', execOpts);
     broadcast({ type: 'cui-sync', status: 'installing' });
 
     // 3. Build frontend
-    const { stdout: buildOut } = await execAsync('npm run build 2>&1', execOpts);
+    const { stdout: buildOut } = await execAsync('npm run build 2>&1', { ...execOpts, env: { ...devEnv, NODE_ENV: 'production' } });
     const builtMatch = buildOut.match(/built in ([\d.]+s)/);
     broadcast({ type: 'cui-sync', status: 'built', detail: builtMatch?.[1] || 'ok' });
 
     _syncInProgress = false;
+    _pendingChanges = []; // Clear pending changes after successful build
     res.json({ ok: true, git: gitResult, build: builtMatch?.[1] || 'ok' });
 
     // 4. Schedule pm2 restart (after response is sent)
@@ -1861,52 +2139,11 @@ app.post('/api/cui-sync', async (_req, res) => {
   }
 });
 
-// --- Continuous Auto-Sync: Watch src/ and server/ for changes, auto-rebuild ---
-const AUTO_SYNC_DEBOUNCE = 3000;
-let _autoSyncTimer: ReturnType<typeof setTimeout> | null = null;
-let _autoSyncEnabled = true;
+// --- Change Detection: Watch src/ and server/, notify frontend (no auto-build) ---
+let _pendingChanges: string[] = [];
+let _changeDebounce: ReturnType<typeof setTimeout> | null = null;
 
-function triggerAutoSync() {
-  if (!_autoSyncEnabled || _syncInProgress) return;
-  _syncInProgress = true;
-  const startTs = Date.now();
-  console.log('[AutoSync] Changes detected, rebuilding...');
-  broadcast({ type: 'cui-sync', status: 'started', auto: true });
-
-  const PATH_PREFIX = '/opt/homebrew/bin:/usr/local/bin:' + (process.env.PATH || '');
-  // Force NODE_ENV=development so npm installs devDependencies (vite, tsx, etc.)
-  const execOpts = { cwd: WORKSPACE_ROOT, env: { ...process.env, PATH: PATH_PREFIX, NODE_ENV: 'development' }, timeout: 120_000 };
-
-  (async () => {
-    try {
-      await execAsync('npm install --prefer-offline 2>&1', execOpts);
-      broadcast({ type: 'cui-sync', status: 'installing', auto: true });
-
-      const { stdout: buildOut } = await execAsync('npm run build 2>&1', { ...execOpts, env: { ...execOpts.env, NODE_ENV: 'production' } });
-      const builtMatch = buildOut.match(/built in ([\d.]+s)/);
-      const elapsed = ((Date.now() - startTs) / 1000).toFixed(1);
-      console.log(`[AutoSync] Build complete in ${elapsed}s (vite: ${builtMatch?.[1] || 'ok'})`);
-      broadcast({ type: 'cui-sync', status: 'built', detail: builtMatch?.[1] || 'ok', auto: true });
-
-      _syncInProgress = false;
-
-      setTimeout(async () => {
-        try {
-          await execAsync('pm2 restart cui-workspace', { env: { ...process.env, PATH: PATH_PREFIX } });
-          console.log('[AutoSync] pm2 restart triggered');
-        } catch (err: any) {
-          console.error('[AutoSync] pm2 restart failed:', err.message);
-        }
-      }, 500);
-    } catch (err: any) {
-      _syncInProgress = false;
-      console.error('[AutoSync] Build failed:', err.message);
-      broadcast({ type: 'cui-sync', status: 'error', detail: err.message, auto: true });
-    }
-  })();
-}
-
-const autoSyncWatcher = watch([
+const changeWatcher = watch([
   join(WORKSPACE_ROOT, 'src'),
   join(WORKSPACE_ROOT, 'server'),
 ], {
@@ -1916,30 +2153,30 @@ const autoSyncWatcher = watch([
   depth: 10,
 });
 
-autoSyncWatcher.on('error', (err) => {
-  console.warn('[AutoSync] Watcher error:', (err as NodeJS.ErrnoException).message);
+changeWatcher.on('error', (err) => {
+  console.warn('[ChangeWatch] Watcher error:', (err as NodeJS.ErrnoException).message);
 });
 
-autoSyncWatcher.on('all', (event, filePath) => {
+changeWatcher.on('all', (event, filePath) => {
   if (!/\.(ts|tsx|css|html|json)$/.test(filePath)) return;
   if (filePath.includes('/dist/') || filePath.includes('/node_modules/')) return;
-  console.log(`[AutoSync] ${event}: ${relative(WORKSPACE_ROOT, filePath)}`);
-  if (_autoSyncTimer) clearTimeout(_autoSyncTimer);
-  _autoSyncTimer = setTimeout(triggerAutoSync, AUTO_SYNC_DEBOUNCE);
+  const rel = relative(WORKSPACE_ROOT, filePath);
+  console.log(`[ChangeWatch] ${event}: ${rel}`);
+  if (!_pendingChanges.includes(rel)) _pendingChanges.push(rel);
+
+  // Debounce: notify frontend after 2s quiet period
+  if (_changeDebounce) clearTimeout(_changeDebounce);
+  _changeDebounce = setTimeout(() => {
+    broadcast({ type: 'cui-update-available', files: _pendingChanges.slice(0, 20), count: _pendingChanges.length });
+    console.log(`[ChangeWatch] Update available: ${_pendingChanges.length} files changed`);
+  }, 2000);
 });
 
-console.log(`[AutoSync] Watching src/ and server/ for changes (debounce: ${AUTO_SYNC_DEBOUNCE}ms)`);
+console.log('[ChangeWatch] Watching src/ and server/ for changes (notify-only, no auto-build)');
 
-app.get('/api/cui-sync/auto', (_req, res) => {
-  res.json({ enabled: _autoSyncEnabled, syncing: _syncInProgress });
-});
-
-app.post('/api/cui-sync/auto', (req, res) => {
-  if (typeof req.body.enabled === 'boolean') {
-    _autoSyncEnabled = req.body.enabled;
-    console.log(`[AutoSync] ${_autoSyncEnabled ? 'ENABLED' : 'DISABLED'}`);
-  }
-  res.json({ enabled: _autoSyncEnabled });
+// API: get pending changes
+app.get('/api/cui-sync/pending', (_req, res) => {
+  res.json({ pending: _pendingChanges.length > 0, files: _pendingChanges.slice(0, 20), count: _pendingChanges.length, syncing: _syncInProgress });
 });
 
 // --- Control API ---
@@ -2016,6 +2253,23 @@ app.post('/api/control/panel/remove', (req, res) => {
 app.post('/api/control/layout/reset', (_req, res) => {
   broadcast({ type: 'control:layout-reset' });
   res.json({ ok: true });
+});
+
+// --- Rebuild & Restart Endpoint ---
+app.post('/api/rebuild', (_req, res) => {
+  console.log('[Rebuild] Starting frontend rebuild...');
+  broadcast({ type: 'cui-rebuilding' });
+  res.json({ status: 'rebuilding', message: 'Build gestartet, Server startet gleich neu...' });
+  setTimeout(() => {
+    exec('cd /root/projekte/werkingflow/autopilot/cui && npx vite build 2>&1', (err, stdout) => {
+      if (err) { console.error('[Rebuild] Build failed:', err.message); return; }
+      console.log('[Rebuild] Build done:', stdout.trim().split('\n').pop());
+      console.log('[Rebuild] Restarting server...');
+      exec('cd /root/projekte/werkingflow/autopilot/cui && NODE_ENV=production PORT=4005 nohup npx tsx server/index.ts > /tmp/cui-server.log 2>&1 &', () => {
+        setTimeout(() => process.exit(0), 500);
+      });
+    });
+  }, 200);
 });
 
 // --- Serve Frontend in Production ---

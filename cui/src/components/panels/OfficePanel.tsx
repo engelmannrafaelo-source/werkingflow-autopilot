@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import TaskBoard from './TaskBoard';
 import PersonaChat from './PersonaChat';
 import ReviewQueue from './ReviewQueue';
+import MeetingRoomView from './MeetingRoomView';
 
 const API = '/api';
 
@@ -14,6 +15,12 @@ interface PersonaCard {
   status: 'idle' | 'working' | 'blocked' | 'review';
   worklistPath: string;    // '/root/.../worklists/max.md'
   lastUpdated: string;     // ISO timestamp
+  // Virtual Office Metadaten
+  team?: string;           // 'Engineering', 'Business', 'Leadership'
+  department?: string;     // 'Technical', 'Sales & Marketing', etc.
+  table?: string;          // 'leadership', 'engineering', 'business'
+  governance?: 'auto-commit' | 'review-required';
+  reportsTo?: string | null;  // 'Rafael', 'Max', 'Otto', etc.
 }
 
 interface OfficePanelProps {
@@ -27,7 +34,7 @@ export default function OfficePanel({ projectId, workDir }: OfficePanelProps) {
   const [worklist, setWorklist] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [view, setView] = useState<'grid' | 'tasks' | 'chat' | 'reviews'>('grid');
+  const [view, setView] = useState<'grid' | 'room' | 'tasks' | 'chat' | 'reviews'>('room');
 
   // Load personas on mount
   useEffect(() => {
@@ -132,6 +139,21 @@ export default function OfficePanel({ projectId, workDir }: OfficePanelProps) {
             }}
           >
             👥 Team
+          </button>
+          <button
+            onClick={() => setView('room')}
+            style={{
+              padding: '6px 12px',
+              background: view === 'room' ? 'var(--tn-blue)' : 'var(--tn-bg)',
+              color: view === 'room' ? 'white' : 'var(--tn-text-muted)',
+              border: '1px solid var(--tn-border)',
+              borderRadius: 4,
+              cursor: 'pointer',
+              fontSize: 12,
+              fontWeight: view === 'room' ? 600 : 400,
+            }}
+          >
+            🏢 Meeting Room
           </button>
           <button
             onClick={() => setView('reviews')}
@@ -251,6 +273,14 @@ export default function OfficePanel({ projectId, workDir }: OfficePanelProps) {
 
       {view === 'reviews' && (
         <ReviewQueue />
+      )}
+
+      {view === 'room' && (
+        <MeetingRoomView
+          personas={personas}
+          onSelectPersona={selectPersona}
+          selected={selected}
+        />
       )}
     </div>
   );

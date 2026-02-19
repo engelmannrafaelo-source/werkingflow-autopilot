@@ -184,3 +184,181 @@
     opacity: 0.4;
   }
 }
+
+/* Meeting Room Styles */
+.meeting-room {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  padding: 1rem;
+}
+
+.table-section {
+  border: 2px solid var(--tn-border);
+  border-radius: 12px;
+  padding: 1rem;
+  background: var(--tn-surface);
+  transition: all 0.2s ease;
+}
+
+.table-section:hover {
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+.table-gold {
+  border-color: #d4af37;
+  background: linear-gradient(135deg, rgba(212,175,55,0.05) 0%, rgba(212,175,55,0.02) 100%);
+}
+
+.table-blue {
+  border-color: #3b82f6;
+  background: linear-gradient(135deg, rgba(59,130,246,0.05) 0%, rgba(59,130,246,0.02) 100%);
+}
+
+.table-green {
+  border-color: #10b981;
+  background: linear-gradient(135deg, rgba(16,185,129,0.05) 0%, rgba(16,185,129,0.02) 100%);
+}
+
+.table-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--tn-border);
+}
+
+.table-icon {
+  font-size: 1.5rem;
+}
+
+.table-header h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--tn-text);
+  flex: 1;
+}
+
+.table-count {
+  font-size: 0.75rem;
+  color: var(--tn-text-muted);
+  background: var(--tn-bg-dark);
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+}
+
+.table-seats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.persona-seat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid var(--tn-border);
+  border-radius: 8px;
+  background: var(--tn-bg);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.persona-seat:hover {
+  border-color: var(--tn-blue);
+  transform: translateY(-2px);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.persona-seat.selected {
+  border-color: var(--tn-blue);
+  background: var(--tn-bg-highlight);
+  box-shadow: 0 0 0 2px rgba(122,162,247,0.2);
+}
+
+.persona-seat-avatar {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--tn-blue);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.875rem;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+.persona-seat-status {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--tn-bg);
+}
+
+.status-idle {
+  background: #6b7280;
+}
+
+.status-working {
+  background: #3b82f6;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.status-blocked {
+  background: #ef4444;
+}
+
+.status-review {
+  background: #f59e0b;
+}
+
+.persona-seat-name {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--tn-text);
+  text-align: center;
+  line-height: 1.2;
+}
+
+.table-footer {
+  display: flex;
+  justify-content: center;
+  gap: 0.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--tn-border);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.375rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.badge-auto {
+  background: rgba(16,185,129,0.15);
+  color: #10b981;
+  border: 1px solid rgba(16,185,129,0.3);
+}
+
+.badge-review {
+  background: rgba(245,158,11,0.15);
+  color: #f59e0b;
+  border: 1px solid rgba(245,158,11,0.3);
+}
