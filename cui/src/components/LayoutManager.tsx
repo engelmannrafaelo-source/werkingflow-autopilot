@@ -11,6 +11,7 @@ import MissionControl from './panels/MissionControl';
 import OfficePanel from './panels/OfficePanel';
 import WerkingReportAdmin from './panels/WerkingReportAdmin/WerkingReportAdmin';
 import LinkedInPanel from './panels/LinkedInPanel';
+import BridgeMonitor from './panels/BridgeMonitor/BridgeMonitor';
 import SystemHealth from './panels/SystemHealth';
 import LayoutBuilder from './LayoutBuilder';
 import '../styles/office.css';
@@ -171,11 +172,19 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
   const factory = useCallback((node: TabNode) => {
     const component = node.getComponent();
     const config = node.getConfig() ?? {};
+    const nodeId = node.getId();
+
+    // Wrapper with data-node-id for screenshot targeting
+    const wrapWithId = (children: React.ReactNode) => (
+      <div data-node-id={nodeId} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+        {children}
+      </div>
+    );
 
     switch (component) {
       case 'cui':
-        return <CuiPanel accountId={config.accountId} projectId={projectId} workDir={workDir} panelId={node.getId()} isTabVisible={node.isVisible()}
-          onRouteChange={(route) => updateNodeConfig(node.getId(), { _route: route })} />;
+        return wrapWithId(<CuiPanel accountId={config.accountId} projectId={projectId} workDir={workDir} panelId={nodeId} isTabVisible={node.isVisible()}
+          onRouteChange={(route) => updateNodeConfig(nodeId, { _route: route })} />);
       case 'chat': {
         const accountId = config.accountId || 'rafael';
         const PROXY_PORTS: Record<string, number> = {
@@ -184,29 +193,31 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           office: 5003,
           local: 5004
         };
-        return <NativeChat accountId={accountId} proxyPort={PROXY_PORTS[accountId] || 5001} />;
+        return wrapWithId(<NativeChat accountId={accountId} proxyPort={PROXY_PORTS[accountId] || 5001} />);
       }
       case 'images':
-        return <ImageDrop />;
+        return wrapWithId(<ImageDrop />);
       case 'browser':
-        return <BrowserPanel initialUrl={config.url} panelId={node.getId()}
-          onUrlChange={(url) => updateNodeConfig(node.getId(), { url })} />;
+        return wrapWithId(<BrowserPanel initialUrl={config.url} panelId={nodeId}
+          onUrlChange={(url) => updateNodeConfig(nodeId, { url })} />);
       case 'preview':
-        return <FilePreview watchPath={config.watchPath || activeDirRef.current || workDir} stageDir={activeDirRef.current} />;
+        return wrapWithId(<FilePreview watchPath={config.watchPath || activeDirRef.current || workDir} stageDir={activeDirRef.current} />);
       case 'notes':
-        return <NotesPanel projectId={projectId} />;
+        return wrapWithId(<NotesPanel projectId={projectId} />);
       case 'mission':
-        return <MissionControl projectId={config.projectId || projectId} workDir={config.workDir || workDir} />;
+        return wrapWithId(<MissionControl projectId={config.projectId || projectId} workDir={config.workDir || workDir} />);
       case 'office':
-        return <OfficePanel projectId={projectId} workDir={workDir} />;
+        return wrapWithId(<OfficePanel projectId={projectId} workDir={workDir} />);
       case 'admin-wr':
-        return <WerkingReportAdmin />;
+        return wrapWithId(<WerkingReportAdmin />);
       case 'linkedin':
-        return <LinkedInPanel />;
+        return wrapWithId(<LinkedInPanel />);
+      case 'bridge-monitor':
+        return wrapWithId(<BridgeMonitor />);
       case 'system-health':
-        return <SystemHealth />;
+        return wrapWithId(<SystemHealth />);
       default:
-        return (
+        return wrapWithId(
           <div style={{ padding: 20, color: 'var(--tn-text-muted)' }}>
             Unknown panel: {component}
           </div>
@@ -254,7 +265,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     saveLayout(newModel);
   }, [workDir, saveLayout]);
 
-  const addTab = useCallback((type: 'cui' | 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health', config: Record<string, string>, targetId: string) => {
+  const addTab = useCallback((type: 'cui' | 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor', config: Record<string, string>, targetId: string) => {
     if (!model) return;
     const names: Record<string, string> = {
       cui: config.accountId ? config.accountId.charAt(0).toUpperCase() + config.accountId.slice(1) : 'CUI',
@@ -267,6 +278,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       'admin-wr': 'Werking Report Admin',
       linkedin: 'LinkedIn Marketing 🔗',
       'system-health': 'System Health',
+      'bridge-monitor': 'Bridge Monitor',
     };
     if (type === 'preview' && !config.watchPath) {
       config.watchPath = activeDirRef.current || workDir;
@@ -292,7 +304,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           if (val.startsWith('cui:')) {
             addTab('cui', { accountId: val.split(':')[1] }, node.getId());
           } else {
-            addTab(val as 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health', {}, node.getId());
+            addTab(val as 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor', {}, node.getId());
           }
           e.target.value = '';
         }}
@@ -325,6 +337,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         <option value="admin-wr">Werking Report Admin</option>
         <option value="system-health">System Health</option>
         <option value="linkedin">LinkedIn Marketing 🔗</option>
+        <option value="bridge-monitor">Bridge Monitor</option>
       </select>
     );
   }, [addTab]);
@@ -370,8 +383,44 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     return action;
   }, [model, cuiStates, onCuiStateReset]);
 
-  // Color indicators on CUI tabs based on state
+  // Color indicators on CUI tabs based on state + show node ID
   const onRenderTab = useCallback((node: TabNode, renderValues: ITabRenderValues) => {
+    const nodeId = node.getId();
+
+    // Add node ID badge (visible on hover)
+    renderValues.buttons.push(
+      <span
+        key="node-id"
+        title={`Panel ID: ${nodeId}\nClick to copy`}
+        onClick={(e) => {
+          e.stopPropagation();
+          navigator.clipboard.writeText(nodeId);
+          // Brief visual feedback
+          (e.target as HTMLElement).style.background = 'var(--tn-green)';
+          setTimeout(() => {
+            (e.target as HTMLElement).style.background = 'var(--tn-bg-dark)';
+          }, 200);
+        }}
+        style={{
+          fontSize: 8,
+          fontFamily: 'monospace',
+          padding: '2px 4px',
+          borderRadius: 2,
+          background: 'var(--tn-bg-dark)',
+          color: 'var(--tn-text-muted)',
+          cursor: 'pointer',
+          opacity: 0.4,
+          transition: 'opacity 0.15s',
+          userSelect: 'none',
+        }}
+        onMouseEnter={(e) => { (e.target as HTMLElement).style.opacity = '1'; }}
+        onMouseLeave={(e) => { (e.target as HTMLElement).style.opacity = '0.4'; }}
+      >
+        #{nodeId}
+      </span>
+    );
+
+    // CUI state indicators
     if (node.getComponent() !== 'cui') return;
     const cuiId = node.getConfig()?.accountId;
     if (!cuiId) return;

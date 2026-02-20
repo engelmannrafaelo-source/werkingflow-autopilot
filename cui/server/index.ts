@@ -2875,37 +2875,67 @@ app.post('/api/control/screenshot/request', async (req, res) => {
 
 // GET /api/dev/screenshot-live — Server-side screenshot using Playwright (dev/debugging only)
 app.get('/api/dev/screenshot-live', async (req, res) => {
-  const panelId = req.query.panel as string || 'admin-wr';
+  // Support both panel type (data-panel) and node ID (data-node-id)
+  const panelType = req.query.panel as string;
+  const nodeId = req.query.nodeId as string;
   const wait = Math.min(parseInt(req.query.wait as string) || 3000, 15000);
+
+  if (!panelType && !nodeId) {
+    res.status(400).json({ error: 'Either panel or nodeId required' });
+    return;
+  }
 
   try {
     const playwright = await import('playwright-core');
     const browser = await playwright.chromium.launch({ headless: true });
     const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
 
-    console.log(`[Screenshot] Opening http://localhost:4005 for panel=${panelId}...`);
+    const targetDesc = nodeId ? `node=${nodeId}` : `panel=${panelType}`;
+    console.log(`[Screenshot] Opening http://localhost:4005 for ${targetDesc}...`);
     await page.goto('http://localhost:4005', { waitUntil: 'domcontentloaded', timeout: 20000 });
 
     // Wait for flexlayout
     await page.waitForSelector('.flexlayout__layout', { timeout: 5000 });
 
-    // Check if panel exists, if not try to add it
-    const panelExists = await page.locator(`[data-panel="${panelId}"]`).count();
+    // Build selector based on nodeId or panelType
+    const selector = nodeId ? `[data-node-id="${nodeId}"]` : `[data-panel="${panelType}"]`;
+
+    // Check if panel exists
+    const panelExists = await page.locator(selector).count();
     if (panelExists === 0) {
-      console.log(`[Screenshot] Panel ${panelId} not visible, trying to add...`);
-      // Try to add via dropdown
-      await page.evaluate((pid) => {
-        const select = document.querySelector('select[title="Tab hinzufuegen"]') as HTMLSelectElement;
-        if (select) {
-          select.value = pid;
-          select.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-      }, panelId);
-      await page.waitForTimeout(2000); // Wait for panel to render
+      console.log(`[Screenshot] Panel ${targetDesc} not visible`);
+
+      // If searching by panel type, try to add it via dropdown
+      if (panelType && !nodeId) {
+        console.log(`[Screenshot] Trying to add panel type ${panelType}...`);
+        await page.evaluate((pt) => {
+          const select = document.querySelector('select[title="Tab hinzufuegen"]') as HTMLSelectElement;
+          if (select) {
+            select.value = pt;
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        }, panelType);
+        await page.waitForTimeout(2000);
+      } else {
+        // If searching by node ID, try to activate the tab
+        console.log(`[Screenshot] Trying to activate node ${nodeId}...`);
+        await page.evaluate((nid) => {
+          // Find tab with matching data-node-id and click it
+          const allTabs = Array.from(document.querySelectorAll('.flexlayout__tab'));
+          for (const tab of allTabs) {
+            const content = tab.closest('.flexlayout__tabset')?.querySelector(`[data-node-id="${nid}"]`);
+            if (content) {
+              (tab as HTMLElement).click();
+              break;
+            }
+          }
+        }, nodeId);
+        await page.waitForTimeout(1000);
+      }
     }
 
     // Wait for panel to be visible
-    await page.waitForSelector(`[data-panel="${panelId}"]`, { timeout: 5000 });
+    await page.waitForSelector(selector, { timeout: 5000 });
 
     // Wait for content to load
     await page.waitForTimeout(wait);
@@ -2915,18 +2945,65 @@ app.get('/api/dev/screenshot-live', async (req, res) => {
     await browser.close();
 
     // Save to file
-    const filePath = `${SCREENSHOT_DIR}/${panelId}-live-${Date.now()}.png`;
+    const fileName = nodeId ? `node-${nodeId}` : `panel-${panelType}`;
+    const filePath = `${SCREENSHOT_DIR}/${fileName}-live-${Date.now()}.png`;
     writeFileSync(filePath, screenshot);
 
     console.log(`[Screenshot] ✓ Saved live screenshot: ${filePath}`);
 
     // Return as PNG image
     res.setHeader('Content-Type', 'image/png');
-    res.setHeader('Content-Disposition', `inline; filename="${panelId}-live.png"`);
+    res.setHeader('Content-Disposition', `inline; filename="${fileName}-live.png"`);
     res.send(screenshot);
 
   } catch (error: any) {
     console.error('[Screenshot] Error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// List all panel node IDs from the current layout
+app.get('/api/dev/panel-ids', async (req, res) => {
+  try {
+    const playwright = await import('playwright-core');
+    const browser = await playwright.chromium.launch({ headless: true });
+    const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+
+    await page.goto('http://localhost:4005', { waitUntil: 'domcontentloaded', timeout: 20000 });
+    await page.waitForSelector('.flexlayout__layout', { timeout: 5000 });
+
+    // Extract all panel IDs and their types
+    const panels = await page.evaluate(() => {
+      const results: Array<{ nodeId: string; panelType: string | null; tabName: string | null }> = [];
+      const allPanels = Array.from(document.querySelectorAll('[data-node-id]'));
+
+      for (const panel of allPanels) {
+        const nodeId = panel.getAttribute('data-node-id');
+        const panelType = panel.getAttribute('data-panel');
+
+        // Try to find the tab name
+        let tabName: string | null = null;
+        const tabs = Array.from(document.querySelectorAll('.flexlayout__tab'));
+        for (const tab of tabs) {
+          const tabContent = (tab as HTMLElement).closest('.flexlayout__tabset')?.querySelector(`[data-node-id="${nodeId}"]`);
+          if (tabContent) {
+            tabName = (tab as HTMLElement).querySelector('.flexlayout__tab_button_content')?.textContent?.trim() || null;
+            break;
+          }
+        }
+
+        if (nodeId) {
+          results.push({ nodeId, panelType, tabName });
+        }
+      }
+      return results;
+    });
+
+    await browser.close();
+
+    res.json({ panels, count: panels.length });
+  } catch (error: any) {
+    console.error('[Panel IDs] Error:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
@@ -3321,6 +3398,63 @@ app.get(/^\/api\/agents\/business\/diff\/(.+)$/, async (req, res) => {
     res.json({ pending: pendingContent, final: finalContent });
   } catch (err) {
     res.status(404).json({ error: 'File not found' });
+  }
+});
+
+// GET /api/agents/activity-stream — SSE stream of agent activities
+app.get('/api/agents/activity-stream', (_req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  // Send initial ping
+  res.write(`data: ${JSON.stringify({ timestamp: new Date().toISOString(), action: 'connected' })}\n\n`);
+
+  // For now, send a ping every 30 seconds to keep connection alive
+  // In production, this would emit events when agents actually do work
+  const interval = setInterval(() => {
+    res.write(`data: ${JSON.stringify({ timestamp: new Date().toISOString(), action: 'ping' })}\n\n`);
+  }, 30000);
+
+  // Cleanup on client disconnect
+  _req.on('close', () => {
+    clearInterval(interval);
+  });
+});
+
+// GET /api/agents/recommendations — smart action recommendations
+app.get('/api/agents/recommendations', async (_req, res) => {
+  try {
+    const urgent: Array<any> = [];
+    const recommended: Array<any> = [];
+
+    // Check business approvals for old items
+    try {
+      const raw = await fsAgentPromises.readFile(BUSINESS_QUEUE, 'utf-8');
+      const lines = raw.trim().split('\n').filter(Boolean);
+      const pending = lines.map(l => JSON.parse(l));
+
+      pending.forEach(entry => {
+        const ageMs = Date.now() - new Date(entry.timestamp).getTime();
+        const ageDays = Math.floor(ageMs / 86400000);
+
+        if (ageDays > 3) {
+          urgent.push({
+            title: `Business approval overdue: ${entry.file.split('/').pop().replace('.pending', '')}`,
+            description: `Pending for ${ageDays} days - blocking ${entry.persona}`,
+            ageDays,
+            personaId: entry.persona
+          });
+        }
+      });
+    } catch {}
+
+    // TODO: Add more recommendation logic (overdue agents, idle agents, etc.)
+
+    res.json({ urgent, recommended, tips: { idle_agents: 0, blocking_count: urgent.length } });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
   }
 });
 
