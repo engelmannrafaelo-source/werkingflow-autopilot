@@ -2535,10 +2535,24 @@ const WR_PROD_URL = process.env.WERKING_REPORT_URL ?? 'https://werking-report.ve
 const WR_STAGING_URL = process.env.WERKING_REPORT_STAGING_URL ?? 'https://werking-report-git-develop-rafael-engelmanns-projects.vercel.app';
 const WR_ADMIN_SECRET = process.env.WERKING_REPORT_ADMIN_SECRET ?? process.env.ADMIN_SECRET ?? '';
 
-// Runtime-switchable env mode (persists until server restart)
+// Runtime-switchable env mode (persists across restarts via file)
 type WrEnvMode = 'production' | 'staging';
-let wrEnvMode: WrEnvMode = 'production';
+const WR_ENV_MODE_FILE = '/tmp/cui-wr-env-mode.json';
+function loadWrEnvMode(): WrEnvMode {
+  try {
+    if (existsSync(WR_ENV_MODE_FILE)) {
+      const data = JSON.parse(readFileSync(WR_ENV_MODE_FILE, 'utf8'));
+      if (data.mode === 'staging') return 'staging';
+    }
+  } catch {}
+  return 'production'; // default
+}
+function saveWrEnvMode(mode: WrEnvMode) {
+  try { writeFileSync(WR_ENV_MODE_FILE, JSON.stringify({ mode })); } catch {}
+}
+let wrEnvMode: WrEnvMode = loadWrEnvMode();
 function wrBase(): string { return wrEnvMode === 'staging' ? WR_STAGING_URL : WR_PROD_URL; }
+console.log(`[WR Env] Loaded mode: ${wrEnvMode} → ${wrBase()}`);
 
 function wrAdminHeaders(): Record<string, string> {
   if (!WR_ADMIN_SECRET) throw new Error('WERKING_REPORT_ADMIN_SECRET not set');
@@ -2558,6 +2572,7 @@ app.post('/api/admin/wr/env', (req, res) => {
     return;
   }
   wrEnvMode = mode;
+  saveWrEnvMode(mode); // persist across restarts
   console.log(`[Admin Proxy] WR env switched to: ${wrEnvMode} → ${wrBase()}`);
   broadcast({ type: 'wr-env-changed', mode: wrEnvMode });
   res.json({ ok: true, mode: wrEnvMode, url: wrBase() });
@@ -3009,6 +3024,96 @@ app.get('/api/agents/brief/:name', async (req, res) => {
   try {
     res.type('text/plain').send(await fsAgentPromises.readFile(`${AGENTS_DIR}/shared/weekly-briefs/${safe}`, 'utf-8'));
   } catch { res.status(404).json({ error: 'Not found' }); }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Claude Code Agent Runner — 16 Personas, full filesystem access
+// ─────────────────────────────────────────────────────────────────────────────
+const PROMPTS_DIR = `${AGENTS_DIR}/prompts`;
+const CLAUDE_LOGS_DIR = '/root/projekte/local-storage/backends/team-agents/logs';
+const runningClaudes = new Map<string, ReturnType<typeof spawn>>();
+
+const CLAUDE_AGENT_REGISTRY: Record<string, { name: string; schedule: string; task_type: string }> = {
+  'kai-hoffmann':    { name: 'Kai Hoffmann',    schedule: 'Mo 09:00',       task_type: 'SCAN' },
+  'birgit-bauer':    { name: 'Birgit Bauer',    schedule: 'Mo 10:00',       task_type: 'SYNC' },
+  'max-weber':       { name: 'Max Weber',        schedule: 'Di 09:00',       task_type: 'DECIDE' },
+  'vera-vertrieb':   { name: 'Vera Vertrieb',    schedule: 'Mo 11:00',       task_type: 'SCAN' },
+  'herbert-sicher':  { name: 'Herbert Sicher',   schedule: 'tägl. 02:00',    task_type: 'SCAN' },
+  'otto-operations': { name: 'Otto Operations',  schedule: 'Mi 09:00',       task_type: 'SYNC' },
+  'mira-marketing':  { name: 'Mira Marketing',   schedule: 'Di 10:00',       task_type: 'PRODUCE' },
+  'felix-krause':    { name: 'Felix Krause',     schedule: 'Fr 14:00',       task_type: 'REVIEW' },
+  'anna-frontend':   { name: 'Anna Frontend',    schedule: 'on-demand',      task_type: 'PRODUCE' },
+  'tim-berger':      { name: 'Tim Berger',       schedule: 'on-demand',      task_type: 'PRODUCE' },
+  'chris-customer':  { name: 'Chris Customer',   schedule: 'tägl. 08:00',    task_type: 'SCAN' },
+  'finn-finanzen':   { name: 'Finn Finanzen',    schedule: '1. des Monats',  task_type: 'REVIEW' },
+  'lisa-mueller':    { name: 'Lisa Müller',      schedule: 'Mo 08:00',       task_type: 'REVIEW' },
+  'peter-doku':      { name: 'Peter Doku',       schedule: 'Fr 10:00',       task_type: 'PRODUCE' },
+  'sarah-koch':      { name: 'Sarah Koch',       schedule: 'on-demand',      task_type: 'REVIEW' },
+  'klaus-schmidt':   { name: 'Klaus Schmidt',    schedule: 'Mi 09:00',       task_type: 'REVIEW' },
+};
+
+app.get('/api/agents/claude/status', async (_req, res) => {
+  const readSafe = async (p: string, fb = '') => { try { return await fsAgentPromises.readFile(p, 'utf-8'); } catch { return fb; } };
+  const agents = await Promise.all(Object.entries(CLAUDE_AGENT_REGISTRY).map(async ([id, info]) => {
+    let last_run: string | null = null; let last_outcome = '';
+    try {
+      const lines = (await fsAgentPromises.readFile(`${AGENTS_DIR}/memory/${id}.jsonl`, 'utf-8')).trim().split('\n').filter(Boolean);
+      const last = JSON.parse(lines[lines.length - 1]);
+      last_run = last.timestamp ?? null; last_outcome = (last.outcome ?? '').slice(0, 100);
+    } catch { /**/ }
+    let inbox_count = 0;
+    try { inbox_count = ((await fsAgentPromises.readFile(`${AGENTS_DIR}/inbox/${id}.md`, 'utf-8')).match(/^---$/gm) ?? []).length; } catch { /**/ }
+    return { id, name: info.name, schedule: info.schedule, task_type: info.task_type, status: runningClaudes.has(id) ? 'working' : 'idle' as const, last_run, last_outcome, inbox_count };
+  }));
+  res.json({ agents });
+});
+
+app.post('/api/agents/claude/run', async (req, res) => {
+  const { persona_id, task } = req.body as { persona_id: string; task?: string };
+  if (!CLAUDE_AGENT_REGISTRY[persona_id]) return res.status(404).json({ error: `Unknown persona: ${persona_id}` });
+  if (runningClaudes.has(persona_id)) return res.status(409).json({ error: 'Already running' });
+  const info = CLAUDE_AGENT_REGISTRY[persona_id];
+  const taskId = `${persona_id}-${Date.now()}`;
+  const logFile = `${CLAUDE_LOGS_DIR}/${taskId}.log`;
+  await fsAgentPromises.mkdir(CLAUDE_LOGS_DIR, { recursive: true });
+  const readSafe = async (p: string, fb = '') => { try { return await fsAgentPromises.readFile(p, 'utf-8'); } catch { return fb; } };
+  const basePrompt    = await readSafe(`${PROMPTS_DIR}/_base_system.md`);
+  const personaPrompt = await readSafe(`${PROMPTS_DIR}/${persona_id}.md`, `Du bist ${info.name} bei Werkingflow.`);
+  const memory        = await readSafe(`${AGENTS_DIR}/memory/${persona_id}.summary.md`, 'Erster Durchlauf — kein vorheriges Memory.');
+  const inbox         = await readSafe(`${AGENTS_DIR}/inbox/${persona_id}.md`, 'Keine Nachrichten.');
+  const now           = new Date().toISOString().slice(0, 16).replace('T', ' ');
+  const taskDesc      = task ?? `Führe deinen regulären ${info.task_type}-Zyklus durch.`;
+  const fullPrompt    = [basePrompt, '---', personaPrompt, '---', '## Dein Memory (bisherige Runs)', memory, '## Deine Inbox', inbox, '---', `## Aktuelle Aufgabe\n**Datum:** ${now}  **Task-Typ:** ${info.task_type}\n**Aufgabe:** ${taskDesc}`, '', 'Arbeite jetzt autonom. Schreibe am Ende deinen Memory-Record und das AGENT_COMPLETE Signal.'].join('\n\n');
+  // Remove CLAUDECODE env var so nested claude sessions are allowed
+  const spawnEnv = { ...process.env };
+  delete (spawnEnv as Record<string, string | undefined>).CLAUDECODE;
+  const proc = spawn('claude', ['--dangerously-skip-permissions', '--print', '-p', fullPrompt], { cwd: '/root/projekte/werkingflow', stdio: ['ignore', 'pipe', 'pipe'], env: spawnEnv });
+  const writeLog = (s: string) => fsAgentPromises.appendFile(logFile, s).catch(() => {});
+  writeLog(`[${now}] ${info.name} gestartet — ${taskDesc}\n${'─'.repeat(60)}\n\n`);
+  proc.stdout?.on('data', (d: Buffer) => writeLog(d.toString()));
+  proc.stderr?.on('data', (d: Buffer) => writeLog(`[ERR] ${d.toString()}`));
+  proc.on('close', (code) => { runningClaudes.delete(persona_id); writeLog(`\n${'─'.repeat(60)}\n[DONE] Exit: ${code}\n`); console.log(`[ClaudeAgent:${persona_id}] done (${code})`); });
+  runningClaudes.set(persona_id, proc);
+  console.log(`[ClaudeAgent] Starting ${persona_id} → ${logFile}`);
+  res.json({ ok: true, task_id: taskId, persona_id, log_file: logFile });
+});
+
+app.get('/api/agents/claude/log/:taskId', async (req, res) => {
+  const safe = req.params.taskId.replace(/[^a-zA-Z0-9._-]/g, '');
+  const logFile = `${CLAUDE_LOGS_DIR}/${safe}.log`;
+  res.setHeader('Content-Type', 'text/event-stream'); res.setHeader('Cache-Control', 'no-cache'); res.setHeader('Connection', 'keep-alive');
+  try { res.write(`data: ${JSON.stringify({ text: await fsAgentPromises.readFile(logFile, 'utf-8'), init: true })}\n\n`); } catch { /**/ }
+  const tail = spawn('tail', ['-f', '-n', '0', logFile]);
+  tail.stdout?.on('data', (d: Buffer) => res.write(`data: ${JSON.stringify({ text: d.toString() })}\n\n`));
+  req.on('close', () => tail.kill());
+});
+
+app.get('/api/agents/claude/memory/:personaId', async (req, res) => {
+  const id = req.params.personaId.replace(/[^a-z0-9-]/g, '');
+  const summary = await (async () => { try { return await fsAgentPromises.readFile(`${AGENTS_DIR}/memory/${id}.summary.md`, 'utf-8'); } catch { return 'Kein Memory.'; } })();
+  const raw = await (async () => { try { return await fsAgentPromises.readFile(`${AGENTS_DIR}/memory/${id}.jsonl`, 'utf-8'); } catch { return ''; } })();
+  const runs = raw.trim().split('\n').filter(Boolean).slice(-10).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean).reverse();
+  res.json({ summary, runs });
 });
 
 // --- Serve Frontend in Production ---
