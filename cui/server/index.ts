@@ -2873,6 +2873,64 @@ app.post('/api/control/screenshot/request', async (req, res) => {
   res.status(408).json({ error: `Screenshot timeout after ${waitMs}ms — panel may not be visible` });
 });
 
+// GET /api/dev/screenshot-live — Server-side screenshot using Playwright (dev/debugging only)
+app.get('/api/dev/screenshot-live', async (req, res) => {
+  const panelId = req.query.panel as string || 'admin-wr';
+  const wait = Math.min(parseInt(req.query.wait as string) || 3000, 15000);
+
+  try {
+    const playwright = await import('playwright-core');
+    const browser = await playwright.chromium.launch({ headless: true });
+    const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+
+    console.log(`[Screenshot] Opening http://localhost:4005 for panel=${panelId}...`);
+    await page.goto('http://localhost:4005', { waitUntil: 'domcontentloaded', timeout: 20000 });
+
+    // Wait for flexlayout
+    await page.waitForSelector('.flexlayout__layout', { timeout: 5000 });
+
+    // Check if panel exists, if not try to add it
+    const panelExists = await page.locator(`[data-panel="${panelId}"]`).count();
+    if (panelExists === 0) {
+      console.log(`[Screenshot] Panel ${panelId} not visible, trying to add...`);
+      // Try to add via dropdown
+      await page.evaluate((pid) => {
+        const select = document.querySelector('select[title="Tab hinzufuegen"]') as HTMLSelectElement;
+        if (select) {
+          select.value = pid;
+          select.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      }, panelId);
+      await page.waitForTimeout(2000); // Wait for panel to render
+    }
+
+    // Wait for panel to be visible
+    await page.waitForSelector(`[data-panel="${panelId}"]`, { timeout: 5000 });
+
+    // Wait for content to load
+    await page.waitForTimeout(wait);
+
+    // Take screenshot
+    const screenshot = await page.screenshot({ type: 'png', fullPage: false });
+    await browser.close();
+
+    // Save to file
+    const filePath = `${SCREENSHOT_DIR}/${panelId}-live-${Date.now()}.png`;
+    writeFileSync(filePath, screenshot);
+
+    console.log(`[Screenshot] ✓ Saved live screenshot: ${filePath}`);
+
+    // Return as PNG image
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Content-Disposition', `inline; filename="${panelId}-live.png"`);
+    res.send(screenshot);
+
+  } catch (error: any) {
+    console.error('[Screenshot] Error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.post('/api/control/panel/add', (req, res) => {
   const { component, config, name } = req.body;
   if (!component) { res.status(400).json({ error: 'component required' }); return; }
@@ -3069,7 +3127,8 @@ app.get('/api/agents/claude/status', async (_req, res) => {
 });
 
 app.post('/api/agents/claude/run', async (req, res) => {
-  const { persona_id, task } = req.body as { persona_id: string; task?: string };
+  const { persona_id, task, mode, plan_id } = req.body as { persona_id: string; task?: string; mode?: 'plan' | 'execute'; plan_id?: string };
+  const runMode = mode ?? 'plan'; // Default: plan first
   if (!CLAUDE_AGENT_REGISTRY[persona_id]) return res.status(404).json({ error: `Unknown persona: ${persona_id}` });
   if (runningClaudes.has(persona_id)) return res.status(409).json({ error: 'Already running' });
   const info = CLAUDE_AGENT_REGISTRY[persona_id];
@@ -3083,7 +3142,50 @@ app.post('/api/agents/claude/run', async (req, res) => {
   const inbox         = await readSafe(`${AGENTS_DIR}/inbox/${persona_id}.md`, 'Keine Nachrichten.');
   const now           = new Date().toISOString().slice(0, 16).replace('T', ' ');
   const taskDesc      = task ?? `Führe deinen regulären ${info.task_type}-Zyklus durch.`;
-  const fullPrompt    = [basePrompt, '---', personaPrompt, '---', '## Dein Memory (bisherige Runs)', memory, '## Deine Inbox', inbox, '---', `## Aktuelle Aufgabe\n**Datum:** ${now}  **Task-Typ:** ${info.task_type}\n**Aufgabe:** ${taskDesc}`, '', 'Arbeite jetzt autonom. Schreibe am Ende deinen Memory-Record und das AGENT_COMPLETE Signal.'].join('\n\n');
+
+  let fullPrompt = '';
+  if (runMode === 'plan') {
+    // PLAN MODE: Agent soll nur planen, nicht ausführen
+    const planFile = `${AGENTS_DIR}/plans/${persona_id}-${Date.now()}.md`;
+    fullPrompt = [
+      basePrompt, '---', personaPrompt, '---',
+      '## Dein Memory (bisherige Runs)', memory,
+      '## Deine Inbox', inbox, '---',
+      `## Aktuelle Aufgabe — PLAN MODE\n**Datum:** ${now}  **Task-Typ:** ${info.task_type}\n**Aufgabe:** ${taskDesc}`,
+      '',
+      '**WICHTIG: Du bist im PLAN-Modus. Führe NICHTS aus!**',
+      '',
+      'Deine Aufgabe:',
+      '1. Analysiere die Aufgabe gründlich',
+      '2. Lies relevante Dateien (Read tool) um den aktuellen Stand zu verstehen',
+      '3. Erstelle einen detaillierten Umsetzungs-Plan',
+      '4. Schreibe den Plan nach: ' + planFile,
+      '',
+      'Der Plan muss enthalten:',
+      '- Was genau gemacht werden soll',
+      '- Welche Dateien gelesen/geschrieben werden',
+      '- Welche Bash-Commands ausgeführt werden',
+      '- Welche Personas benachrichtigt werden',
+      '',
+      'Am Ende: PLAN_COMPLETE: [Ein-Satz-Zusammenfassung]',
+    ].join('\n\n');
+  } else {
+    // EXECUTE MODE: Agent führt approved Plan aus
+    const planContent = plan_id ? await readSafe(`${AGENTS_DIR}/plans/${plan_id}.md`, 'Kein Plan gefunden.') : '';
+    fullPrompt = [
+      basePrompt, '---', personaPrompt, '---',
+      '## Dein Memory (bisherige Runs)', memory,
+      '## Deine Inbox', inbox, '---',
+      `## Aktuelle Aufgabe — EXECUTE MODE\n**Datum:** ${now}  **Task-Typ:** ${info.task_type}\n**Aufgabe:** ${taskDesc}`,
+      '',
+      '## Dein genehmigter Plan',
+      planContent,
+      '',
+      '**Führe jetzt den Plan aus. Du hast volle Berechtigung.**',
+      '',
+      'Arbeite systematisch durch den Plan. Schreibe am Ende deinen Memory-Record und das AGENT_COMPLETE Signal.',
+    ].join('\n\n');
+  }
   // Remove CLAUDECODE env var so nested claude sessions are allowed
   const spawnEnv = { ...process.env };
   delete (spawnEnv as Record<string, string | undefined>).CLAUDECODE;
@@ -3094,8 +3196,9 @@ app.post('/api/agents/claude/run', async (req, res) => {
   proc.stderr?.on('data', (d: Buffer) => writeLog(`[ERR] ${d.toString()}`));
   proc.on('close', (code) => { runningClaudes.delete(persona_id); writeLog(`\n${'─'.repeat(60)}\n[DONE] Exit: ${code}\n`); console.log(`[ClaudeAgent:${persona_id}] done (${code})`); });
   runningClaudes.set(persona_id, proc);
-  console.log(`[ClaudeAgent] Starting ${persona_id} → ${logFile}`);
-  res.json({ ok: true, task_id: taskId, persona_id, log_file: logFile });
+  console.log(`[ClaudeAgent] Starting ${persona_id} (${runMode}) → ${logFile}`);
+  const planFile = runMode === 'plan' ? `${persona_id}-${Date.now()}.md` : (plan_id ?? null);
+  res.json({ ok: true, task_id: taskId, persona_id, log_file: logFile, mode: runMode, plan_file: planFile });
 });
 
 app.get('/api/agents/claude/log/:taskId', async (req, res) => {
@@ -3114,6 +3217,111 @@ app.get('/api/agents/claude/memory/:personaId', async (req, res) => {
   const raw = await (async () => { try { return await fsAgentPromises.readFile(`${AGENTS_DIR}/memory/${id}.jsonl`, 'utf-8'); } catch { return ''; } })();
   const runs = raw.trim().split('\n').filter(Boolean).slice(-10).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean).reverse();
   res.json({ summary, runs });
+});
+
+// GET /api/agents/claude/plan/:planFile — read a plan file
+app.get('/api/agents/claude/plan/:planFile', async (req, res) => {
+  const safe = req.params.planFile.replace(/[^a-zA-Z0-9._-]/g, '');
+  if (!safe.endsWith('.md')) return res.status(400).json({ error: 'Only .md files' });
+  try {
+    const content = await fsAgentPromises.readFile(`${AGENTS_DIR}/plans/${safe}`, 'utf-8');
+    res.type('text/plain').send(content);
+  } catch { res.status(404).json({ error: 'Plan not found' }); }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Business Approval System — .pending files must be approved by Rafael
+// ─────────────────────────────────────────────────────────────────────────────
+const BUSINESS_DIR = '/root/projekte/werkingflow/business';
+const BUSINESS_QUEUE = `${BUSINESS_DIR}/.pending-queue.jsonl`;
+
+// GET /api/agents/business/pending — list all pending business changes
+app.get('/api/agents/business/pending', async (_req, res) => {
+  try {
+    const raw = await fsAgentPromises.readFile(BUSINESS_QUEUE, 'utf-8');
+    const pending = raw.trim().split('\n').filter(Boolean).map((l, i) => {
+      try {
+        const entry = JSON.parse(l);
+        return { index: i, ...entry };
+      } catch { return null; }
+    }).filter(Boolean);
+    res.json({ pending });
+  } catch { res.json({ pending: [] }); }
+});
+
+// POST /api/agents/business/approve — approve a pending change
+app.post('/api/agents/business/approve', async (req, res) => {
+  const { index, commit_message } = req.body as { index: number; commit_message?: string };
+  try {
+    const raw = await fsAgentPromises.readFile(BUSINESS_QUEUE, 'utf-8');
+    const lines = raw.trim().split('\n').filter(Boolean);
+    if (index >= lines.length) return res.status(404).json({ error: 'Entry not found' });
+    const entry = JSON.parse(lines[index]);
+    const pendingPath = entry.file;
+    const finalPath = pendingPath.replace(/\.pending$/, '');
+
+    // Move .pending → final
+    await fsAgentPromises.rename(pendingPath, finalPath);
+
+    // Remove from queue
+    lines.splice(index, 1);
+    await fsAgentPromises.writeFile(BUSINESS_QUEUE, lines.join('\n') + (lines.length > 0 ? '\n' : ''));
+
+    // Auto-commit (approved option from questions)
+    const message = commit_message ?? `Approved by Rafael: ${finalPath.replace(`${BUSINESS_DIR}/`, '')}`;
+    const { execAsync } = await import('child_process');
+    const { promisify } = await import('util');
+    const exec = promisify(execAsync);
+    try {
+      await exec(`cd ${BUSINESS_DIR} && git add "${finalPath}" && git commit -m "${message}"`, { timeout: 10000 });
+    } catch (gitErr) {
+      console.warn('[BusinessApprove] Git commit failed:', gitErr);
+      // Non-fatal — file is still moved
+    }
+
+    res.json({ ok: true, file: finalPath });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// POST /api/agents/business/reject — reject a pending change
+app.post('/api/agents/business/reject', async (req, res) => {
+  const { index } = req.body as { index: number };
+  try {
+    const raw = await fsAgentPromises.readFile(BUSINESS_QUEUE, 'utf-8');
+    const lines = raw.trim().split('\n').filter(Boolean);
+    if (index >= lines.length) return res.status(404).json({ error: 'Entry not found' });
+    const entry = JSON.parse(lines[index]);
+
+    // Delete .pending file
+    await fsAgentPromises.unlink(entry.file).catch(() => {});
+
+    // Remove from queue
+    lines.splice(index, 1);
+    await fsAgentPromises.writeFile(BUSINESS_QUEUE, lines.join('\n') + (lines.length > 0 ? '\n' : ''));
+
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// GET /api/agents/business/diff/:file — get diff for a .pending file
+app.get(/^\/api\/agents\/business\/diff\/(.+)$/, async (req, res) => {
+  const filePath = req.params[0];
+  const pendingPath = `${BUSINESS_DIR}/${filePath}`;
+  const finalPath = pendingPath.replace(/\.pending$/, '');
+  try {
+    const pendingContent = await fsAgentPromises.readFile(pendingPath, 'utf-8');
+    let finalContent = '';
+    try {
+      finalContent = await fsAgentPromises.readFile(finalPath, 'utf-8');
+    } catch { /* file doesn't exist yet */ }
+    res.json({ pending: pendingContent, final: finalContent });
+  } catch (err) {
+    res.status(404).json({ error: 'File not found' });
+  }
 });
 
 // --- Serve Frontend in Production ---
