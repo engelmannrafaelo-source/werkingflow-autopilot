@@ -17,15 +17,20 @@ export default function WerkingReportAdmin() {
   const [envLoading, setEnvLoading] = useState(false);
   const [envUrl, setEnvUrl] = useState('');
 
-  // Load current env mode from server on mount
+  // Load current env mode from server on mount + poll every 5s to stay in sync
   useEffect(() => {
-    fetch('/api/admin/wr/env')
-      .then(r => r.json())
-      .then(d => {
-        if (d.mode) setEnvMode(d.mode);
-        if (d.urls) setEnvUrl(d.mode === 'staging' ? d.urls.staging : d.urls.production);
-      })
-      .catch(() => {});
+    const loadEnv = () => {
+      fetch('/api/admin/wr/env')
+        .then(r => r.json())
+        .then(d => {
+          if (d.mode) setEnvMode(d.mode);
+          if (d.urls) setEnvUrl(d.mode === 'staging' ? d.urls.staging : d.urls.production);
+        })
+        .catch(() => {});
+    };
+    loadEnv(); // Initial load
+    const interval = setInterval(loadEnv, 5000); // Poll every 5s to detect server restarts
+    return () => clearInterval(interval);
   }, []);
 
   const switchEnv = useCallback(async (mode: EnvMode) => {
