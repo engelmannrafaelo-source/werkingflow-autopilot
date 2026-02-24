@@ -64,33 +64,54 @@ cd /root/projekte/werkingflow/autopilot/cui
 npx playwright install chromium
 ```
 
-### 2. Login to Claude.ai (one-time per account)
+### 2. Setup Authentication Tokens (one-time)
 
-Run the interactive login script for each account:
+Add your long-lived Claude.ai authentication tokens to `~/.zshrc`:
+
+```bash
+# Edit ~/.zshrc
+nano ~/.zshrc
+
+# Add at the end:
+export CLAUDE_AUTH_TOKEN_RAFAEL="sk-ant-..."
+export CLAUDE_AUTH_TOKEN_OFFICE="sk-ant-..."
+export CLAUDE_AUTH_TOKEN_ENGELMANN="sk-ant-..."
+
+# Reload
+source ~/.zshrc
+```
+
+**Where to get tokens:**
+- These are your existing 1-year authentication tokens from Claude.ai
+- Extract from browser cookies (`sessionKey` cookie)
+- Or from existing authentication setup
+
+### 3. Create Session States (one-time per account)
+
+Generate Playwright session states from your tokens:
 
 ```bash
 cd /root/projekte/werkingflow/autopilot/cui
 
-# Login for rafael account
-npx tsx scripts/login-claude.ts rafael
+# Create session for rafael account
+npx tsx scripts/create-session-from-token.ts rafael
 
-# Login for office account
-npx tsx scripts/login-claude.ts office
+# Create session for office account
+npx tsx scripts/create-session-from-token.ts office
 
-# Login for engelmann account
-npx tsx scripts/login-claude.ts engelmann
+# Create session for engelmann account
+npx tsx scripts/create-session-from-token.ts engelmann
 ```
 
 **What happens:**
-1. Opens non-headless Chromium browser on server
-2. Navigate to `claude.ai/login` manually
-3. Complete login + 2FA for the account
-4. Script detects successful login
-5. Saves session state to `/root/projekte/local-storage/backends/cui/playwright-sessions/{account}.json`
+1. Reads token from environment variable
+2. Creates Playwright browser context with cookie
+3. Verifies token by navigating to `claude.ai/settings/usage`
+4. Saves session state to `/root/projekte/local-storage/backends/cui/playwright-sessions/{account}.json`
 
-**Important**: You need to be able to see the browser window (X11 forwarding, VNC, or local access).
+**No interactive login needed!** Runs headless, preserves your existing auth tokens.
 
-### 3. Run Scraper (automated)
+### 4. Run Scraper (automated)
 
 Once logged in, scraping works headless:
 
@@ -101,7 +122,7 @@ npx tsx scripts/scrape-claude-usage.ts
 
 **Output**: `claude-usage-scraped.json` with real usage data for all accounts.
 
-### 4. Setup Cron (daily scraping)
+### 5. Setup Cron (daily scraping)
 
 ```bash
 # Add to crontab
@@ -179,7 +200,7 @@ Shows actionable alerts:
 
 | File | Purpose |
 |------|---------|
-| `scripts/login-claude.ts` | Interactive login to save session state |
+| `scripts/create-session-from-token.ts` | Create session state from auth token |
 | `scripts/scrape-claude-usage.ts` | Automated scraper using saved sessions |
 | `server/index.ts` | `/api/claude-code/stats-v2` endpoint |
 | `src/components/panels/BridgeMonitor/tabs/CCUsageTab.tsx` | Frontend component |
@@ -190,17 +211,20 @@ Shows actionable alerts:
 
 ### "No session state found"
 
-Run `npx tsx scripts/login-claude.ts {account}` to establish session.
+Run `npx tsx scripts/create-session-from-token.ts {account}` to create session.
 
 ### Scraper times out
 
-Session may have expired. Re-run login script.
+Token may have expired. Get new token from browser and update `~/.zshrc`, then re-run session creation.
 
-### Browser won't open (login script)
+### "Token invalid - got redirected to login"
 
-- Check X11 forwarding: `echo $DISPLAY`
-- Or use VNC/local access
-- Login script requires visible browser (Chromium headless: false)
+Token expired or incorrect. Extract fresh `sessionKey` cookie from browser:
+1. Open claude.ai in browser
+2. DevTools → Application → Cookies → `sessionKey`
+3. Copy value to `~/.zshrc` as `CLAUDE_AUTH_TOKEN_{ACCOUNT}`
+4. Run `source ~/.zshrc`
+5. Re-run `npx tsx scripts/create-session-from-token.ts {account}`
 
 ### LIVE badge not showing
 
@@ -210,9 +234,17 @@ Session may have expired. Re-run login script.
 
 ## Maintenance
 
-- **Session Renewal**: Re-login if scraper fails consistently (~monthly)
+- **Token Renewal**: Update tokens in `~/.zshrc` if they expire (~1 year)
+- **Session Refresh**: Re-run `create-session-from-token.ts` after token update
 - **Cron Monitoring**: Check `/var/log/claude-scraper.log` for errors
 - **Data Freshness**: `scrapedTimestamp` field shows last scrape time
+
+## Token Security
+
+- Tokens are **1-year authentication tokens** with full account access
+- Store ONLY in `~/.zshrc` (never commit to git!)
+- Never expose in logs or API responses
+- Each account has separate token (rafael, office, engelmann)
 
 ---
 
