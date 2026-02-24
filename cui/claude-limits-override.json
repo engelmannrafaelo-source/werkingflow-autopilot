@@ -1,0 +1,27 @@
+{
+  "_comment": "Manual override for Claude.ai usage limits. Update weekly from claude.ai/settings/usage",
+  "rafael": {
+    "weeklyLimitTokens": 10000000,
+    "currentWeeklyPercent": 83,
+    "currentSessionPercent": 4,
+    "weeklyResetDate": "2026-02-27T10:00:00Z",
+    "currentSessionResetDate": "2026-02-24T17:46:00Z",
+    "lastManualUpdate": "2026-02-24T12:30:00Z"
+  },
+  "office": {
+    "weeklyLimitTokens": 10000000,
+    "currentWeeklyPercent": null,
+    "currentSessionPercent": null,
+    "weeklyResetDate": null,
+    "currentSessionResetDate": null,
+    "lastManualUpdate": null
+  },
+  "engelmann": {
+    "weeklyLimitTokens": 10000000,
+    "currentWeeklyPercent": null,
+    "currentSessionPercent": null,
+    "weeklyResetDate": null,
+    "currentSessionResetDate": null,
+    "lastManualUpdate": null
+  }
+}

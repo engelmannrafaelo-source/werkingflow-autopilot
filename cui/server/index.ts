@@ -21,7 +21,7 @@ import express from 'express';
 import { createServer, request as httpRequest, IncomingMessage, ServerResponse } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { resolve, extname, relative, join } from 'path';
-import { readFileSync, readdirSync, statSync, existsSync, mkdirSync, writeFileSync, unlinkSync, rmSync } from 'fs';
+import { readFileSync, readdirSync, statSync, existsSync, mkdirSync, writeFileSync, unlinkSync, rmSync, copyFileSync } from "fs";
 import { homedir } from 'os';
 import { watch } from 'chokidar';
 import mime from 'mime-types';
@@ -33,11 +33,11 @@ const PROD = process.env.NODE_ENV === 'production';
 
 // --- CUI Reverse Proxies ---
 // Each CUI account gets a local proxy port so iframes load same-origin (no cookie issues)
-const CUI_PROXIES = [
-  { id: 'rafael',    localPort: 5001, target: 'http://100.121.161.109:4001' },
-  { id: 'engelmann', localPort: 5002, target: 'http://100.121.161.109:4002' },
-  { id: 'office',    localPort: 5003, target: 'http://100.121.161.109:4003' },
-  { id: 'local',     localPort: 5004, target: 'http://localhost:4004' },
+const CUI_PROXIES: Array<{id: string; localPort: number; target: string}> = [
+  { id: 'rafael', localPort: 5001, target: 'http://localhost:4001' },
+  { id: 'engelmann', localPort: 5002, target: 'http://localhost:4002' },
+  { id: 'office', localPort: 5003, target: 'http://localhost:4003' },
+  { id: 'local', localPort: 5004, target: 'http://localhost:4004' },
 ];
 
 // SSE proxy: blocks data relay to browser (no continuous streaming).
@@ -560,6 +560,13 @@ for (const cui of CUI_PROXIES) {
     });
   });
 
+  proxyServer.on('error', (err: any) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`[Proxy] ${cui.id}: Port ${cui.localPort} already in use — skipping`);
+    } else {
+      console.error(`[Proxy] ${cui.id}: Listen error:`, err.message);
+    }
+  });
   proxyServer.listen(cui.localPort, () => {
     console.log(`[Proxy] ${cui.id}: localhost:${cui.localPort} → ${cui.target}`);
   });
@@ -649,6 +656,10 @@ function getSessionStates(): Record<string, SessionState> {
 // IMPORTANT: Only match LIVE stream events, not historical conversation replay data.
 // Historical chunks contain "type":"result", "stop_reason" etc. for every past message.
 function detectAttentionMarkers(text: string): { state: ConvAttentionState; reason?: AttentionReason } | null {
+  // Rate limit / billing errors - notify user immediately
+  if (text.includes("rate_limit") || text.includes("billing") || text.includes("hit your limit")) {
+    return { state: "needs_attention", reason: "error" };
+  }
   // Plan mode: ExitPlanMode or EnterPlanMode tool calls
   if (text.includes('"name":"ExitPlanMode"') || text.includes('"name":"EnterPlanMode"')) {
     return { state: 'needs_attention', reason: 'plan' };
@@ -1279,7 +1290,7 @@ app.get('/api/mission/conversation/:accountId/:sessionId', async (req, res) => {
   if (!convData) { res.status(502).json({ error: 'CUI unreachable' }); return; }
 
   // Transform CUI message format: {type, message: {role, content}, timestamp} → {role, content, timestamp}
-  const rawMessages = convData.messages || [];
+  const rawMessages = (convData.messages || []).sort((a: any, b: any) => (a.timestamp || '').localeCompare(b.timestamp || ''));
   const messages = rawMessages.slice(-tail).map((m: any) => ({
     role: m.message?.role || m.type || 'user',
     content: m.message?.content || m.content || '',
@@ -1289,6 +1300,7 @@ app.get('/api/mission/conversation/:accountId/:sessionId', async (req, res) => {
   res.json({
     messages,
     summary: convData.summary || '',
+    customName: getTitle(req.params.sessionId) || convData.sessionInfo?.custom_name || '',
     status: convData.metadata?.status || 'completed',
     projectPath: convData.projectPath || '',
     permissions: permData?.permissions || [],
@@ -1298,7 +1310,7 @@ app.get('/api/mission/conversation/:accountId/:sessionId', async (req, res) => {
 
 // 3. Send message to existing conversation
 app.post('/api/mission/send', async (req, res) => {
-  const { accountId, sessionId, message, workDir } = req.body;
+  const { accountId, sessionId, message, workDir, model } = req.body;
   if (!accountId || !sessionId || !message) {
     res.status(400).json({ error: 'accountId, sessionId, message required' });
     return;
@@ -1311,11 +1323,12 @@ app.post('/api/mission/send', async (req, res) => {
     body: JSON.stringify({
       workingDirectory: workDir || '/root',
       initialPrompt: message,
-      resumedSessionId: sessionId,
+      resumedSessionId: sessionId, ...(model ? { model } : {}),
     }),
   });
 
   if (!result) { res.status(502).json({ error: 'CUI unreachable' }); return; }
+  if (result.error) { res.status(400).json({ error: result.error, code: result.code }); return; }
   saveAssignment(result.sessionId || sessionId, accountId);
   setLastPrompt(result.sessionId || sessionId);
 
@@ -1331,7 +1344,8 @@ app.post('/api/mission/send', async (req, res) => {
   // Track account assignment for this conversation
   saveAssignment(result.sessionId || sessionId, accountId);
 
-  res.json({ ok: true, streamingId: result.streamingId, sessionId: result.sessionId || sessionId });
+  const busy = !result.streamingId;
+  res.json({ ok: true, busy, streamingId: result.streamingId, sessionId: result.sessionId || sessionId });
 });
 
 // 4. Approve/deny permission
@@ -1465,7 +1479,7 @@ app.post('/api/mission/activate', (req, res) => {
 
 // 6. Start new conversation with subject
 app.post('/api/mission/start', async (req, res) => {
-  const { accountId, workDir, subject, message } = req.body;
+  const { accountId, workDir, subject, message, model } = req.body;
   if (!accountId || !message) {
     res.status(400).json({ error: 'accountId, message required' });
     return;
@@ -1479,6 +1493,7 @@ app.post('/api/mission/start', async (req, res) => {
     body: JSON.stringify({
       workingDirectory: workDir || '/root',
       initialPrompt: message,
+      ...(model ? { model } : {}),
     }),
   });
 
@@ -1968,21 +1983,19 @@ app.post('/api/images', async (req, res) => {
     results.push({ localPath, name: safeName });
   }
 
-  // For remote accounts: SCP to server
-  if (isRemote) {
-    const server = REMOTE_SERVERS[accountId];
-    try {
-      await execAsync(`ssh root@${server} "mkdir -p ${REMOTE_IMG_DIR}"`);
-      for (const r of results) {
-        await execAsync(`scp "${r.localPath}" root@${server}:${REMOTE_IMG_DIR}/${r.name}`);
-        r.remotePath = `${REMOTE_IMG_DIR}/${r.name}`;
-      }
-      console.log(`[Images] Uploaded ${results.length} images to ${server}:${REMOTE_IMG_DIR}`);
-    } catch (err: any) {
-      console.error(`[Images] SCP failed: ${err.message}`);
-      res.status(500).json({ error: `SCP failed: ${err.message}` });
-      return;
+  // Copy to /tmp/cui-images (local filesystem, no SCP needed)
+  try {
+    mkdirSync(REMOTE_IMG_DIR, { recursive: true });
+    for (const r of results) {
+      const dest = join(REMOTE_IMG_DIR, r.name);
+      copyFileSync(r.localPath, dest);
+      r.remotePath = dest;
     }
+    console.log(`[Images] Saved ${results.length} images to ${REMOTE_IMG_DIR}`);
+  } catch (err: any) {
+    console.error(`[Images] Save failed: ${err.message}`);
+    res.status(500).json({ error: `Save failed: ${err.message}` });
+    return;
   }
 
   // Build the Read command for Claude
@@ -2053,6 +2066,34 @@ app.get('/api/team/personas', async (_req, res) => {
   }
 });
 
+// GET /api/agents/persona/:id
+// Returns: Single persona with full metadata
+app.get('/api/agents/persona/:id', async (req, res) => {
+  const personasPath = process.platform === 'darwin'
+    ? '/Users/rafael/Documents/GitHub/orchestrator/team/personas'
+    : '/root/projekte/orchestrator/team/personas';
+
+  try {
+    const personaFile = `${req.params.id}.md`;
+    const personaPath = join(personasPath, personaFile);
+    const content = await readFile(personaPath, 'utf-8');
+    const persona = parsePersona(personaFile, content);
+
+    // Add additional fields that parsePersona might not include
+    const specialtyMatch = content.match(/\*\*Specialty\*\*:\s*(.+)/i);
+    const mottoMatch = content.match(/>\s+"(.+?)"/);
+
+    res.json({
+      ...persona,
+      specialty: specialtyMatch?.[1]?.trim(),
+      motto: mottoMatch?.[1]?.trim()
+    });
+  } catch (err: any) {
+    console.error(`[API] Persona not found: ${req.params.id}`, err);
+    res.status(404).json({ error: 'Persona not found' });
+  }
+});
+
 // GET /api/team/worklist/:personaId
 // Returns: string (markdown content)
 app.get('/api/team/worklist/:personaId', async (req, res) => {
@@ -2065,6 +2106,100 @@ app.get('/api/team/worklist/:personaId', async (req, res) => {
   } catch (err: any) {
     console.error(`[Team API] Worklist not found for ${personaId}:`, err);
     res.status(404).send('Worklist not found');
+  }
+});
+
+// GET /api/workspaces/:workspace/credentials
+// Returns safe credential info (WITHOUT passwords!)
+app.get('/api/workspaces/:workspace/credentials', async (req, res) => {
+  try {
+    const { workspace } = req.params;
+    const registryPath = `/root/orchestrator/workspaces/${workspace}/CREDENTIALS.json`;
+
+    if (!existsSync(registryPath)) {
+      return res.status(404).json({
+        error: 'Credential registry not found',
+        workspace
+      });
+    }
+
+    const registry = JSON.parse(readFileSync(registryPath, 'utf-8'));
+
+    // NEVER send passwords to frontend!
+    const safeRegistry = {
+      app: registry.app,
+      version: registry.version,
+      updated: registry.updated,
+      personas: Object.entries(registry.personas || {}).map(([key, persona]: [string, any]) => ({
+        key,
+        email: persona.email,
+        role: persona.role,
+        name: `${persona.firstname} ${persona.lastname}`,
+        company: persona.company,
+        description: persona.description,
+        usage: persona.usage || ''
+      })),
+      expert_reviewers: Object.entries(registry.expert_reviewers || {}).map(([key, reviewer]: [string, any]) => ({
+        key,
+        name: `${reviewer.firstname} ${reviewer.lastname}`,
+        email: reviewer.email,
+        description: reviewer.description,
+        persona_type: reviewer.persona_type,
+        uses_herbert_login: reviewer.uses_herbert_login || false
+      })),
+      platform_defaults: Object.keys(registry.platform_defaults || {})
+    };
+
+    res.json(safeRegistry);
+  } catch (error) {
+    console.error('[Credentials API] Error loading credential registry:', error);
+    res.status(500).json({ error: 'Failed to load credential registry' });
+  }
+});
+
+// POST /api/workspaces/:workspace/credentials/validate
+// Validates that a persona exists in registry
+app.post('/api/workspaces/:workspace/credentials/validate', async (req, res) => {
+  try {
+    const { workspace } = req.params;
+    const { persona } = req.body;
+
+    if (!persona) {
+      return res.status(400).json({ valid: false, error: 'Persona parameter required' });
+    }
+
+    const registryPath = `/root/orchestrator/workspaces/${workspace}/CREDENTIALS.json`;
+
+    if (!existsSync(registryPath)) {
+      return res.status(404).json({ valid: false, error: 'Registry not found' });
+    }
+
+    const registry = JSON.parse(readFileSync(registryPath, 'utf-8'));
+
+    const personaExists = (
+      (registry.personas && registry.personas[persona]) ||
+      (registry.expert_reviewers && registry.expert_reviewers[persona]) ||
+      (registry.platform_defaults && registry.platform_defaults[persona])
+    );
+
+    if (!personaExists) {
+      return res.json({ valid: false, error: 'Persona not found' });
+    }
+
+    const personaData =
+      registry.personas?.[persona] ||
+      registry.expert_reviewers?.[persona] ||
+      registry.platform_defaults?.[persona];
+
+    res.json({
+      valid: true,
+      email: personaData.email,
+      name: `${personaData.firstname || ''} ${personaData.lastname || ''}`.trim() || persona
+    });
+
+  } catch (error) {
+    console.error('[Credentials API] Error validating persona:', error);
+    res.status(500).json({ valid: false, error: 'Validation failed' });
   }
 });
 
@@ -2436,7 +2571,7 @@ let _changeDebounce: ReturnType<typeof setTimeout> | null = null;
 
 const changeWatcher = watch([
   join(WORKSPACE_ROOT, 'src'),
-  join(WORKSPACE_ROOT, 'server'),
+  // join(WORKSPACE_ROOT, 'server'), // disabled: production mode
 ], {
   ignored: /(node_modules|dist|\.git|__pycache__)/,
   persistent: true,
@@ -3168,7 +3303,39 @@ const PROMPTS_DIR = `${AGENTS_DIR}/prompts`;
 const CLAUDE_LOGS_DIR = '/root/projekte/local-storage/backends/team-agents/logs';
 const runningClaudes = new Map<string, ReturnType<typeof spawn>>();
 
+// Activity Stream Broadcasting
+const activityClients: ServerResponse[] = [];
+
+function broadcastActivity(event: {
+  timestamp: string;
+  personaId: string;
+  personaName: string;
+  action: string; // "started", "completed", "error", "wrote", "messaged", "approved", "rejected"
+  description: string;
+  progress?: number;
+}) {
+  const data = `data: ${JSON.stringify(event)}\n\n`;
+  activityClients.forEach(client => {
+    try {
+      client.write(data);
+    } catch (err) {
+      // Client disconnected, will be cleaned up
+    }
+  });
+  console.log(`[Activity] Broadcast: ${event.personaName} - ${event.action}`);
+}
+
+// POST /api/test/broadcast-activity — Test endpoint to manually broadcast activity
+app.post('/api/test/broadcast-activity', (req, res) => {
+  const event = req.body;
+  if (!event.timestamp) event.timestamp = new Date().toISOString();
+  broadcastActivity(event);
+  res.json({ success: true, broadcast: event });
+});
+
+
 const CLAUDE_AGENT_REGISTRY: Record<string, { name: string; schedule: string; task_type: string }> = {
+  'rafbot':          { name: 'Rafbot',           schedule: 'tägl. 06:00',    task_type: 'SYNC' },
   'kai-hoffmann':    { name: 'Kai Hoffmann',    schedule: 'Mo 09:00',       task_type: 'SCAN' },
   'birgit-bauer':    { name: 'Birgit Bauer',    schedule: 'Mo 10:00',       task_type: 'SYNC' },
   'max-weber':       { name: 'Max Weber',        schedule: 'Di 09:00',       task_type: 'DECIDE' },
@@ -3269,9 +3436,34 @@ app.post('/api/agents/claude/run', async (req, res) => {
   const proc = spawn('claude', ['--dangerously-skip-permissions', '--print', '-p', fullPrompt], { cwd: '/root/projekte/werkingflow', stdio: ['ignore', 'pipe', 'pipe'], env: spawnEnv });
   const writeLog = (s: string) => fsAgentPromises.appendFile(logFile, s).catch(() => {});
   writeLog(`[${now}] ${info.name} gestartet — ${taskDesc}\n${'─'.repeat(60)}\n\n`);
+
+  // Broadcast agent started
+  broadcastActivity({
+    timestamp: new Date().toISOString(),
+    personaId: persona_id,
+    personaName: info.name,
+    action: 'started',
+    description: taskDesc,
+    progress: 0
+  });
+
   proc.stdout?.on('data', (d: Buffer) => writeLog(d.toString()));
   proc.stderr?.on('data', (d: Buffer) => writeLog(`[ERR] ${d.toString()}`));
-  proc.on('close', (code) => { runningClaudes.delete(persona_id); writeLog(`\n${'─'.repeat(60)}\n[DONE] Exit: ${code}\n`); console.log(`[ClaudeAgent:${persona_id}] done (${code})`); });
+  proc.on('close', (code) => {
+    runningClaudes.delete(persona_id);
+    writeLog(`\n${'─'.repeat(60)}\n[DONE] Exit: ${code}\n`);
+    console.log(`[ClaudeAgent:${persona_id}] done (${code})`);
+
+    // Broadcast agent completed or error
+    broadcastActivity({
+      timestamp: new Date().toISOString(),
+      personaId: persona_id,
+      personaName: info.name,
+      action: code === 0 ? 'completed' : 'error',
+      description: code === 0 ? `${runMode} completed successfully` : `Exited with code ${code}`,
+      progress: code === 0 ? 100 : undefined
+    });
+  });
   runningClaudes.set(persona_id, proc);
   console.log(`[ClaudeAgent] Starting ${persona_id} (${runMode}) → ${logFile}`);
   const planFile = runMode === 'plan' ? `${persona_id}-${Date.now()}.md` : (plan_id ?? null);
@@ -3344,6 +3536,16 @@ app.post('/api/agents/business/approve', async (req, res) => {
     lines.splice(index, 1);
     await fsAgentPromises.writeFile(BUSINESS_QUEUE, lines.join('\n') + (lines.length > 0 ? '\n' : ''));
 
+    // Broadcast approval event
+    broadcastActivity({
+      timestamp: new Date().toISOString(),
+      personaId: entry.persona || 'unknown',
+      personaName: entry.persona || 'Unknown',
+      action: 'approved',
+      description: `Document approved: ${finalPath.replace(`${BUSINESS_DIR}/`, '')}`,
+      progress: 100
+    });
+
     // Auto-commit (approved option from questions)
     const message = commit_message ?? `Approved by Rafael: ${finalPath.replace(`${BUSINESS_DIR}/`, '')}`;
     const { execAsync } = await import('child_process');
@@ -3378,9 +3580,56 @@ app.post('/api/agents/business/reject', async (req, res) => {
     lines.splice(index, 1);
     await fsAgentPromises.writeFile(BUSINESS_QUEUE, lines.join('\n') + (lines.length > 0 ? '\n' : ''));
 
+    // Broadcast rejection event
+    broadcastActivity({
+      timestamp: new Date().toISOString(),
+      personaId: entry.persona || 'unknown',
+      personaName: entry.persona || 'Unknown',
+      action: 'rejected',
+      description: `Document rejected: ${entry.file.replace(`${BUSINESS_DIR}/`, '')}`,
+      progress: 0
+    });
+
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: String(err) });
+  }
+});
+
+// GET /api/agents/persona/:id — get individual persona data
+app.get('/api/agents/persona/:id', async (req, res) => {
+  try {
+    const personaPath = `${AGENTS_DIR}/personas/${req.params.id}.md`;
+    const content = await fsAgentPromises.readFile(personaPath, 'utf-8');
+
+    const persona: Record<string, any> = { id: req.params.id };
+
+    // Parse header
+    const headerMatch = content.match(/^#\s+(.+?)\s+-\s+(.+?)$/m);
+    if (headerMatch) {
+      persona.name = headerMatch[1].trim();
+      persona.role = headerMatch[2].trim();
+    }
+
+    // Parse MBTI
+    const mbtiMatch = content.match(/\*\*MBTI\*\*:\s+(.+?)$/m);
+    if (mbtiMatch) persona.mbti = mbtiMatch[1].trim();
+
+    // Parse Specialty
+    const specialtyMatch = content.match(/\*\*Specialty\*\*:\s+(.+?)$/m);
+    if (specialtyMatch) persona.specialty = specialtyMatch[1].trim();
+
+    // Parse Team
+    const teamMatch = content.match(/\*\*Team\*\*:\s+(.+?)$/m);
+    if (teamMatch) persona.team = teamMatch[1].trim();
+
+    // Parse Motto
+    const mottoMatch = content.match(/>\s+"(.+?)"/);
+    if (mottoMatch) persona.motto = mottoMatch[1].trim();
+
+    res.json(persona);
+  } catch (err) {
+    res.status(404).json({ error: 'Persona not found' });
   }
 });
 
@@ -3401,6 +3650,124 @@ app.get(/^\/api\/agents\/business\/diff\/(.+)$/, async (req, res) => {
   }
 });
 
+// ============================================================================
+// API COMMAND SYSTEM - Complete programmatic control
+// ============================================================================
+
+// POST /api/commands/run-agent — Run any agent with optional test mode
+app.post('/api/commands/run-agent', async (req, res) => {
+  const { persona_id, task, test_mode } = req.body as { persona_id: string; task?: string; test_mode?: boolean };
+
+  try {
+    // If test_mode, prepend test instruction to task
+    let finalTask = task || '';
+    if (test_mode) {
+      finalTask = `[TEST MODE] Generate dummy test data for the Virtual Office:\n- Create sample approvals\n- Write test inbox messages\n- Generate sample reports\n\nOriginal task: ${task || 'General testing'}`;
+    }
+
+    const response = await fetch(`http://localhost:${PORT}/api/agents/claude/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ persona_id, mode: 'plan', task: finalTask })
+    });
+
+    const data = await response.json();
+    res.json({ success: true, ...data });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/commands/approve-all — Approve all pending items
+app.post('/api/commands/approve-all', async (_req, res) => {
+  try {
+    const raw = await fsAgentPromises.readFile(BUSINESS_QUEUE, 'utf-8');
+    const lines = raw.trim().split('\n').filter(Boolean);
+    const approved: string[] = [];
+
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const entry = JSON.parse(lines[i]);
+        const pendingPath = entry.file;
+        const finalPath = pendingPath.replace(/\.pending$/, '');
+        await fsAgentPromises.rename(pendingPath, finalPath);
+        approved.push(finalPath);
+      } catch (err) {
+        console.error(`[ApproveAll] Failed to approve index ${i}:`, err);
+      }
+    }
+
+    // Clear queue
+    await fsAgentPromises.writeFile(BUSINESS_QUEUE, '');
+
+    res.json({ success: true, approved_count: approved.length, files: approved });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/commands/trigger-rafbot-test — Special endpoint to trigger Rafbot in test mode
+app.post('/api/commands/trigger-rafbot-test', async (_req, res) => {
+  try {
+    const response = await fetch(`http://localhost:${PORT}/api/commands/run-agent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        persona_id: 'rafbot',
+        test_mode: true,
+        task: 'Fill the Virtual Office with test data to demonstrate all features'
+      })
+    });
+
+    const data = await response.json();
+    res.json(data);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/commands/status — Get complete system status
+app.get('/api/commands/status', async (_req, res) => {
+  try {
+    // Get agent status
+    const agentsResponse = await fetch(`http://localhost:${PORT}/api/agents/claude/status`);
+    const agentsData = await agentsResponse.json();
+
+    // Get pending approvals
+    const pendingResponse = await fetch(`http://localhost:${PORT}/api/agents/business/pending`);
+    const pendingData = await pendingResponse.json();
+
+    // Count inbox messages
+    let totalInboxCount = 0;
+    const inboxDir = `${AGENTS_DIR}/inbox`;
+    try {
+      const inboxFiles = await fsAgentPromises.readdir(inboxDir);
+      for (const file of inboxFiles.filter(f => f.endsWith('.md'))) {
+        const content = await fsAgentPromises.readFile(`${inboxDir}/${file}`, 'utf-8');
+        const count = (content.match(/^---$/gm) || []).length;
+        totalInboxCount += count;
+      }
+    } catch { /* inbox dir might not exist */ }
+
+    res.json({
+      agents: {
+        total: agentsData.agents?.length || 0,
+        working: agentsData.agents?.filter((a: any) => a.status === 'working').length || 0,
+        idle: agentsData.agents?.filter((a: any) => a.status === 'idle').length || 0,
+      },
+      approvals: {
+        pending: pendingData.pending?.length || 0
+      },
+      inbox: {
+        total_messages: totalInboxCount
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/agents/activity-stream — SSE stream of agent activities
 app.get('/api/agents/activity-stream', (_req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -3408,18 +3775,30 @@ app.get('/api/agents/activity-stream', (_req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
 
+  // Add client to broadcast list
+  activityClients.push(res);
+  console.log(`[Activity] Client connected (total: ${activityClients.length})`);
+
   // Send initial ping
   res.write(`data: ${JSON.stringify({ timestamp: new Date().toISOString(), action: 'connected' })}\n\n`);
 
-  // For now, send a ping every 30 seconds to keep connection alive
-  // In production, this would emit events when agents actually do work
+  // Keepalive ping every 30 seconds
   const interval = setInterval(() => {
-    res.write(`data: ${JSON.stringify({ timestamp: new Date().toISOString(), action: 'ping' })}\n\n`);
+    try {
+      res.write(`data: ${JSON.stringify({ timestamp: new Date().toISOString(), action: 'ping' })}\n\n`);
+    } catch (err) {
+      clearInterval(interval);
+    }
   }, 30000);
 
   // Cleanup on client disconnect
   _req.on('close', () => {
     clearInterval(interval);
+    const index = activityClients.indexOf(res);
+    if (index > -1) {
+      activityClients.splice(index, 1);
+      console.log(`[Activity] Client disconnected (total: ${activityClients.length})`);
+    }
   });
 });
 
@@ -3458,13 +3837,373 @@ app.get('/api/agents/recommendations', async (_req, res) => {
   }
 });
 
+// GET /api/claude-code/stats-v2 — Claude Code JSONL usage stats (Account-based)
+app.get('/api/claude-code/stats-v2', async (_req, res) => {
+  try {
+    const claudeDir = join(homedir(), '.claude', 'projects');
+    if (!existsSync(claudeDir)) {
+      res.json({ error: 'No Claude Code data found', accounts: [], alerts: [] });
+      return;
+    }
+
+    // Load manual overrides (from claude.ai/settings/usage)
+    let manualOverrides: Record<string, any> = {};
+    const overridePath = join(import.meta.dirname ?? __dirname, 'claude-limits-override.json');
+    try {
+      if (existsSync(overridePath)) {
+        const overrideContent = readFileSync(overridePath, 'utf-8');
+        manualOverrides = JSON.parse(overrideContent);
+      }
+    } catch (err) {
+      console.error('[CC-Usage] Failed to load manual overrides:', err);
+    }
+
+    // Account-to-Workspace mapping (Claude Code limits are per account, not per workspace!)
+    const ACCOUNT_MAP: Record<string, string[]> = {
+      'rafael': [
+        '-root-orchestrator-workspaces-administration',
+        '-root-orchestrator-workspaces-team',
+        '-root-orchestrator-workspaces-diverse',
+        '-root-projekte-orchestrator',
+      ],
+      'office': [
+        '-root-orchestrator-workspaces-werking-report',
+        '-root-orchestrator-workspaces-werking-energy',
+        '-root-orchestrator-workspaces-werkingsafety',
+      ],
+      'engelmann': [
+        '-root-orchestrator-workspaces-engelmann-ai-hub',
+      ],
+      'local': [
+        '-root-projekte-werkingflow',
+        '-tmp',
+      ],
+    };
+
+    // Reverse mapping: workspace -> account
+    const workspaceToAccount: Record<string, string> = {};
+    Object.entries(ACCOUNT_MAP).forEach(([account, workspaces]) => {
+      workspaces.forEach(ws => workspaceToAccount[ws] = account);
+    });
+
+    interface WorkspaceData {
+      name: string;
+      sessions: number;
+      tokens: number;
+      inputTokens: number;
+      outputTokens: number;
+      cacheCreation: number;
+      cacheRead: number;
+      lastActivity: number | null;
+      models: Record<string, number>;
+      storageBytes: number;
+      timestamps: number[]; // For 5h-window detection
+    }
+
+    const workspaceData: Record<string, WorkspaceData> = {};
+
+    // Parse all workspaces
+    const entries = readdirSync(claudeDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+
+      const workspacePath = join(claudeDir, entry.name);
+      const jsonlFiles = readdirSync(workspacePath)
+        .filter(f => f.endsWith('.jsonl') && !f.includes('/subagents/'));
+
+      let inputTokens = 0;
+      let outputTokens = 0;
+      let cacheCreation = 0;
+      let cacheRead = 0;
+      let lastActivity: number | null = null;
+      const models: Record<string, number> = {};
+      let storageBytes = 0;
+      const timestamps: number[] = [];
+
+      // Parse each JSONL file
+      for (const jsonlFile of jsonlFiles) {
+        const jsonlPath = join(workspacePath, jsonlFile);
+        storageBytes += statSync(jsonlPath).size;
+
+        try {
+          const content = readFileSync(jsonlPath, 'utf-8');
+          const lines = content.trim().split('\n').filter(Boolean);
+
+          for (const line of lines) {
+            try {
+              const entry = JSON.parse(line);
+
+              // Track timestamps for 5h-window detection
+              if (entry.timestamp) {
+                const ts = new Date(entry.timestamp).getTime();
+                timestamps.push(ts);
+                if (!lastActivity || ts > lastActivity) {
+                  lastActivity = ts;
+                }
+              }
+
+              // Aggregate token usage
+              const usage = entry.usage || entry.message?.usage;
+              if (usage) {
+                inputTokens += usage.input_tokens ?? 0;
+                outputTokens += usage.output_tokens ?? 0;
+                cacheCreation += usage.cache_creation_input_tokens ?? 0;
+                cacheRead += usage.cache_read_input_tokens ?? 0;
+              }
+
+              // Track model usage
+              if (entry.message?.model) {
+                models[entry.message.model] = (models[entry.message.model] ?? 0) + 1;
+              }
+            } catch {}
+          }
+        } catch {}
+      }
+
+      workspaceData[entry.name] = {
+        name: entry.name,
+        sessions: jsonlFiles.length,
+        tokens: inputTokens + outputTokens,
+        inputTokens,
+        outputTokens,
+        cacheCreation,
+        cacheRead,
+        lastActivity,
+        models,
+        storageBytes,
+        timestamps: timestamps.sort((a, b) => a - b), // Sort chronologically
+      };
+    }
+
+    // Aggregate by account
+    const accounts: Array<{
+      accountName: string;
+      workspaces: string[];
+      totalTokens: number;
+      totalSessions: number;
+      totalInputTokens: number;
+      totalOutputTokens: number;
+      totalCacheCreation: number;
+      totalCacheRead: number;
+      lastActivity: string | null;
+      models: Record<string, number>;
+      storageBytes: number;
+      burnRatePerHour: number;
+      weeklyProjection: number;
+      weeklyLimitPercent: number;
+      status: 'safe' | 'warning' | 'critical';
+      nextWindowReset: string | null;
+      currentWindowTokens: number;
+    }> = [];
+
+    const now = Date.now();
+    const weekStart = now - (7 * 24 * 60 * 60 * 1000);
+    const WEEKLY_LIMIT = 10_000_000; // ~10M tokens/week for Pro (conservative estimate)
+    const WINDOW_5H = 5 * 60 * 60 * 1000;
+
+    Object.entries(ACCOUNT_MAP).forEach(([accountName, workspaceNames]) => {
+      let totalTokens = 0;
+      let totalSessions = 0;
+      let totalInput = 0;
+      let totalOutput = 0;
+      let totalCacheCreation = 0;
+      let totalCacheRead = 0;
+      let lastActivity: number | null = null;
+      const models: Record<string, number> = {};
+      let storageBytes = 0;
+      const allTimestamps: number[] = [];
+
+      workspaceNames.forEach(wsName => {
+        const ws = workspaceData[wsName];
+        if (!ws) return;
+
+        totalTokens += ws.tokens;
+        totalSessions += ws.sessions;
+        totalInput += ws.inputTokens;
+        totalOutput += ws.outputTokens;
+        totalCacheCreation += ws.cacheCreation;
+        totalCacheRead += ws.cacheRead;
+        storageBytes += ws.storageBytes;
+        allTimestamps.push(...ws.timestamps);
+
+        if (ws.lastActivity && (!lastActivity || ws.lastActivity > lastActivity)) {
+          lastActivity = ws.lastActivity;
+        }
+
+        Object.entries(ws.models).forEach(([model, count]) => {
+          models[model] = (models[model] ?? 0) + count;
+        });
+      });
+
+      // Calculate burn rate (tokens/hour) - last 24h only
+      const last24h = now - (24 * 60 * 60 * 1000);
+      const recentTokens = allTimestamps.filter(ts => ts >= last24h).length * 50; // Rough estimate: 50 tokens/message
+      const burnRatePerHour = recentTokens / 24;
+
+      // Weekly projection
+      const tokensThisWeek = allTimestamps.filter(ts => ts >= weekStart).length * 50;
+      const daysElapsed = Math.max(1, (now - weekStart) / (24 * 60 * 60 * 1000));
+      const dailyAverage = tokensThisWeek / daysElapsed;
+      const weeklyProjection = dailyAverage * 7;
+      const weeklyLimitPercent = (weeklyProjection / WEEKLY_LIMIT) * 100;
+
+      // 5h-window detection: find latest message cluster
+      let nextWindowReset: number | null = null;
+      let currentWindowTokens = 0;
+      if (allTimestamps.length > 0) {
+        const sorted = [...allTimestamps].sort((a, b) => b - a); // Newest first
+        const latestTimestamp = sorted[0];
+
+        // Find all messages in current 5h window
+        const windowStart = latestTimestamp - WINDOW_5H;
+        const windowMessages = sorted.filter(ts => ts >= windowStart);
+        currentWindowTokens = windowMessages.length * 50; // Rough estimate
+
+        // Next reset = 5h after first message in window
+        const oldestInWindow = Math.min(...windowMessages);
+        nextWindowReset = oldestInWindow + WINDOW_5H;
+      }
+
+      // Apply manual overrides if available
+      const override = manualOverrides[accountName];
+      let finalWeeklyPercent = weeklyLimitPercent;
+      let finalWeeklyLimit = WEEKLY_LIMIT;
+      let finalWindowReset = nextWindowReset;
+      let dataSource: 'jsonl-estimated' | 'manual-override' | 'hybrid' = 'jsonl-estimated';
+
+      if (override && override.currentWeeklyPercent !== null) {
+        // Use manual weekly percent (from claude.ai/settings/usage)
+        finalWeeklyPercent = override.currentWeeklyPercent;
+        dataSource = 'manual-override';
+
+        // Calculate actual limit from percent and total tokens
+        if (totalTokens > 0 && finalWeeklyPercent > 0) {
+          finalWeeklyLimit = Math.round((totalTokens / (finalWeeklyPercent / 100)));
+        } else if (override.weeklyLimitTokens) {
+          finalWeeklyLimit = override.weeklyLimitTokens;
+        }
+
+        // Use manual window reset if available
+        if (override.currentSessionResetDate) {
+          try {
+            finalWindowReset = new Date(override.currentSessionResetDate).getTime();
+          } catch {}
+        }
+      }
+
+      // Status determination (use final percent)
+      let status: 'safe' | 'warning' | 'critical' = 'safe';
+      if (finalWeeklyPercent > 80) status = 'critical';
+      else if (finalWeeklyPercent > 60) status = 'warning';
+
+      accounts.push({
+        accountName,
+        workspaces: workspaceNames.filter(ws => workspaceData[ws]),
+        totalTokens,
+        totalSessions,
+        totalInputTokens: totalInput,
+        totalOutputTokens: totalOutput,
+        totalCacheCreation,
+        totalCacheRead,
+        lastActivity: lastActivity ? new Date(lastActivity).toISOString() : null,
+        models,
+        storageBytes,
+        burnRatePerHour: Math.round(burnRatePerHour),
+        weeklyProjection: Math.round(weeklyProjection),
+        weeklyLimitPercent: Math.round(finalWeeklyPercent * 10) / 10,
+        weeklyLimitActual: finalWeeklyLimit,
+        status,
+        nextWindowReset: finalWindowReset ? new Date(finalWindowReset).toISOString() : null,
+        currentWindowTokens: Math.round(currentWindowTokens),
+        dataSource,
+        manualUpdateDate: override?.lastManualUpdate || null,
+      });
+    });
+
+    // Sort by status (critical first) then by last activity
+    accounts.sort((a, b) => {
+      const statusOrder = { critical: 0, warning: 1, safe: 2 };
+      if (statusOrder[a.status] !== statusOrder[b.status]) {
+        return statusOrder[a.status] - statusOrder[b.status];
+      }
+      if (!a.lastActivity && !b.lastActivity) return 0;
+      if (!a.lastActivity) return 1;
+      if (!b.lastActivity) return -1;
+      return new Date(b.lastActivity).getTime() - new Date(a.lastActivity).getTime();
+    });
+
+    // Generate alerts
+    const alerts: Array<{ severity: 'critical' | 'warning' | 'info'; title: string; description: string; accountName: string }> = [];
+
+    accounts.forEach(acc => {
+      if (acc.status === 'critical') {
+        const daysUntilLimit = ((WEEKLY_LIMIT - acc.weeklyProjection) / acc.burnRatePerHour / 24);
+        alerts.push({
+          severity: 'critical',
+          title: `Account "${acc.accountName}" critical`,
+          description: `${acc.weeklyLimitPercent}% of weekly limit projected. Limit reached in ~${Math.max(0, daysUntilLimit).toFixed(1)} days at current burn rate (${acc.burnRatePerHour.toLocaleString()} tok/h).`,
+          accountName: acc.accountName,
+        });
+      } else if (acc.status === 'warning') {
+        alerts.push({
+          severity: 'warning',
+          title: `Account "${acc.accountName}" warning`,
+          description: `${acc.weeklyLimitPercent}% of weekly limit projected. Monitor usage closely.`,
+          accountName: acc.accountName,
+        });
+      }
+
+      // Window reset alerts
+      if (acc.nextWindowReset && acc.currentWindowTokens > 800_000) {
+        const resetIn = new Date(acc.nextWindowReset).getTime() - now;
+        const hoursUntilReset = Math.max(0, resetIn / (60 * 60 * 1000));
+        alerts.push({
+          severity: 'info',
+          title: `5h-Window active on "${acc.accountName}"`,
+          description: `${(acc.currentWindowTokens / 1000).toFixed(0)}K tokens in current window. Reset in ${hoursUntilReset.toFixed(1)}h.`,
+          accountName: acc.accountName,
+        });
+      }
+    });
+
+    res.json({
+      accounts,
+      alerts,
+      weeklyLimit: WEEKLY_LIMIT,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: `Failed to parse Claude Code data: ${err.message}` });
+  }
+});
+
 // --- Serve Frontend in Production ---
 if (PROD) {
   const distPath = resolve(import.meta.dirname ?? __dirname, '..', 'dist');
+
+  // Watchdog proxy: /watchdog/* -> localhost:9090
+  app.use('/watchdog', (req, res) => {
+    const targetUrl = 'http://localhost:9090' + req.url;
+    const proxyReq = httpRequest(targetUrl, { method: req.method, headers: req.headers }, (proxyRes) => {
+      res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
+      proxyRes.pipe(res);
+    });
+    proxyReq.on('error', () => res.status(502).send('Watchdog not available'));
+    req.pipe(proxyReq);
+  });
+
   if (existsSync(distPath)) {
+    // Prevent HTML caching — ensures new JS bundles are always loaded after rebuild
+    app.use((req, res, next) => {
+      if (req.path === '/' || req.path.endsWith('.html')) {
+        res.set('Cache-Control', 'no-store, must-revalidate');
+      }
+      next();
+    });
     app.use(express.static(distPath));
     // SPA fallback
     app.use((_req, res) => {
+      res.set('Cache-Control', 'no-store');
       res.sendFile(join(distPath, 'index.html'));
     });
   }
