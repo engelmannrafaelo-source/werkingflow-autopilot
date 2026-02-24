@@ -20,8 +20,8 @@ interface AccountData {
   status: 'safe' | 'warning' | 'critical';
   nextWindowReset: string | null;
   currentWindowTokens: number;
-  dataSource: 'jsonl-estimated' | 'manual-override' | 'hybrid';
-  manualUpdateDate: string | null;
+  dataSource: 'jsonl-estimated' | 'scraped' | 'hybrid';
+  scrapedTimestamp: string | null;
 }
 
 interface Alert {
@@ -180,7 +180,7 @@ export default function CCUsageTab() {
                           {acc.accountName}
                         </span>
                         <StatusBadge status={acc.status === 'critical' ? 'error' : acc.status === 'warning' ? 'paused' : 'ok'} />
-                        {acc.dataSource === 'manual-override' && (
+                        {acc.dataSource === 'scraped' && (
                           <span style={{
                             fontSize: 8,
                             fontWeight: 700,
@@ -203,7 +203,7 @@ export default function CCUsageTab() {
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 8, marginBottom: 10 }}>
                       <div style={{ background: 'rgba(0,0,0,0.2)', borderRadius: 4, padding: 8 }}>
                         <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginBottom: 3 }}>
-                          {acc.dataSource === 'manual-override' ? 'Weekly Usage (Live)' : 'Weekly Projection'}
+                          {acc.dataSource === 'scraped' ? 'Weekly Usage (Live)' : 'Weekly Projection'}
                         </div>
                         <div style={{
                           fontSize: 16,
@@ -214,7 +214,7 @@ export default function CCUsageTab() {
                           {acc.weeklyLimitPercent.toFixed(1)}%
                         </div>
                         <div style={{ fontSize: 8, color: 'var(--tn-text-muted)' }}>
-                          {acc.dataSource === 'manual-override'
+                          {acc.dataSource === 'scraped'
                             ? `${formatTokens(acc.totalTokens)} / ${formatTokens(acc.weeklyLimitActual)}`
                             : `${formatTokens(acc.weeklyProjection)} / ${formatTokens(stats.weeklyLimit)}`
                           }

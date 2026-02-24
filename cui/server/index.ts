@@ -3846,16 +3846,20 @@ app.get('/api/claude-code/stats-v2', async (_req, res) => {
       return;
     }
 
-    // Load manual overrides (from claude.ai/settings/usage)
-    let manualOverrides: Record<string, any> = {};
-    const overridePath = join(import.meta.dirname ?? __dirname, 'claude-limits-override.json');
+    // Load scraped usage data (from scrape-claude-usage.ts)
+    let scrapedData: Record<string, any> = {};
+    const scrapedPath = join(import.meta.dirname ?? __dirname, 'claude-usage-scraped.json');
     try {
-      if (existsSync(overridePath)) {
-        const overrideContent = readFileSync(overridePath, 'utf-8');
-        manualOverrides = JSON.parse(overrideContent);
+      if (existsSync(scrapedPath)) {
+        const scrapedContent = readFileSync(scrapedPath, 'utf-8');
+        const scrapedArray = JSON.parse(scrapedContent);
+        // Convert array to account-keyed object
+        scrapedArray.forEach((item: any) => {
+          scrapedData[item.account] = item;
+        });
       }
     } catch (err) {
-      console.error('[CC-Usage] Failed to load manual overrides:', err);
+      console.error('[CC-Usage] Failed to load scraped data:', err);
     }
 
     // Account-to-Workspace mapping (Claude Code limits are per account, not per workspace!)
@@ -4064,29 +4068,34 @@ app.get('/api/claude-code/stats-v2', async (_req, res) => {
         nextWindowReset = oldestInWindow + WINDOW_5H;
       }
 
-      // Apply manual overrides if available
-      const override = manualOverrides[accountName];
+      // Apply scraped data if available (real limits from claude.ai)
+      const scraped = scrapedData[accountName];
       let finalWeeklyPercent = weeklyLimitPercent;
       let finalWeeklyLimit = WEEKLY_LIMIT;
       let finalWindowReset = nextWindowReset;
-      let dataSource: 'jsonl-estimated' | 'manual-override' | 'hybrid' = 'jsonl-estimated';
+      let dataSource: 'jsonl-estimated' | 'scraped' | 'hybrid' = 'jsonl-estimated';
 
-      if (override && override.currentWeeklyPercent !== null) {
-        // Use manual weekly percent (from claude.ai/settings/usage)
-        finalWeeklyPercent = override.currentWeeklyPercent;
-        dataSource = 'manual-override';
+      if (scraped && scraped.weeklyAllModels && scraped.weeklyAllModels.percent !== null) {
+        // Use real scraped weekly percent from claude.ai/settings/usage
+        finalWeeklyPercent = scraped.weeklyAllModels.percent;
+        dataSource = 'scraped';
 
-        // Calculate actual limit from percent and total tokens
+        // Calculate actual limit from scraped percent
         if (totalTokens > 0 && finalWeeklyPercent > 0) {
           finalWeeklyLimit = Math.round((totalTokens / (finalWeeklyPercent / 100)));
-        } else if (override.weeklyLimitTokens) {
-          finalWeeklyLimit = override.weeklyLimitTokens;
         }
 
-        // Use manual window reset if available
-        if (override.currentSessionResetDate) {
+        // Use scraped session reset if available
+        if (scraped.currentSession && scraped.currentSession.resetIn) {
           try {
-            finalWindowReset = new Date(override.currentSessionResetDate).getTime();
+            // Parse relative time like "in 4 Std. 15 Min." or absolute date
+            const resetStr = scraped.currentSession.resetIn;
+            if (resetStr.includes('Std.') || resetStr.includes('Min.')) {
+              // Relative time parsing would go here
+              // For now, keep JSONL-based estimate
+            } else {
+              finalWindowReset = new Date(resetStr).getTime();
+            }
           } catch {}
         }
       }
@@ -4116,7 +4125,7 @@ app.get('/api/claude-code/stats-v2', async (_req, res) => {
         nextWindowReset: finalWindowReset ? new Date(finalWindowReset).toISOString() : null,
         currentWindowTokens: Math.round(currentWindowTokens),
         dataSource,
-        manualUpdateDate: override?.lastManualUpdate || null,
+        scrapedTimestamp: scraped?.timestamp || null,
       });
     });
 

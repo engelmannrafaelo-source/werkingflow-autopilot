@@ -1,286 +1,219 @@
-# Claude Code Usage Tracking - Complete Guide
+# Claude Code Usage Tracking
 
-## Was wurde implementiert?
+**Account-based CC-Usage monitoring with automated scraping from claude.ai**
 
-Ein **Account-basiertes** Claude Code Usage Dashboard im CUI BridgeMonitor mit:
+## Overview
 
-### ✅ Phase 1 + 2 Features (Fertig)
+Tracks Claude Code usage across multiple accounts (rafael, office, engelmann, local) by:
+1. Analyzing local `.claude/projects/**/*.jsonl` files for token usage
+2. Automatically scraping real limits from `claude.ai/settings/usage` via Playwright
+3. Displaying combined data in CUI BridgeMonitor with alerts and projections
 
-1. **Account-Level Tracking** statt Workspace-Level
-   - Aggregiert alle Workspaces pro Account (rafael, office, engelmann, local)
-   - Richtige Metrik: 1 Account = 1 Weekly Limit (nicht pro Workspace!)
+## Architecture
 
-2. **5h-Window Detection**
-   - Automatische Erkennung via Timestamp-Clustering
-   - Zeigt "Reset in X Stunden" an
-   - Zeigt aktuelle Window-Tokens
+### Why Account-Level Tracking?
 
-3. **Burn-Rate Calculation**
-   - Tokens/Stunde basierend auf letzten 24h
-   - Prediction: "Limit erreicht in X Tagen"
+Claude Code limits are **per account**, not per workspace. Multiple workspaces can share the same account:
 
-4. **Weekly Limit Projection**
-   - Hochrechnung auf 7 Tage
-   - Status Badges: Safe (<60%), Warning (60-80%), Critical (>80%)
+```
+rafael@werk-ing.com (Account)
+  ├─ /root/orchestrator/workspaces/administration (Workspace)
+  ├─ /root/orchestrator/workspaces/team (Workspace)
+  └─ /root/projekte/orchestrator (Workspace)
 
-5. **Alert-System**
-   - Top-3-Warnungen prominent angezeigt
-   - Schweregrad: Critical, Warning, Info
-   - Actionable Messages ("Limit erreicht Freitag 14:00")
+office@werk-ing.com (Account)
+  ├─ /root/orchestrator/workspaces/werking-report
+  └─ /root/orchestrator/workspaces/werking-energy
 
-6. **Account Cards**
-   - Weekly Projection (% von 10M Limit)
-   - Burn-Rate (K tokens/hour)
-   - Limit Reached In (Tage)
-   - 5h-Window Reset Timer
-   - Workspaces pro Account
+engelmann@werk-ing.com (Account)
+  └─ /root/orchestrator/workspaces/engelmann-ai-hub
 
-## Aktueller Stand
-
-### ✅ Komplett implementiert:
-
-- **Server**: `/root/projekte/werkingflow/autopilot/cui/server/index.ts`
-  - Route: `GET /api/claude-code/stats-v2`
-  - Account-Mapping (rafael, office, engelmann, local)
-  - JSONL-Parsing mit Token-Aggregation
-  - 5h-Window Heuristik
-  - Burn-Rate & Projection
-  - Alert-Generierung
-
-- **Frontend**: `/root/projekte/werkingflow/autopilot/cui/src/components/panels/BridgeMonitor/tabs/CCUsageTab.tsx`
-  - Account Cards mit 4 KPIs
-  - Alert-Banner (Critical/Warning/Info)
-  - Global Statistics
-  - Auto-Refresh (60s)
-
-### ⚠️ Server-Restart erforderlich
-
-Der Code ist fertig, läuft aber noch nicht weil der CUI Workspace Server (Port 4005) mehrere tsx/node-Prozesse hat die sich gegenseitig blockieren.
-
-**Manual Fix:**
-```bash
-pkill -f cui
-cd /root/projekte/werkingflow/autopilot/cui
-npx tsx server/index.ts
+local@werk-ing.com (Account)
+  ├─ /root/projekte/werkingflow
+  └─ /tmp
 ```
 
-Dann ist `/api/claude-code/stats-v2` live.
+Usage aggregates across all workspaces of the same account.
 
----
+### Data Sources
 
-## Phase 3: Claude.ai Live-Scraping (NEU!)
+1. **JSONL Files** (`~/.claude/projects/**/*.jsonl`):
+   - Token usage per message (input_tokens, output_tokens, cache_*)
+   - Timestamps for 5h-window detection
+   - Model usage breakdown
+   - Storage size tracking
 
-### Problem mit bisheriger Lösung:
+2. **Scraped Live Data** (`claude-usage-scraped.json`):
+   - Real weekly limit percentage from claude.ai
+   - Current session percentage
+   - Reset times (weekly, 5h-window)
+   - Sonnet-specific limits
 
-Die JSONL-basierte Tracking gibt **Schätzungen**, aber keine echten Limits:
-- Weekly Limit: **geschätzt 10M tokens** (konservativ, könnte auch 15M oder 20M sein)
-- 5h-Window: **Heuristik** basierend auf Timestamps (nicht 100% genau)
-- Reset-Timer: **Approximation** (kein exakter Zeitpunkt)
+### Hybrid Calculation
 
-### Lösung: Claude.ai Usage Page Scraping
+- **JSONL-only**: Estimates weekly projection from burn rate (less accurate)
+- **With Scraped Data**: Uses real percentage from claude.ai, calculates actual limit from `total_tokens / (percent / 100)`
+- **Display**: Shows "LIVE" badge when scraped data is active
 
-Der Screenshot zeigt: `claude.ai/settings/usage` hat die **echten** Limits!
+## Setup
 
-**Was extrahiert werden kann:**
-1. **Aktuelle Sitzung**: 4% verwendet, "Zurücksetzung in 3 Std. 46 Min."
-2. **Wöchentliche Limits - Alle Modelle**: 83% verwendet, "Zurücksetzung Do., 11:00"
-3. **Nur Sonnet**: 1% verwendet, "Zurücksetzung Di., 11:00"
+### 1. Install Chromium (one-time)
 
-### Implementierung
+```bash
+cd /root/projekte/werkingflow/autopilot/cui
+npx playwright install chromium
+```
 
-**1. Scraper-Script**
-- Datei: `/root/projekte/werkingflow/autopilot/cui/scripts/scrape-claude-usage.ts`
-- Nutzt Playwright (headless Chrome)
-- Braucht Session-Cookies (siehe Setup unten)
+### 2. Login to Claude.ai (one-time per account)
 
-**2. Setup: Session Cookies holen**
-- Siehe: `/root/projekte/werkingflow/autopilot/cui/scripts/SETUP_CLAUDE_COOKIES.md`
-- TL;DR:
-  1. Browser → claude.ai → Dev Tools → Application → Cookies
-  2. Cookie `sessionKey` kopieren
-  3. In `~/.zshrc` als `CLAUDE_SESSION_RAFAEL` etc. speichern
+Run the interactive login script for each account:
 
-**3. Scraper testen**
+```bash
+cd /root/projekte/werkingflow/autopilot/cui
+
+# Login for rafael account
+npx tsx scripts/login-claude.ts rafael
+
+# Login for office account
+npx tsx scripts/login-claude.ts office
+
+# Login for engelmann account
+npx tsx scripts/login-claude.ts engelmann
+```
+
+**What happens:**
+1. Opens non-headless Chromium browser on server
+2. Navigate to `claude.ai/login` manually
+3. Complete login + 2FA for the account
+4. Script detects successful login
+5. Saves session state to `/root/projekte/local-storage/backends/cui/playwright-sessions/{account}.json`
+
+**Important**: You need to be able to see the browser window (X11 forwarding, VNC, or local access).
+
+### 3. Run Scraper (automated)
+
+Once logged in, scraping works headless:
+
 ```bash
 cd /root/projekte/werkingflow/autopilot/cui
 npx tsx scripts/scrape-claude-usage.ts
 ```
 
-**Output**:
-```json
-[
-  {
-    "account": "rafael",
-    "timestamp": "2026-02-24T12:30:00.000Z",
-    "currentSession": {
-      "percent": 4,
-      "resetIn": "in 3 Std. 46 Min."
-    },
-    "weeklyAllModels": {
-      "percent": 83,
-      "resetDate": "Do., 11:00"
-    },
-    "weeklySonnet": {
-      "percent": 1,
-      "resetDate": "Di., 11:00"
-    }
-  }
-]
+**Output**: `claude-usage-scraped.json` with real usage data for all accounts.
+
+### 4. Setup Cron (daily scraping)
+
+```bash
+# Add to crontab
+crontab -e
+
+# Scrape every day at 6:00 AM
+0 6 * * * cd /root/projekte/werkingflow/autopilot/cui && npx tsx scripts/scrape-claude-usage.ts >> /var/log/claude-scraper.log 2>&1
 ```
 
-**4. Integration in CUI Server**
+## Usage
 
-**Plan**:
-- Scraper läuft alle 15min im Hintergrund (cron oder setInterval)
-- Daten werden in `/tmp/claude-usage-live.json` gecached
-- `/api/claude-code/stats-v2` merged:
-  - **JSONL-Daten**: Total Tokens, Sessions, Models, Storage
-  - **Scraped-Daten**: Echte Limits, Reset-Timer, Weekly %
+### View in CUI
 
-**Merged Response**:
+1. Navigate to CUI: http://localhost:4005
+2. Open **BridgeMonitor** panel
+3. Click **CC-Usage** tab
+
+### Account Cards
+
+Each account shows:
+
+- **Weekly Usage**: Real percentage (LIVE badge) or projected
+- **Burn Rate**: Tokens/hour from last 24h
+- **Limit Reached In**: Time until hitting weekly limit at current burn rate
+- **5h-Window Reset**: When current session window resets
+
+### Status Badges
+
+- 🟢 **Safe** (<60%): Normal usage
+- 🟡 **Warning** (60-80%): Elevated usage
+- 🔴 **Critical** (>80%): Near limit, slow down!
+
+### Alerts Panel
+
+Shows actionable alerts:
+
+- **Critical**: >80% weekly usage → "Reduce usage immediately"
+- **Warning**: >60% weekly usage → "Monitor usage closely"
+- **Info**: High burn rate → "Will reach limit in X hours"
+
+## API Endpoint
+
+**GET** `/api/claude-code/stats-v2`
+
 ```json
 {
   "accounts": [
     {
       "accountName": "rafael",
-      "totalTokens": 329862,  // from JSONL
-      "burnRatePerHour": 1250, // from JSONL
-      "weeklyLimitPercent": 83, // from SCRAPED (real!)
-      "weeklyLimitActual": 8300000, // calculated from percent
-      "nextWindowReset": "2026-02-24T15:46:00Z", // from SCRAPED (exact!)
-      "status": "critical" // from scraped percent
+      "workspaces": ["administration", "team", "diverse"],
+      "totalTokens": 8500000,
+      "weeklyLimitPercent": 83.0,
+      "weeklyLimitActual": 10240964,
+      "burnRatePerHour": 25000,
+      "status": "critical",
+      "nextWindowReset": "2026-02-24T17:46:00Z",
+      "dataSource": "scraped",
+      "scrapedTimestamp": "2026-02-24T12:30:00Z"
     }
   ],
   "alerts": [
     {
       "severity": "critical",
-      "title": "Account \"rafael\" at 83%",
-      "description": "Weekly limit reached Thursday 11:00 AM"
+      "title": "rafael: 83% weekly limit",
+      "description": "Reduce usage immediately. Limit reached in 5 hours at current burn rate.",
+      "accountName": "rafael"
     }
-  ]
+  ],
+  "weeklyLimit": 10000000,
+  "timestamp": "2026-02-24T14:00:00Z"
 }
 ```
 
----
-
-## Next Steps
-
-### Für dich (Rafael):
-
-1. **Server neustarten** (siehe oben) → CC-Usage Tab funktioniert
-2. **Session Cookies holen** (siehe `SETUP_CLAUDE_COOKIES.md`)
-3. **Scraper testen**: `npx tsx scripts/scrape-claude-usage.ts`
-
-### Für mich (wenn Cookies da sind):
-
-1. **Server-Integration**:
-   - Background-Job alle 15min
-   - Cache-File mit scraped data
-   - Merge-Logic in `/api/claude-code/stats-v2`
-
-2. **Frontend-Update**:
-   - "LIVE" Badge wenn scraped data vorhanden
-   - Exakte Reset-Timer statt Approximation
-   - Echte Weekly % statt Projection
-
-3. **Error-Handling**:
-   - Fallback auf JSONL-Schätzungen wenn Scraper fehlschlägt
-   - Cookie-Expiry-Detection mit Notification
-   - Retry-Logic bei Timeouts
-
----
-
-## Technische Details
-
-### Account-Workspace Mapping
-
-```typescript
-const ACCOUNT_MAP = {
-  'rafael': [
-    '-root-orchestrator-workspaces-administration',
-    '-root-orchestrator-workspaces-team',
-    '-root-orchestrator-workspaces-diverse',
-    '-root-projekte-orchestrator',
-  ],
-  'office': [
-    '-root-orchestrator-workspaces-werking-report',
-    '-root-orchestrator-workspaces-werking-energy',
-    '-root-orchestrator-workspaces-werkingsafety',
-  ],
-  'engelmann': [
-    '-root-orchestrator-workspaces-engelmann-ai-hub',
-  ],
-  'local': [
-    '-root-projekte-werkingflow',
-    '-tmp',
-  ],
-};
-```
-
-### Warum Account-Level?
-
-Claude Code Limits sind **pro Account**, nicht pro Workspace:
-- 1 Account kann 10+ Workspaces haben
-- Alle Workspaces teilen sich das gleiche 5h-Window
-- Alle Workspaces zählen auf das gleiche Weekly Limit
-
-**Falsch** (altes System):
-```
-Workspace "team": 50K tokens
-Workspace "administration": 30K tokens
-→ Zeige beide separat (irreführend!)
-```
-
-**Richtig** (neues System):
-```
-Account "rafael":
-  - Workspaces: team, administration, diverse
-  - Total: 80K tokens (combined!)
-  - Weekly: 0.8% von 10M Limit
-  - Status: Safe
-```
-
----
-
 ## Files
 
-### Server
-- `/root/projekte/werkingflow/autopilot/cui/server/index.ts` (Line 3739-3950)
-- Route: `GET /api/claude-code/stats-v2`
+| File | Purpose |
+|------|---------|
+| `scripts/login-claude.ts` | Interactive login to save session state |
+| `scripts/scrape-claude-usage.ts` | Automated scraper using saved sessions |
+| `server/index.ts` | `/api/claude-code/stats-v2` endpoint |
+| `src/components/panels/BridgeMonitor/tabs/CCUsageTab.tsx` | Frontend component |
+| `claude-usage-scraped.json` | Scraped data output (updated daily) |
+| `/root/projekte/local-storage/backends/cui/playwright-sessions/*.json` | Saved session states |
 
-### Frontend
-- `/root/projekte/werkingflow/autopilot/cui/src/components/panels/BridgeMonitor/tabs/CCUsageTab.tsx`
-- `/root/projekte/werkingflow/autopilot/cui/src/components/panels/BridgeMonitor/BridgeMonitor.tsx` (Tab integration)
+## Troubleshooting
 
-### Scripts
-- `/root/projekte/werkingflow/autopilot/cui/scripts/scrape-claude-usage.ts`
-- `/root/projekte/werkingflow/autopilot/cui/scripts/SETUP_CLAUDE_COOKIES.md`
+### "No session state found"
 
-### Docs
-- Dieses File: `/root/projekte/werkingflow/autopilot/cui/CC_USAGE_TRACKING.md`
+Run `npx tsx scripts/login-claude.ts {account}` to establish session.
+
+### Scraper times out
+
+Session may have expired. Re-run login script.
+
+### Browser won't open (login script)
+
+- Check X11 forwarding: `echo $DISPLAY`
+- Or use VNC/local access
+- Login script requires visible browser (Chromium headless: false)
+
+### LIVE badge not showing
+
+- Check if `claude-usage-scraped.json` exists
+- Verify scraped data has valid `weeklyAllModels.percent`
+- Restart CUI server to reload scraped data
+
+## Maintenance
+
+- **Session Renewal**: Re-login if scraper fails consistently (~monthly)
+- **Cron Monitoring**: Check `/var/log/claude-scraper.log` for errors
+- **Data Freshness**: `scrapedTimestamp` field shows last scrape time
 
 ---
 
-## FAQ
-
-**Q: Warum scrapen statt Admin API?**
-A: Admin API gibt's nur für Team/Enterprise. Pro/Max User haben keine API für Limits.
-
-**Q: Ist Scraping legal?**
-A: Ja - es sind deine eigenen Accounts, deine eigenen Daten. Kein Abuse, nur Read-Only.
-
-**Q: Was wenn Cookies ablaufen?**
-A: Scraper failed → Fallback auf JSONL-Schätzungen. Du bekommst Alert "Cookies expired".
-
-**Q: Kann ich mehrere Gmail-Accounts tracken?**
-A: Ja! Einfach mehr Cookies in `.zshrc` hinzufügen und `ACCOUNT_MAP` erweitern.
-
-**Q: Performance-Impact?**
-A: Minimal - Scraper läuft nur alle 15min, cached Ergebnisse. Frontend bleibt snappy.
-
-**Q: Was wenn Claude.ai UI sich ändert?**
-A: Scraper muss angepasst werden (Selektoren updaten). Dauert ~10min.
-
----
-
-*Erstellt: 2026-02-24 | Status: Phase 1+2 fertig, Phase 3 (Scraping) ready to integrate*
+**Last Updated**: 2026-02-24
