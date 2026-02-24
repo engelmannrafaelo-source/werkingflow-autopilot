@@ -3,12 +3,14 @@
  * Scrape Claude.ai Usage Data
  *
  * Extracts real usage limits from claude.ai/settings/usage page
- * Requires: CLAUDE_SESSION_COOKIE environment variable
+ * Uses saved session state from login-claude.ts
  */
 
 import { chromium } from 'playwright';
-import { writeFileSync } from 'fs';
+import { writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
+
+const STORAGE_DIR = '/root/projekte/local-storage/backends/cui/playwright-sessions';
 
 interface UsageData {
   account: string;
@@ -27,7 +29,15 @@ interface UsageData {
   };
 }
 
-async function scrapeClaudeUsage(sessionCookie: string, accountName: string): Promise<UsageData> {
+async function scrapeClaudeUsage(accountName: string): Promise<UsageData> {
+  const storageStatePath = join(STORAGE_DIR, `${accountName}.json`);
+
+  if (!existsSync(storageStatePath)) {
+    throw new Error(
+      `No session state found for ${accountName}. Run: npx tsx scripts/login-claude.ts ${accountName}`
+    );
+  }
+
   const browser = await chromium.launch({
     headless: true,
     args: [
@@ -38,21 +48,12 @@ async function scrapeClaudeUsage(sessionCookie: string, accountName: string): Pr
     ],
   });
 
+  // Load saved session state
   const context = await browser.newContext({
-    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
+    storageState: storageStatePath,
+    userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     viewport: { width: 1920, height: 1080 },
   });
-
-  // Set session cookie
-  await context.addCookies([{
-    name: 'sessionKey',
-    value: sessionCookie,
-    domain: '.claude.ai',
-    path: '/',
-    httpOnly: true,
-    secure: true,
-    sameSite: 'Lax',
-  }]);
 
   const page = await context.newPage();
 
@@ -161,26 +162,24 @@ async function scrapeClaudeUsage(sessionCookie: string, accountName: string): Pr
 }
 
 async function main() {
-  // Account mapping: session cookies from environment
-  const accounts = [
-    { name: 'rafael', cookie: process.env.CLAUDE_SESSION_RAFAEL },
-    { name: 'office', cookie: process.env.CLAUDE_SESSION_OFFICE },
-    { name: 'engelmann', cookie: process.env.CLAUDE_SESSION_ENGELMANN },
-  ];
+  // Account names to scrape (must have session state from login-claude.ts)
+  const accounts = ['rafael', 'office', 'engelmann'];
 
   const results: UsageData[] = [];
 
-  for (const account of accounts) {
-    if (!account.cookie) {
-      console.warn(`[Scraper] ⚠ No session cookie for ${account.name}, skipping`);
+  for (const accountName of accounts) {
+    const storageStatePath = join(STORAGE_DIR, `${accountName}.json`);
+
+    if (!existsSync(storageStatePath)) {
+      console.warn(`[Scraper] ⚠ No session state for ${accountName}, skipping (run: npx tsx scripts/login-claude.ts ${accountName})`);
       continue;
     }
 
     try {
-      const data = await scrapeClaudeUsage(account.cookie, account.name);
+      const data = await scrapeClaudeUsage(accountName);
       results.push(data);
     } catch (err) {
-      console.error(`[Scraper] Failed to scrape ${account.name}:`, err);
+      console.error(`[Scraper] Failed to scrape ${accountName}:`, err);
     }
   }
 
