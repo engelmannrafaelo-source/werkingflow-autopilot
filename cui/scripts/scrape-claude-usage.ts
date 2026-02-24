@@ -61,11 +61,32 @@ async function scrapeClaudeUsage(accountName: string): Promise<UsageData> {
     console.log(`[Scraper] Navigating to claude.ai/settings/usage for ${accountName}...`);
     await page.goto('https://claude.ai/settings/usage', { waitUntil: 'domcontentloaded', timeout: 60000 });
 
+    // Check if redirected to login (session invalid)
+    const currentUrl = page.url();
+    if (currentUrl.includes('/login')) {
+      throw new Error(`Session invalid - redirected to login. Re-create session: npx tsx scripts/create-session-from-token.ts ${accountName}`);
+    }
+
+    console.log(`[Scraper] Page loaded: ${currentUrl}`);
+
     // Wait for page to be interactive
     await page.waitForTimeout(3000);
 
-    // Wait for usage data to load
-    await page.waitForSelector('text=Plan-Nutzungslimits', { timeout: 10000 });
+    // Wait for usage data to load (with better error message)
+    try {
+      await page.waitForSelector('text=Plan-Nutzungslimits', { timeout: 10000 });
+      console.log('[Scraper] ✓ Usage data loaded');
+    } catch (selectorErr) {
+      // Save screenshot for debugging
+      const screenshotPath = `/tmp/scraper-load-fail-${accountName}.png`;
+      await page.screenshot({ path: screenshotPath, fullPage: true });
+
+      // Get page content to check what we got
+      const bodyText = await page.textContent('body');
+      const preview = bodyText ? bodyText.substring(0, 500) : 'No body text';
+
+      throw new Error(`Usage page did not load expected content. Screenshot: ${screenshotPath}\nPage preview: ${preview}`);
+    }
 
     // Extract data
     const usageData = await page.evaluate(() => {
@@ -144,18 +165,22 @@ async function scrapeClaudeUsage(accountName: string): Promise<UsageData> {
     console.log(`[Scraper] ✓ Scraped ${accountName}: ${result.weeklyAllModels.percent}% weekly`);
     return result;
   } catch (err: any) {
-    console.error(`[Scraper] ✗ Failed for ${accountName}:`, err.message);
+    console.error(`\n❌ [Scraper] Failed for ${accountName}`);
+    console.error(`Error: ${err.message}\n`);
 
-    // Save screenshot on error for debugging
+    // Save screenshot on error for debugging (if page still exists)
     try {
-      const screenshotPath = `/tmp/claude-scraper-error-${accountName}.png`;
-      await page.screenshot({ path: screenshotPath, fullPage: true });
-      console.log(`[Scraper] Screenshot saved to ${screenshotPath}`);
+      if (page && !page.isClosed()) {
+        const screenshotPath = `/tmp/claude-scraper-error-${accountName}.png`;
+        await page.screenshot({ path: screenshotPath, fullPage: true });
+        console.error(`📸 Screenshot saved: ${screenshotPath}\n`);
+      }
     } catch (screenshotErr) {
-      console.error(`[Scraper] Could not save screenshot:`, screenshotErr);
+      // Ignore screenshot errors
     }
 
-    throw err;
+    // Rethrow with more context
+    throw new Error(`${accountName}: ${err.message}`);
   } finally {
     await browser.close();
   }
