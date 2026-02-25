@@ -31,12 +31,26 @@ async def capture():
 
         print("✅ Page loaded")
 
-        # Virtual Office should be directly visible at localhost:4005
-        # No need to click workspace tabs - CUI opens directly to Virtual Office
-        print("🔍 Looking for Virtual Office...")
+        # Click "Team" in the top workspace bar
+        print("🔍 Looking for Team workspace tab...")
+        try:
+            # Try multiple selectors
+            await page.click('text=Team', timeout=10000)
+            await asyncio.sleep(5)
+            print("✅ Clicked Team workspace")
+        except Exception as e:
+            print(f"⚠️  Could not click Team workspace: {e}")
 
-        # Wait for Virtual Office to render
-        await asyncio.sleep(3)
+            # Try clicking "Team (Screenshots)"
+            try:
+                await page.click('text=Team (Screenshots)', timeout=5000)
+                await asyncio.sleep(5)
+                print("✅ Clicked Team (Screenshots)")
+            except Exception as e2:
+                print(f"❌ Also failed: {e2}")
+                await page.screenshot(path=f"{OUTPUT}/00-no-team-tab.png", full_page=True)
+                await browser.close()
+                return
 
         # Now look for Virtual Office panel
         agent_grid = await page.query_selector('button:has-text("Agent Grid")')

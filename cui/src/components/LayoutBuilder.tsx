@@ -19,7 +19,8 @@ const PANEL_OPTIONS = [
   { value: 'office', label: 'Virtual Office 👥' },
   { value: 'admin-wr', label: 'Werking Report Admin' },
   { value: 'linkedin', label: 'LinkedIn Marketing 🔗' },
-  { value: 'bridge-monitor', label: 'Bridge Monitor' },
+  { value: 'bridge-monitor', label: 'Bridge Monitor (Old)' },
+  { value: 'attribution-dashboard', label: 'Attribution Dashboard 📊' },
 ];
 
 const CELL_DEFAULTS = [
@@ -100,9 +101,10 @@ function panelFromValue(value: string, workDir: string): PanelConfig {
     case 'mission':  return { component: 'mission', name: 'Mission Control', config: {} };
     case 'office':   return { component: 'office', name: 'Virtual Office', config: {} };
     case 'admin-wr': return { component: 'admin-wr', name: 'Werking Report Admin', config: {} };
-    case 'linkedin':        return { component: 'linkedin', name: 'LinkedIn Marketing 🔗', config: {} };
-    case 'bridge-monitor': return { component: 'bridge-monitor', name: 'Bridge Monitor', config: {} };
-    default:               throw new Error(`Unknown panel type: ${value}`);
+    case 'linkedin':                return { component: 'linkedin', name: 'LinkedIn Marketing 🔗', config: {} };
+    case 'bridge-monitor':          return { component: 'bridge-monitor', name: 'Bridge Monitor', config: {} };
+    case 'attribution-dashboard':   return { component: 'attribution-dashboard', name: 'Attribution Dashboard 📊', config: {} };
+    default:                        throw new Error(`Unknown panel type: ${value}`);
   }
 }
 

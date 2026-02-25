@@ -25,6 +25,24 @@ export interface DocumentEdit {
 
 // In-Memory Storage (MVP - später DB)
 let edits: DocumentEdit[] = [];
+let demoDataLoaded = false;
+
+// Lazy-load demo reviews on first access
+async function ensureDemoDataLoaded() {
+  if (demoDataLoaded) return;
+  demoDataLoaded = true;
+
+  try {
+    const demoPath = '/root/projekte/werkingflow/autopilot/cui/data/active/team/reviews.json';
+    const content = await fs.readFile(demoPath, 'utf-8');
+    const data = JSON.parse(content);
+    const demoReviews = Array.isArray(data) ? data : (data.reviews || []);
+    edits.push(...demoReviews);
+    console.log(`[DocumentManager] Loaded ${demoReviews.length} demo reviews from ${demoPath}`);
+  } catch (err) {
+    console.warn('[DocumentManager] Could not load demo reviews:', err);
+  }
+}
 
 // WebSocket clients for live updates
 const wsClients: Set<any> = new Set();
@@ -244,7 +262,8 @@ router.post('/documents/edit', async (req, res) => {
 });
 
 // GET /api/team/reviews - Pending Reviews
-router.get('/reviews', (req, res) => {
+router.get('/reviews', async (req, res) => {
+  await ensureDemoDataLoaded();
   const pending = edits.filter(e => e.status === 'pending');
   res.json(pending);
 });

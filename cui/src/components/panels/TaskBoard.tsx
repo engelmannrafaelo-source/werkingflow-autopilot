@@ -14,6 +14,20 @@ interface Task {
   updatedAt: string;
 }
 
+// Map demo task status to expected format
+function mapDemoStatus(status: string): Task['status'] {
+  const statusMap: Record<string, Task['status']> = {
+    'todo': 'backlog',
+    'in_progress': 'in_progress',
+    'in_review': 'review',
+    'review': 'review',
+    'done': 'done',
+    'completed': 'done',
+    'blocked': 'backlog'  // Blocked tasks go to backlog
+  };
+  return statusMap[status] || 'backlog';
+}
+
 interface TaskBoardProps {
   personaId?: string;  // Filter für spezifische Persona
 }
@@ -31,11 +45,32 @@ export default function TaskBoard({ personaId }: TaskBoardProps) {
   async function loadTasks() {
     try {
       setLoading(true);
-      const params = personaId ? `?assignee=${personaId}` : '';
-      const response = await fetch(`${API}/team/tasks${params}`);
+
+      // Load from demo data API (tasks.json)
+      const response = await fetch(`${API}/team/task-board`);
       if (!response.ok) throw new Error('Failed to load tasks');
-      const data = await response.json();
-      setTasks(data);
+
+      const rawTasks = await response.json();
+
+      // Map demo tasks to expected format
+      const allTasks = (Array.isArray(rawTasks) ? rawTasks : []).map((t: any) => ({
+        id: t.id,
+        title: t.title,
+        description: t.description,
+        assignee: t.assignedTo || t.assignee || '',
+        status: mapDemoStatus(t.status),
+        priority: (t.priority === 'critical' ? 'high' : t.priority) || 'medium',
+        documentRef: t.documentRef,
+        createdAt: t.created || t.createdAt || new Date().toISOString(),
+        updatedAt: t.updated || t.updatedAt || new Date().toISOString()
+      }));
+
+      // Filter by personaId if provided
+      const filtered = personaId
+        ? allTasks.filter((t: Task) => t.assignee === personaId)
+        : allTasks;
+
+      setTasks(filtered);
     } catch (err: any) {
       console.error('[TaskBoard] Load error:', err);
     } finally {

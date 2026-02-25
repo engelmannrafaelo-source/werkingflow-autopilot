@@ -100,6 +100,7 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
   const [syncDetail, setSyncDetail] = useState('');
   const [pendingCount, setPendingCount] = useState(0);
   const [allLive, setAllLive] = useState(false);
+  const [panelHealth, setPanelHealth] = useState<{ running: number; total: number; missing: string[] } | null>(null);
 
   // Listen for update-available notifications via WebSocket (forwarded by App.tsx)
   useEffect(() => {
@@ -137,6 +138,50 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
       setTimeout(() => { setSyncState('idle'); setSyncDetail(''); }, 5000);
     }
   }, [syncState]);
+
+  const checkPanelHealth = useCallback(async () => {
+    try {
+      const resp = await fetch('/api/panel-health');
+      const data = await resp.json();
+      setPanelHealth({
+        running: data.running,
+        total: data.total,
+        missing: data.panels.filter((p: any) => !p.running).map((p: any) => p.name)
+      });
+    } catch {
+      setPanelHealth(null);
+    }
+  }, []);
+
+  const handleStartPanels = useCallback(async () => {
+    if (syncState === 'syncing') return;
+    setSyncState('syncing');
+    setSyncDetail('Starting panels...');
+    try {
+      const resp = await fetch('/api/start-all-panels', { method: 'POST' });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || 'Failed to start panels');
+      setSyncState('done');
+      setSyncDetail(data.message || 'Panels starting');
+      // Re-check health after 10s
+      setTimeout(() => {
+        checkPanelHealth();
+        setSyncState('idle');
+        setSyncDetail('');
+      }, 10000);
+    } catch (err: any) {
+      setSyncState('error');
+      setSyncDetail(err.message.slice(0, 60));
+      setTimeout(() => { setSyncState('idle'); setSyncDetail(''); }, 5000);
+    }
+  }, [syncState, checkPanelHealth]);
+
+  // Check panel health on mount
+  useEffect(() => {
+    checkPanelHealth();
+    const interval = setInterval(checkPanelHealth, 30000); // Check every 30s
+    return () => clearInterval(interval);
+  }, [checkPanelHealth]);
 
   const handleRebuild = useCallback(async () => {
     if (syncState === 'syncing') return;
@@ -341,11 +386,48 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
         {allLive ? '● Live' : '○ Live'}
       </button>
 
+      {/* Panel Health Indicator + Start Button */}
+      {panelHealth && panelHealth.missing.length > 0 && (
+        <>
+          <button
+            onClick={handleStartPanels}
+            disabled={syncState === 'syncing'}
+            title={`${panelHealth.missing.length} panel(s) offline:\n${panelHealth.missing.join('\n')}\n\nClick to start all missing panels`}
+            style={{
+              background: 'rgba(239,68,68,0.15)',
+              border: '1px solid #EF4444',
+              color: '#EF4444',
+              padding: '3px 10px',
+              fontSize: 10,
+              fontWeight: 600,
+              cursor: syncState === 'syncing' ? 'wait' : 'pointer',
+              borderRadius: 4,
+              WebkitAppRegion: 'no-drag',
+              whiteSpace: 'nowrap',
+              transition: 'all 0.2s',
+              marginRight: 6,
+            } as React.CSSProperties}
+          >
+            ▶ Start {panelHealth.missing.length} Panel{panelHealth.missing.length > 1 ? 's' : ''}
+          </button>
+          <div
+            style={{
+              fontSize: 10,
+              color: 'var(--tn-text-muted)',
+              marginRight: 6,
+              opacity: 0.6
+            }}
+          >
+            ({panelHealth.running}/{panelHealth.total} online)
+          </div>
+        </>
+      )}
+
       {/* Rebuild button - triggers frontend rebuild only */}
       <button
         onClick={handleRebuild}
         disabled={syncState === 'syncing'}
-        title="Rebuild frontend (npm run build)"
+        title="Rebuild CUI frontend (npm run build + restart server)\n\nNote: This only rebuilds CUI, not panel backends"
         style={{
           background: 'none',
           border: '1px solid var(--tn-border)',

@@ -26,6 +26,7 @@ import { readFileSync, readdirSync, statSync, existsSync, mkdirSync, writeFileSy
 import { homedir } from 'os';
 import { spawn } from 'child_process';
 import { watch } from 'chokidar';
+import { createConnection } from 'net';
 import mime from 'mime-types';
 import httpProxy from 'http-proxy';
 import documentManager, { registerWebSocketClient } from './document-manager.js';
@@ -2378,6 +2379,50 @@ app.delete('/api/team/tasks/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+// GET /api/team/events - Load activity events from events.json
+app.get('/api/team/events', async (_req, res) => {
+  const eventsPath = '/root/projekte/werkingflow/autopilot/cui/data/active/team/events.json';
+  try {
+    const content = await readFile(eventsPath, 'utf-8');
+    const data = JSON.parse(content);
+    // Wrap array in object if needed (VirtualOffice expects { events: [...] })
+    const response = Array.isArray(data) ? { events: data } : data;
+    res.json(response);
+  } catch (err: any) {
+    console.error('Failed to load events.json:', err);
+    res.status(500).json({ error: 'Failed to load events', events: [] });
+  }
+});
+
+// GET /api/team/reviews - Load reviews from reviews.json
+app.get('/api/team/reviews', async (_req, res) => {
+  const reviewsPath = '/root/projekte/werkingflow/autopilot/cui/data/active/team/reviews.json';
+  try {
+    const content = await readFile(reviewsPath, 'utf-8');
+    const data = JSON.parse(content);
+    // Accept both array format and { reviews: [...] } format
+    const reviews = Array.isArray(data) ? data : (data.reviews || []);
+    console.log('[Reviews API] Loaded', reviews.length, 'reviews from', reviewsPath);
+    res.json(reviews);
+  } catch (err: any) {
+    console.error('[Reviews API] Failed to load reviews.json:', err);
+    res.status(500).json([]);
+  }
+});
+
+// GET /api/team/task-board - Load tasks from tasks.json (for Task Board)
+app.get('/api/team/task-board', async (_req, res) => {
+  const tasksPath = '/root/projekte/werkingflow/autopilot/cui/data/active/team/tasks.json';
+  try {
+    const content = await readFile(tasksPath, 'utf-8');
+    const data = JSON.parse(content);
+    res.json(data); // Returns { tasks: [...] }
+  } catch (err: any) {
+    console.error('Failed to load tasks.json:', err);
+    res.status(500).json({ error: 'Failed to load tasks', tasks: [] });
+  }
+});
+
 // --- Persona Chat via AI-Bridge ---
 // POST /api/team/chat/:personaId
 app.post('/api/team/chat/:personaId', async (req, res) => {
@@ -3512,10 +3557,27 @@ app.use('/watchdog', (req, res) => {
 
 // --- Rebuild & Restart Endpoints ---
 
-// Helper: restart CUI server after build (systemd handles the restart)
+// Helper: restart CUI server after build
 function restartCuiServer() {
-  console.log('[Restart] Exiting — systemd will restart the process');
-  setTimeout(() => process.exit(0), 500);
+  console.log('[Restart] Triggering external restart script...');
+
+  // Use external restart script for clean restart (kill old, start new)
+  const { spawn } = require('child_process');
+  const restartScript = join(WORKSPACE_ROOT, 'restart-server.sh');
+
+  spawn('bash', [restartScript], {
+    detached: true,
+    stdio: 'ignore',
+    env: { ...process.env }
+  }).unref();
+
+  console.log('[Restart] Restart script launched, exiting in 500ms...');
+
+  // Exit after launching restart script
+  setTimeout(() => {
+    console.log('[Restart] Exiting now');
+    process.exit(0);
+  }, 500);
 }
 
 // Helper: trigger watchdog to restart all enabled dev servers
@@ -3529,44 +3591,106 @@ function triggerWatchdogCheck() {
   } catch { /* watchdog not running, skip */ }
 }
 
-// POST /api/rebuild — legacy rebuild (vite build + restart)
+// POST /api/rebuild — legacy rebuild (redirects to robust cui-rebuild)
 app.post('/api/rebuild', (_req, res) => {
-  console.log('[Rebuild] Starting frontend rebuild...');
+  console.log('[Rebuild] Spawning cui-rebuild (detached)...');
   broadcast({ type: 'cui-rebuilding' });
-  res.json({ status: 'rebuilding', message: 'Build gestartet, Server startet gleich neu...' });
+  res.json({ status: 'rebuilding', message: 'cui-rebuild gestartet (Server startet gleich neu)...' });
   setTimeout(() => {
-    exec(`cd "${WORKSPACE_ROOT}" && npx vite build 2>&1`, (err, stdout) => {
-      if (err) { console.error('[Rebuild] Build failed:', err.message); return; }
-      console.log('[Rebuild] Build done:', stdout.trim().split('\n').pop());
-      triggerWatchdogCheck();
-      restartCuiServer();
-    });
-  }, 200);
+    const child = spawn('systemd-run', ['--scope', '--', 'cui-rebuild'], { detached: true, stdio: ['ignore', 'ignore', 'ignore'] });
+    child.unref();
+    console.log('[Rebuild] cui-rebuild spawned via systemd-run, PID', child.pid);
+  }, 500);
+});
+
+// Panel configuration with start commands
+const PANEL_CONFIGS = [
+  { name: 'Platform', port: 3004, path: '/root/projekte/werkingflow/platform', startCmd: 'npm run build:local' },
+  { name: 'Dashboard', port: 3333, path: '/root/projekte/werkingflow/dashboard', startCmd: 'python3 -m dashboard.app &' },
+  { name: 'Werking-Report', port: 3008, path: '/root/projekte/werking-report', startCmd: 'npm run build:local' },
+  { name: 'Werking-Energy', port: 3007, path: '/root/projekte/apps/werking-energy', startCmd: 'npm run build:local' },
+  { name: 'Engelmann', port: 3009, path: '/root/projekte/engelmann-ai-hub', startCmd: 'npm run build:local' },
+  { name: 'TECC-Safety', port: 3005, path: '/root/projekte/werking-safety/frontend', startCmd: 'npm run build:local' },
+];
+
+// GET /api/panel-health — Check which panel dependencies are running
+app.get('/api/panel-health', async (_req, res) => {
+  const checks = await Promise.all(PANEL_CONFIGS.map(async (panel) => {
+    try {
+      // Use nc (netcat) to check if port is listening
+      const checkPort = () => new Promise<boolean>((resolve) => {
+        const proc = spawn('nc', ['-z', 'localhost', String(panel.port)], {
+          stdio: ['ignore', 'ignore', 'ignore']
+        });
+
+        proc.on('close', (code) => {
+          resolve(code === 0);
+        });
+
+        proc.on('error', () => {
+          resolve(false);
+        });
+
+        // Timeout after 1s
+        setTimeout(() => {
+          proc.kill();
+          resolve(false);
+        }, 1000);
+      });
+
+      const isRunning = await checkPort();
+      return { ...panel, running: isRunning };
+    } catch {
+      return { ...panel, running: false };
+    }
+  }));
+
+  const running = checks.filter(c => c.running);
+  const missing = checks.filter(c => !c.running);
+
+  res.json({
+    ok: missing.length === 0,
+    total: PANEL_CONFIGS.length,
+    running: running.length,
+    missing: missing.length,
+    panels: checks,
+    message: missing.length === 0 ? 'All panels running' : `${missing.length} offline: ${missing.map(p => p.name).join(', ')}`
+  });
+});
+
+// POST /api/start-all-panels — Start all missing panel backends
+app.post('/api/start-all-panels', (_req, res) => {
+  console.log('[Start-Panels] Launching start script...');
+  try {
+    const startScript = join(WORKSPACE_ROOT, 'start-all-panels.sh');
+    const child = spawn('bash', [startScript], { detached: true, stdio: 'ignore', env: process.env });
+    child.unref();
+    console.log('[Start-Panels] Script launched');
+    res.json({ ok: true, message: 'Starting all missing panels', note: 'Check status in 10-30s' });
+  } catch (err: any) {
+    console.error('[Start-Panels] Failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // POST /api/rebuild-frontend — called by ProjectTabs Rebuild button
+// Spawns cui-rebuild as detached background process (because it restarts this server)
 app.post('/api/rebuild-frontend', async (_req, res) => {
-  console.log('[Rebuild-Frontend] Starting...');
+  console.log('[Rebuild-Frontend] Spawning cui-rebuild (detached)...');
   broadcast({ type: 'cui-rebuilding' });
 
-  const PATH_PREFIX = '/usr/local/bin:' + (process.env.PATH || '');
-  const buildEnv = { ...process.env, PATH: PATH_PREFIX, NODE_ENV: 'production' };
+  // Respond immediately — the server will be killed by cui-rebuild
+  res.json({ ok: true, detail: 'cui-rebuild started (server will restart)' });
 
-  try {
-    const { stdout } = await execAsync(`npx vite build 2>&1`, { cwd: WORKSPACE_ROOT, env: buildEnv, timeout: 120_000 });
-    const builtMatch = stdout.match(/built in ([\d.]+s)/);
-    console.log('[Rebuild-Frontend] Build done:', builtMatch?.[1] || stdout.trim().split('\n').pop());
-    broadcast({ type: 'cui-sync', status: 'built', detail: builtMatch?.[1] || 'ok' });
-    triggerWatchdogCheck();
-    res.json({ ok: true, detail: builtMatch?.[1] || 'ok' });
-
-    // Restart after response
-    setTimeout(() => restartCuiServer(), 500);
-  } catch (err: any) {
-    console.error('[Rebuild-Frontend] Failed:', err.message);
-    broadcast({ type: 'cui-sync', status: 'error', detail: err.message });
-    res.status(500).json({ error: err.message });
-  }
+  // Use systemd-run to escape the cgroup (systemd KillMode=control-group kills all children)
+  setTimeout(() => {
+    const child = spawn('systemd-run', ['--scope', '--', 'cui-rebuild'], {
+      detached: true,
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+    child.unref();
+    console.log('[Rebuild-Frontend] cui-rebuild spawned via systemd-run, PID', child.pid);
+  }, 500);
 });
 
 // --- Knowledge Registry (Document Knowledge System) ---
@@ -4252,9 +4376,45 @@ app.post('/api/cpu-profile', (_req, res) => {
 
 // GET /api/agents/team/structure — get team org chart + RACI matrix
 app.get('/api/agents/team/structure', async (_req, res) => {
-  const personasDir = '/root/projekte/orchestrator/team/personas';
-
   try {
+    // Try to load pre-built hierarchy from hierarchy.json first
+    const hierarchyPath = '/root/projekte/werkingflow/autopilot/cui/data/active/team/hierarchy.json';
+
+    try {
+      const hierarchyContent = await fsAgentPromises.readFile(hierarchyPath, 'utf-8');
+      const hierarchyData = JSON.parse(hierarchyContent);
+
+      // Load RACI matrix separately
+      const raciPath = '/root/projekte/werkingflow/autopilot/cui/data/active/team/raci-matrix.json';
+      let raciMatrix: Array<any> = [];
+
+      try {
+        const raciContent = await fsAgentPromises.readFile(raciPath, 'utf-8');
+        const raciData = JSON.parse(raciContent);
+        raciMatrix = (raciData.tasks || []).map((t: any) => ({
+          task: t.task,
+          owner: t.owner || '',
+          responsible: t.responsible || [],
+          approver: t.approver || [],
+          consulted: t.consulted || []
+        }));
+      } catch (raciErr) {
+        console.warn('Could not load raci-matrix.json:', raciErr);
+      }
+
+      // Return hierarchy + RACI
+      return res.json({
+        orgChart: hierarchyData.orgChart || [],
+        raciMatrix,
+        personas: [] // Can add persona details if needed
+      });
+    } catch (hierarchyErr) {
+      // Fallback: build from persona files (legacy)
+      console.warn('hierarchy.json not found, building from personas:', hierarchyErr);
+    }
+
+    // Fallback: build hierarchy from persona markdown files
+    const personasDir = '/root/projekte/orchestrator/team/personas';
     const files = await fsAgentPromises.readdir(personasDir);
     const mdFiles = files.filter(f => f.endsWith('.md'));
 
@@ -4309,21 +4469,55 @@ app.get('/api/agents/team/structure', async (_req, res) => {
       personas.push(persona);
     }
 
-    // Build org chart
+    // Build org chart with smart name matching
     const nodeMap = new Map();
+    const nameToIdMap = new Map(); // Map display names to IDs
+
     personas.forEach(p => {
       nodeMap.set(p.id, { id: p.id, name: p.name, role: p.role, children: [] });
+
+      // Build name-to-ID mapping (e.g., "Max" -> "max-weber", "Max (CTO)" -> "max-weber")
+      if (p.name) {
+        const firstName = p.name.split(' ')[0].toLowerCase();
+        nameToIdMap.set(firstName, p.id);
+        nameToIdMap.set(p.name.toLowerCase(), p.id);
+      }
     });
+
+    // Add special aliases for common references (with parens removed)
+    nameToIdMap.set('rafael', 'rafbot');
+    nameToIdMap.set('rafael ceo', 'rafbot');  // "Rafael (CEO)" → "rafael ceo"
+    nameToIdMap.set('rafael engelmann', 'rafbot');  // Rafbot reports to "Rafael Engelmann (Real)" → treat as self
+    nameToIdMap.set('rafael engelmann real', 'rafbot');
+    nameToIdMap.set('max', 'max-weber');
+    nameToIdMap.set('max cto', 'max-weber');  // "Max (CTO)" → "max cto"
+    nameToIdMap.set('vera', 'vera-vertrieb');
+    nameToIdMap.set('vera sales', 'vera-vertrieb');  // "Vera (Sales)" → "vera sales"
+    nameToIdMap.set('otto', 'otto-operations');
+    nameToIdMap.set('otto coo', 'otto-operations');  // "Otto (COO)" → "otto coo"
 
     const roots: Array<any> = [];
     personas.forEach(p => {
       const node = nodeMap.get(p.id);
       if (p.reportsTo) {
-        const parentName = p.reportsTo.toLowerCase().replace(/\s+/g, '-');
-        const parent = nodeMap.get(parentName);
-        if (parent) {
-          parent.children.push(node);
+        // Try to find parent by name (e.g., "Max (CTO)" -> "max-weber")
+        // Remove parens, take first part before dash/slash, trim
+        // Examples: "Rafael (CEO) - direkt" → "rafael ceo", "Vera (Sales) / Rafael (CEO)" → "vera sales"
+        const reportsToClean = p.reportsTo.toLowerCase().replace(/[()]/g, '').split(/[-/]/)[0].trim();
+        const reportsToFirstWord = reportsToClean.split(/\s+/)[0].trim(); // "max cto" -> "max"
+
+        // Try exact match first, then first word only
+        let parentId = nameToIdMap.get(reportsToClean) || nameToIdMap.get(reportsToFirstWord);
+
+        if (parentId) {
+          const parent = nodeMap.get(parentId);
+          if (parent && parent !== node) {
+            parent.children.push(node);
+          } else {
+            roots.push(node);
+          }
         } else {
+          // No parent found - make it a root
           roots.push(node);
         }
       } else {
@@ -4331,28 +4525,46 @@ app.get('/api/agents/team/structure', async (_req, res) => {
       }
     });
 
-    // Build RACI matrix (simplified - just owners and responsible)
-    const raciMatrix: Array<any> = [];
-    const taskMap = new Map();
+    // Build RACI matrix - load from raci-matrix.json if available, otherwise build from personas
+    let raciMatrix: Array<any> = [];
 
-    personas.forEach(p => {
-      p.responsibilities.forEach((resp: string) => {
-        const [task] = resp.split(':');
-        const taskKey = task.trim().toLowerCase();
+    try {
+      const raciPath = '/root/projekte/werkingflow/autopilot/cui/data/active/team/raci-matrix.json';
+      const raciContent = await fsAgentPromises.readFile(raciPath, 'utf-8');
+      const raciData = JSON.parse(raciContent);
 
-        if (!taskMap.has(taskKey)) {
-          taskMap.set(taskKey, {
-            task: task.trim(),
-            owner: p.name,
-            responsible: [p.name],
-            approver: [],
-            consulted: []
-          });
-        }
+      // Transform from JSON format to API format
+      raciMatrix = (raciData.tasks || []).map((t: any) => ({
+        task: t.task,
+        owner: t.owner || '',
+        responsible: t.responsible || [],
+        approver: t.approver || [],
+        consulted: t.consulted || []
+      }));
+    } catch (raciErr) {
+      // Fallback: build from persona responsibilities
+      console.warn('Could not load raci-matrix.json, building from personas:', raciErr);
+
+      const taskMap = new Map();
+      personas.forEach(p => {
+        p.responsibilities.forEach((resp: string) => {
+          const [task] = resp.split(':');
+          const taskKey = task.trim().toLowerCase();
+
+          if (!taskMap.has(taskKey)) {
+            taskMap.set(taskKey, {
+              task: task.trim(),
+              owner: p.name,
+              responsible: [p.name],
+              approver: [],
+              consulted: []
+            });
+          }
+        });
       });
-    });
 
-    raciMatrix.push(...Array.from(taskMap.values()));
+      raciMatrix.push(...Array.from(taskMap.values()));
+    }
 
     res.json({ orgChart: roots, raciMatrix, personas });
   } catch (err) {

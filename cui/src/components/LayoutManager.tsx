@@ -52,11 +52,14 @@ import FilePreview from './panels/FilePreview';
 import NotesPanel from './panels/NotesPanel';
 import MissionControl from './panels/MissionControl';
 import OfficePanel from './panels/OfficePanel';
+import ErrorBoundary from './ErrorBoundary';
 import WerkingReportAdmin from './panels/WerkingReportAdmin/WerkingReportAdmin';
 import LinkedInPanel from './panels/LinkedInPanel';
 import BridgeMonitor from './panels/BridgeMonitor/BridgeMonitor';
+import AttributionDashboard from './panels/AttributionDashboard';
 import SystemHealth from './panels/SystemHealth';
 import WatchdogPanel from './panels/WatchdogPanel';
+import PanelConnectivityGuard from './panels/PanelConnectivityGuard';
 import LayoutBuilder from './LayoutBuilder';
 import '../styles/office.css';
 
@@ -263,13 +266,46 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         return wrapWithId(<MissionControl projectId={config.projectId || projectId} workDir={config.workDir || workDir} />);
       case 'office':
       case 'virtual-office':
-        return wrapWithId(<OfficePanel projectId={projectId} workDir={workDir} />);
+        return wrapWithId(
+          <ErrorBoundary>
+            <OfficePanel projectId={projectId} workDir={workDir} />
+          </ErrorBoundary>
+        );
       case 'admin-wr':
         return wrapWithId(<WerkingReportAdmin />);
       case 'linkedin':
-        return wrapWithId(<LinkedInPanel />);
+        return wrapWithId(
+          <PanelConnectivityGuard
+            panelName="Platform"
+            checkUrl="http://localhost:3004/api/version"
+            port={3004}
+            startCommand="cd /root/projekte/werkingflow/platform && npm run build:local"
+          >
+            <LinkedInPanel />
+          </PanelConnectivityGuard>
+        );
       case 'bridge-monitor':
-        return wrapWithId(<BridgeMonitor />);
+        return wrapWithId(
+          <PanelConnectivityGuard
+            panelName="Bridge"
+            checkUrl="http://localhost:8000/health"
+            port={8000}
+            startCommand="# Bridge runs on Hetzner - check server status"
+          >
+            <BridgeMonitor />
+          </PanelConnectivityGuard>
+        );
+      case 'attribution-dashboard':
+        return wrapWithId(
+          <PanelConnectivityGuard
+            panelName="Dashboard"
+            checkUrl="http://localhost:3333/api/version"
+            port={3333}
+            startCommand="cd /root/projekte/werkingflow/dashboard && python3 -m dashboard.app"
+          >
+            <AttributionDashboard />
+          </PanelConnectivityGuard>
+        );
       case 'system-health':
         return wrapWithId(<SystemHealth />);
       case 'watchdog':
@@ -323,7 +359,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     saveLayout(newModel);
   }, [workDir, saveLayout]);
 
-  const addTab = useCallback((type: 'cui' | 'cui-lite' | 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'watchdog', config: Record<string, string>, targetId: string) => {
+  const addTab = useCallback((type: 'cui' | 'cui-lite' | 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'attribution-dashboard' | 'watchdog', config: Record<string, string>, targetId: string) => {
     if (!model) return;
     const names: Record<string, string> = {
       cui: config.accountId ? config.accountId.charAt(0).toUpperCase() + config.accountId.slice(1) : 'CUI',
@@ -338,6 +374,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       linkedin: 'LinkedIn Marketing 🔗',
       'system-health': 'System Health',
       'bridge-monitor': 'Bridge Monitor',
+      'attribution-dashboard': 'Attribution Dashboard 📊',
       watchdog: 'Dev Server Watchdog',
     };
     if (type === 'preview' && !config.watchPath) {
@@ -366,7 +403,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           } else if (val.startsWith('lite:')) {
             addTab('cui-lite', { accountId: val.split(':')[1] }, node.getId());
           } else {
-            addTab(val as 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'watchdog', {}, node.getId());
+            addTab(val as 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'attribution-dashboard' | 'watchdog', {}, node.getId());
           }
           e.target.value = '';
         }}
@@ -399,7 +436,8 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         <option value="system-health">System Health</option>
         <option value="watchdog">Dev Server Watchdog</option>
         <option value="linkedin">LinkedIn Marketing 🔗</option>
-        <option value="bridge-monitor">Bridge Monitor</option>
+        <option value="bridge-monitor">Bridge Monitor (Old)</option>
+        <option value="attribution-dashboard">Attribution Dashboard 📊</option>
       </select>
     );
   }, [addTab]);

@@ -71,6 +71,30 @@ export default function VirtualOffice({ projectId, workDir }: VirtualOfficeProps
     }
   }, []);
 
+  // Fetch activity events from events.json
+  const loadActivities = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/team/events`);
+      if (!res.ok) throw new Error('Failed to load events');
+      const data = await res.json();
+
+      // events.json has { events: [...] }
+      const events = data.events || [];
+
+      // Sort by timestamp (newest first) and take last 20
+      const sorted = events
+        .sort((a: ActivityEvent, b: ActivityEvent) =>
+          new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+        )
+        .slice(0, 20);
+
+      setActivities(sorted);
+    } catch (err) {
+      console.error('Failed to load activities:', err);
+      // Keep existing activities or set empty
+    }
+  }, []);
+
   // Fetch action items (approvals, pending reviews, etc.)
   const loadActionItems = useCallback(async () => {
     try {
@@ -139,21 +163,23 @@ export default function VirtualOffice({ projectId, workDir }: VirtualOfficeProps
 
   // Initial load
   useEffect(() => {
-    Promise.all([loadAgents(), loadActionItems()]).finally(() => setLoading(false));
-  }, [loadAgents, loadActionItems]);
+    Promise.all([loadAgents(), loadActionItems(), loadActivities()]).finally(() => setLoading(false));
+  }, [loadAgents, loadActionItems, loadActivities]);
 
   // Poll for updates every 10 seconds
   useEffect(() => {
     const interval = setInterval(() => {
       loadAgents();
       loadActionItems();
+      loadActivities();
     }, 10000);
     return () => clearInterval(interval);
-  }, [loadAgents, loadActionItems]);
+  }, [loadAgents, loadActionItems, loadActivities]);
 
-  // Listen to SSE for activity stream
+  // Listen to SSE for activity stream (non-critical - falls back to polling)
   useEffect(() => {
     const eventSource = new EventSource(`${API}/agents/activity-stream`);
+    let connectionFailed = false;
 
     eventSource.onmessage = (e) => {
       try {
@@ -165,7 +191,10 @@ export default function VirtualOffice({ projectId, workDir }: VirtualOfficeProps
     };
 
     eventSource.onerror = () => {
-      console.error('Activity stream connection error');
+      if (!connectionFailed) {
+        console.warn('Activity stream SSE not available - using polling fallback');
+        connectionFailed = true;
+      }
       eventSource.close();
     };
 

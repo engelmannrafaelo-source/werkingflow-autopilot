@@ -46,12 +46,36 @@ journalctl -u cui-workspace -f    # Follow logs
 Service file: `/etc/systemd/system/cui-workspace.service`
 Log file: `/var/log/cui-workspace.log`
 
+### KRITISCH: Workspace-Server vs CUI-Binaries — NICHT VERWECHSELN!
+
+| Komponente | Verwaltet durch | Ports | Neustart |
+|------------|----------------|-------|----------|
+| **Workspace-Server** (server/index.ts) | **systemd** (`cui-workspace.service`) | 4005, 5001-5004 | `systemctl restart cui-workspace` |
+| **CUI-Binaries** (claude-code CLI) | **PM2** (`ecosystem.config.js`) | 4001, 4002, 4003 | `su - claude-user -c "pm2 restart cui-1"` |
+
+**NIEMALS:**
+- `pm2 start ... --name werkingflow-cui` oder ähnliche PM2-Befehle für den Workspace-Server
+- `pm2 start npm -- run dev:server` — der Server läuft über systemd, NICHT PM2!
+- `pm2 save` nach Änderungen an CUI-Prozessen — kann die ecosystem.config.js überschreiben!
+- PM2 IDs/Namen ändern — `cui-1`, `cui-2`, `cui-3` sind fest definiert in `/root/.cui/ecosystem.config.js`
+
+**IMMER:**
+- Workspace-Server: `systemctl restart cui-workspace`
+- CUI-Binaries: `su - claude-user -c "pm2 restart cui-{1,2,3}"`
+- PM2 ecosystem wiederherstellen: `su - claude-user -c "pm2 start /root/.cui/ecosystem.config.js"`
+
 ## Development Workflow
 
 1. Edit source code on Mac (VS Code)
 2. Syncthing syncs `src/` and `server/` to remote (~1-2s)
-3. For frontend changes: SSH to remote, run `npx vite build`, reload browser
-4. For server changes: `systemctl restart cui-workspace`
+3. **IMMER `cui-rebuild` verwenden** — baut Frontend und startet Server:
+
+```bash
+cui-rebuild          # Quick: vite build + systemctl restart
+cui-rebuild --full   # Full: npm install + vite build + restart
+```
+
+NIEMALS nur `vite build` ohne Restart oder nur Restart ohne Build!
 
 ## Environment Variables
 
