@@ -21,6 +21,15 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
   const [error, setError] = useState('');
   const [filter, setFilter] = useState<FilterType>('all');
   const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
+  const [showCreate, setShowCreate] = useState(false);
+  const [search, setSearch] = useState('');
+
+  // Create form state
+  const [newEmail, setNewEmail] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [newName, setNewName] = useState('');
+  const [newRole, setNewRole] = useState('user');
+  const [creating, setCreating] = useState(false);
 
   const fetchUsers = useCallback(async () => {
     setLoading(true);
@@ -44,255 +53,264 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
   const handleApprove = async (userId: string) => {
     setProcessingIds(prev => new Set(prev).add(userId));
     try {
-      const res = await fetch(`/api/admin/wr/users/${userId}/approve`, {
-        method: 'POST',
-      });
+      const res = await fetch(`/api/admin/wr/users/${userId}/approve`, { method: 'POST' });
       if (!res.ok) throw new Error(await res.text());
-      await fetchUsers(); // Refresh list
+      await fetchUsers();
     } catch (err: any) {
       alert(`Failed to approve: ${err.message}`);
     } finally {
-      setProcessingIds(prev => {
-        const next = new Set(prev);
-        next.delete(userId);
-        return next;
-      });
+      setProcessingIds(prev => { const next = new Set(prev); next.delete(userId); return next; });
     }
   };
 
   const handleVerify = async (userId: string) => {
     setProcessingIds(prev => new Set(prev).add(userId));
     try {
-      const res = await fetch(`/api/admin/wr/users/${userId}/verify`, {
-        method: 'POST',
-      });
+      const res = await fetch(`/api/admin/wr/users/${userId}/verify`, { method: 'POST' });
       if (!res.ok) throw new Error(await res.text());
-      await fetchUsers(); // Refresh list
+      await fetchUsers();
     } catch (err: any) {
       alert(`Failed to verify: ${err.message}`);
     } finally {
-      setProcessingIds(prev => {
-        const next = new Set(prev);
-        next.delete(userId);
-        return next;
-      });
+      setProcessingIds(prev => { const next = new Set(prev); next.delete(userId); return next; });
     }
   };
 
-  const filteredUsers = users.filter(u => {
-    if (filter === 'pending') return !u.approved;
-    if (filter === 'unverified') return !u.emailVerified && u.approved;
-    return true;
-  });
+  const handleCreate = async () => {
+    if (!newEmail.trim() || !newPassword.trim()) {
+      setError('Email and password are required');
+      return;
+    }
+    setCreating(true);
+    setError('');
+    try {
+      const res = await fetch('/api/admin/wr/users/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: newEmail,
+          password: newPassword,
+          name: newName,
+          role: newRole,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || data.msg || `HTTP ${res.status}`);
+      }
+      setNewEmail('');
+      setNewPassword('');
+      setNewName('');
+      setNewRole('user');
+      setShowCreate(false);
+      await fetchUsers();
+    } catch (err: any) {
+      setError(`Create failed: ${err.message}`);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleDelete = async (userId: string, email: string) => {
+    if (!confirm(`Delete user "${email}"? This cannot be undone.`)) return;
+    setProcessingIds(prev => new Set(prev).add(userId));
+    try {
+      const res = await fetch(`/api/admin/wr/users/${userId}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      await fetchUsers();
+    } catch (err: any) {
+      alert(`Delete failed: ${err.message}`);
+    } finally {
+      setProcessingIds(prev => { const next = new Set(prev); next.delete(userId); return next; });
+    }
+  };
+
+  const filteredUsers = users
+    .filter(u => {
+      if (filter === 'pending') return !u.approved;
+      if (filter === 'unverified') return !u.emailVerified && u.approved;
+      return true;
+    })
+    .filter(u => {
+      if (!search) return true;
+      const s = search.toLowerCase();
+      return u.email.toLowerCase().includes(s) || u.name?.toLowerCase().includes(s) || u.tenantName?.toLowerCase().includes(s);
+    });
+
+  const inputStyle: React.CSSProperties = {
+    padding: '5px 8px', borderRadius: 3, fontSize: 11, background: 'var(--tn-bg)',
+    border: '1px solid var(--tn-border)', color: 'var(--tn-text)', outline: 'none', width: '100%',
+  };
 
   return (
     <div style={{ padding: 12 }}>
       {/* Filter Bar */}
-      <div style={{
-        display: 'flex',
-        gap: 6,
-        marginBottom: 12,
-        alignItems: 'center',
-      }}>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
         <span style={{ fontSize: 11, color: 'var(--tn-text-muted)', fontWeight: 600 }}>Filter:</span>
         {(['all', 'pending', 'unverified'] as FilterType[]).map(f => (
-          <button
-            key={f}
-            onClick={() => setFilter(f)}
-            style={{
-              padding: '3px 10px',
-              borderRadius: 3,
-              fontSize: 10,
-              fontWeight: 600,
-              cursor: 'pointer',
-              background: filter === f ? 'rgba(122,162,247,0.2)' : 'var(--tn-bg)',
-              border: `1px solid ${filter === f ? 'var(--tn-blue)' : 'var(--tn-border)'}`,
-              color: filter === f ? 'var(--tn-blue)' : 'var(--tn-text-muted)',
-              textTransform: 'capitalize',
-            }}
-          >
-            {f}
-          </button>
+          <button key={f} onClick={() => setFilter(f)} style={{
+            padding: '3px 10px', borderRadius: 3, fontSize: 10, fontWeight: 600, cursor: 'pointer',
+            background: filter === f ? 'rgba(122,162,247,0.2)' : 'var(--tn-bg)',
+            border: `1px solid ${filter === f ? 'var(--tn-blue)' : 'var(--tn-border)'}`,
+            color: filter === f ? 'var(--tn-blue)' : 'var(--tn-text-muted)',
+            textTransform: 'capitalize',
+          }}>{f}</button>
         ))}
+        <input
+          placeholder="Search users..."
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          style={{ ...inputStyle, width: 140, marginLeft: 4 }}
+        />
         <div style={{ flex: 1 }} />
-        <button
-          onClick={fetchUsers}
-          style={{
-            padding: '3px 10px',
-            borderRadius: 3,
-            fontSize: 10,
-            cursor: 'pointer',
-            background: 'var(--tn-bg)',
-            border: '1px solid var(--tn-border)',
-            color: 'var(--tn-text-muted)',
-          }}
-        >
-          Refresh
+        <button onClick={() => setShowCreate(!showCreate)} style={{
+          padding: '4px 12px', borderRadius: 3, fontSize: 10, fontWeight: 600, cursor: 'pointer',
+          background: showCreate ? 'var(--tn-red)' : 'var(--tn-green)', border: 'none', color: '#fff',
+        }}>
+          {showCreate ? 'Cancel' : '+ New User'}
         </button>
+        <button onClick={fetchUsers} style={{
+          padding: '3px 10px', borderRadius: 3, fontSize: 10, cursor: 'pointer',
+          background: 'var(--tn-bg)', border: '1px solid var(--tn-border)', color: 'var(--tn-text-muted)',
+        }}>Refresh</button>
       </div>
+
+      {/* Create User Form */}
+      {showCreate && (
+        <div style={{
+          background: 'var(--tn-bg-dark)', border: '1px solid var(--tn-green)', borderRadius: 6,
+          padding: 12, marginBottom: 12,
+        }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--tn-green)', marginBottom: 8 }}>Create New User (Supabase Auth)</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 80px auto', gap: 8, alignItems: 'end' }}>
+            <div>
+              <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginBottom: 3 }}>Email *</div>
+              <input value={newEmail} onChange={e => setNewEmail(e.target.value)} placeholder="user@example.com" style={inputStyle} />
+            </div>
+            <div>
+              <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginBottom: 3 }}>Password *</div>
+              <input value={newPassword} onChange={e => setNewPassword(e.target.value)} type="password" placeholder="Min. 8 chars" style={inputStyle} />
+            </div>
+            <div>
+              <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginBottom: 3 }}>Name</div>
+              <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="Full Name" style={inputStyle} />
+            </div>
+            <div>
+              <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginBottom: 3 }}>Role</div>
+              <select value={newRole} onChange={e => setNewRole(e.target.value)} style={inputStyle}>
+                <option value="user">User</option>
+                <option value="admin">Admin</option>
+              </select>
+            </div>
+            <button onClick={handleCreate} disabled={creating || !newEmail.trim() || !newPassword.trim()} style={{
+              padding: '5px 14px', borderRadius: 3, fontSize: 10, fontWeight: 600,
+              cursor: creating ? 'not-allowed' : 'pointer',
+              background: 'var(--tn-green)', border: 'none', color: '#fff', opacity: creating ? 0.5 : 1,
+            }}>
+              {creating ? 'Creating...' : 'Create'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Error */}
       {error && (
-        <div style={{
-          padding: '4px 8px',
-          fontSize: 11,
-          color: 'var(--tn-red)',
-          background: 'rgba(247,118,142,0.1)',
-          borderRadius: 3,
-          marginBottom: 8,
-        }}>
+        <div style={{ padding: '4px 8px', fontSize: 11, color: 'var(--tn-red)', background: 'rgba(247,118,142,0.1)', borderRadius: 3, marginBottom: 8 }}>
           {error}
         </div>
       )}
 
       {/* Loading */}
       {loading && (
-        <div style={{
-          padding: 20,
-          textAlign: 'center',
-          color: 'var(--tn-text-muted)',
-          fontSize: 12,
-        }}>
-          Loading...
+        <div style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>Loading...</div>
+      )}
+
+      {/* User Count */}
+      {!loading && (
+        <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6 }}>
+          {filteredUsers.length} user(s) {filter !== 'all' ? `(${filter})` : ''} {search ? `matching "${search}"` : ''}
         </div>
       )}
 
       {/* User List */}
       {!loading && filteredUsers.length === 0 && (
-        <div style={{
-          padding: 20,
-          textAlign: 'center',
-          color: 'var(--tn-text-muted)',
-          fontSize: 11,
-        }}>
-          No users found
-        </div>
+        <div style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 11 }}>No users found</div>
       )}
 
       {!loading && filteredUsers.length > 0 && (
         <div>
           {/* Table Header */}
           <div style={{
-            display: 'grid',
-            gridTemplateColumns: '200px 150px 100px 80px 80px 1fr',
-            gap: 8,
-            padding: '6px 10px',
-            background: 'var(--tn-bg-dark)',
-            borderRadius: 4,
-            fontSize: 10,
-            fontWeight: 600,
-            color: 'var(--tn-text-muted)',
-            marginBottom: 4,
+            display: 'grid', gridTemplateColumns: '1fr 120px 100px 60px 60px 60px 120px',
+            gap: 8, padding: '6px 10px', background: 'var(--tn-bg-dark)', borderRadius: 4,
+            fontSize: 10, fontWeight: 600, color: 'var(--tn-text-muted)', marginBottom: 4,
           }}>
-            <div>Email</div>
-            <div>Name</div>
-            <div>Tenant</div>
-            <div>Approved</div>
-            <div>Verified</div>
-            <div>Actions</div>
+            <div>Email</div><div>Name</div><div>Tenant</div><div>Role</div><div>Appr.</div><div>Verif.</div><div>Actions</div>
           </div>
 
           {/* Table Rows */}
           {filteredUsers.map(user => {
             const isProcessing = processingIds.has(user.id);
             return (
-              <div
-                key={user.id}
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '200px 150px 100px 80px 80px 1fr',
-                  gap: 8,
-                  padding: '8px 10px',
-                  borderBottom: '1px solid var(--tn-border)',
-                  fontSize: 11,
-                  alignItems: 'center',
-                }}
-              >
-                <div style={{
-                  color: 'var(--tn-text)',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}>
-                  {user.email}
+              <div key={user.id} style={{
+                display: 'grid', gridTemplateColumns: '1fr 120px 100px 60px 60px 60px 120px',
+                gap: 8, padding: '8px 10px', borderBottom: '1px solid var(--tn-border)',
+                fontSize: 11, alignItems: 'center', opacity: isProcessing ? 0.5 : 1,
+              }}>
+                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <span style={{ color: 'var(--tn-text)' }}>{user.email}</span>
+                  {user.lastLogin && (
+                    <div style={{ fontSize: 9, color: 'var(--tn-text-muted)' }}>
+                      Last: {new Date(user.lastLogin).toLocaleDateString('de-DE')}
+                    </div>
+                  )}
                 </div>
-                <div style={{ color: 'var(--tn-text-subtle)' }}>{user.name}</div>
-                <div style={{
-                  color: 'var(--tn-text-muted)',
-                  fontSize: 10,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}>
-                  {user.tenantName || user.tenantId || '-'}
+                <div style={{ color: 'var(--tn-text-subtle)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user.name}</div>
+                <div style={{ color: 'var(--tn-text-muted)', fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {user.tenantName || user.tenantId?.slice(0, 8) || '—'}
                 </div>
                 <div>
                   <span style={{
-                    display: 'inline-block',
-                    padding: '2px 6px',
-                    borderRadius: 3,
-                    fontSize: 9,
-                    fontWeight: 600,
-                    textTransform: 'uppercase',
+                    padding: '2px 5px', borderRadius: 3, fontSize: 9, fontWeight: 600, textTransform: 'uppercase',
+                    background: user.role === 'admin' ? 'rgba(122,162,247,0.2)' : 'rgba(158,206,106,0.1)',
+                    color: user.role === 'admin' ? 'var(--tn-blue)' : 'var(--tn-text-muted)',
+                  }}>{user.role}</span>
+                </div>
+                <div>
+                  <span style={{
+                    display: 'inline-block', padding: '2px 6px', borderRadius: 3, fontSize: 9, fontWeight: 600, textTransform: 'uppercase',
                     background: user.approved ? 'rgba(158,206,106,0.2)' : 'rgba(224,175,104,0.2)',
                     color: user.approved ? 'var(--tn-green)' : 'var(--tn-orange)',
-                  }}>
-                    {user.approved ? 'Yes' : 'No'}
-                  </span>
+                  }}>{user.approved ? 'Yes' : 'No'}</span>
                 </div>
                 <div>
                   <span style={{
-                    display: 'inline-block',
-                    padding: '2px 6px',
-                    borderRadius: 3,
-                    fontSize: 9,
-                    fontWeight: 600,
-                    textTransform: 'uppercase',
+                    display: 'inline-block', padding: '2px 6px', borderRadius: 3, fontSize: 9, fontWeight: 600, textTransform: 'uppercase',
                     background: user.emailVerified ? 'rgba(158,206,106,0.2)' : 'rgba(247,118,142,0.2)',
                     color: user.emailVerified ? 'var(--tn-green)' : 'var(--tn-red)',
-                  }}>
-                    {user.emailVerified ? 'Yes' : 'No'}
-                  </span>
+                  }}>{user.emailVerified ? 'Yes' : 'No'}</span>
                 </div>
-                <div style={{ display: 'flex', gap: 4 }}>
+                <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
                   {!user.approved && (
-                    <button
-                      onClick={() => handleApprove(user.id)}
-                      disabled={isProcessing}
-                      style={{
-                        padding: '3px 8px',
-                        borderRadius: 3,
-                        fontSize: 10,
-                        cursor: isProcessing ? 'not-allowed' : 'pointer',
-                        background: isProcessing ? 'var(--tn-border)' : 'var(--tn-green)',
-                        border: 'none',
-                        color: '#fff',
-                        fontWeight: 600,
-                        opacity: isProcessing ? 0.5 : 1,
-                      }}
-                    >
-                      {isProcessing ? 'Processing...' : 'Approve'}
-                    </button>
+                    <button onClick={() => handleApprove(user.id)} disabled={isProcessing} style={{
+                      padding: '3px 6px', borderRadius: 3, fontSize: 9, cursor: isProcessing ? 'not-allowed' : 'pointer',
+                      background: 'var(--tn-green)', border: 'none', color: '#fff', fontWeight: 600,
+                    }}>{isProcessing ? '...' : 'Approve'}</button>
                   )}
                   {user.approved && !user.emailVerified && (
-                    <button
-                      onClick={() => handleVerify(user.id)}
-                      disabled={isProcessing}
-                      style={{
-                        padding: '3px 8px',
-                        borderRadius: 3,
-                        fontSize: 10,
-                        cursor: isProcessing ? 'not-allowed' : 'pointer',
-                        background: isProcessing ? 'var(--tn-border)' : 'var(--tn-blue)',
-                        border: 'none',
-                        color: '#fff',
-                        fontWeight: 600,
-                        opacity: isProcessing ? 0.5 : 1,
-                      }}
-                    >
-                      {isProcessing ? 'Processing...' : 'Verify'}
-                    </button>
+                    <button onClick={() => handleVerify(user.id)} disabled={isProcessing} style={{
+                      padding: '3px 6px', borderRadius: 3, fontSize: 9, cursor: isProcessing ? 'not-allowed' : 'pointer',
+                      background: 'var(--tn-blue)', border: 'none', color: '#fff', fontWeight: 600,
+                    }}>{isProcessing ? '...' : 'Verify'}</button>
                   )}
+                  <button onClick={() => handleDelete(user.id, user.email)} disabled={isProcessing} style={{
+                    padding: '3px 6px', borderRadius: 3, fontSize: 9, cursor: isProcessing ? 'not-allowed' : 'pointer',
+                    background: 'rgba(247,118,142,0.15)', border: '1px solid rgba(247,118,142,0.3)',
+                    color: 'var(--tn-red)', fontWeight: 600,
+                  }}>Delete</button>
                 </div>
               </div>
             );

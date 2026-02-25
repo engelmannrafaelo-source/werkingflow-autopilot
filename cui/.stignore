@@ -1,0 +1,15 @@
+// CUI Workspace Syncthing Ignore
+// Only sync SOURCE CODE — data/dist/deps stay per-machine
+
+/data
+/dist
+/dist-old
+/node_modules
+/.git
+*.log
+.env
+pm2.config.cjs
+package-lock.json
+yarn.lock
+*.sync-conflict-*
+/session-info.db*

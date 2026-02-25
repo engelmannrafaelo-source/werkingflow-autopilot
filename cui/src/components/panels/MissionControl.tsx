@@ -4,6 +4,9 @@ import { ACCOUNTS } from '../../types';
 const API = '/api';
 
 // --- Types ---
+type AttentionState = 'working' | 'needs_attention' | 'idle';
+type AttentionReason = 'plan' | 'question' | 'permission' | 'error' | 'done';
+
 interface Conversation {
   sessionId: string;
   accountId: string;
@@ -20,13 +23,19 @@ interface Conversation {
   messageCount: number;
   updatedAt: string;
   createdAt: string;
+  lastPromptAt?: string;
+  attentionState?: AttentionState;
+  attentionReason?: AttentionReason;
+  isVisible?: boolean;
+  manualFinished?: boolean;
 }
 
 interface ProjectGroup {
   name: string;
   conversations: Conversation[];
   activeCount: number;
-  streamingCount: number;
+  workingCount: number;
+  attentionCount: number;
   accounts: Array<{ id: string; label: string; color: string }>;
   lastActivity: string;
 }
@@ -88,18 +97,22 @@ function groupByProject(conversations: Conversation[]): ProjectGroup[] {
   for (const c of conversations) {
     let group = map.get(c.projectName);
     if (!group) {
-      group = { name: c.projectName, conversations: [], activeCount: 0, streamingCount: 0, accounts: [], lastActivity: '' };
+      group = { name: c.projectName, conversations: [], activeCount: 0, workingCount: 0, attentionCount: 0, accounts: [], lastActivity: '' };
       map.set(c.projectName, group);
     }
     group.conversations.push(c);
     if (c.status === 'ongoing') group.activeCount++;
-    if (c.streamingId) group.streamingCount++;
+    if (c.streamingId || c.attentionState === 'working') group.workingCount++;
+    if (c.attentionState === 'needs_attention') group.attentionCount++;
     if (!group.accounts.find(a => a.id === c.accountId)) {
       group.accounts.push({ id: c.accountId, label: c.accountLabel, color: c.accountColor });
     }
     if (!group.lastActivity || c.updatedAt > group.lastActivity) group.lastActivity = c.updatedAt;
   }
   return Array.from(map.values()).sort((a, b) => {
+    // Attention first, then working, then active
+    if (a.attentionCount !== b.attentionCount) return b.attentionCount - a.attentionCount;
+    if (a.workingCount !== b.workingCount) return b.workingCount - a.workingCount;
     if (a.activeCount !== b.activeCount) return b.activeCount - a.activeCount;
     return new Date(b.lastActivity).getTime() - new Date(a.lastActivity).getTime();
   });
@@ -123,10 +136,40 @@ function ensureStyles() {
 
 // --- Sub-components ---
 
-function StatusBadge({ status, streaming }: { status: string; streaming: boolean }) {
-  if (streaming) return <span style={{ fontSize: 9, fontWeight: 700, color: '#3B82F6', background: 'rgba(59,130,246,0.15)', padding: '1px 6px', borderRadius: 3, animation: 'mc-pulse 1.5s ease-in-out infinite' }}>STREAMING</span>;
-  if (status === 'ongoing') return <span style={{ fontSize: 9, fontWeight: 700, color: '#F59E0B', background: 'rgba(245,158,11,0.15)', padding: '1px 6px', borderRadius: 3 }}>AKTIV</span>;
-  return <span style={{ fontSize: 9, fontWeight: 600, color: '#10B981', background: 'rgba(16,185,129,0.1)', padding: '1px 6px', borderRadius: 3 }}>DONE</span>;
+const ATTENTION_LABELS: Record<string, string> = {
+  plan: 'PLAN',
+  question: 'FRAGE',
+  permission: 'PERM',
+  error: 'FEHLER',
+};
+
+function StatusDot({ conv }: { conv: Conversation }) {
+  const attn = conv.attentionState;
+  const reason = conv.attentionReason;
+  const isStreaming = !!conv.streamingId;
+
+  // Needs attention: orange pulsing dot + label
+  if (attn === 'needs_attention' && reason) {
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#F59E0B', display: 'inline-block', animation: 'mc-pulse 1s ease-in-out infinite', boxShadow: '0 0 6px rgba(245,158,11,0.6)' }} />
+        <span style={{ fontSize: 9, fontWeight: 700, color: '#F59E0B' }}>{ATTENTION_LABELS[reason] || reason.toUpperCase()}</span>
+      </span>
+    );
+  }
+
+  // Working: blue pulsing dot, no text
+  if (isStreaming || (attn === 'working')) {
+    return <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#3B82F6', display: 'inline-block', animation: 'mc-pulse 1.5s ease-in-out infinite' }} />;
+  }
+
+  // Ongoing but not streaming
+  if (conv.status === 'ongoing') {
+    return <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#F59E0B', display: 'inline-block', opacity: 0.6 }} />;
+  }
+
+  // Idle/Done: dim grey dot
+  return <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--tn-text-subtle)', display: 'inline-block', opacity: 0.3 }} />;
 }
 
 function AccountDots({ accounts }: { accounts: ProjectGroup['accounts'] }) {
@@ -143,34 +186,124 @@ function AccountDots({ accounts }: { accounts: ProjectGroup['accounts'] }) {
   );
 }
 
-// --- Session Card (compact, 64px height) ---
-function SessionCard({ conv, isSelected, onClick }: {
+// --- Session Card (compact, attention-based) ---
+function SessionCard({ conv, isSelected, onClick, checked, onCheck, onActivate, onFinish, onDelete, panelLabel, expanded, snippet }: {
   conv: Conversation; isSelected: boolean; onClick: () => void;
+  checked?: boolean; onCheck?: (checked: boolean) => void;
+  onActivate?: (conv: Conversation) => void;
+  onFinish?: (conv: Conversation) => void;
+  onDelete?: (conv: Conversation) => void;
+  panelLabel?: string;
+  expanded?: boolean;
+  snippet?: string;
 }) {
-  const isStreaming = !!conv.streamingId;
+  const needsAttention = conv.attentionState === 'needs_attention';
+  const isWorking = !!conv.streamingId || conv.attentionState === 'working';
   const displayName = conv.customName || truncate(conv.summary.split('\n')[0], 60) || 'Neue Konversation';
+
+  // Border color: attention > checked > selected > working > default
+  const borderColor = needsAttention ? 'rgba(245,158,11,0.5)'
+    : checked ? '#10B981'
+    : isSelected ? 'var(--tn-blue)'
+    : isWorking ? 'rgba(59,130,246,0.15)'
+    : 'var(--tn-border)';
+
+  // Preview: summary lines that differ from title, plus metadata
+  const summaryText = conv.summary || '';
+  const summaryFirstLine = summaryText.split('\n')[0];
+  // If summary first line matches the display name, skip it to avoid repetition
+  const extraLines = displayName === truncate(summaryFirstLine, 60)
+    ? summaryText.split('\n').slice(1).join('\n').trim()
+    : summaryText.trim();
 
   return (
     <div className="mc-card" onClick={onClick} style={{
-      padding: '8px 12px', borderRadius: 6, cursor: 'pointer',
-      border: `1.5px solid ${isSelected ? 'var(--tn-blue)' : isStreaming ? 'rgba(59,130,246,0.3)' : conv.status === 'ongoing' ? 'rgba(245,158,11,0.2)' : 'var(--tn-border)'}`,
-      background: isSelected ? 'rgba(122,162,247,0.1)' : 'var(--tn-bg)',
-      transition: 'all 0.1s', minHeight: 56,
+      padding: expanded ? '10px 14px' : '8px 12px', borderRadius: 8, cursor: 'pointer', overflow: 'hidden',
+      border: `1.5px solid ${borderColor}`,
+      background: needsAttention ? 'rgba(245,158,11,0.06)' : checked ? 'rgba(16,185,129,0.08)' : isSelected ? 'rgba(122,162,247,0.1)' : 'var(--tn-bg)',
+      transition: 'all 0.1s',
     }}>
-      {/* Row 1: Status + Project + Account + Time */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-        <StatusBadge status={conv.status} streaming={isStreaming} />
-        <span style={{ fontSize: 10, color: 'var(--tn-text-subtle)', fontWeight: 600 }}>{conv.projectName}</span>
-        <span style={{ fontSize: 9, fontWeight: 700, color: conv.accountColor }}>{conv.accountLabel.slice(0, 3).toUpperCase()}</span>
-        <span style={{ marginLeft: 'auto', fontSize: 9, color: 'var(--tn-text-subtle)' }}>{timeAgo(conv.updatedAt)}</span>
+      {/* Row 1: Title + meta + buttons */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        {onCheck && (
+          <input type="checkbox" checked={!!checked}
+            onChange={e => { e.stopPropagation(); onCheck(e.target.checked); }}
+            onClick={e => e.stopPropagation()}
+            style={{ accentColor: '#10B981', cursor: 'pointer', width: 14, height: 14, flexShrink: 0 }} />
+        )}
+        <StatusDot conv={conv} />
+        {panelLabel && (
+          <span title={`Offen in: ${panelLabel}`} style={{
+            maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            padding: '1px 5px', borderRadius: 3, fontSize: 9, fontWeight: 600,
+            background: 'rgba(16,185,129,0.15)', border: '1px solid rgba(16,185,129,0.4)',
+            color: '#10B981', flexShrink: 0,
+          }}>{panelLabel}</span>
+        )}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{
+            fontSize: 13, color: needsAttention ? '#F59E0B' : 'var(--tn-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            fontWeight: needsAttention ? 700 : 600, lineHeight: 1.4,
+          }}>
+            {displayName}
+          </div>
+          <div style={{ display: 'flex', gap: 8, fontSize: 10, color: 'var(--tn-text-muted)', marginTop: 2, alignItems: 'center' }}>
+            <span style={{ fontWeight: 600 }}>{conv.projectName}</span>
+            <span style={{ fontWeight: 700, color: conv.accountColor }}>{conv.accountLabel.slice(0, 3).toUpperCase()}</span>
+            <span style={{ color: 'var(--tn-text-subtle)' }}>{conv.messageCount} msgs</span>
+          </div>
+        </div>
+        {!panelLabel && onActivate && (
+          <button onClick={(e) => { e.stopPropagation(); onActivate(conv); }}
+            title="In Panel oeffnen"
+            style={{
+              background: 'none', border: '1px solid rgba(139,92,246,0.3)',
+              color: '#8B5CF6', cursor: 'pointer', fontSize: 10,
+              padding: '2px 6px', borderRadius: 3, fontWeight: 600, flexShrink: 0,
+            }}>&#8594;</button>
+        )}
+        {!conv.manualFinished && onFinish && (
+          <button onClick={(e) => { e.stopPropagation(); onFinish(conv); }}
+            title="Als fertig markieren"
+            style={{
+              background: 'none', border: '1px solid rgba(16,185,129,0.3)',
+              color: '#10B981', cursor: 'pointer', fontSize: 13,
+              padding: '0px 5px', borderRadius: 3, flexShrink: 0, lineHeight: 1,
+            }}>&#10003;</button>
+        )}
+        {onDelete && (
+          <button onClick={(e) => { e.stopPropagation(); onDelete(conv); }}
+            title="Konversation loeschen"
+            style={{
+              background: 'none', border: '1px solid rgba(239,68,68,0.3)',
+              color: '#EF4444', cursor: 'pointer', fontSize: 13,
+              padding: '0px 5px', borderRadius: 3, flexShrink: 0, lineHeight: 1,
+            }}>&#10005;</button>
+        )}
+        <span title={conv.lastPromptAt ? `Letzter Prompt: ${new Date(conv.lastPromptAt).toLocaleString()}` : `Letzte Aktivität: ${new Date(conv.updatedAt).toLocaleString()}`}
+          style={{ fontSize: 10, color: conv.lastPromptAt ? 'var(--tn-text-muted)' : 'var(--tn-text-subtle)', flexShrink: 0, fontWeight: 500 }}>
+          {conv.lastPromptAt ? timeAgo(conv.lastPromptAt) : <span style={{ opacity: 0.6 }}>{timeAgo(conv.updatedAt)}</span>}
+        </span>
       </div>
-      {/* Row 2: Title/Summary */}
-      <div style={{
-        fontSize: 11, color: 'var(--tn-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        fontWeight: conv.customName ? 600 : 400, lineHeight: 1.3,
-      }}>
-        {displayName}
-      </div>
+      {/* Row 2: Snippet preview */}
+      {expanded && snippet && (
+        <div style={{
+          marginTop: 8, padding: '8px 10px', borderRadius: 4,
+          background: 'rgba(0,0,0,0.25)', borderLeft: '3px solid rgba(122,162,247,0.5)',
+        }}>
+          <div style={{
+            fontFamily: 'ui-monospace, "SF Mono", Monaco, Menlo, monospace',
+            fontSize: 11, lineHeight: '16px',
+            color: '#c0caf5', overflow: 'hidden',
+            maxHeight: 80, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+          }}>
+            {snippet}
+          </div>
+          <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginTop: 4 }}>
+            {conv.model ? conv.model.split('-').slice(0, 2).join('-') : ''} &middot; {conv.status}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -200,14 +333,13 @@ function PreviewPanel({ conv, onSend, onStop, onNameChange, onPermission }: {
       .catch(() => setLoading(false));
   }, [conv.sessionId, conv.accountId]);
 
+  // Only refresh detail when attention state changes (not on a timer)
   useEffect(() => {
     if (conv.status !== 'ongoing') return;
-    const iv = setInterval(() => {
-      fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}?tail=100`)
-        .then(r => r.json()).then(data => setDetail(data)).catch(() => {});
-    }, 4000);
-    return () => clearInterval(iv);
-  }, [conv.sessionId, conv.accountId, conv.status]);
+    // Single refresh when attention state changes to show latest messages
+    fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}?tail=100`)
+      .then(r => r.json()).then(data => setDetail(data)).catch(() => {});
+  }, [conv.sessionId, conv.accountId, conv.status, conv.attentionState]);
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [detail?.messages]);
   useEffect(() => { if (editingName) { nameInputRef.current?.focus(); nameInputRef.current?.select(); } }, [editingName]);
@@ -224,7 +356,7 @@ function PreviewPanel({ conv, onSend, onStop, onNameChange, onPermission }: {
         borderBottom: '1px solid var(--tn-border)', flexShrink: 0,
         display: 'flex', alignItems: 'center', gap: 8,
       }}>
-        <StatusBadge status={conv.status} streaming={isStreaming} />
+        <StatusDot conv={conv} />
         <span style={{ fontSize: 11, fontWeight: 700, color: conv.accountColor }}>{conv.accountLabel}</span>
         <span style={{ fontSize: 10, color: 'var(--tn-text-subtle)' }}>{conv.projectName}</span>
 
@@ -491,6 +623,8 @@ export default function MissionControl({ projectId }: MissionControlProps) {
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
   const [selectedConv, setSelectedConv] = useState<Conversation | null>(null);
   const [projects, setProjects] = useState<Array<{ id: string; name: string; workDir: string }>>([]);
+  const [checkedConvs, setCheckedConvs] = useState<Set<string>>(new Set());
+  const [bulkStatus, setBulkStatus] = useState<string | null>(null);
   const [autoTitleStatus, setAutoTitleStatus] = useState<string | null>(null);
   const [syncEnabled, setSyncEnabled] = useState(() => {
     try { return localStorage.getItem('mc-sync') !== 'off'; } catch { return true; }
@@ -502,10 +636,15 @@ export default function MissionControl({ projectId }: MissionControlProps) {
     } catch { return new Set(); }
   });
   const pollRef = useRef<ReturnType<typeof setInterval>>(null);
+  const [visibleSessionIds, setVisibleSessionIds] = useState<Set<string>>(new Set());
+  const [panelMap, setPanelMap] = useState<Map<string, string>>(new Map()); // sessionId → panel label
+  const [showPreviews, setShowPreviews] = useState(() => {
+    try { return localStorage.getItem('mc-show-previews') === '1'; } catch { return false; }
+  });
+  const [snippets, setSnippets] = useState<Map<string, string>>(new Map());
 
   useEffect(() => { ensureStyles(); }, []);
   useEffect(() => { fetch(`${API}/projects`).then(r => r.json()).then(setProjects).catch(() => {}); }, []);
-
   const toggleProjectVisibility = useCallback((projectName: string) => {
     setHiddenProjects(prev => {
       const next = new Set(prev);
@@ -517,27 +656,32 @@ export default function MissionControl({ projectId }: MissionControlProps) {
 
   const fetchConversations = useCallback(() => {
     const qs = projectId ? `?project=${encodeURIComponent(projectId)}` : '';
-    fetch(`${API}/mission/conversations${qs}`)
-      .then(r => r.json())
-      .then(data => { setConversations(data.conversations || []); setLoading(false); })
-      .catch(() => setLoading(false));
+    Promise.all([
+      fetch(`${API}/mission/conversations${qs}`).then(r => r.json()),
+      fetch(`${API}/mission/visibility`).then(r => r.json()).catch(() => ({ panels: [], visibleSessionIds: [] })),
+    ]).then(([convData, visData]) => {
+      setConversations(convData.conversations || []);
+      setVisibleSessionIds(new Set(visData.visibleSessionIds || []));
+      // Build sessionId → panel label map from panel data
+      const pm = new Map<string, string>();
+      for (const p of (visData.panels || [])) {
+        if (p.sessionId) {
+          // Label: projectId or "Panel {panelId short}"
+          const label = p.projectId && p.projectId !== 'default' ? p.projectId : `Panel ${(p.panelId || '').slice(0, 4)}`;
+          pm.set(p.sessionId, label);
+        }
+      }
+      setPanelMap(pm);
+      setLoading(false);
+    }).catch(() => setLoading(false));
   }, [projectId]);
 
+  // Poll every 60s - no WebSocket streaming
   useEffect(() => {
     if (!syncEnabled) { setLoading(false); return; }
     fetchConversations();
-    pollRef.current = setInterval(fetchConversations, 15000);
+    pollRef.current = setInterval(fetchConversations, 60000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [fetchConversations, syncEnabled]);
-
-  useEffect(() => {
-    if (!syncEnabled) return;
-    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const ws = new WebSocket(`${protocol}://${window.location.host}/ws`);
-    ws.onmessage = (e) => {
-      try { const msg = JSON.parse(e.data); if (msg.type === 'cui-state') fetchConversations(); } catch {}
-    };
-    return () => ws.close();
   }, [fetchConversations, syncEnabled]);
 
   const visibleConversations = useMemo(() =>
@@ -547,27 +691,88 @@ export default function MissionControl({ projectId }: MissionControlProps) {
 
   const groups = useMemo(() => groupByProject(visibleConversations), [visibleConversations]);
   const allGroups = useMemo(() => groupByProject(conversations), [conversations]);
+  // Enrich conversations with visibility from registry
+  const enrichedConversations = useMemo(() =>
+    visibleConversations.map(c => ({ ...c, isVisible: visibleSessionIds.has(c.sessionId) })),
+    [visibleConversations, visibleSessionIds]
+  );
+
   const stats = useMemo(() => ({
-    total: visibleConversations.length,
-    ongoing: visibleConversations.filter(c => c.status === 'ongoing').length,
-    streaming: visibleConversations.filter(c => c.streamingId).length,
-    completed: visibleConversations.filter(c => c.status === 'completed').length,
-  }), [visibleConversations]);
+    total: enrichedConversations.length,
+    attention: enrichedConversations.filter(c => c.attentionState === 'needs_attention').length,
+    working: enrichedConversations.filter(c => c.streamingId || c.attentionState === 'working').length,
+    idle: enrichedConversations.filter(c => !c.streamingId && c.attentionState !== 'working' && c.attentionState !== 'needs_attention').length,
+    visible: enrichedConversations.filter(c => c.isVisible).length,
+    orphans: visibleSessionIds.size > 0 ? enrichedConversations.filter(c => !c.isVisible).length : 0,
+  }), [enrichedConversations]);
 
   const selectedConvId = selectedConv ? `${selectedConv.accountId}-${selectedConv.sessionId}` : null;
 
-  // Cards to show: filtered by selected project, sorted streaming > ongoing > completed
-  const displayedConvs = useMemo(() => {
-    let list = selectedProject
-      ? visibleConversations.filter(c => c.projectName === selectedProject)
-      : visibleConversations;
-    return [...list].sort((a, b) => {
-      const aScore = a.streamingId ? 3 : a.status === 'ongoing' ? 2 : 1;
-      const bScore = b.streamingId ? 3 : b.status === 'ongoing' ? 2 : 1;
-      if (aScore !== bScore) return bScore - aScore;
-      return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+  // Split into active (top) and finished (bottom)
+  const projectFiltered = useMemo(() => {
+    return selectedProject
+      ? enrichedConversations.filter(c => c.projectName === selectedProject)
+      : enrichedConversations;
+  }, [enrichedConversations, selectedProject]);
+
+  const sortByPriority = (list: Conversation[]) => [...list].sort((a, b) => {
+    const scoreOf = (c: Conversation) => {
+      if (c.attentionState === 'needs_attention') return 4;
+      if (c.streamingId || c.attentionState === 'working') return 3;
+      if (c.status === 'ongoing') return 2;
+      return 1;
+    };
+    const diff = scoreOf(b) - scoreOf(a);
+    if (diff !== 0) return diff;
+    return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+  });
+
+  const displayedConvs = useMemo(() =>
+    sortByPriority(projectFiltered.filter(c => !c.manualFinished)),
+    [projectFiltered]);
+
+  const finishedConvs = useMemo(() =>
+    projectFiltered.filter(c => c.manualFinished)
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()),
+    [projectFiltered]);
+
+  // Fetch snippets (last lines of conversation) when previews are expanded
+  useEffect(() => {
+    if (!showPreviews) return;
+    if (displayedConvs.length === 0) return;
+
+    const toFetch = displayedConvs.slice(0, 30);
+    let cancelled = false;
+
+    Promise.allSettled(
+      toFetch.map(conv =>
+        fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}?tail=3`)
+          .then(r => r.json())
+          .then((data: ConversationDetail) => {
+            const msgs = data.messages || [];
+            const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant');
+            if (!lastAssistant) return { sessionId: conv.sessionId, snippet: '' };
+            const text = extractText(lastAssistant.content);
+            // Take meaningful lines, skip empty ones, limit to ~400 chars
+            const lines = text.split('\n').filter(l => l.trim());
+            const preview = lines.slice(-8).join('\n');
+            return { sessionId: conv.sessionId, snippet: preview.length > 400 ? preview.slice(-400) : preview };
+          })
+          .catch(() => ({ sessionId: conv.sessionId, snippet: '' }))
+      )
+    ).then(results => {
+      if (cancelled) return;
+      const next = new Map<string, string>();
+      for (const r of results) {
+        if (r.status === 'fulfilled' && r.value.snippet) {
+          next.set(r.value.sessionId, r.value.snippet);
+        }
+      }
+      setSnippets(next);
     });
-  }, [visibleConversations, selectedProject]);
+
+    return () => { cancelled = true; };
+  }, [showPreviews, displayedConvs]);
 
   // Actions
   const handleSend = useCallback((conv: Conversation, message: string) => {
@@ -599,12 +804,143 @@ export default function MissionControl({ projectId }: MissionControlProps) {
     }).then(() => { setShowNewDialog(false); setTimeout(fetchConversations, 2000); }).catch(() => {});
   }, [fetchConversations]);
 
+  const convKey = (conv: Conversation) => `${conv.accountId}-${conv.sessionId}`;
+
+  const toggleCheck = useCallback((conv: Conversation, checked: boolean) => {
+    setCheckedConvs(prev => {
+      const next = new Set(prev);
+      const key = `${conv.accountId}-${conv.sessionId}`;
+      if (checked) next.add(key); else next.delete(key);
+      return next;
+    });
+  }, []);
+
+  const handleBulkContinue = useCallback(() => {
+    const targets = displayedConvs.filter(c => checkedConvs.has(convKey(c)));
+    if (targets.length === 0) return;
+    setBulkStatus(`Sende continue an ${targets.length}...`);
+    const promises = targets.map(conv =>
+      fetch(`${API}/mission/send`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountId: conv.accountId, sessionId: conv.sessionId, message: 'continue', workDir: conv.projectPath }),
+      }).catch(() => {})
+    );
+    Promise.all(promises).then(() => {
+      setBulkStatus(`${targets.length} gesendet`);
+      setCheckedConvs(new Set());
+      setTimeout(() => { setBulkStatus(null); fetchConversations(); }, 2000);
+    });
+  }, [displayedConvs, checkedConvs, fetchConversations]);
+
+  const handleBulkAccountSwitch = useCallback((newAccountId: string) => {
+    const targets = displayedConvs.filter(c => checkedConvs.has(convKey(c)));
+    if (targets.length === 0) return;
+    const label = ACCOUNTS.find(a => a.id === newAccountId)?.label || newAccountId;
+    setBulkStatus(`Wechsle ${targets.length} zu ${label}...`);
+    const promises = targets.map(conv =>
+      fetch(`${API}/mission/conversation/${conv.sessionId}/assign`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountId: newAccountId }),
+      }).catch(() => {})
+    );
+    Promise.all(promises).then(() => {
+      setBulkStatus(`${targets.length} → ${label}`);
+      setCheckedConvs(new Set());
+      setTimeout(() => { setBulkStatus(null); fetchConversations(); }, 2000);
+    });
+  }, [displayedConvs, checkedConvs, fetchConversations]);
+
+  const handleSelectAll = useCallback(() => {
+    const allKeys = new Set(displayedConvs.map(convKey));
+    const allChecked = displayedConvs.every(c => checkedConvs.has(convKey(c)));
+    setCheckedConvs(allChecked ? new Set() : allKeys);
+  }, [displayedConvs, checkedConvs]);
+
+  // Activate: open selected conversations as panels in their project layouts
+  const handleActivateSelected = useCallback(() => {
+    const targets = displayedConvs.filter(c => checkedConvs.has(convKey(c)));
+    if (targets.length === 0) return;
+    setBulkStatus(`Aktiviere ${targets.length}...`);
+    fetch(`${API}/mission/activate`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversations: targets.map(c => ({ sessionId: c.sessionId, accountId: c.accountId, projectName: c.projectName })) }),
+    }).then(r => r.json()).then(() => {
+      setBulkStatus(`${targets.length} aktiviert`);
+      setCheckedConvs(new Set());
+      setTimeout(() => setBulkStatus(null), 3000);
+    }).catch(() => {
+      setBulkStatus('Aktivierung fehlgeschlagen');
+      setTimeout(() => setBulkStatus(null), 3000);
+    });
+  }, [displayedConvs, checkedConvs]);
+
+  // Single conversation activate (from "Open" button on orphan cards)
+  const handleActivateSingle = useCallback((conv: Conversation) => {
+    setBulkStatus('Aktiviere...');
+    fetch(`${API}/mission/activate`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversations: [{ sessionId: conv.sessionId, accountId: conv.accountId, projectName: conv.projectName }] }),
+    }).then(() => {
+      setBulkStatus('Aktiviert');
+      setTimeout(() => setBulkStatus(null), 2000);
+    }).catch(() => {
+      setBulkStatus('Fehlgeschlagen');
+      setTimeout(() => setBulkStatus(null), 2000);
+    });
+  }, []);
+
+  const handleFinish = useCallback((conv: Conversation) => {
+    fetch(`${API}/mission/conversation/${conv.sessionId}/finish`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ finished: true }),
+    }).then(() => { setTimeout(fetchConversations, 500); }).catch(() => {});
+  }, [fetchConversations]);
+
+  const handleDelete = useCallback((conv: Conversation) => {
+    if (!confirm(`"${conv.customName || conv.summary?.slice(0, 40) || conv.sessionId}" wirklich loeschen? Die .jsonl Datei wird unwiderruflich geloescht.`)) return;
+    fetch(`${API}/mission/conversation/${conv.sessionId}`, { method: 'DELETE' })
+      .then(r => r.json())
+      .then(data => {
+        if (data.ok) {
+          // Deselect if this was the selected conversation
+          if (selectedConv?.sessionId === conv.sessionId) setSelectedConv(null);
+          setTimeout(fetchConversations, 500);
+        }
+      })
+      .catch(() => {});
+  }, [fetchConversations, selectedConv]);
+
+  const handleBulkFinish = useCallback(() => {
+    const targets = displayedConvs.filter(c => checkedConvs.has(convKey(c)));
+    if (targets.length === 0) return;
+    setBulkStatus(`Markiere ${targets.length} als fertig...`);
+    Promise.all(targets.map(c =>
+      fetch(`${API}/mission/conversation/${c.sessionId}/finish`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ finished: true }),
+      }).catch(() => {})
+    )).then(() => {
+      setBulkStatus(`${targets.length} fertig`);
+      setCheckedConvs(new Set());
+      setTimeout(() => { setBulkStatus(null); fetchConversations(); }, 2000);
+    });
+  }, [displayedConvs, checkedConvs, fetchConversations]);
+
   const handleAutoTitles = useCallback(() => {
     setAutoTitleStatus('...');
     fetch(`${API}/mission/auto-titles`, { method: 'POST' }).then(r => r.json())
       .then(data => { setAutoTitleStatus(`${data.updated} Titel`); setTimeout(() => { setAutoTitleStatus(null); fetchConversations(); }, 2000); })
       .catch(() => setAutoTitleStatus('Fehler'));
   }, [fetchConversations]);
+
+  const handleRebuild = useCallback(() => {
+    if (!confirm('Frontend neu bauen und Server neustarten? (App ist kurz offline)')) return;
+    setBulkStatus('Rebuilding...');
+    fetch(`${API}/rebuild`, { method: 'POST' }).then(r => r.json())
+      .then(() => {
+        setBulkStatus('Build laeuft, reload in 8s...');
+        setTimeout(() => window.location.reload(), 8000);
+      })
+      .catch(() => setBulkStatus('Rebuild fehlgeschlagen'));
+  }, []);
 
   const toggleSync = useCallback(() => {
     setSyncEnabled(prev => {
@@ -626,11 +962,14 @@ export default function MissionControl({ projectId }: MissionControlProps) {
       }}>
         <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--tn-text)' }}>Mission Control</span>
         <span style={{ fontSize: 10, color: 'var(--tn-text-muted)' }}>
-          {stats.streaming > 0 && <span style={{ color: '#3B82F6', fontWeight: 600 }}>{stats.streaming} streaming </span>}
-          {stats.ongoing > 0 && <span style={{ color: '#F59E0B', fontWeight: 600 }}>{stats.ongoing} aktiv </span>}
+          {stats.orphans > 0 && <span style={{ color: '#EF4444', fontWeight: 700 }}>{stats.orphans} orphan{stats.orphans > 1 ? 's' : ''} </span>}
+          {stats.attention > 0 && <span style={{ color: '#F59E0B', fontWeight: 700 }}>{stats.attention} braucht dich </span>}
+          {stats.working > 0 && <span style={{ color: '#3B82F6', fontWeight: 600 }}>{stats.working} arbeitet </span>}
+          {stats.visible > 0 && <span style={{ color: '#10B981' }}>{stats.visible} sichtbar </span>}
           <span>{stats.total} total</span>
         </span>
         <div style={{ flex: 1 }} />
+        {bulkStatus && <span style={{ fontSize: 9, color: '#F59E0B', fontWeight: 600 }}>{bulkStatus}</span>}
         {autoTitleStatus && <span style={{ fontSize: 9, color: '#10B981', fontWeight: 600 }}>{autoTitleStatus}</span>}
 
         <button onClick={toggleSync} style={{
@@ -642,10 +981,25 @@ export default function MissionControl({ projectId }: MissionControlProps) {
           {syncEnabled ? 'Sync ON' : 'Sync OFF'}
         </button>
 
+        <button onClick={() => {
+          setShowPreviews(prev => { const next = !prev; try { localStorage.setItem('mc-show-previews', next ? '1' : '0'); } catch {} return next; });
+        }} style={{
+          padding: '2px 8px', borderRadius: 3, fontSize: 9, cursor: 'pointer',
+          background: showPreviews ? 'rgba(122,162,247,0.15)' : 'var(--tn-bg)',
+          border: `1px solid ${showPreviews ? 'var(--tn-blue)' : 'var(--tn-border)'}`,
+          color: showPreviews ? 'var(--tn-blue)' : 'var(--tn-text-muted)', fontWeight: 600,
+        }}>{showPreviews ? 'Kompakt' : 'Expand'}</button>
+
         <button onClick={handleAutoTitles} style={{
           background: 'none', border: '1px solid var(--tn-border)', color: 'var(--tn-text-muted)',
           cursor: 'pointer', fontSize: 9, padding: '2px 8px', borderRadius: 3,
         }}>Titel</button>
+
+        <button onClick={handleRebuild} title="Frontend neu bauen & Server neustarten" style={{
+          padding: '2px 8px', borderRadius: 3, fontSize: 9, cursor: 'pointer',
+          background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)',
+          color: '#EF4444', fontWeight: 600,
+        }}>Rebuild</button>
 
         <button onClick={fetchConversations} style={{
           background: 'none', border: 'none', color: 'var(--tn-text-muted)',
@@ -664,6 +1018,59 @@ export default function MissionControl({ projectId }: MissionControlProps) {
           color: showCommander ? '#fff' : 'var(--tn-text)', fontWeight: 600,
         }}>&#129504;</button>
       </div>
+
+      {/* ===== BULK ACTION BAR ===== */}
+      {checkedConvs.size > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10,
+          padding: '5px 12px', background: 'rgba(16,185,129,0.1)',
+          borderBottom: '1px solid rgba(16,185,129,0.3)', flexShrink: 0,
+        }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: '#10B981' }}>
+            {checkedConvs.size} ausgewaehlt
+          </span>
+          {bulkStatus && <span style={{ fontSize: 10, color: '#10B981' }}>{bulkStatus}</span>}
+          <div style={{ flex: 1 }} />
+          <button onClick={handleSelectAll} style={{
+            padding: '3px 10px', borderRadius: 3, fontSize: 10, cursor: 'pointer',
+            background: 'none', border: '1px solid var(--tn-border)', color: 'var(--tn-text-muted)', fontWeight: 600,
+          }}>
+            {displayedConvs.every(c => checkedConvs.has(convKey(c))) ? 'Keine' : 'Alle'}
+          </button>
+          <button onClick={() => setCheckedConvs(new Set())} style={{
+            padding: '3px 10px', borderRadius: 3, fontSize: 10, cursor: 'pointer',
+            background: 'none', border: '1px solid var(--tn-border)', color: 'var(--tn-text-muted)', fontWeight: 600,
+          }}>Abwaehlen</button>
+          <button onClick={handleBulkContinue} style={{
+            padding: '4px 14px', borderRadius: 4, fontSize: 11, cursor: 'pointer',
+            background: '#10B981', border: 'none', color: '#fff', fontWeight: 700,
+          }}>
+            Continue ({checkedConvs.size})
+          </button>
+          <button onClick={handleActivateSelected} style={{
+            padding: '4px 14px', borderRadius: 4, fontSize: 11, cursor: 'pointer',
+            background: '#8B5CF6', border: 'none', color: '#fff', fontWeight: 700,
+          }}>
+            Aktivieren ({checkedConvs.size})
+          </button>
+          <button onClick={handleBulkFinish} style={{
+            padding: '4px 14px', borderRadius: 4, fontSize: 11, cursor: 'pointer',
+            background: 'rgba(16,185,129,0.15)', border: '1px solid #10B981', color: '#10B981', fontWeight: 700,
+          }}>
+            &#10003; Fertig ({checkedConvs.size})
+          </button>
+          <span style={{ fontSize: 10, color: 'var(--tn-text-muted)', margin: '0 2px' }}>|</span>
+          <span style={{ fontSize: 10, color: 'var(--tn-text-muted)' }}>Account:</span>
+          {ACCOUNTS.map(a => (
+            <button key={a.id} onClick={() => handleBulkAccountSwitch(a.id)} style={{
+              padding: '3px 10px', borderRadius: 3, fontSize: 10, cursor: 'pointer',
+              background: a.color || '#2563eb', border: 'none', color: '#1a1b26', fontWeight: 600,
+            }}>
+              {a.label.slice(0, 3).toUpperCase()}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* ===== 3-PANEL SPLIT ===== */}
       <div style={{ flex: 1, display: 'flex', minHeight: 0, position: 'relative' }}>
@@ -698,7 +1105,7 @@ export default function MissionControl({ projectId }: MissionControlProps) {
                 onClick={() => setSelectedProject(prev => prev === g.name ? null : g.name)}
                 style={{
                   padding: '5px 10px', cursor: 'pointer',
-                  borderLeft: `3px solid ${selectedProject === g.name ? '#3B82F6' : g.streamingCount > 0 ? '#3B82F6' : g.activeCount > 0 ? '#F59E0B' : 'transparent'}`,
+                  borderLeft: `3px solid ${selectedProject === g.name ? '#3B82F6' : g.attentionCount > 0 ? '#F59E0B' : g.workingCount > 0 ? '#3B82F6' : g.activeCount > 0 ? 'rgba(245,158,11,0.3)' : 'transparent'}`,
                   background: selectedProject === g.name ? 'rgba(59,130,246,0.08)' : 'transparent',
                 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -712,8 +1119,8 @@ export default function MissionControl({ projectId }: MissionControlProps) {
                 </div>
                 <div style={{ display: 'flex', gap: 6, fontSize: 9, color: 'var(--tn-text-subtle)', marginTop: 1 }}>
                   <span>{g.conversations.length}</span>
-                  {g.streamingCount > 0 && <span style={{ color: '#3B82F6', fontWeight: 600 }}>{g.streamingCount} stream</span>}
-                  {g.activeCount > 0 && g.streamingCount === 0 && <span style={{ color: '#F59E0B' }}>{g.activeCount} aktiv</span>}
+                  {g.attentionCount > 0 && <span style={{ color: '#F59E0B', fontWeight: 700 }}>{g.attentionCount} wartet</span>}
+                  {g.workingCount > 0 && <span style={{ color: '#3B82F6', fontWeight: 600 }}>{g.workingCount} aktiv</span>}
                 </div>
               </div>
             ))}
@@ -760,18 +1167,104 @@ export default function MissionControl({ projectId }: MissionControlProps) {
             </div>
           ) : loading ? (
             <div style={{ padding: 30, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>Lade Sessions...</div>
-          ) : displayedConvs.length === 0 ? (
+          ) : displayedConvs.length === 0 && finishedConvs.length === 0 ? (
             <div style={{ padding: 30, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>
               {selectedProject ? 'Keine Sessions in diesem Projekt' : 'Keine Sessions gefunden'}
             </div>
+          ) : selectedProject ? (
+            /* Single project view - flat list */
+            <>
+              {displayedConvs.map(conv => (
+                <SessionCard key={`${conv.accountId}-${conv.sessionId}`}
+                  conv={conv}
+                  isSelected={selectedConvId === `${conv.accountId}-${conv.sessionId}`}
+                  onClick={() => setSelectedConv(conv)}
+                  checked={checkedConvs.has(convKey(conv))}
+                  onCheck={(checked) => toggleCheck(conv, checked)}
+                  onActivate={handleActivateSingle}
+                  onFinish={handleFinish}
+                  panelLabel={panelMap.get(conv.sessionId)}
+                  expanded={showPreviews}
+                  snippet={snippets.get(conv.sessionId)}
+                />
+              ))}
+              {finishedConvs.length > 0 && (
+                <>
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 8, padding: '8px 4px 4px',
+                    borderTop: '1px solid var(--tn-border)', marginTop: 4,
+                  }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--tn-text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                      Abgeschlossen ({finishedConvs.length})
+                    </span>
+                  </div>
+                  {finishedConvs.map(conv => (
+                    <SessionCard key={`${conv.accountId}-${conv.sessionId}`}
+                      conv={conv}
+                      isSelected={selectedConvId === `${conv.accountId}-${conv.sessionId}`}
+                      onClick={() => setSelectedConv(conv)}
+                      onDelete={handleDelete}
+                      panelLabel={panelMap.get(conv.sessionId)}
+                      expanded={showPreviews}
+                      snippet={snippets.get(conv.sessionId)}
+                    />
+                  ))}
+                </>
+              )}
+            </>
           ) : (
-            displayedConvs.map(conv => (
-              <SessionCard key={`${conv.accountId}-${conv.sessionId}`}
-                conv={conv}
-                isSelected={selectedConvId === `${conv.accountId}-${conv.sessionId}`}
-                onClick={() => setSelectedConv(conv)}
-              />
-            ))
+            /* ALL view - grouped by project with headers */
+            <>
+              {groups.map(group => {
+                const groupActive = group.conversations.filter(c => !c.manualFinished);
+                const groupFinished = group.conversations.filter(c => c.manualFinished);
+                const sortedActive = sortByPriority(groupActive);
+                return (
+                  <div key={group.name} style={{ marginBottom: 4 }}>
+                    {/* Project group header */}
+                    <div
+                      onClick={() => setSelectedProject(group.name)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 8,
+                        padding: '6px 8px', marginBottom: 4, cursor: 'pointer',
+                        borderLeft: `3px solid ${group.attentionCount > 0 ? '#F59E0B' : group.workingCount > 0 ? '#3B82F6' : group.activeCount > 0 ? '#10B981' : 'var(--tn-border)'}`,
+                        background: 'rgba(255,255,255,0.03)', borderRadius: '0 4px 4px 0',
+                      }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--tn-text)' }}>{group.name}</span>
+                      <AccountDots accounts={group.accounts} />
+                      <span style={{ fontSize: 10, color: 'var(--tn-text-muted)' }}>{groupActive.length} Sessions</span>
+                      {group.attentionCount > 0 && <span style={{ fontSize: 9, color: '#F59E0B', fontWeight: 700 }}>{group.attentionCount} wartet</span>}
+                      {group.workingCount > 0 && <span style={{ fontSize: 9, color: '#3B82F6', fontWeight: 600 }}>{group.workingCount} aktiv</span>}
+                    </div>
+                    {/* Active sessions */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 6 }}>
+                      {sortedActive.map(conv => (
+                        <SessionCard key={`${conv.accountId}-${conv.sessionId}`}
+                          conv={conv}
+                          isSelected={selectedConvId === `${conv.accountId}-${conv.sessionId}`}
+                          onClick={() => setSelectedConv(conv)}
+                          checked={checkedConvs.has(convKey(conv))}
+                          onCheck={(checked) => toggleCheck(conv, checked)}
+                          onActivate={handleActivateSingle}
+                          onFinish={handleFinish}
+                          panelLabel={panelMap.get(conv.sessionId)}
+                          expanded={showPreviews}
+                          snippet={snippets.get(conv.sessionId)}
+                        />
+                      ))}
+                    </div>
+                    {/* Finished sessions (collapsed) */}
+                    {groupFinished.length > 0 && (
+                      <div style={{ paddingLeft: 6, marginTop: 2 }}>
+                        <div style={{ fontSize: 9, color: 'var(--tn-text-subtle)', padding: '2px 4px' }}>
+                          +{groupFinished.length} abgeschlossen
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </>
           )}
         </div>
 

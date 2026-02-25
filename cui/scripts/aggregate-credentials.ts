@@ -1,316 +1,325 @@
 #!/usr/bin/env tsx
 /**
- * Credentials Aggregator
+ * aggregate-credentials.ts
+ * Scans CLAUDE.md files + seed.sql + scenario JSONs for test credentials.
+ * Outputs data/credentials.json for generate-shared-notes.ts.
  *
- * Aggregiert alle User-Credentials aus:
- * 1. Supabase Seed-Dateien (seed.sql, seed_real.sql)
- * 2. Test Scenarios (unified-tester/features/scenarios)
- *
- * Output: data/credentials.json
+ * Works on local Mac (primary) with fallback for Hetzner paths.
  */
-
-import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { resolve, join, dirname } from 'path';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { glob } from 'glob';
+import { homedir } from 'os';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const CUI_ROOT = resolve(__dirname, '..');
-const PLATFORM_ROOT = resolve(CUI_ROOT, '../../platform');
-const SCENARIOS_ROOT = resolve(CUI_ROOT, '../../tests/unified-tester/features/scenarios');
-const OUTPUT_FILE = join(CUI_ROOT, 'data/credentials.json');
+const OUTPUT = join(__dirname, '../data/credentials.json');
 
+const HOME = homedir();
+const GH = join(HOME, 'Documents/GitHub');
+
+// Try local Mac paths first, then Hetzner
+const PLATFORM_ROOT = existsSync(join(GH, 'werkingflow/platform'))
+  ? join(GH, 'werkingflow/platform')
+  : '/root/projekte/werkingflow/platform';
+const TESTS_ROOT = existsSync(join(GH, 'werkingflow/tests'))
+  ? join(GH, 'werkingflow/tests')
+  : '/root/projekte/werkingflow/tests';
+
+// --- Types ---
 interface User {
-  name: string;
+  name?: string;
   email: string;
   password?: string;
   role?: string;
   tenant?: string;
-  environments: {
-    local?: string;
-    staged?: string;
-    production?: string;
-  };
-  scenarios: string[];
-  source: 'seed' | 'scenario' | 'both';
+  userId?: string;
+  environments?: { local?: string; staged?: string; production?: string };
+  scenarios?: string[];
+  notes?: string;
 }
 
-interface AppCredentials {
-  app: string;
-  displayName: string;
+interface AppData {
+  name: string;
+  productionUrl?: string;
   users: User[];
+  extras?: string[];
 }
 
-interface AggregatedData {
-  generatedAt: string;
-  apps: AppCredentials[];
+type CredentialsData = Record<string, AppData>;
+
+const credentials: CredentialsData = {};
+
+function addUser(appId: string, appName: string, user: User, prodUrl?: string) {
+  if (!credentials[appId]) {
+    credentials[appId] = { name: appName, productionUrl: prodUrl, users: [], extras: [] };
+  }
+  if (prodUrl && !credentials[appId].productionUrl) {
+    credentials[appId].productionUrl = prodUrl;
+  }
+  const existing = credentials[appId].users.find(u => u.email === user.email);
+  if (existing) {
+    if (user.password && !existing.password) existing.password = user.password;
+    if (user.role && !existing.role) existing.role = user.role;
+    if (user.name && !existing.name) existing.name = user.name;
+    if (user.userId && !existing.userId) existing.userId = user.userId;
+    if (user.tenant && !existing.tenant) existing.tenant = user.tenant;
+    if (user.environments) {
+      existing.environments = { ...existing.environments, ...user.environments };
+    }
+    if (user.scenarios) {
+      existing.scenarios = [...new Set([...(existing.scenarios || []), ...user.scenarios])];
+    }
+  } else {
+    credentials[appId].users.push(user);
+  }
 }
 
-// Known app display names
-const APP_NAMES: Record<string, string> = {
-  'platform': 'Werkingflow Platform',
-  'engelmann': 'Engelmann AI Hub',
-  'werking-report': 'Werking Report Studio',
-  'werking-energy': 'Werking Energy',
-  'werkingsafety': 'TECC Safety Engineering',
-  'bacher': 'Bacher-ZT Hub',
-  'gutachten': 'Gutachten App',
-  'teufel': 'Teufel Safety AI',
-  'eco-diagnostics': 'ECO Diagnostics',
-};
+// ═══════════════════════════════════════
+// 1. GLOBAL POWER TEST USER (always)
+// ═══════════════════════════════════════
+console.log('1. Global Test User...');
+addUser('_global', 'Global (alle Supabase Apps)', {
+  name: 'Power Test User',
+  email: 'test@werkingflow.com',
+  password: 'TestUser2024!',
+  role: 'super_admin',
+  userId: 'd44b2bb4-2dd7-4910-b904-dd1ba8869133',
+  notes: 'Funktioniert in allen Werkingflow-Apps',
+});
+credentials['_global'].extras = [
+  'Supabase: https://ilnoeveehrnhuljvzyab.supabase.co',
+  'Mollie Test-Karte: 4111 1111 1111 1111 (beliebiges Datum)',
+];
 
-/**
- * Parse Supabase seed.sql for credentials
- */
-function parseSeedSQL(): Map<string, User> {
-  const users = new Map<string, User>();
+// ═══════════════════════════════════════
+// 2. SCAN CLAUDE.MD FILES
+// ═══════════════════════════════════════
+console.log('2. Scanning CLAUDE.md files...');
 
-  const seedPath = join(PLATFORM_ROOT, 'supabase/seed.sql');
-  if (!existsSync(seedPath)) {
-    console.warn('⚠️  seed.sql not found');
-    return users;
+interface SourceDef {
+  appId: string;
+  name: string;
+  claudeMd: string;
+  prodUrl: string;
+}
+
+const sources: SourceDef[] = [
+  { appId: 'werkingflow-platform', name: 'Werkingflow Platform', claudeMd: join(GH, 'werkingflow/platform/CLAUDE.md'), prodUrl: 'https://werkingflow.com' },
+  { appId: 'werking-report', name: 'WerkING Report', claudeMd: join(GH, 'werking-report/CLAUDE.md'), prodUrl: 'https://werking-report.vercel.app' },
+  { appId: 'engelmann-ai-hub', name: 'Engelmann AI Hub', claudeMd: join(GH, 'engelmann-ai-hub/CLAUDE.md'), prodUrl: 'https://engelmann-ai-hub.vercel.app' },
+  { appId: 'werking-safety', name: 'WerkING Safety', claudeMd: join(GH, 'werking-safety/CLAUDE.md'), prodUrl: 'https://werking-safety.vercel.app' },
+  { appId: 'werking-energy', name: 'WerkING Energy', claudeMd: join(GH, 'apps/werking-energy/CLAUDE.md'), prodUrl: 'https://werking-energy.vercel.app' },
+  { appId: 'eco-diagnostics', name: 'ECO Diagnostics', claudeMd: join(GH, 'apps/eco-diagnostics/CLAUDE.md'), prodUrl: 'https://diagnostics.ecoenergygroup.com' },
+];
+
+function extractCredsFromClaude(text: string): User[] {
+  const users: User[] = [];
+  const seen = new Set<string>();
+
+  // Pattern 1: Table rows with valid email address | password
+  // Email must be a real email: word@word.word (max 60 chars to avoid matching CLAUDE.md content)
+  const tableRow = /\|\s*(?:\*\*)?([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(?:\*\*)?\s*\|\s*(?:\*\*)?`?([^|`\n]{2,40}?)`?(?:\*\*)?\s*\|/g;
+  let m;
+  while ((m = tableRow.exec(text)) !== null) {
+    const email = m[1].trim();
+    const col2 = m[2].trim();
+    if (col2.includes('---') || col2.toLowerCase() === 'password' || col2.toLowerCase() === 'passwort') continue;
+    if (seen.has(email)) continue;
+    seen.add(email);
+
+    // Find role and userId near this email
+    const idx = text.indexOf(email);
+    const vicinity = text.slice(Math.max(0, idx - 300), idx + 600);
+    const uuidMatch = vicinity.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+    const lcVic = vicinity.toLowerCase();
+    const role = lcVic.includes('super_admin') ? 'super_admin'
+      : lcVic.includes('owner') ? 'owner'
+      : lcVic.includes('admin') ? 'admin' : undefined;
+
+    users.push({ email, password: col2, role, userId: uuidMatch?.[0] });
   }
 
-  const content = readFileSync(seedPath, 'utf8');
-
-  // Extract auth.users (email + password from crypt())
-  const userRegex = /'([^']+@[^']+)',\s*crypt\('([^']+)'/g;
-  let match;
-  while ((match = userRegex.exec(content)) !== null) {
-    const [, email, password] = match;
-    users.set(email, {
-      name: email.split('@')[0],
-      email,
-      password,
-      environments: {},
-      scenarios: [],
-      source: 'seed',
-    });
-  }
-
-  // Extract tenant memberships (role + tenant)
-  const tenantRegex = /INSERT INTO tenant_memberships[\s\S]*?VALUES\s*\('([^']+)',\s*'([^']+)',\s*'([^']+)'/g;
-  while ((match = tenantRegex.exec(content)) !== null) {
-    const [, tenantId, userId, role] = match;
-
-    // Find user by ID (match with auth.users INSERT)
-    const userIdRegex = new RegExp(`'${userId}'[\\s\\S]*?'([^']+@[^']+)'`, 'g');
-    const userMatch = userIdRegex.exec(content);
-    if (userMatch) {
-      const email = userMatch[1];
-      const user = users.get(email);
-      if (user) {
-        user.role = role;
-        user.tenant = tenantId;
-      }
+  // Pattern 2: Feld|Wert vertical tables (like global CLAUDE.md)
+  const fieldBlock = text.match(/(?:Test.?User|Testbenutzer)[^\n]*\n([\s\S]*?)(?=\n##|\n---|\n\n\n)/i);
+  if (fieldBlock) {
+    const fields: Record<string, string> = {};
+    const fRegex = /\|\s*\*?\*?(\w[\w\s/-]*?)\*?\*?\s*\|\s*`?([^|`\n]+)`?\s*\|/g;
+    let fm;
+    while ((fm = fRegex.exec(fieldBlock[1])) !== null) {
+      fields[fm[1].trim().toLowerCase()] = fm[2].trim();
+    }
+    if (fields.email && !seen.has(fields.email)) {
+      seen.add(fields.email);
+      users.push({
+        email: fields.email,
+        password: fields.password || fields.passwort,
+        role: fields.role || fields.rolle,
+        userId: fields['user id'],
+      });
     }
   }
 
-  console.log(`✓ Parsed seed.sql: ${users.size} users`);
+  // Pattern 3: ENV vars (ADMIN_EMAIL=xxx)
+  const envEmail = text.match(/(?:ADMIN_EMAIL|TEST_EMAIL)\s*=\s*(\S+@\S+)/);
+  const envPass = text.match(/(?:ADMIN_PASSWORD|TEST_PASSWORD)\s*=\s*(\S+)/);
+  if (envEmail && envPass && envPass[1] !== 'xxx' && !seen.has(envEmail[1])) {
+    users.push({ email: envEmail[1], password: envPass[1], role: 'admin', notes: '.env config' });
+  }
+
   return users;
 }
 
-/**
- * Parse seed_real.sql (production seed, auth.users via API)
- */
-function parseSeedRealSQL(existing: Map<string, User>): Map<string, User> {
-  const seedRealPath = join(PLATFORM_ROOT, 'supabase/seed_real.sql');
-  if (!existsSync(seedRealPath)) {
-    console.warn('⚠️  seed_real.sql not found');
-    return existing;
+for (const src of sources) {
+  if (!existsSync(src.claudeMd)) {
+    console.log(`  [SKIP] ${src.appId}: not found`);
+    // Still register the app with global user reference
+    addUser(src.appId, src.name, {
+      email: 'test@werkingflow.com',
+      password: 'TestUser2024!',
+      role: 'super_admin',
+      notes: 'Global Test User',
+    }, src.prodUrl);
+    continue;
   }
 
-  const content = readFileSync(seedRealPath, 'utf8');
+  const text = readFileSync(src.claudeMd, 'utf8');
+  const found = extractCredsFromClaude(text);
+  console.log(`  [OK] ${src.appId}: ${found.length} users found`);
 
-  // seed_real.sql has comment: "Auth user (test@werkingflow.com) created via API"
-  // Extract from public.users INSERT
-  const userRegex = /INSERT INTO users[\s\S]*?VALUES\s*\([^)]*?'([^']+@[^']+)',\s*'([^']+)'/g;
-  let match;
-  while ((match = userRegex.exec(content)) !== null) {
-    const [, email, name] = match;
-
-    if (!existing.has(email)) {
-      // Hardcoded password from seed.sql (production uses API, but dev uses same)
-      const password = email === 'test@werkingflow.com' ? 'TestUser2024!' : undefined;
-
-      existing.set(email, {
-        name,
-        email,
-        password,
-        environments: {},
-        scenarios: [],
-        source: 'seed',
-      });
-    }
+  if (found.length > 0) {
+    for (const u of found) addUser(src.appId, src.name, u, src.prodUrl);
+  } else {
+    addUser(src.appId, src.name, {
+      email: 'test@werkingflow.com',
+      password: 'TestUser2024!',
+      role: 'super_admin',
+      notes: 'Global Test User (kein app-spez. User in CLAUDE.md)',
+    }, src.prodUrl);
   }
-
-  console.log(`✓ Parsed seed_real.sql: ${existing.size} total users`);
-  return existing;
 }
 
-/**
- * Parse test scenarios for credentials
- */
-async function parseScenarios(existingUsers: Map<string, User>): Promise<Map<string, AppCredentials>> {
-  const appData = new Map<string, AppCredentials>();
+// ═══════════════════════════════════════
+// 3. SCAN SEED.SQL (if available)
+// ═══════════════════════════════════════
+const seedPath = join(PLATFORM_ROOT, 'supabase/seed.sql');
+if (existsSync(seedPath)) {
+  console.log('3. Parsing seed.sql...');
+  const sql = readFileSync(seedPath, 'utf8');
+  const userPattern = /INSERT INTO auth\.users[\s\S]*?'([^']+@[^']+)'[\s\S]*?crypt\('([^']+)'/g;
+  let sm;
+  let seedCount = 0;
+  while ((sm = userPattern.exec(sql)) !== null) {
+    addUser('werkingflow-platform', 'Werkingflow Platform', {
+      email: sm[1],
+      password: sm[2],
+      notes: 'from seed.sql',
+    }, 'https://werkingflow.com');
+    seedCount++;
+  }
+  console.log(`  [OK] ${seedCount} users from seed.sql`);
+} else {
+  console.log('3. seed.sql not found, skipping');
+}
 
-  const scenarioFiles = await glob('**/*.json', {
-    cwd: SCENARIOS_ROOT,
-    ignore: ['**/_archived/**'],
-    absolute: true,
-  });
+// ═══════════════════════════════════════
+// 4. SCAN SCENARIO FILES (if available)
+// ═══════════════════════════════════════
+const scenariosDir = join(TESTS_ROOT, 'unified-tester/features/scenarios');
+if (existsSync(scenariosDir)) {
+  console.log('4. Scanning scenario files...');
+  // Simple recursive glob without external dependency
+  const { readdirSync, statSync } = await import('fs');
+  function findJsonFiles(dir: string): string[] {
+    const files: string[] = [];
+    try {
+      for (const entry of readdirSync(dir)) {
+        const full = join(dir, entry);
+        try {
+          if (statSync(full).isDirectory()) {
+            if (!entry.startsWith('_') && entry !== 'node_modules') files.push(...findJsonFiles(full));
+          } else if (entry.endsWith('.json')) {
+            files.push(full);
+          }
+        } catch {}
+      }
+    } catch {}
+    return files;
+  }
 
-  console.log(`\n📂 Scanning ${scenarioFiles.length} scenario files...`);
+  const scenarioFiles = findJsonFiles(scenariosDir);
+  let scenarioCount = 0;
+
+  // Normalize scenario app IDs to match CLAUDE.md source IDs
+  const appIdMap: Record<string, string> = {
+    platform: 'werkingflow-platform',
+    engelmann: 'engelmann-ai-hub',
+    'werking-report': 'werking-report',
+    gutachten: 'werking-report',
+    'werking-energy': 'werking-energy',
+    'energy-report': 'werking-energy',
+    'werking-safety': 'werking-safety',
+    teufel: 'werking-safety',
+    'eco-diagnostics': 'eco-diagnostics',
+  };
+  const appNames: Record<string, string> = {
+    'werkingflow-platform': 'Werkingflow Platform', 'engelmann-ai-hub': 'Engelmann AI Hub',
+    'werking-report': 'WerkING Report', 'werking-energy': 'WerkING Energy',
+    'werking-safety': 'WerkING Safety', 'eco-diagnostics': 'ECO Diagnostics',
+  };
 
   for (const file of scenarioFiles) {
     try {
-      const content = readFileSync(file, 'utf8');
-      const scenario = JSON.parse(content);
+      const scenario = JSON.parse(readFileSync(file, 'utf8'));
+      const rawApp = scenario.app || scenario.system || 'unknown';
+      const app = appIdMap[rawApp] || rawApp;
+      const name = appNames[app] || rawApp;
+      const scenarioName = file.split('/scenarios/')[1]?.replace('.json', '') || 'unknown';
 
-      // Extract app/system
-      const app = scenario.app || scenario.system || 'unknown';
+      const isEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 
-      // Extract email from persona or credentials
-      let email = scenario.persona?.email;
-      let password: string | undefined;
-
-      // If no persona email, try credentials
-      if (!email) {
-        const testUser = scenario.credentials?.test_user;
-        const demoUser = scenario.credentials?.demo_user;
-        if (testUser?.email) {
-          email = testUser.email;
-          password = testUser.password;
-        } else if (demoUser?.email) {
-          email = demoUser.email;
-          password = demoUser.password;
-        }
-      } else {
-        // Has persona email, check for password in credentials
-        const credentials = scenario.credentials?.test_user || scenario.credentials?.demo_user;
-        password = credentials?.password;
+      if (scenario.persona?.email && isEmail(scenario.persona.email)) {
+        addUser(app, name, {
+          name: scenario.persona.name,
+          email: scenario.persona.email,
+          role: scenario.persona.rolle || scenario.persona.typ,
+          environments: { local: scenario.endpoints?.local_url, staged: scenario.endpoints?.base_url },
+          scenarios: [scenarioName],
+        });
+        scenarioCount++;
       }
-
-      if (!email) continue;
-
-      // Extract endpoints
-      const localUrl = scenario.endpoints?.local_url;
-      const stagedUrl = scenario.endpoints?.base_url;
-      const prodUrl = stagedUrl?.includes('vercel.app') || stagedUrl?.includes('railway.app')
-        ? stagedUrl
-        : undefined;
-
-      // Get or create app
-      if (!appData.has(app)) {
-        appData.set(app, {
-          app,
-          displayName: APP_NAMES[app] || app,
-          users: [],
+      if (scenario.credentials?.test_user?.email && isEmail(scenario.credentials.test_user.email)) {
+        addUser(app, name, {
+          email: scenario.credentials.test_user.email,
+          password: scenario.credentials.test_user.password,
+          scenarios: [scenarioName],
         });
       }
-
-      const appCreds = appData.get(app)!;
-
-      // Find or create user
-      let user = appCreds.users.find(u => u.email === email);
-      if (!user) {
-        // Check if exists in seed data
-        const seedUser = existingUsers.get(email);
-
-        user = {
-          name: scenario.persona?.name || seedUser?.name || email.split('@')[0],
-          email,
-          password: password || seedUser?.password,
-          role: seedUser?.role || scenario.persona?.rolle,
-          tenant: seedUser?.tenant,
-          environments: {
-            local: localUrl,
-            staged: prodUrl ? undefined : stagedUrl,
-            production: prodUrl,
-          },
-          scenarios: [],
-          source: seedUser ? 'both' : 'scenario',
-        };
-        appCreds.users.push(user);
-      } else {
-        // Update existing user
-        if (password && !user.password) user.password = password;
-        if (localUrl) user.environments.local = localUrl;
-        if (stagedUrl && !prodUrl) user.environments.staged = stagedUrl;
-        if (prodUrl) user.environments.production = prodUrl;
-      }
-
-      // Add scenario reference
-      const scenarioId = scenario.id || scenario.feature_id || file.split('/').pop()?.replace('.json', '');
-      if (scenarioId && !user.scenarios.includes(scenarioId)) {
-        user.scenarios.push(scenarioId);
-      }
-
-    } catch (err) {
-      console.warn(`⚠️  Failed to parse ${file}:`, (err as Error).message);
-    }
+    } catch {}
   }
-
-  console.log(`✓ Parsed scenarios: ${appData.size} apps`);
-  return appData;
+  console.log(`  [OK] ${scenarioFiles.length} files, ${scenarioCount} entries`);
+} else {
+  console.log('4. Scenarios dir not found, skipping');
 }
 
-/**
- * Main aggregation
- */
-async function main() {
-  console.log('🔐 Aggregating credentials...\n');
-
-  // 1. Parse seed files
-  let seedUsers = parseSeedSQL();
-  seedUsers = parseSeedRealSQL(seedUsers);
-
-  // 2. Parse scenarios
-  const appData = await parseScenarios(seedUsers);
-
-  // 3. Add platform users from seed (if not in scenarios)
-  if (!appData.has('platform')) {
-    appData.set('platform', {
-      app: 'platform',
-      displayName: APP_NAMES.platform,
-      users: [],
-    });
-  }
-
-  const platformApp = appData.get('platform')!;
-  for (const [email, user] of seedUsers.entries()) {
-    if (!platformApp.users.find(u => u.email === email)) {
-      platformApp.users.push({
-        ...user,
-        environments: {
-          local: 'http://localhost:3004',
-          staged: 'http://100.121.161.109:4001',
-          production: 'https://werkingflow-platform.vercel.app',
-        },
-      });
-    }
-  }
-
-  // 4. Sort apps and users
-  const sortedApps = Array.from(appData.values()).sort((a, b) => a.app.localeCompare(b.app));
-  for (const app of sortedApps) {
-    app.users.sort((a, b) => a.email.localeCompare(b.email));
-  }
-
-  // 5. Write output
-  const output: AggregatedData = {
-    generatedAt: new Date().toISOString(),
-    apps: sortedApps,
-  };
-
-  writeFileSync(OUTPUT_FILE, JSON.stringify(output, null, 2));
-  console.log(`\n✅ Credentials aggregated: ${OUTPUT_FILE}`);
-  console.log(`   Apps: ${sortedApps.length}`);
-  console.log(`   Total users: ${sortedApps.reduce((sum, app) => sum + app.users.length, 0)}`);
-}
-
-main().catch(err => {
-  console.error('❌ Aggregation failed:', err);
-  process.exit(1);
+// ═══════════════════════════════════════
+// 5. WRITE OUTPUT
+// ═══════════════════════════════════════
+// Sort: _global first, then alphabetical
+const sorted: CredentialsData = {};
+const keys = Object.keys(credentials).sort((a, b) => {
+  if (a.startsWith('_')) return -1;
+  if (b.startsWith('_')) return 1;
+  return a.localeCompare(b);
 });
+for (const k of keys) {
+  sorted[k] = credentials[k];
+  sorted[k].users.sort((a, b) => a.email.localeCompare(b.email));
+}
+
+mkdirSync(dirname(OUTPUT), { recursive: true });
+writeFileSync(OUTPUT, JSON.stringify(sorted, null, 2));
+
+const totalUsers = Object.values(sorted).reduce((s, a) => s + a.users.length, 0);
+console.log(`\nDone: ${OUTPUT}`);
+console.log(`  Apps: ${keys.length}, Users: ${totalUsers}`);

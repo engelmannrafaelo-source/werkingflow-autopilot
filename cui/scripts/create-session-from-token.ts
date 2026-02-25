@@ -27,15 +27,15 @@ interface SessionConfig {
 const ACCOUNTS: Record<string, { email: string; tokenEnvVar: string }> = {
   rafael: {
     email: 'rafael@werk-ing.com',
-    tokenEnvVar: 'CLAUDE_AUTH_TOKEN_RAFAEL',
+    tokenEnvVar: 'CLAUDE_SESSION_RAFAEL',
   },
   office: {
     email: 'office@werk-ing.com',
-    tokenEnvVar: 'CLAUDE_AUTH_TOKEN_OFFICE',
+    tokenEnvVar: 'CLAUDE_SESSION_OFFICE',
   },
   engelmann: {
     email: 'engelmann@werk-ing.com',
-    tokenEnvVar: 'CLAUDE_AUTH_TOKEN_ENGELMANN',
+    tokenEnvVar: 'CLAUDE_SESSION_ENGELMANN',
   },
 };
 

@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef, memo } from 'react';
 import { type Project } from '../types';
 
 interface ProjectTabsProps {
@@ -15,45 +15,108 @@ interface ProjectTabsProps {
 
 type SyncState = 'idle' | 'syncing' | 'done' | 'error';
 
-export default function ProjectTabs({ projects, activeId, attention, onSelect, onNew, onEdit, onDelete, missionActive, onMissionClick }: ProjectTabsProps) {
-  const [syncState, setSyncState] = useState<SyncState>('idle');
-  const [syncDetail, setSyncDetail] = useState('');
-  const [autoSync, setAutoSync] = useState(true);
+// --- Syncthing Toggle ---
+function SyncthingToggle() {
+  const [paused, setPaused] = useState<boolean | null>(null); // null = loading/unknown
+  const [lastSync, setLastSync] = useState<string | null>(null);
+  const [toggling, setToggling] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval>>(null);
 
-  // Fetch auto-sync status on mount
-  useEffect(() => {
-    fetch('/api/cui-sync/auto').then(r => r.json()).then(d => {
-      setAutoSync(d.enabled);
-    }).catch(() => {});
+  const fetchStatus = useCallback(() => {
+    fetch('/api/syncthing/status')
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data) return;
+        setPaused(data.paused);
+        if (data.lastSyncAt) setLastSync(data.lastSyncAt);
+      })
+      .catch(() => setPaused(null));
   }, []);
 
-  // Listen for auto-sync broadcasts via WebSocket
   useEffect(() => {
-    function handleWs(e: MessageEvent) {
+    fetchStatus();
+    pollRef.current = setInterval(fetchStatus, 30000);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [fetchStatus]);
+
+  const toggle = useCallback(async () => {
+    if (toggling || paused === null) return;
+    setToggling(true);
+    try {
+      const endpoint = paused ? '/api/syncthing/resume' : '/api/syncthing/pause';
+      const res = await fetch(endpoint, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        setPaused(data.paused);
+      }
+    } catch {}
+    setToggling(false);
+  }, [paused, toggling]);
+
+  // Format last sync time as relative
+  const lastSyncLabel = lastSync ? (() => {
+    const diff = Date.now() - new Date(lastSync).getTime();
+    if (diff < 60000) return 'gerade';
+    if (diff < 3600000) return `${Math.floor(diff / 60000)}m`;
+    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h`;
+    return `${Math.floor(diff / 86400000)}d`;
+  })() : null;
+
+  if (paused === null) return null; // Don't render until status known
+
+  const color = paused ? '#EF4444' : '#10B981';
+
+  return (
+    <button
+      onClick={toggle}
+      disabled={toggling}
+      title={paused
+        ? `Syncthing PAUSIERT${lastSyncLabel ? ` — Letzter Sync: vor ${lastSyncLabel}` : ''}\nKlick zum Fortsetzen`
+        : `Syncthing AKTIV${lastSyncLabel ? ` — Letzter Sync: vor ${lastSyncLabel}` : ''}\nKlick zum Pausieren`
+      }
+      style={{
+        background: paused ? 'rgba(239,68,68,0.1)' : 'none',
+        border: `1px solid ${color}`,
+        color,
+        padding: '3px 8px',
+        fontSize: 10,
+        fontWeight: 600,
+        cursor: toggling ? 'wait' : 'pointer',
+        borderRadius: 4,
+        marginRight: 6,
+        whiteSpace: 'nowrap',
+        transition: 'all 0.2s',
+        opacity: toggling ? 0.5 : 1,
+        WebkitAppRegion: 'no-drag',
+      } as React.CSSProperties}
+    >
+      {paused ? 'ST paused' : 'ST'}{lastSyncLabel ? ` (${lastSyncLabel})` : ''}
+    </button>
+  );
+}
+
+export default memo(function ProjectTabs({ projects, activeId, attention, onSelect, onNew, onEdit, onDelete, missionActive, onMissionClick }: ProjectTabsProps) {
+  const [syncState, setSyncState] = useState<SyncState>('idle');
+  const [syncDetail, setSyncDetail] = useState('');
+  const [pendingCount, setPendingCount] = useState(0);
+  const [allLive, setAllLive] = useState(false);
+
+  // Listen for update-available notifications via WebSocket (forwarded by App.tsx)
+  useEffect(() => {
+    function handleMessage(e: MessageEvent) {
       try {
-        const msg = JSON.parse(e.data);
-        if (msg.type === 'cui-sync' && msg.auto) {
-          if (msg.status === 'started') {
-            setSyncState('syncing');
-            setSyncDetail('Auto-rebuild...');
-          } else if (msg.status === 'built') {
-            setSyncState('done');
-            setSyncDetail(msg.detail || 'ok');
-            // Auto-reload after pm2 restart
-            setTimeout(() => window.location.reload(), 3500);
-          } else if (msg.status === 'error') {
-            setSyncState('error');
-            setSyncDetail(msg.detail?.slice(0, 60) || 'Build failed');
-            setTimeout(() => { setSyncState('idle'); setSyncDetail(''); }, 5000);
-          }
+        const msg = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
+        if (msg.type === 'cui-update-available') {
+          setPendingCount(msg.count || 0);
         }
       } catch { /* ignore */ }
     }
-
-    // The global WebSocket is on /ws - we can listen via window events
-    // But since App.tsx owns the WebSocket, we'll use a BroadcastChannel or custom event
-    window.addEventListener('message', handleWs);
-    return () => window.removeEventListener('message', handleWs);
+    window.addEventListener('message', handleMessage);
+    // Also check on mount
+    fetch('/api/cui-sync/pending').then(r => r.json()).then(d => {
+      if (d.count > 0) setPendingCount(d.count);
+    }).catch(() => {});
+    return () => window.removeEventListener('message', handleMessage);
   }, []);
 
   const handleSync = useCallback(async () => {
@@ -66,6 +129,7 @@ export default function ProjectTabs({ projects, activeId, attention, onSelect, o
       if (!resp.ok) throw new Error(data.error || 'Sync failed');
       setSyncState('done');
       setSyncDetail(data.build || 'ok');
+      setPendingCount(0);
       setTimeout(() => window.location.reload(), 3000);
     } catch (err: any) {
       setSyncState('error');
@@ -74,15 +138,23 @@ export default function ProjectTabs({ projects, activeId, attention, onSelect, o
     }
   }, [syncState]);
 
-  const toggleAutoSync = useCallback(async () => {
-    const newState = !autoSync;
-    setAutoSync(newState);
-    await fetch('/api/cui-sync/auto', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled: newState }),
-    }).catch(() => {});
-  }, [autoSync]);
+  const handleRebuild = useCallback(async () => {
+    if (syncState === 'syncing') return;
+    setSyncState('syncing');
+    setSyncDetail('Rebuilding frontend...');
+    try {
+      const resp = await fetch('/api/rebuild-frontend', { method: 'POST' });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || 'Rebuild failed');
+      setSyncState('done');
+      setSyncDetail(data.detail || 'ok');
+      setTimeout(() => window.location.reload(), 2000);
+    } catch (err: any) {
+      setSyncState('error');
+      setSyncDetail(err.message.slice(0, 60));
+      setTimeout(() => { setSyncState('idle'); setSyncDetail(''); }, 5000);
+    }
+  }, [syncState]);
 
   const syncColors: Record<SyncState, string> = {
     idle: 'var(--tn-text-muted)',
@@ -90,6 +162,8 @@ export default function ProjectTabs({ projects, activeId, attention, onSelect, o
     done: '#10B981',
     error: '#EF4444',
   };
+
+  const hasPending = pendingCount > 0 && syncState === 'idle';
 
   return (
     <div
@@ -238,36 +312,44 @@ export default function ProjectTabs({ projects, activeId, attention, onSelect, o
       {/* Spacer */}
       <div style={{ flex: 1 }} />
 
-      {/* Auto-Sync indicator */}
+      {/* Syncthing toggle */}
+      <SyncthingToggle />
+
+      {/* All Live toggle - switches all visible chats to 2s polling */}
       <button
-        onClick={toggleAutoSync}
-        title={autoSync ? 'Auto-Sync AN — Klick zum Deaktivieren' : 'Auto-Sync AUS — Klick zum Aktivieren'}
+        onClick={() => {
+          const newState = !allLive;
+          setAllLive(newState);
+          window.dispatchEvent(new CustomEvent('cui-all-live', { detail: { live: newState } }));
+        }}
+        title={allLive ? 'Live-Modus fuer alle Chats aus (zurueck zu 15s)' : 'Live-Modus fuer alle Chats an (2s Polling)'}
         style={{
-          background: 'none',
-          border: 'none',
-          color: autoSync ? '#10B981' : 'var(--tn-text-muted)',
-          padding: '3px 6px',
-          fontSize: 9,
-          fontWeight: 600,
+          background: allLive ? 'rgba(239,68,68,0.15)' : 'none',
+          border: `1px solid ${allLive ? '#EF4444' : 'var(--tn-border)'}`,
+          color: allLive ? '#EF4444' : 'var(--tn-text-muted)',
+          padding: '3px 10px',
+          fontSize: 10,
+          fontWeight: allLive ? 700 : 400,
           cursor: 'pointer',
+          borderRadius: 4,
           WebkitAppRegion: 'no-drag',
           whiteSpace: 'nowrap',
-          opacity: autoSync ? 1 : 0.5,
           transition: 'all 0.2s',
+          marginRight: 6,
         } as React.CSSProperties}
       >
-        {autoSync ? 'AUTO' : 'AUTO OFF'}
+        {allLive ? '● Live' : '○ Live'}
       </button>
 
-      {/* Manual Sync button */}
+      {/* Rebuild button - triggers frontend rebuild only */}
       <button
-        onClick={handleSync}
+        onClick={handleRebuild}
         disabled={syncState === 'syncing'}
-        title={syncState === 'idle' ? 'Manuell: Build + Restart' : syncDetail}
+        title="Rebuild frontend (npm run build)"
         style={{
-          background: syncState === 'syncing' ? 'rgba(59,130,246,0.15)' : 'none',
-          border: `1px solid ${syncState === 'idle' ? 'var(--tn-border)' : syncColors[syncState]}`,
-          color: syncColors[syncState],
+          background: 'none',
+          border: '1px solid var(--tn-border)',
+          color: 'var(--tn-text-muted)',
           padding: '3px 10px',
           fontSize: 10,
           fontWeight: 600,
@@ -276,9 +358,78 @@ export default function ProjectTabs({ projects, activeId, attention, onSelect, o
           WebkitAppRegion: 'no-drag',
           whiteSpace: 'nowrap',
           transition: 'all 0.2s',
+          marginRight: 6,
         } as React.CSSProperties}
       >
-        {syncState === 'idle' && 'Sync'}
+        🔨 Rebuild
+      </button>
+
+      {/* Nuclear cache refresh - clears all browser caches and reloads everything */}
+      <button
+        onClick={async () => {
+          if ('serviceWorker' in navigator) {
+            const regs = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(regs.map(r => r.unregister()));
+          }
+          if ('caches' in window) {
+            const keys = await caches.keys();
+            await Promise.all(keys.map(k => caches.delete(k)));
+          }
+          window.dispatchEvent(new CustomEvent('nuclear-refresh'));
+          const keep = ['flexlayout', 'cui-workspace-'];
+          Object.keys(localStorage).forEach(k => {
+            if (!keep.some(prefix => k.startsWith(prefix))) localStorage.removeItem(k);
+          });
+          setTimeout(() => {
+            window.location.href = window.location.pathname + '?_cb=' + Date.now();
+          }, 200);
+        }}
+        title="Nuclear Refresh: Service Workers + Cache + alle Panels neu laden"
+        style={{
+          background: 'none',
+          border: '1px solid var(--tn-border)',
+          color: 'var(--tn-text-muted)',
+          padding: '3px 10px',
+          fontSize: 10,
+          fontWeight: 600,
+          cursor: 'pointer',
+          borderRadius: 4,
+          WebkitAppRegion: 'no-drag',
+          whiteSpace: 'nowrap',
+          transition: 'all 0.2s',
+          marginRight: 6,
+        } as React.CSSProperties}
+      >
+        ☢ Cache
+      </button>
+
+      {/* Sync button - shows update badge when changes detected */}
+      <button
+        onClick={handleSync}
+        disabled={syncState === 'syncing'}
+        title={
+          hasPending
+            ? `${pendingCount} Datei${pendingCount > 1 ? 'en' : ''} geaendert — Klick zum Updaten`
+            : syncState === 'idle' ? 'Build + Restart (keine Aenderungen)'
+            : syncDetail
+        }
+        style={{
+          background: hasPending ? 'rgba(224,175,104,0.15)' : syncState === 'syncing' ? 'rgba(59,130,246,0.15)' : 'none',
+          border: `1px solid ${hasPending ? '#e0af68' : syncState === 'idle' ? 'var(--tn-border)' : syncColors[syncState]}`,
+          color: hasPending ? '#e0af68' : syncColors[syncState],
+          padding: '3px 10px',
+          fontSize: 10,
+          fontWeight: 600,
+          cursor: syncState === 'syncing' ? 'wait' : 'pointer',
+          borderRadius: 4,
+          WebkitAppRegion: 'no-drag',
+          whiteSpace: 'nowrap',
+          transition: 'all 0.2s',
+          position: 'relative',
+        } as React.CSSProperties}
+      >
+        {syncState === 'idle' && !hasPending && 'Sync'}
+        {syncState === 'idle' && hasPending && `Update (${pendingCount})`}
         {syncState === 'syncing' && 'Syncing...'}
         {syncState === 'done' && 'Reloading...'}
         {syncState === 'error' && 'Sync Error'}
@@ -295,4 +446,4 @@ export default function ProjectTabs({ projects, activeId, attention, onSelect, o
       )}
     </div>
   );
-}
+});

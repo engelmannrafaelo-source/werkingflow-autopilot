@@ -231,7 +231,7 @@ export default function App() {
       try {
         const msg = JSON.parse(e.data);
         if (msg.type === 'cui-state' && msg.cuiId && msg.state) {
-          setCuiStates(prev => ({ ...prev, [msg.cuiId]: msg.state }));
+          setCuiStates(prev => prev[msg.cuiId] === msg.state ? prev : { ...prev, [msg.cuiId]: msg.state });
         }
         // Control API: switch project
         if (msg.type === 'control:project-switch' && msg.projectId) {
@@ -267,28 +267,70 @@ export default function App() {
           })();
         }
         // Screenshot request: capture DOM of matching panel via html2canvas
+        // Supports: data-panel="x", data-node-id="x" (full or partial), component name (e.g. "admin-wr"), or "full" for entire app
+        // Auto-activates hidden tabs and auto-adds missing panels before capturing
         if (msg.type === 'control:screenshot-request' && msg.panel) {
           (async () => {
             try {
-              // Find panel container by data-panel-component or flexlayout tab content
               const panelId: string = msg.panel;
-              // Try to find visible panel by component name in flexlayout DOM
               let target: HTMLElement | null = null;
-              // flexlayout renders tab contents in divs with data attributes
-              // Try multiple selectors to find the right panel
-              const candidates = document.querySelectorAll<HTMLElement>(
-                `[data-layout-path], .flexlayout__tab_content, .flexlayout__tabset_content`
-              );
-              for (const el of candidates) {
-                if (el.querySelector(`[data-panel="${panelId}"]`)) { target = el; break; }
+              let matchedVia = '';
+
+              const findTarget = (): { el: HTMLElement | null; via: string } => {
+                if (panelId === 'full') return { el: document.getElementById('root'), via: 'root' };
+                // 1. Exact data-node-id match
+                let el = document.querySelector<HTMLElement>(`[data-node-id="${panelId}"]`);
+                if (el) return { el, via: 'data-node-id-exact' };
+                // 2. Partial data-node-id match (short IDs)
+                const allNodes = document.querySelectorAll<HTMLElement>('[data-node-id]');
+                for (const node of allNodes) {
+                  const nid = node.getAttribute('data-node-id') || '';
+                  if (nid.startsWith(panelId)) return { el: node, via: `data-node-id-partial:${nid}` };
+                }
+                // 3. Exact data-panel attribute
+                el = document.querySelector<HTMLElement>(`[data-panel="${panelId}"]`);
+                if (el) return { el, via: 'data-panel' };
+                // 4. data-panel inside flexlayout tab
+                const candidates = document.querySelectorAll<HTMLElement>('.flexlayout__tab');
+                for (const tab of candidates) {
+                  if (tab.querySelector(`[data-panel="${panelId}"]`)) return { el: tab, via: 'flexlayout-tab-child' };
+                }
+                return { el: null, via: '' };
+              };
+
+              let found = findTarget();
+              target = found.el;
+              matchedVia = found.via;
+
+              // If not found or hidden, try to ensure the panel via LayoutManager
+              const isHidden = target && (target.getBoundingClientRect().width === 0 || target.getBoundingClientRect().height === 0);
+              if (!target || isHidden) {
+                // Send ensure-panel (adds if missing, selects if hidden) via WS
+                const ensureTarget = panelId; // could be component name like "admin-wr" or a nodeId
+                wsRef.current?.send(JSON.stringify({ type: 'control:ensure-panel', component: ensureTarget }));
+                // Also try select-tab in case it's a nodeId
+                wsRef.current?.send(JSON.stringify({ type: 'control:select-tab', target: ensureTarget }));
+                // Wait for DOM to update
+                await new Promise(r => setTimeout(r, 1500));
+                // Re-find target
+                found = findTarget();
+                target = found.el;
+                matchedVia = found.via ? `auto-activated:${found.via}` : '';
               }
-              // Fallback: find by visible content heuristic (largest visible panel-like div)
+
               if (!target) {
-                target = document.querySelector<HTMLElement>(`[data-panel="${panelId}"]`);
+                const existingIds = Array.from(document.querySelectorAll<HTMLElement>('[data-node-id]'))
+                  .map(el => el.getAttribute('data-node-id'));
+                throw new Error(`Panel "${panelId}" not found in DOM. Available node IDs: [${existingIds.join(', ')}]`);
               }
-              // Last resort: capture full app
-              if (!target) target = document.getElementById('root');
-              if (!target) throw new Error('No target element found');
+              const rect = target.getBoundingClientRect();
+              if (rect.width === 0 || rect.height === 0) {
+                throw new Error(`Panel "${panelId}" exists but is hidden (${rect.width}x${rect.height}) even after activation attempt.`);
+              }
+
+              // Wait for panel content to render (data loading etc.)
+              const contentWait = msg.contentWait ?? 2000;
+              if (contentWait > 0) await new Promise(r => setTimeout(r, contentWait));
 
               const html2canvas = (await import('html2canvas')).default;
               const canvas = await html2canvas(target, {
@@ -304,9 +346,49 @@ export default function App() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ dataUrl, width: canvas.width, height: canvas.height }),
               });
-              console.log(`[Screenshot] Captured ${panelId} (${canvas.width}x${canvas.height})`);
+              console.log(`[Screenshot] Captured ${panelId} via ${matchedVia} (${canvas.width}x${canvas.height})`);
             } catch (err) {
-              console.warn('[Screenshot] Failed:', msg.panel, err);
+              const errMsg = err instanceof Error ? err.message : String(err);
+              console.error('[Screenshot] Failed:', msg.panel, errMsg);
+              fetch(`/api/screenshot/${msg.panel}/error`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ error: errMsg }),
+              }).catch(() => {});
+            }
+          })();
+        }
+        // DOM introspection: list all panel node IDs for debugging
+        if (msg.type === 'control:list-panels') {
+          const panels = Array.from(document.querySelectorAll<HTMLElement>('[data-node-id]')).map(el => {
+            const rect = el.getBoundingClientRect();
+            return {
+              nodeId: el.getAttribute('data-node-id'),
+              visible: rect.width > 0 && rect.height > 0,
+              size: `${Math.round(rect.width)}x${Math.round(rect.height)}`,
+            };
+          });
+          fetch('/api/screenshot/panels', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ panels, timestamp: new Date().toISOString() }),
+          }).catch(() => {});
+        }
+        // CPU Profile: capture V8 profile and send result back to server
+        if (msg.type === 'control:cpu-profile' && window.electronAPI?.cpuProfile) {
+          (async () => {
+            try {
+              console.log('[CPU Profile] Capturing 5s V8 profile...');
+              const result = await window.electronAPI!.cpuProfile();
+              console.log('[CPU Profile] Result:', result);
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'cpu-profile-result', data: result }));
+              }
+            } catch (err) {
+              console.warn('[CPU Profile] Failed:', err);
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'cpu-profile-result', data: { error: String(err) } }));
+              }
             }
           })();
         }
@@ -317,6 +399,9 @@ export default function App() {
 
   const handleAttentionChange = useCallback((projectId: string, needsAttention: boolean) => {
     setProjectAttention(prev => {
+      const has = prev.has(projectId);
+      if (needsAttention && has) return prev;
+      if (!needsAttention && !has) return prev;
       const next = new Set(prev);
       if (needsAttention) next.add(projectId);
       else next.delete(projectId);
@@ -325,7 +410,7 @@ export default function App() {
   }, []);
 
   const handleCuiStateReset = useCallback((cuiId: string) => {
-    setCuiStates(prev => ({ ...prev, [cuiId]: 'idle' }));
+    setCuiStates(prev => prev[cuiId] === 'idle' ? prev : { ...prev, [cuiId]: 'idle' });
   }, []);
 
   const handleActivationProcessed = useCallback(() => {

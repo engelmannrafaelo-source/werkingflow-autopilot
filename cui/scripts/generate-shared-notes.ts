@@ -1,175 +1,119 @@
 #!/usr/bin/env tsx
-/**
- * Shared Notes Generator
- *
- * Generiert Markdown-Datei mit allen Credentials aus credentials.json
- * Output: data/notes/shared.md
- */
-
 import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { join, resolve, dirname } from 'path';
+import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
+// ESM compatibility
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const CUI_ROOT = resolve(__dirname, '..');
-const CREDENTIALS_FILE = join(CUI_ROOT, 'data/credentials.json');
-const OUTPUT_FILE = join(CUI_ROOT, 'data/notes/shared.md');
+
+const CREDENTIALS_JSON = join(__dirname, '../data/credentials.json');
+const OUTPUT_MD = join(__dirname, '../data/notes/shared.md');
 
 interface User {
-  name: string;
+  name?: string;
   email: string;
   password?: string;
   role?: string;
   tenant?: string;
-  environments: {
+  environments?: {
     local?: string;
     staged?: string;
     production?: string;
   };
-  scenarios: string[];
-  source: 'seed' | 'scenario' | 'both';
+  scenarios?: string[];
+  notes?: string;
 }
 
-interface AppCredentials {
-  app: string;
-  displayName: string;
+interface AppData {
+  name: string;
   users: User[];
 }
 
-interface AggregatedData {
-  generatedAt: string;
-  apps: AppCredentials[];
+interface CredentialsData {
+  [appId: string]: AppData;
 }
 
-/**
- * Format password field with fallback
- */
-function formatPassword(password?: string): string {
-  if (!password) return '`Demo-Mode` (see scenario)';
-  return `\`${password}\``;
+console.log('📝 Generating Shared Notes...');
+
+if (!existsSync(CREDENTIALS_JSON)) {
+  console.error('❌ credentials.json not found. Run `npm run aggregate:credentials` first.');
+  process.exit(1);
 }
 
-/**
- * Format environments as compact list
- */
-function formatEnvironments(envs: User['environments']): string {
-  const lines: string[] = [];
-  if (envs.local) lines.push(`**Local:** ${envs.local}`);
-  if (envs.staged) lines.push(`**Staged:** ${envs.staged}`);
-  if (envs.production) lines.push(`**Prod:** ${envs.production}`);
-  return lines.length > 0 ? lines.join('<br>') : '—';
-}
+const credentials: CredentialsData = JSON.parse(readFileSync(CREDENTIALS_JSON, 'utf8'));
 
-/**
- * Generate markdown for one app
- */
-function generateAppSection(app: AppCredentials): string {
-  const lines: string[] = [];
+const now = new Date().toISOString().split('T')[0];
+const time = new Date().toTimeString().split(' ')[0].slice(0, 5);
 
-  lines.push(`## ${app.displayName}`);
-  lines.push('');
-  lines.push('| Name | Email | Password | Role | Tenant | Environments |');
-  lines.push('|------|-------|----------|------|--------|--------------|');
+let markdown = `# 🔐 Shared Notes - Zugangsdaten
 
-  for (const user of app.users) {
-    const name = user.name;
+**⚠️ FOR DEVELOPMENT ONLY - NEVER COMMIT PRODUCTION CREDENTIALS**
+
+*Auto-generated: ${now} ${time}*
+
+---
+
+`;
+
+for (const [appId, appData] of Object.entries(credentials)) {
+  markdown += `## ${appData.name}\n\n`;
+
+  if (appData.users.length === 0) {
+    markdown += `*No users found*\n\n`;
+    continue;
+  }
+
+  // Table header
+  markdown += `| User | Email | Password | Tenant | Role | Environment |\n`;
+  markdown += `|------|-------|----------|--------|------|-------------|\n`;
+
+  for (const user of appData.users) {
+    const name = user.name || '—';
     const email = user.email;
-    const password = formatPassword(user.password);
-    const role = user.role || '—';
+    const password = user.password || (user.notes ? user.notes : 'See Scenario');
     const tenant = user.tenant || '—';
-    const envs = formatEnvironments(user.environments);
+    const role = user.role || '—';
 
-    lines.push(`| ${name} | ${email} | ${password} | ${role} | ${tenant} | ${envs} |`);
+    // Build environment string
+    const envs: string[] = [];
+    if (user.environments?.local) envs.push(`**Local:** ${user.environments.local}`);
+    if (user.environments?.staged) envs.push(`**Staged:** ${user.environments.staged}`);
+    if (user.environments?.production) envs.push(`**Prod:** ${user.environments.production}`);
+    const environment = envs.length > 0 ? envs.join('<br>') : '—';
+
+    markdown += `| ${name} | ${email} | \`${password}\` | ${tenant} | ${role} | ${environment} |\n`;
   }
 
-  lines.push('');
+  // Scenarios section
+  const allScenarios = appData.users.flatMap(u => u.scenarios || []);
+  const uniqueScenarios = [...new Set(allScenarios)].sort();
 
-  // Scenarios
-  const allScenarios = app.users.flatMap(u => u.scenarios).filter((v, i, a) => a.indexOf(v) === i);
-  if (allScenarios.length > 0) {
-    lines.push('**Scenarios:**');
-    for (const scenario of allScenarios.slice(0, 10)) {
-      // Limit to 10 for readability
-      lines.push(`- \`${scenario}\``);
+  if (uniqueScenarios.length > 0) {
+    markdown += `\n**Scenarios:**\n`;
+    for (const scenario of uniqueScenarios.slice(0, 10)) { // Max 10 scenarios
+      markdown += `- \`${scenario}\`\n`;
     }
-    if (allScenarios.length > 10) {
-      lines.push(`- *...and ${allScenarios.length - 10} more*`);
+    if (uniqueScenarios.length > 10) {
+      markdown += `- ... and ${uniqueScenarios.length - 10} more\n`;
     }
-    lines.push('');
   }
 
-  lines.push('---');
-  lines.push('');
-
-  return lines.join('\n');
+  markdown += `\n---\n\n`;
 }
 
-/**
- * Main generator
- */
-function main() {
-  console.log('📝 Generating shared notes...\n');
+markdown += `## 📋 Summary
 
-  if (!existsSync(CREDENTIALS_FILE)) {
-    console.error(`❌ credentials.json not found: ${CREDENTIALS_FILE}`);
-    console.error('   Run: npm run aggregate:credentials');
-    process.exit(1);
-  }
+- **Total Apps:** ${Object.keys(credentials).length}
+- **Total Users:** ${Object.values(credentials).reduce((sum, app) => sum + app.users.length, 0)}
+- **Last Updated:** ${now} ${time}
 
-  const data: AggregatedData = JSON.parse(readFileSync(CREDENTIALS_FILE, 'utf8'));
+---
 
-  const lines: string[] = [];
+*Run \`npm run generate:shared-notes\` to update this file*
+`;
 
-  // Header
-  lines.push('# 🔐 Shared Notes - Zugangsdaten');
-  lines.push('');
-  lines.push('> **⚠️ FOR DEVELOPMENT ONLY**');
-  lines.push('> Diese Datei enthält NUR Development- und Test-Credentials.');
-  lines.push('> NIEMALS Production-Secrets hier eintragen!');
-  lines.push('');
-  lines.push(`*Auto-generated: ${new Date(data.generatedAt).toLocaleString('de-AT')}*`);
-  lines.push('');
-  lines.push('---');
-  lines.push('');
-
-  // Apps
-  for (const app of data.apps) {
-    lines.push(generateAppSection(app));
-  }
-
-  // Footer
-  lines.push('---');
-  lines.push('');
-  lines.push('## 🔄 Regeneration');
-  lines.push('');
-  lines.push('**Manuell:**');
-  lines.push('```bash');
-  lines.push('cd /root/projekte/werkingflow/autopilot/cui');
-  lines.push('npm run generate:shared-notes');
-  lines.push('```');
-  lines.push('');
-  lines.push('**Automatisch:**');
-  lines.push('- Git Hook: `post-merge` (nach `git pull`)');
-  lines.push('');
-  lines.push('---');
-  lines.push('');
-  lines.push('## 📚 Sources');
-  lines.push('');
-  lines.push('1. **Supabase Seed:**');
-  lines.push('   - `/root/projekte/werkingflow/platform/supabase/seed.sql`');
-  lines.push('   - `/root/projekte/werkingflow/platform/supabase/seed_real.sql`');
-  lines.push('');
-  lines.push('2. **Test Scenarios:**');
-  lines.push('   - `/root/projekte/werkingflow/tests/unified-tester/features/scenarios/`');
-  lines.push('');
-
-  writeFileSync(OUTPUT_FILE, lines.join('\n'));
-
-  console.log(`✅ Shared notes generated: ${OUTPUT_FILE}`);
-  console.log(`   Apps: ${data.apps.length}`);
-  console.log(`   Total users: ${data.apps.reduce((sum, app) => sum + app.users.length, 0)}`);
-  console.log(`   Size: ${(lines.join('\n').length / 1024).toFixed(1)} KB`);
-}
-
-main();
+writeFileSync(OUTPUT_MD, markdown);
+console.log(`✅ Shared Notes generated: ${OUTPUT_MD}`);
+console.log(`   Apps: ${Object.keys(credentials).length}`);
+console.log(`   Users: ${Object.values(credentials).reduce((sum, app) => sum + app.users.length, 0)}`);

@@ -7,14 +7,19 @@
   --tn-surface: #24283b;
   --tn-border: #414868;
   --tn-text: #c0caf5;
-  --tn-text-muted: #565f89;
+  --tn-text-muted: #737aa2;
   --tn-text-subtle: #a9b1d6;
   --tn-blue: #7aa2f7;
   --tn-purple: #bb9af7;
+  --tn-purple-dim: #a78bfa;
   --tn-green: #9ece6a;
   --tn-orange: #e0af68;
   --tn-red: #f7768e;
   --tn-cyan: #7dcfff;
+  --tn-status-idle: #9ca3af;
+  --tn-status-working: #3b82f6;
+  --tn-status-error: #ef4444;
+  --tn-status-review: #f59e0b;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }

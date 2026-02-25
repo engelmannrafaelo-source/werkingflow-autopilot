@@ -1,0 +1,71 @@
+[
+  {
+    "account": "rafael",
+    "timestamp": "2026-02-25T08:00:18.966Z",
+    "plan": "Max",
+    "currentSession": {
+      "percent": 15,
+      "resetIn": "Resets in 3 hr 59 min"
+    },
+    "weeklyAllModels": {
+      "percent": 89,
+      "resetDate": "Resets Thu 10:00 AM"
+    },
+    "weeklySonnet": {
+      "percent": 4,
+      "resetDate": "Resets Tue 10:00 AM"
+    },
+    "extraUsage": {
+      "percent": 112,
+      "spent": "22.36 EUR",
+      "limit": "20 EUR",
+      "balance": "20.13 EUR"
+    }
+  },
+  {
+    "account": "office",
+    "timestamp": "2026-02-25T08:00:34.522Z",
+    "plan": "Max",
+    "currentSession": {
+      "percent": 11,
+      "resetIn": "Zurücksetzung in 3 Std. 59 Min."
+    },
+    "weeklyAllModels": {
+      "percent": 26,
+      "resetDate": "Zurücksetzung Sa., 09:00"
+    },
+    "weeklySonnet": {
+      "percent": 40,
+      "resetDate": "Zurücksetzung Sa., 09:59"
+    },
+    "extraUsage": {
+      "percent": 100,
+      "spent": "42.67 EUR",
+      "limit": "43 EUR",
+      "balance": "0.00 EUR"
+    }
+  },
+  {
+    "account": "engelmann",
+    "timestamp": "2026-02-25T08:00:50.647Z",
+    "plan": "Max",
+    "currentSession": {
+      "percent": 4,
+      "resetIn": "Zurücksetzung in 3 Std. 59 Min."
+    },
+    "weeklyAllModels": {
+      "percent": 29,
+      "resetDate": "Zurücksetzung Do., 09:00"
+    },
+    "weeklySonnet": {
+      "percent": 17,
+      "resetDate": "Zurücksetzung Sa., 09:59"
+    },
+    "extraUsage": {
+      "percent": 101,
+      "spent": "42.84 EUR",
+      "limit": "43 EUR",
+      "balance": "0.00 EUR"
+    }
+  }
+]

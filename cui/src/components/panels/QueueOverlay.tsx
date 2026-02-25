@@ -25,8 +25,10 @@ interface QueueOverlayProps {
   accountId: string;
   projectId?: string;
   workDir?: string;
+  useLocal?: boolean;
   onNavigate: (sessionId: string) => void;  // Navigate CUI iframe to conversation
-  onStartNew: (subject: string, message: string) => void;  // Start new conversation
+  onStartNew: (subject: string, message: string) => Promise<boolean>;  // Start new conversation, returns success
+  refreshSignal?: number;  // Increment to trigger conversation list refresh (from parent WS)
 }
 
 // --- Helpers ---
@@ -176,13 +178,14 @@ function ConvRow({ conv, onNavigate, onStop, onSetName }: {
 }
 
 // --- Main Component ---
-export default function QueueOverlay({ accountId, projectId, workDir, onNavigate, onStartNew }: QueueOverlayProps) {
+export default function QueueOverlay({ accountId, projectId, workDir, useLocal, onNavigate, onStartNew, refreshSignal }: QueueOverlayProps) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
   const [showCompleted, setShowCompleted] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [startError, setStartError] = useState('');
   const subjectRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval>>(null);
 
@@ -191,41 +194,55 @@ export default function QueueOverlay({ accountId, projectId, workDir, onNavigate
   const account = ACCOUNTS.find(a => a.id === accountId) ?? ACCOUNTS[0];
 
   // Fetch conversations
+  const lastCountRef = useRef(-1);
   const fetchConversations = useCallback(() => {
     fetch(`${API}/mission/conversations`)
       .then(r => r.json())
       .then(data => {
         const convs: Conversation[] = data.conversations || [];
-        // Filter: this account + this workspace
+        const REMOTE_IDS = new Set(['rafael', 'engelmann', 'office']);
+        const REMOTE_WS_PREFIX = '/root/orchestrator/workspaces/';
+        const LOCAL_WS_PREFIX_MATCH = '/.cui/workspaces/';
+        const wsName = workDir?.startsWith(REMOTE_WS_PREFIX)
+          ? workDir.slice(REMOTE_WS_PREFIX.length).replace(/\/$/, '')
+          : '';
         const filtered = convs.filter(c => {
-          if (c.accountId !== accountId) return false;
-          if (workDir && c.projectPath !== workDir && !c.projectPath.startsWith(workDir + '/')) return false;
+          if (useLocal) {
+            if (c.accountId !== 'local') return false;
+          } else if (REMOTE_IDS.has(accountId)) {
+            if (!REMOTE_IDS.has(c.accountId)) return false;
+          } else {
+            if (c.accountId !== accountId) return false;
+          }
+          if (workDir) {
+            const pp = c.projectPath || '';
+            if (pp === workDir || pp.startsWith(workDir + '/')) return true;
+            if (wsName && (pp.includes(LOCAL_WS_PREFIX_MATCH + wsName) || pp.endsWith('/' + wsName))) return true;
+            return false;
+          }
           return true;
         });
+        // Only log when count changes (avoid console spam)
+        if (filtered.length !== lastCountRef.current) {
+          console.log(`[QueueOverlay:${accountId}] ${filtered.length} conversations (${convs.length} total)`);
+          lastCountRef.current = filtered.length;
+        }
         setConversations(filtered);
         setLoading(false);
       })
       .catch(() => setLoading(false));
-  }, [accountId, workDir]);
+  }, [accountId, workDir, useLocal]);
 
   useEffect(() => {
     fetchConversations();
-    pollRef.current = setInterval(fetchConversations, 10000);
+    pollRef.current = setInterval(fetchConversations, 60000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [fetchConversations]);
 
-  // WebSocket updates
+  // Refresh when parent signals via WS (replaces redundant WebSocket connection)
   useEffect(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const ws = new WebSocket(`${protocol}://${window.location.host}/ws`);
-    ws.onmessage = (e) => {
-      try {
-        const msg = JSON.parse(e.data);
-        if (msg.type === 'cui-state' && msg.cuiId === accountId) fetchConversations();
-      } catch {}
-    };
-    return () => ws.close();
-  }, [accountId, fetchConversations]);
+    if (refreshSignal && refreshSignal > 0) fetchConversations();
+  }, [refreshSignal, fetchConversations]);
 
   // Split conversations
   const active = useMemo(
@@ -242,16 +259,18 @@ export default function QueueOverlay({ accountId, projectId, workDir, onNavigate
   );
 
   // Start new conversation
-  const handleStart = useCallback(() => {
+  const handleStart = useCallback(async () => {
     if (!subject.trim() || !message.trim() || starting) return;
     setStarting(true);
-    onStartNew(subject.trim(), message.trim());
-    // Reset form after short delay
-    setTimeout(() => {
+    setStartError('');
+    const ok = await onStartNew(subject.trim(), message.trim());
+    if (ok) {
       setSubject('');
       setMessage('');
-      setStarting(false);
-    }, 1000);
+    } else {
+      setStartError('Konversation konnte nicht gestartet werden');
+    }
+    setStarting(false);
   }, [subject, message, starting, onStartNew]);
 
   // Stop conversation
@@ -309,7 +328,7 @@ export default function QueueOverlay({ accountId, projectId, workDir, onNavigate
           <input
             ref={subjectRef}
             value={subject}
-            onChange={e => setSubject(e.target.value)}
+            onChange={e => { setSubject(e.target.value); setStartError(''); }}
             onKeyDown={e => {
               if (e.key === 'Enter' && !e.shiftKey && subject.trim()) {
                 // Focus message field
@@ -329,7 +348,7 @@ export default function QueueOverlay({ accountId, projectId, workDir, onNavigate
           <div style={{ display: 'flex', gap: 6 }}>
             <textarea
               value={message}
-              onChange={e => setMessage(e.target.value)}
+              onChange={e => { setMessage(e.target.value); setStartError(''); }}
               onKeyDown={e => {
                 if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                   e.preventDefault();
@@ -360,6 +379,15 @@ export default function QueueOverlay({ accountId, projectId, workDir, onNavigate
               {starting ? '...' : 'Start'}
             </button>
           </div>
+          {startError && (
+            <div style={{
+              marginTop: 6, padding: '4px 8px', fontSize: 11, fontWeight: 600,
+              color: '#f7768e', background: 'rgba(247,118,142,0.1)',
+              borderRadius: 4, border: '1px solid rgba(247,118,142,0.3)',
+            }}>
+              {startError}
+            </div>
+          )}
         </div>
       </div>
 

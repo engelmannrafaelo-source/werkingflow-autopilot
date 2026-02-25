@@ -7,14 +7,16 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': 'http://localhost:4000',
+      '/api': 'http://localhost:4005',
       '/ws': {
-        target: 'ws://localhost:4000',
+        target: 'ws://localhost:4005',
         ws: true,
       },
     },
   },
   build: {
     outDir: 'dist',
+    sourcemap: true,
+    minify: false,
   },
 });

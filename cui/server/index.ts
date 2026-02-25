@@ -1,6 +1,7 @@
 import { readFileSync as _readEnvFile, existsSync as _envExists } from 'fs';
-// Load .env from CUI root (manual dotenv — fixed absolute path, always runs before const init)
-const _envPath = '/root/projekte/werkingflow/autopilot/cui/.env';
+import { resolve as _resolvePath } from 'path';
+// Load .env from CUI root (relative to this file)
+const _envPath = _resolvePath(import.meta.dirname ?? '.', '..', '.env');
 if (_envExists(_envPath)) {
   const _lines = _readEnvFile(_envPath, 'utf8').split('\n');
   for (const _line of _lines) {
@@ -21,8 +22,9 @@ import express from 'express';
 import { createServer, request as httpRequest, IncomingMessage, ServerResponse } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { resolve, extname, relative, join } from 'path';
-import { readFileSync, readdirSync, statSync, existsSync, mkdirSync, writeFileSync, unlinkSync, rmSync, copyFileSync } from "fs";
+import { readFileSync, readdirSync, statSync, existsSync, mkdirSync, writeFileSync, unlinkSync, rmSync, appendFileSync, copyFileSync } from 'fs';
 import { homedir } from 'os';
+import { spawn } from 'child_process';
 import { watch } from 'chokidar';
 import mime from 'mime-types';
 import httpProxy from 'http-proxy';
@@ -33,19 +35,19 @@ const PROD = process.env.NODE_ENV === 'production';
 
 // --- CUI Reverse Proxies ---
 // Each CUI account gets a local proxy port so iframes load same-origin (no cookie issues)
-const CUI_PROXIES: Array<{id: string; localPort: number; target: string}> = [
-  { id: 'rafael', localPort: 5001, target: 'http://localhost:4001' },
+const CUI_PROXIES = [
+  { id: 'rafael',    localPort: 5001, target: 'http://localhost:4001' },
   { id: 'engelmann', localPort: 5002, target: 'http://localhost:4002' },
-  { id: 'office', localPort: 5003, target: 'http://localhost:4003' },
-  { id: 'local', localPort: 5004, target: 'http://localhost:4004' },
+  { id: 'office',    localPort: 5003, target: 'http://localhost:4003' },
+  { id: 'local',     localPort: 5004, target: 'http://localhost:4004' },
 ];
 
-// SSE proxy: blocks data relay to browser (no continuous streaming).
-// Still connects upstream to detect attention markers (plan/question/done).
-// Browser gets an open SSE connection with heartbeat comments only.
+// SSE proxy: monitors upstream for attention markers (plan/question/done).
+// CRITICAL: Only sends SSE headers to browser if upstream has an active stream (200 OK).
+// For dead streams (non-200), forwards the error response so the CUI app knows there's no stream.
+// This prevents the SSE reconnect loop that causes the "Stopschild" (disabled input) bug.
 function sseProxy(targetBase: string, req: IncomingMessage, res: ServerResponse, cuiId?: string) {
   const streamId = req.url!.split('/api/stream/')[1]?.slice(0, 8) ?? '?';
-  console.log(`[SSE] → Monitor-only ${streamId} (${cuiId || 'no-id'})`);
   const url = new URL(req.url!, targetBase);
   const headers: Record<string, string> = {};
   for (const [k, v] of Object.entries(req.headers)) {
@@ -54,25 +56,37 @@ function sseProxy(targetBase: string, req: IncomingMessage, res: ServerResponse,
   headers.host = url.host;
   delete headers['accept-encoding'];
 
-  // Send SSE headers to browser but NO data — just heartbeat to keep alive
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
-    'X-Accel-Buffering': 'no',
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Credentials': 'true',
-  });
-  res.write(':ok\n\n'); // Initial comment to confirm connection
-  const heartbeat = setInterval(() => { res.write(':\n\n'); }, 30000);
+  let heartbeat: ReturnType<typeof setInterval> | null = null;
+  let browserHeadersSent = false;
 
-  // Connect to upstream SSE silently — only for attention detection
+  // Connect to upstream FIRST — only send SSE headers to browser if upstream is alive
   const proxyReq = httpRequest(url, { method: req.method, headers }, (proxyRes) => {
+    // Dead stream: upstream returns non-200 → forward error to browser (no SSE pretending)
+    if (proxyRes.statusCode !== 200) {
+      console.log(`[SSE] ${streamId} upstream ${proxyRes.statusCode} — forwarding error (${cuiId || 'no-id'})`);
+      res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
+      proxyRes.pipe(res);
+      return;
+    }
+
+    // Active stream: send SSE headers to browser, start monitoring
+    console.log(`[SSE] → Monitor-only ${streamId} (${cuiId || 'no-id'})`);
+    browserHeadersSent = true;
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Credentials': 'true',
+    });
+    res.write(':ok\n\n');
+    heartbeat = setInterval(() => { res.write(':\n\n'); }, 30000);
+
     let chunkCount = 0;
 
     proxyRes.on('data', (chunk: Buffer) => {
       chunkCount++;
-      // Detect attention markers (plan/question/done) — no data relay
       if (cuiId) {
         const text = chunk.toString();
         const attention = detectAttentionMarkers(text);
@@ -90,7 +104,7 @@ function sseProxy(targetBase: string, req: IncomingMessage, res: ServerResponse,
     });
 
     proxyRes.on('end', () => {
-      clearInterval(heartbeat);
+      if (heartbeat) clearInterval(heartbeat);
       console.log(`[SSE] End ${streamId} (${chunkCount} chunks monitored)`);
       if (cuiId && chunkCount > 0) {
         broadcast({ type: 'cui-state', cuiId, state: 'done' });
@@ -105,14 +119,21 @@ function sseProxy(targetBase: string, req: IncomingMessage, res: ServerResponse,
   });
 
   proxyReq.on('error', (err) => {
-    clearInterval(heartbeat);
+    if (heartbeat) clearInterval(heartbeat);
     console.error(`[SSE] ✗ Error ${streamId}:`, err.message);
-    if (cuiId) broadcast({ type: 'cui-state', cuiId, state: 'done' });
-    res.end();
+    if (!browserHeadersSent) {
+      // Never sent SSE headers — return proper error so CUI app doesn't retry
+      if (!res.headersSent) res.writeHead(502);
+      res.end();
+    } else {
+      // SSE was active — close browser connection
+      if (cuiId) broadcast({ type: 'cui-state', cuiId, state: 'done' });
+      res.end();
+    }
   });
 
   req.on('close', () => {
-    clearInterval(heartbeat);
+    if (heartbeat) clearInterval(heartbeat);
     console.log(`[SSE] Client disconnected ${streamId}`);
     proxyReq.destroy();
   });
@@ -372,9 +393,9 @@ const CUI_INJECT_SCRIPT = `<script>(function(){
 
   // --- Plan Mode Formatter (instant, pre-rendered) ---
   // Detects tool call JSON blocks (ExitPlanMode, etc.) and renders plan text as readable markdown
-  // Uses requestAnimationFrame for instant rendering + scroll listener for virtualized lists
-  // Auto-detects light/dark theme for proper contrast
+  // MutationObserver for instant detection, no polling fallback (performance-safe)
   var _pfPending=false;
+  var _pfDark=null;
   function _pfIsDark(){
     try{
       var bg=getComputedStyle(document.body).backgroundColor;
@@ -383,7 +404,8 @@ const CUI_INJECT_SCRIPT = `<script>(function(){
     }catch(e){}
     return true;
   }
-  var _pfDark=null;
+  // Detect theme once (not on every call — saves getComputedStyle)
+  setTimeout(function(){_pfDark=_pfIsDark();},1000);
   function _pfColors(){
     if(_pfDark===null)_pfDark=_pfIsDark();
     return _pfDark?{
@@ -396,7 +418,6 @@ const CUI_INJECT_SCRIPT = `<script>(function(){
   }
   function formatPlanBlocks(){
     _pfPending=false;
-    _pfDark=null; // re-detect each pass
     var c=_pfColors();
     var els=document.querySelectorAll('pre:not([data-pf]), code:not([data-pf])');
     for(var i=0;i<els.length;i++){
@@ -429,30 +450,71 @@ const CUI_INJECT_SCRIPT = `<script>(function(){
       el.dataset.pf='1';
     }
   }
+  var _pfTimer=null;
   function schedulePF(){
-    if(!_pfPending){_pfPending=true;requestAnimationFrame(formatPlanBlocks);}
+    if(_pfTimer) return;
+    _pfTimer=setTimeout(function(){_pfTimer=null;_pfPending=false;formatPlanBlocks();},2000);
   }
-  // MutationObserver fires on next animation frame (not 300ms delay)
+  // MutationObserver: debounced to 2s to avoid layout thrashing during typing
   var planObs=new MutationObserver(schedulePF);
   if(document.body) planObs.observe(document.body,{childList:true,subtree:true});
   else document.addEventListener('DOMContentLoaded',function(){planObs.observe(document.body,{childList:true,subtree:true});});
-  // Scroll listener catches virtualized list renders instantly
-  document.addEventListener('scroll',schedulePF,true);
-  // Fallback interval (reduced from 3s to 500ms)
-  setInterval(schedulePF,500);
 
   // --- Rate Limit Detection ---
+  // PERF FIX: Use targeted querySelector instead of document.body.innerText (which forces full layout recalc)
   var _rlLast=false;
   function checkRateLimit(){
-    var t=(document.body&&document.body.innerText)||'';
-    var limited=t.indexOf("You've hit your limit")>-1||t.indexOf("you've hit your limit")>-1||t.indexOf("rate limit")>-1;
+    // Look for rate limit indicators via targeted selectors (cheap) instead of innerText (very expensive)
+    var limited=false;
+    try{
+      // CUI app shows rate limit in a banner/dialog — check for specific elements
+      var banners=document.querySelectorAll('[role="alert"], [class*="error"], [class*="limit"], [class*="banner"]');
+      for(var i=0;i<banners.length;i++){
+        var txt=banners[i].textContent||'';
+        if(txt.indexOf("hit your limit")>-1||txt.indexOf("rate limit")>-1){limited=true;break;}
+      }
+      // Fallback: check h1/h2 headers only (much cheaper than full innerText)
+      if(!limited){
+        var headers=document.querySelectorAll('h1,h2,h3');
+        for(var i=0;i<headers.length;i++){
+          var txt=headers[i].textContent||'';
+          if(txt.indexOf("hit your limit")>-1||txt.indexOf("rate limit")>-1){limited=true;break;}
+        }
+      }
+    }catch(e){}
     if(limited!==_rlLast){
       _rlLast=limited;
       try{window.parent.postMessage({type:'cui-rate-limit',limited:limited},'*');}catch(e){}
     }
   }
-  setInterval(checkRateLimit,3000);
-  setTimeout(checkRateLimit,2000);
+  setInterval(checkRateLimit,10000); // Reduced from 3s to 10s (rate limits don't need fast detection)
+  setTimeout(checkRateLimit,5000);
+
+  // --- Stale Conversation Recovery ---
+  var _staleNotified=false;
+  function checkStaleConversation(){
+    if(_staleNotified) return;
+    if(!location.pathname.startsWith('/c/')) return;
+    // Use targeted check instead of innerText
+    try{
+      var banners=document.querySelectorAll('[role="alert"], [class*="error"], [class*="not-found"]');
+      for(var i=0;i<banners.length;i++){
+        if((banners[i].textContent||'').indexOf('not found')>-1){
+          _staleNotified=true;
+          try{window.parent.postMessage({type:'cui-stale-conversation',pathname:location.pathname},'*');}catch(e){}
+          return;
+        }
+      }
+      // Fallback: check page title area
+      var h=document.querySelector('h1,h2,[class*="title"]');
+      if(h&&(h.textContent||'').indexOf('not found')>-1){
+        _staleNotified=true;
+        try{window.parent.postMessage({type:'cui-stale-conversation',pathname:location.pathname},'*');}catch(e){}
+      }
+    }catch(e){}
+  }
+  setTimeout(checkStaleConversation,3000);
+  setTimeout(checkStaleConversation,8000);
 })();</script>`;
 
 // Inject script into CUI HTML for route persistence + auto-refresh
@@ -535,15 +597,13 @@ for (const cui of CUI_PROXIES) {
       return;
     }
 
-    // SSE streams bypass http-proxy to prevent buffering + track CUI state
-    if (req.url?.startsWith('/api/stream/')) {
-      sseProxy(cui.target, req, res, cui.id);
-      return;
-    }
+    // SSE streams: pass through normal proxy (CUI app needs real stream data for input/output).
+    // Attention detection relies on monitorStream() started via messagePostProxy below.
+    // No interception needed — http-proxy handles SSE correctly.
 
     // Intercept message POST for auto-refresh stream monitoring
     if (req.method === 'POST' && /\/api\/conversations\/(start|[^/]+\/messages)/.test(req.url || '')) {
-      const urlMatch = req.url?.match(/\/api\/conversations\/([^/]+)/);
+      const urlMatch = req.url?.match(/\/api\/conversations\/([0-9a-f]{8}-[0-9a-f-]+)/);
       if (urlMatch?.[1]) setLastPrompt(urlMatch[1]);
       broadcast({ type: 'cui-state', cuiId: cui.id, state: 'processing' });
       messagePostProxy(cui.target, cui.id, req, res);
@@ -560,13 +620,6 @@ for (const cui of CUI_PROXIES) {
     });
   });
 
-  proxyServer.on('error', (err: any) => {
-    if (err.code === 'EADDRINUSE') {
-      console.error(`[Proxy] ${cui.id}: Port ${cui.localPort} already in use — skipping`);
-    } else {
-      console.error(`[Proxy] ${cui.id}: Listen error:`, err.message);
-    }
-  });
   proxyServer.listen(cui.localPort, () => {
     console.log(`[Proxy] ${cui.id}: localhost:${cui.localPort} → ${cui.target}`);
   });
@@ -656,10 +709,6 @@ function getSessionStates(): Record<string, SessionState> {
 // IMPORTANT: Only match LIVE stream events, not historical conversation replay data.
 // Historical chunks contain "type":"result", "stop_reason" etc. for every past message.
 function detectAttentionMarkers(text: string): { state: ConvAttentionState; reason?: AttentionReason } | null {
-  // Rate limit / billing errors - notify user immediately
-  if (text.includes("rate_limit") || text.includes("billing") || text.includes("hit your limit")) {
-    return { state: "needs_attention", reason: "error" };
-  }
   // Plan mode: ExitPlanMode or EnterPlanMode tool calls
   if (text.includes('"name":"ExitPlanMode"') || text.includes('"name":"EnterPlanMode"')) {
     return { state: 'needs_attention', reason: 'plan' };
@@ -715,17 +764,89 @@ wss.on('connection', (ws) => {
       if (msg.type === 'navigate-request' && msg.panelId && msg.sessionId) {
         broadcast({ type: 'control:cui-navigate-conversation', panelId: msg.panelId, sessionId: msg.sessionId, projectId: msg.projectId || '' });
       }
+      // Relay control messages from frontend components to LayoutManager (and other listeners)
+      if (msg.type === 'control:ensure-panel' || msg.type === 'control:select-tab') {
+        broadcast(msg);
+      }
+      // CPU profile result from renderer
+      if (msg.type === 'cpu-profile-result' && pendingProfileResolve) {
+        pendingProfileResolve(msg.data);
+      }
     } catch {
       // ignore malformed messages
     }
   });
 });
 
-function broadcast(data: Record<string, unknown>) {
-  // Track CUI states in workspace state store
-  if (data.type === 'cui-state' && data.cuiId && data.state) {
-    workspaceState.cuiStates[data.cuiId as string] = data.state as string;
+// --- Broadcast dedup + throttling ---
+// Tracks last broadcast per type+key to suppress duplicates
+const _lastBroadcast: Record<string, { state: string; at: number }> = {};
+// Global broadcast rate counter (for diagnostics)
+let _broadcastCount = 0;
+let _broadcastDropped = 0;
+let _broadcastT0 = Date.now();
+// Per-type throttle: maps "type:key" → pending setTimeout
+const _broadcastThrottled: Record<string, ReturnType<typeof setTimeout>> = {};
+
+// Log broadcast rate every 60s
+setInterval(() => {
+  if (_broadcastCount > 0 || _broadcastDropped > 0) {
+    const s = ((Date.now() - _broadcastT0) / 1000).toFixed(0);
+    console.log(`[Broadcast] ${s}s: ${_broadcastCount} sent, ${_broadcastDropped} dropped (${(_broadcastCount / (+s || 1)).toFixed(1)}/s)`);
   }
+  _broadcastCount = 0;
+  _broadcastDropped = 0;
+  _broadcastT0 = Date.now();
+}, 60000);
+
+function broadcast(data: Record<string, unknown>) {
+  const type = data.type as string;
+
+  // Track CUI states in workspace state store
+  if (type === 'cui-state' && data.cuiId && data.state) {
+    const id = data.cuiId as string;
+    const state = data.state as string;
+    workspaceState.cuiStates[id] = state;
+    // Dedup: skip if same state was broadcast for this cuiId within last 2s
+    const prev = _lastBroadcast[id];
+    if (prev && prev.state === state && Date.now() - prev.at < 2000) { _broadcastDropped++; return; }
+    _lastBroadcast[id] = { state, at: Date.now() };
+  }
+
+  // Dedup cui-response-ready: skip if last state is already 'done'
+  if (type === 'cui-response-ready' && data.cuiId) {
+    const id = data.cuiId as string;
+    const prev = _lastBroadcast[id];
+    if (prev && prev.state === 'done' && Date.now() - prev.at < 500) { _broadcastDropped++; return; }
+  }
+
+  // Throttle high-frequency types: coalesce rapid-fire messages of same type+key
+  // Only latest value is sent after the throttle window
+  const throttledTypes: Record<string, number> = {
+    'visibility-update': 2000,
+    'conv-attention': 1000,
+    'cui-update-available': 5000,
+  };
+  const throttleMs = throttledTypes[type];
+  if (throttleMs) {
+    const throttleKey = `${type}:${data.cuiId || data.key || '_'}`;
+    if (_broadcastThrottled[throttleKey]) {
+      clearTimeout(_broadcastThrottled[throttleKey]);
+      _broadcastDropped++;
+    }
+    _broadcastThrottled[throttleKey] = setTimeout(() => {
+      delete _broadcastThrottled[throttleKey];
+      _broadcastCount++;
+      const json = JSON.stringify(data);
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) client.send(json);
+      }
+    }, throttleMs);
+    return;
+  }
+
+  // Direct send for non-throttled types
+  _broadcastCount++;
   const json = JSON.stringify(data);
   for (const client of clients) {
     if (client.readyState === WebSocket.OPEN) {
@@ -747,15 +868,13 @@ function cleanupOldWatchers() {
 }
 
 function startWatching(dirPath: string) {
-  // Skip remote paths - can't watch via chokidar
-  if (isRemotePath(dirPath)) return;
 
   const resolved = resolve(dirPath);
   if (watchers.has(resolved)) return;
 
-  // Block overly broad paths (home dir, root, etc.) - they cause EPERM crashes on macOS
+  // Block overly broad paths (home dir, root, etc.) to prevent watcher crashes
   const home = homedir();
-  if (resolved === home || resolved === '/' || resolved === '/Users') {
+  if (resolved === home || resolved === '/') {
     console.warn(`[Watcher] Blocked overly broad watch path: ${resolved}`);
     return;
   }
@@ -769,21 +888,14 @@ function startWatching(dirPath: string) {
     depth: 3,
   });
 
-  // Prevent unhandled EPERM crashes on macOS protected directories
+  // Prevent unhandled EPERM crashes on protected directories
   watcher.on('error', (err) => {
     const e = err as NodeJS.ErrnoException;
     console.warn(`[Watcher] Error on ${resolved}: ${e.code || e.message || err}`);
   });
 
-  watcher.on('change', (filePath) => {
-    broadcast({ type: 'file-change', path: filePath, event: 'change' });
-  });
-  watcher.on('add', (filePath) => {
-    broadcast({ type: 'file-change', path: filePath, event: 'add' });
-  });
-  watcher.on('unlink', (filePath) => {
-    broadcast({ type: 'file-change', path: filePath, event: 'unlink' });
-  });
+  // file-change broadcasts removed — no frontend consumer listens for this type.
+  // ChangeWatch (below) handles src/server change notifications via cui-update-available.
 
   watchers.set(resolved, watcher);
   console.log(`Watching: ${resolved}`);
@@ -798,19 +910,10 @@ function resolvePath(p: string): string {
   return resolve(p);
 }
 
-// Detect remote paths (paths on the dev server)
-const REMOTE_HOST = '100.121.161.109';
-function isRemotePath(p: string): boolean {
-  return p.startsWith('/root/');
-}
+// Server runs on the dev server (100.121.161.109) — all /root/ paths are local filesystem.
+// No SSH needed. Mac is a thin client (browser only).
 
-// SSH helper: execute command on remote and return stdout
-async function sshExec(cmd: string): Promise<string> {
-  const { stdout } = await execAsync(`ssh -o ConnectTimeout=5 root@${REMOTE_HOST} ${JSON.stringify(cmd)}`);
-  return stdout;
-}
-
-// List directory contents (local or remote via SSH)
+// List directory contents
 app.get('/api/files', async (req, res) => {
   const dirPath = req.query.path as string;
   if (!dirPath) {
@@ -818,35 +921,7 @@ app.get('/api/files', async (req, res) => {
     return;
   }
 
-  // Remote path: browse via SSH
-  if (isRemotePath(dirPath)) {
-    try {
-      // Use find with maxdepth 1 for listing + file type detection
-      const raw = await sshExec(
-        `mkdir -p ${dirPath} && find ${dirPath} -maxdepth 1 -not -name '.*' -not -path '${dirPath}' -printf '%y\\t%f\\n' 2>/dev/null | sort -t$'\\t' -k1,1r -k2,2`
-      );
-      const entries = raw.trim().split('\n').filter(Boolean).map(line => {
-        const [type, name] = line.split('\t');
-        const isDir = type === 'd';
-        const fullPath = dirPath.endsWith('/') ? `${dirPath}${name}` : `${dirPath}/${name}`;
-        return {
-          name,
-          path: fullPath,
-          isDir,
-          ext: isDir ? null : extname(name).toLowerCase() || null,
-        };
-      }).sort((a, b) => {
-        if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
-        return a.name.localeCompare(b.name);
-      });
-      res.json({ path: dirPath, entries, remote: true });
-    } catch (err: any) {
-      res.status(500).json({ error: `SSH: ${err.message}` });
-    }
-    return;
-  }
-
-  // Local path
+  // All paths are local (server runs on dev server)
   const resolved = resolvePath(dirPath);
   if (!existsSync(resolved)) {
     res.status(404).json({ error: 'not found' });
@@ -879,7 +954,7 @@ app.get('/api/files', async (req, res) => {
   }
 });
 
-// Read file content (local or remote, supports DOCX→HTML and XLSX→HTML conversion)
+// Read file content (supports DOCX→HTML and XLSX→HTML conversion)
 app.get('/api/file', async (req, res) => {
   const filePath = req.query.path as string;
   if (!filePath) {
@@ -887,33 +962,7 @@ app.get('/api/file', async (req, res) => {
     return;
   }
 
-  // Remote file: read via SSH
-  if (isRemotePath(filePath)) {
-    try {
-      const ext = extname(filePath).toLowerCase();
-      const mimeType = mime.lookup(ext) || 'application/octet-stream';
-      const textExts = ['.md', '.ts', '.tsx', '.js', '.jsx', '.py', '.sh', '.yml', '.yaml', '.toml', '.cfg', '.ini', '.env', '.csv', '.log', '.json', '.html', '.htm', '.txt', '.css'];
-
-      if (mimeType.startsWith('text/') || mimeType === 'application/json' || textExts.includes(ext)) {
-        const content = await sshExec(`cat ${filePath}`);
-        res.json({ path: filePath, content, mimeType, ext, remote: true });
-      } else if (mimeType.startsWith('image/') || mimeType === 'application/pdf') {
-        // Binary files: SCP to temp, serve, cleanup
-        const tmpFile = join('/tmp', `cui-remote-${Date.now()}${ext}`);
-        await execAsync(`scp root@${REMOTE_HOST}:${filePath} ${tmpFile}`);
-        res.sendFile(tmpFile, () => { try { unlinkSync(tmpFile); } catch {} });
-      } else {
-        // Try as text
-        const content = await sshExec(`cat ${filePath}`);
-        res.json({ path: filePath, content, mimeType, ext, remote: true });
-      }
-    } catch (err: any) {
-      res.status(500).json({ error: `SSH: ${err.message}` });
-    }
-    return;
-  }
-
-  // Local file
+  // All files are local (server runs on dev server)
   const resolved = resolvePath(filePath);
   if (!existsSync(resolved)) {
     res.status(404).json({ error: 'not found' });
@@ -1047,6 +1096,14 @@ function autoTitleUntitled(results: Array<{ sessionId: string; summary: string; 
   }
 }
 
+// --- User Input Log ---
+// Persistent log of all user inputs (subject + message) from Queue/Commander
+const INPUT_LOG_FILE = join(DATA_DIR, 'input-log.jsonl');
+function logUserInput(entry: { type: string; accountId: string; workDir?: string; subject?: string; message: string; sessionId?: string; result: 'ok' | 'error'; error?: string }) {
+  const line = JSON.stringify({ ts: new Date().toISOString(), ...entry });
+  try { appendFileSync(INPUT_LOG_FILE, line + '\n'); } catch { /* ignore write errors */ }
+}
+
 // --- Conversation Account Assignment ---
 // Tracks which account a conversation belongs to (avoids duplicate display)
 const ASSIGNMENTS_FILE = join(DATA_DIR, 'conv-accounts.json');
@@ -1156,10 +1213,11 @@ app.get('/api/active-dir/:projectId', (req, res) => {
 
 // --- Mission Control API ---
 // Helper: fetch JSON from a CUI proxy
-async function cuiFetch(proxyPort: number, path: string, options?: { method?: string; body?: string }): Promise<any> {
+async function cuiFetch(proxyPort: number, path: string, options?: { method?: string; body?: string; timeoutMs?: number }): Promise<{ data: any; ok: boolean; status: number; error?: string }> {
   const url = `http://localhost:${proxyPort}${path}`;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
+  const ms = options?.timeoutMs ?? 8000;
+  const timeout = setTimeout(() => controller.abort(), ms);
   try {
     const res = await fetch(url, {
       method: options?.method || 'GET',
@@ -1167,9 +1225,15 @@ async function cuiFetch(proxyPort: number, path: string, options?: { method?: st
       body: options?.body,
       signal: controller.signal,
     });
-    return await res.json();
-  } catch {
-    return null;
+    const data = await res.json();
+    if (!res.ok) {
+      const errMsg = data?.error?.message || data?.error?.code || data?.message || data?.error || `HTTP ${res.status}`;
+      return { data, ok: false, status: res.status, error: String(errMsg) };
+    }
+    return { data, ok: true, status: res.status };
+  } catch (err: any) {
+    const msg = err?.name === 'AbortError' ? `timeout (${ms / 1000}s)` : (err?.cause?.code === 'ECONNREFUSED' ? 'connection refused' : (err?.message || 'network error'));
+    return { data: null, ok: false, status: 0, error: msg };
   } finally {
     clearTimeout(timeout);
   }
@@ -1194,15 +1258,16 @@ function getProxyPort(accountId: string): number | null {
   return proxy?.localPort ?? null;
 }
 
+
 // 1. List all conversations across all accounts
 app.get('/api/mission/conversations', async (req, res) => {
   const filterProject = req.query.project as string | undefined;
   const results: any[] = [];
 
   await Promise.all(CUI_PROXIES.map(async (proxy) => {
-    const data = await cuiFetch(proxy.localPort, '/api/conversations?limit=50&sortBy=updated&order=desc');
-    if (!data?.conversations) return;
-    for (const c of data.conversations) {
+    const resp = await cuiFetch(proxy.localPort, '/api/conversations?limit=50&sortBy=updated&order=desc');
+    if (!resp.ok || !resp.data?.conversations) return;
+    for (const c of resp.data.conversations) {
       if (filterProject && !c.projectPath?.includes(filterProject)) continue;
       results.push({
         sessionId: c.sessionId,
@@ -1282,70 +1347,113 @@ app.get('/api/mission/conversation/:accountId/:sessionId', async (req, res) => {
   if (!port) { res.status(400).json({ error: 'unknown account' }); return; }
 
   const tail = parseInt(req.query.tail as string) || 10;
-  const [convData, permData] = await Promise.all([
+  const [convResp, permResp] = await Promise.all([
     cuiFetch(port, `/api/conversations/${req.params.sessionId}`),
     cuiFetch(port, `/api/permissions?streamingId=&status=pending`),
   ]);
 
-  if (!convData) { res.status(502).json({ error: 'CUI unreachable' }); return; }
+  if (!convResp.ok) { res.status(502).json({ error: convResp.error || 'CUI unreachable' }); return; }
 
-  // Transform CUI message format: {type, message: {role, content}, timestamp} → {role, content, timestamp}
-  const rawMessages = (convData.messages || []).sort((a: any, b: any) => (a.timestamp || '').localeCompare(b.timestamp || ''));
+  // Transform CUI message format + auto-filter synthetic error messages (rate limit, billing, etc.)
+  const allMessages = convResp.data.messages || [];
+  const rawMessages = allMessages.filter((m: any, i: number) => {
+    if (m.isApiErrorMessage === true) return false;
+    if (m.message?.model === '<synthetic>') return false;
+    // Filter orphaned "continue" user messages (unstick attempts before/after errors)
+    const content = typeof m.message?.content === 'string' ? m.message.content.trim().toLowerCase() : '';
+    if (content === 'continue' && m.message?.role === 'user') {
+      const next = allMessages[i + 1];
+      if (!next) return false; // trailing continue with no response
+      if (next.isApiErrorMessage === true || next.message?.model === '<synthetic>') return false;
+    }
+    return true;
+  });
   const messages = rawMessages.slice(-tail).map((m: any) => ({
     role: m.message?.role || m.type || 'user',
     content: m.message?.content || m.content || '',
     timestamp: m.timestamp || '',
   }));
 
+  // Filter permissions to only include ones for THIS conversation's streaming session
+  const convStreamingId = convResp.data.streamingId || convResp.data.metadata?.streamingId || '';
+  const allPermissions: any[] = permResp.data?.permissions || [];
+  const sessionPermissions = convStreamingId
+    ? allPermissions.filter((p: any) => p.streamingId === convStreamingId)
+    : []; // No streamingId → conversation not streaming → no pending permissions
+
+  // Detect if conversation is idle (last message is assistant text, not waiting for tool_result)
+  const lastRaw = rawMessages.length > 0 ? rawMessages[rawMessages.length - 1] : null;
+  const lastRole = lastRaw?.message?.role;
+  const lastContent = lastRaw?.message?.content;
+  let hasPendingToolUse = false;
+  if (Array.isArray(lastContent)) {
+    hasPendingToolUse = lastContent.some((b: any) => b.type === 'tool_use');
+  }
+  const isAgentDone = lastRole === 'assistant' && !hasPendingToolUse && sessionPermissions.length === 0;
+
   res.json({
     messages,
-    summary: convData.summary || '',
-    customName: getTitle(req.params.sessionId) || convData.sessionInfo?.custom_name || '',
-    status: convData.metadata?.status || 'completed',
-    projectPath: convData.projectPath || '',
-    permissions: permData?.permissions || [],
+    summary: convResp.data.summary || '',
+    status: convResp.data.metadata?.status || 'completed',
+    projectPath: convResp.data.projectPath || '',
+    permissions: sessionPermissions,
     totalMessages: rawMessages.length,
+    isAgentDone,
   });
 });
 
 // 3. Send message to existing conversation
 app.post('/api/mission/send', async (req, res) => {
-  const { accountId, sessionId, message, workDir, model } = req.body;
+  const { accountId, sessionId, message, workDir, useLocal } = req.body;
   if (!accountId || !sessionId || !message) {
     res.status(400).json({ error: 'accountId, sessionId, message required' });
     return;
   }
-  const port = getProxyPort(accountId);
+  // useLocal flag: route through local CUI server instead of remote
+  const effectiveAccountId = useLocal ? 'local' : accountId;
+  const port = getProxyPort(effectiveAccountId);
   if (!port) { res.status(400).json({ error: 'unknown account' }); return; }
 
-  const result = await cuiFetch(port, '/api/conversations/start', {
+  const resolvedWorkDir = workDir || '/root';
+
+  // Auto-clean synthetic error messages (rate limit, billing) from JSONL before resuming
+  const cleaned = unstickConversation(sessionId);
+  if (cleaned > 0) console.log(`[Send] Auto-cleaned ${cleaned} error messages from ${sessionId}`);
+
+  const resp = await cuiFetch(port, '/api/conversations/start', {
     method: 'POST',
+    timeoutMs: 60000,
     body: JSON.stringify({
-      workingDirectory: workDir || '/root',
+      workingDirectory: resolvedWorkDir,
       initialPrompt: message,
-      resumedSessionId: sessionId, ...(model ? { model } : {}),
+      resumedSessionId: sessionId,
     }),
   });
 
-  if (!result) { res.status(502).json({ error: 'CUI unreachable' }); return; }
-  if (result.error) { res.status(400).json({ error: result.error, code: result.code }); return; }
-  saveAssignment(result.sessionId || sessionId, accountId);
-  setLastPrompt(result.sessionId || sessionId);
+  if (!resp.ok || !resp.data?.sessionId) {
+    const errMsg = resp.error || 'CUI unreachable';
+    logUserInput({ type: 'send', accountId, workDir, message, sessionId, result: 'error', error: errMsg });
+    res.status(502).json({ error: errMsg });
+    return;
+  }
+  const sendResult = resp.data;
+  logUserInput({ type: 'send', accountId, workDir, message, sessionId: sendResult.sessionId || sessionId, result: 'ok' });
+  saveAssignment(sendResult.sessionId || sessionId, accountId);
+  setLastPrompt(sendResult.sessionId || sessionId);
 
   // Track state
   broadcast({ type: 'cui-state', cuiId: accountId, state: 'processing' });
-  setSessionState(accountId, accountId, 'working', undefined, result.sessionId || sessionId);
+  setSessionState(accountId, accountId, 'working', undefined, sendResult.sessionId || sessionId);
 
   // Monitor the new stream
-  if (result.streamingId) {
-    monitorStream(`http://localhost:${port}`, result.streamingId, accountId, {});
+  if (sendResult.streamingId) {
+    monitorStream(`http://localhost:${port}`, sendResult.streamingId, accountId, {});
   }
 
   // Track account assignment for this conversation
-  saveAssignment(result.sessionId || sessionId, accountId);
+  saveAssignment(sendResult.sessionId || sessionId, accountId);
 
-  const busy = !result.streamingId;
-  res.json({ ok: true, busy, streamingId: result.streamingId, sessionId: result.sessionId || sessionId });
+  res.json({ ok: true, streamingId: sendResult.streamingId, sessionId: sendResult.sessionId || sessionId });
 });
 
 // 4. Approve/deny permission
@@ -1353,12 +1461,13 @@ app.post('/api/mission/permissions/:accountId/:permissionId', async (req, res) =
   const port = getProxyPort(req.params.accountId);
   if (!port) { res.status(400).json({ error: 'unknown account' }); return; }
 
-  const result = await cuiFetch(port, `/api/permissions/${req.params.permissionId}/decision`, {
+  const resp = await cuiFetch(port, `/api/permissions/${req.params.permissionId}/decision`, {
     method: 'POST',
     body: JSON.stringify({ action: req.body.action || 'approve' }),
   });
 
-  res.json(result || { error: 'failed' });
+  if (!resp.ok) { res.status(502).json({ error: resp.error || 'permission decision failed' }); return; }
+  res.json(resp.data);
 });
 
 // 4b. Get all session attention states (for batch UI updates)
@@ -1377,8 +1486,12 @@ app.post('/api/mission/conversation/:accountId/:sessionId/name', async (req, res
 app.post('/api/mission/conversation/:sessionId/assign', (req, res) => {
   const { accountId } = req.body;
   if (!accountId) { res.status(400).json({ error: 'accountId required' }); return; }
-  saveAssignment(req.params.sessionId, accountId);
-  res.json({ ok: true, sessionId: req.params.sessionId, accountId });
+  const sid = req.params.sessionId;
+  saveAssignment(sid, accountId);
+  // Auto-unstick: remove rate-limit messages so the conversation can continue on the new account
+  const removed = unstickConversation(sid);
+  if (removed > 0) console.log(`[Assign] Unsticked ${sid}: removed ${removed} rate-limit messages`);
+  res.json({ ok: true, sessionId: sid, accountId, unsticked: removed });
 });
 
 // 5c. Get panel visibility (which conversations are open in which panels)
@@ -1450,7 +1563,100 @@ app.delete('/api/mission/conversation/:sessionId', (req, res) => {
   res.json({ ok: true, deleted, errors });
 });
 
-// 5f. Activate conversations in panels
+// --- Unstick: remove API error messages + orphaned user messages from conversation JSONL ---
+// Handles: rate_limit, billing_error, unknown, invalid_request, etc.
+// Also removes trailing orphaned user/queue-operation messages that have no assistant response.
+// This prevents the "multiple consecutive user messages" problem that causes context loss.
+function unstickConversation(sessionId: string): number {
+  const cuiProjectsDir = join(homedir(), '.claude', 'projects');
+  if (!existsSync(cuiProjectsDir)) return 0;
+  let totalRemoved = 0;
+  const projectDirs = readdirSync(cuiProjectsDir);
+  for (const dir of projectDirs) {
+    const dirPath = join(cuiProjectsDir, dir);
+    try { if (!statSync(dirPath).isDirectory()) continue; } catch { continue; }
+    const filePath = join(dirPath, `${sessionId}.jsonl`);
+    if (!existsSync(filePath)) continue;
+    try {
+      const lines = readFileSync(filePath, 'utf-8').split('\n');
+      const removeIndices = new Set<number>();
+      // Phase 1: Remove ALL synthetic error messages anywhere in the conversation
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        try {
+          const obj = JSON.parse(line);
+          if (obj.isApiErrorMessage === true) { removeIndices.add(i); continue; }
+          const msg = obj.message;
+          if (msg && typeof msg === 'object' && msg.model === '<synthetic>') { removeIndices.add(i); continue; }
+        } catch { continue; }
+      }
+      // Phase 2: Remove trailing orphaned user/queue-operation entries (no assistant response after them)
+      // Walk backwards from the end, remove user messages and queue-operations until we hit an assistant message.
+      // Keep ONE trailing user message if it's the most recent (will be the "resume" trigger).
+      const remaining = lines.map((l, i) => ({ line: l, idx: i })).filter(x => !removeIndices.has(x.idx));
+      let trailingUserCount = 0;
+      for (let k = remaining.length - 1; k >= 0; k--) {
+        const line = remaining[k].line.trim();
+        if (!line) continue;
+        try {
+          const obj = JSON.parse(line);
+          const role = obj.message?.role || obj.type;
+          if (role === 'assistant') break; // Found last assistant message — stop
+          if (role === 'user') {
+            trailingUserCount++;
+            if (trailingUserCount > 1) {
+              // Keep only the LAST user message, remove earlier orphaned ones
+              removeIndices.add(remaining[k].idx);
+            }
+          }
+          if (obj.type === 'queue-operation' && trailingUserCount > 0) {
+            // Remove queue-operations associated with orphaned user messages
+            removeIndices.add(remaining[k].idx);
+          }
+        } catch { break; }
+      }
+      if (removeIndices.size > 0) {
+        writeFileSync(filePath, lines.filter((_, i) => !removeIndices.has(i)).join('\n'));
+        totalRemoved += removeIndices.size;
+        if (trailingUserCount > 1) {
+          console.log(`[Unstick] ${sessionId}: removed ${trailingUserCount - 1} orphaned user messages`);
+        }
+      }
+    } catch { /* skip unreadable */ }
+  }
+  return totalRemoved;
+}
+
+// 5f. Remove rate-limit messages from stuck conversations (bulk)
+app.post('/api/mission/unstick', (_req, res) => {
+  const cuiProjectsDir = join(homedir(), '.claude', 'projects');
+  if (!existsSync(cuiProjectsDir)) {
+    res.status(404).json({ error: 'CUI projects directory not found' });
+    return;
+  }
+  const fixed: { session: string; removed: number }[] = [];
+  try {
+    const projectDirs = readdirSync(cuiProjectsDir);
+    for (const dir of projectDirs) {
+      const dirPath = join(cuiProjectsDir, dir);
+      try { if (!statSync(dirPath).isDirectory()) continue; } catch { continue; }
+      const files = readdirSync(dirPath).filter(f => f.endsWith('.jsonl') && /^[0-9a-f]{8}-/.test(f));
+      for (const file of files) {
+        const sessionId = file.replace('.jsonl', '');
+        const removed = unstickConversation(sessionId);
+        if (removed > 0) fixed.push({ session: sessionId, removed });
+      }
+    }
+  } catch (e: any) {
+    res.status(500).json({ error: `Failed to scan: ${e.message}` });
+    return;
+  }
+  console.log(`[Unstick] Fixed ${fixed.length} conversations`);
+  res.json({ ok: true, fixed: fixed.length, details: fixed });
+});
+
+// 5g. Activate conversations in panels
 app.post('/api/mission/activate', (req, res) => {
   const { conversations } = req.body;
   if (!Array.isArray(conversations) || conversations.length === 0) {
@@ -1479,40 +1685,62 @@ app.post('/api/mission/activate', (req, res) => {
 
 // 6. Start new conversation with subject
 app.post('/api/mission/start', async (req, res) => {
-  const { accountId, workDir, subject, message, model } = req.body;
+  const { accountId, workDir, subject, message, useLocal } = req.body;
   if (!accountId || !message) {
     res.status(400).json({ error: 'accountId, message required' });
     return;
   }
-  const port = getProxyPort(accountId);
+  // useLocal flag: route through local CUI server instead of remote
+  const effectiveAccountId = useLocal ? 'local' : accountId;
+  const port = getProxyPort(effectiveAccountId);
   if (!port) { res.status(400).json({ error: 'unknown account' }); return; }
 
-  // Start conversation
-  const result = await cuiFetch(port, '/api/conversations/start', {
+  const resolvedWorkDir = workDir || '/root';
+
+  // Start conversation (60s timeout — Claude v1.0.128 spawn takes ~34s)
+  const startResp = await cuiFetch(port, '/api/conversations/start', {
     method: 'POST',
+    timeoutMs: 60000,
     body: JSON.stringify({
-      workingDirectory: workDir || '/root',
+      workingDirectory: resolvedWorkDir,
       initialPrompt: message,
-      ...(model ? { model } : {}),
     }),
   });
 
-  if (!result?.sessionId) { res.status(502).json({ error: 'CUI unreachable' }); return; }
+  if (!startResp.ok || !startResp.data?.sessionId) {
+    const errMsg = startResp.error || 'CUI unreachable';
+    logUserInput({ type: 'start', accountId, workDir, subject, message, result: 'error', error: errMsg });
+    res.status(502).json({ error: errMsg });
+    return;
+  }
+
+  const startData = startResp.data;
+  logUserInput({ type: 'start', accountId, workDir, subject, message, sessionId: startData.sessionId, result: 'ok' });
 
   // Save subject as local title (CUI API doesn't support custom_name)
   if (subject) {
-    saveTitle(result.sessionId, subject);
+    saveTitle(startData.sessionId, subject);
   }
   // Track account assignment + prompt time
-  saveAssignment(result.sessionId, accountId);
-  setLastPrompt(result.sessionId);
+  saveAssignment(startData.sessionId, accountId);
+  setLastPrompt(startData.sessionId);
 
   broadcast({ type: 'cui-state', cuiId: accountId, state: 'processing' });
-  if (result.streamingId) {
-    monitorStream(`http://localhost:${port}`, result.streamingId, accountId, {});
+  if (startData.streamingId) {
+    monitorStream(`http://localhost:${port}`, startData.streamingId, accountId, {});
   }
 
-  res.json({ ok: true, sessionId: result.sessionId, streamingId: result.streamingId });
+  res.json({ ok: true, sessionId: startData.sessionId, streamingId: startData.streamingId });
+});
+
+// 6b. Input log: retrieve all logged user inputs
+app.get('/api/mission/input-log', (_req, res) => {
+  if (!existsSync(INPUT_LOG_FILE)) { res.json({ entries: [] }); return; }
+  try {
+    const lines = readFileSync(INPUT_LOG_FILE, 'utf8').trim().split('\n').filter(Boolean);
+    const entries = lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+    res.json({ entries, total: entries.length });
+  } catch { res.json({ entries: [], total: 0 }); }
 });
 
 // 7. Stop conversation
@@ -1520,11 +1748,12 @@ app.post('/api/mission/conversation/:accountId/:sessionId/stop', async (req, res
   const port = getProxyPort(req.params.accountId);
   if (!port) { res.status(400).json({ error: 'unknown account' }); return; }
 
-  const result = await cuiFetch(port, `/api/conversations/${req.params.sessionId}/stop`, {
+  const resp = await cuiFetch(port, `/api/conversations/${req.params.sessionId}/stop`, {
     method: 'POST',
   });
 
-  res.json(result || { error: 'failed' });
+  if (!resp.ok) { res.status(502).json({ error: resp.error || 'stop failed' }); return; }
+  res.json(resp.data);
 });
 
 // 8. Auto-title: set conversation name from first user message
@@ -1535,9 +1764,9 @@ app.post('/api/mission/auto-titles', async (_req, res) => {
   // Get all conversations
   const allConvs: Array<{ sessionId: string; accountId: string; port: number; summary: string; customName: string }> = [];
   await Promise.all(CUI_PROXIES.map(async (proxy) => {
-    const data = await cuiFetch(proxy.localPort, '/api/conversations?limit=50&sortBy=updated&order=desc');
-    if (!data?.conversations) return;
-    for (const c of data.conversations) {
+    const resp = await cuiFetch(proxy.localPort, '/api/conversations?limit=50&sortBy=updated&order=desc');
+    if (!resp.ok || !resp.data?.conversations) return;
+    for (const c of resp.data.conversations) {
       if (c.sessionInfo?.custom_name || getTitle(c.sessionId)) continue; // Already has a title
       allConvs.push({
         sessionId: c.sessionId,
@@ -1552,8 +1781,9 @@ app.post('/api/mission/auto-titles', async (_req, res) => {
   // For each conversation without a title, fetch first user message
   for (const conv of allConvs) {
     try {
-      const detail = await cuiFetch(conv.port, `/api/conversations/${conv.sessionId}`);
-      if (!detail?.messages) continue;
+      const detailResp = await cuiFetch(conv.port, `/api/conversations/${conv.sessionId}`);
+      if (!detailResp.ok || !detailResp.data?.messages) continue;
+      const detail = detailResp.data;
 
       // Find first user message
       const firstUserMsg = detail.messages.find((m: any) =>
@@ -1586,11 +1816,11 @@ app.get('/api/mission/context', async (_req, res) => {
     // Get all conversations with last 3 messages each
     const conversations: any[] = [];
     await Promise.all(CUI_PROXIES.map(async (proxy) => {
-      const data = await cuiFetch(proxy.localPort, '/api/conversations?limit=20&sortBy=updated&order=desc');
-      if (!data?.conversations) return;
-      for (const c of data.conversations) {
-        const detail = await cuiFetch(proxy.localPort, `/api/conversations/${c.sessionId}`);
-        const rawMsgs = detail?.messages || [];
+      const listResp = await cuiFetch(proxy.localPort, '/api/conversations?limit=20&sortBy=updated&order=desc');
+      if (!listResp.ok || !listResp.data?.conversations) return;
+      for (const c of listResp.data.conversations) {
+        const detailResp = await cuiFetch(proxy.localPort, `/api/conversations/${c.sessionId}`);
+        const rawMsgs = detailResp.data?.messages || [];
         const lastMsgs = rawMsgs.slice(-3).map((m: any) => ({
           role: m.message?.role || m.type || 'user',
           content: typeof m.message?.content === 'string' ? m.message.content.slice(0, 300) :
@@ -1619,15 +1849,15 @@ app.get('/api/mission/context', async (_req, res) => {
 
     const gitStatus: Record<string, { status: string; log: string }> = {};
     for (const p of projects) {
-      if (!p.workDir || !isRemotePath(p.workDir)) continue;
+      if (!p.workDir) continue;
       try {
-        const [status, log] = await Promise.all([
-          sshExec(`cd ${p.workDir} && git status --short 2>/dev/null || echo '(kein Git repo)'`),
-          sshExec(`cd ${p.workDir} && git log --oneline -5 2>/dev/null || echo '(keine commits)'`),
+        const [statusResult, logResult] = await Promise.all([
+          execAsync(`cd ${p.workDir} && git status --short 2>/dev/null || echo '(kein Git repo)'`),
+          execAsync(`cd ${p.workDir} && git log --oneline -5 2>/dev/null || echo '(keine commits)'`),
         ]);
-        gitStatus[p.id] = { status: status.trim(), log: log.trim() };
+        gitStatus[p.id] = { status: statusResult.stdout.trim(), log: logResult.stdout.trim() };
       } catch {
-        gitStatus[p.id] = { status: '(SSH error)', log: '' };
+        gitStatus[p.id] = { status: '(error)', log: '' };
       }
     }
 
@@ -1795,7 +2025,7 @@ app.post('/api/projects', async (req, res) => {
     // New project without explicit workDir: create remote workspace
     const remoteWorkDir = `/root/orchestrator/workspaces/${project.id}`;
     try {
-      await execAsync(`ssh root@100.121.161.109 "mkdir -p ${remoteWorkDir}"`);
+      mkdirSync(remoteWorkDir, { recursive: true });
       project.workDir = remoteWorkDir;
       console.log(`[Project] Created remote workspace: ${remoteWorkDir}`);
     } catch (err: any) {
@@ -1931,12 +2161,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 const execAsync = promisify(exec);
 
-// Remote server config (matches CUI_PROXIES)
-const REMOTE_SERVERS: Record<string, string> = {
-  rafael: '100.121.161.109',
-  engelmann: '100.121.161.109',
-  office: '100.121.161.109',
-};
+// Image upload directory (server runs on dev server — all local)
 const REMOTE_IMG_DIR = '/tmp/cui-images';
 
 app.post('/api/upload', (req, res) => {
@@ -1970,36 +2195,23 @@ app.post('/api/images', async (req, res) => {
     return;
   }
 
-  const isRemote = accountId !== 'local' && REMOTE_SERVERS[accountId];
-  const results: { localPath: string; remotePath?: string; name: string }[] = [];
+  const results: { localPath: string; name: string }[] = [];
 
-  // Save all images locally first
+  // Save all images locally (server IS the dev server)
+  mkdirSync(REMOTE_IMG_DIR, { recursive: true });
   for (const img of images) {
     const ext = img.name?.match(/\.[^.]+$/)?.[0] || '.png';
     const safeName = `${Date.now()}_${Math.random().toString(36).slice(2, 6)}${ext}`;
-    const localPath = join(UPLOADS_DIR, safeName);
+    const localPath = join(REMOTE_IMG_DIR, safeName);
     const base64Data = img.data.replace(/^data:[^;]+;base64,/, '');
     writeFileSync(localPath, Buffer.from(base64Data, 'base64'));
     results.push({ localPath, name: safeName });
   }
 
-  // Copy to /tmp/cui-images (local filesystem, no SCP needed)
-  try {
-    mkdirSync(REMOTE_IMG_DIR, { recursive: true });
-    for (const r of results) {
-      const dest = join(REMOTE_IMG_DIR, r.name);
-      copyFileSync(r.localPath, dest);
-      r.remotePath = dest;
-    }
-    console.log(`[Images] Saved ${results.length} images to ${REMOTE_IMG_DIR}`);
-  } catch (err: any) {
-    console.error(`[Images] Save failed: ${err.message}`);
-    res.status(500).json({ error: `Save failed: ${err.message}` });
-    return;
-  }
+  console.log(`[Images] Saved ${results.length} images to ${REMOTE_IMG_DIR}`);
 
   // Build the Read command for Claude
-  const paths = results.map(r => isRemote ? r.remotePath! : r.localPath);
+  const paths = results.map(r => r.localPath);
   const readCommand = paths.length === 1
     ? `Schau dir dieses Bild an: ${paths[0]}`
     : `Schau dir diese ${paths.length} Bilder an:\n${paths.map(p => `- ${p}`).join('\n')}`;
@@ -2007,7 +2219,6 @@ app.post('/api/images', async (req, res) => {
   res.json({
     ok: true,
     count: results.length,
-    target: isRemote ? `remote (${REMOTE_SERVERS[accountId]})` : 'local',
     paths,
     readCommand,
     results,
@@ -2044,10 +2255,7 @@ import { basename } from 'path';
 // GET /api/team/personas
 // Returns: PersonaCard[]
 app.get('/api/team/personas', async (_req, res) => {
-  // Use local path on macOS, remote path on server
-  const personasPath = process.platform === 'darwin'
-    ? '/Users/rafael/Documents/GitHub/orchestrator/team/personas'
-    : '/root/projekte/orchestrator/team/personas';
+  const personasPath = '/root/projekte/orchestrator/team/personas';
   try {
     const files = await readdir(personasPath);
     const personaFiles = files.filter(f => f.endsWith('.md'));
@@ -2066,34 +2274,6 @@ app.get('/api/team/personas', async (_req, res) => {
   }
 });
 
-// GET /api/agents/persona/:id
-// Returns: Single persona with full metadata
-app.get('/api/agents/persona/:id', async (req, res) => {
-  const personasPath = process.platform === 'darwin'
-    ? '/Users/rafael/Documents/GitHub/orchestrator/team/personas'
-    : '/root/projekte/orchestrator/team/personas';
-
-  try {
-    const personaFile = `${req.params.id}.md`;
-    const personaPath = join(personasPath, personaFile);
-    const content = await readFile(personaPath, 'utf-8');
-    const persona = parsePersona(personaFile, content);
-
-    // Add additional fields that parsePersona might not include
-    const specialtyMatch = content.match(/\*\*Specialty\*\*:\s*(.+)/i);
-    const mottoMatch = content.match(/>\s+"(.+?)"/);
-
-    res.json({
-      ...persona,
-      specialty: specialtyMatch?.[1]?.trim(),
-      motto: mottoMatch?.[1]?.trim()
-    });
-  } catch (err: any) {
-    console.error(`[API] Persona not found: ${req.params.id}`, err);
-    res.status(404).json({ error: 'Persona not found' });
-  }
-});
-
 // GET /api/team/worklist/:personaId
 // Returns: string (markdown content)
 app.get('/api/team/worklist/:personaId', async (req, res) => {
@@ -2106,100 +2286,6 @@ app.get('/api/team/worklist/:personaId', async (req, res) => {
   } catch (err: any) {
     console.error(`[Team API] Worklist not found for ${personaId}:`, err);
     res.status(404).send('Worklist not found');
-  }
-});
-
-// GET /api/workspaces/:workspace/credentials
-// Returns safe credential info (WITHOUT passwords!)
-app.get('/api/workspaces/:workspace/credentials', async (req, res) => {
-  try {
-    const { workspace } = req.params;
-    const registryPath = `/root/orchestrator/workspaces/${workspace}/CREDENTIALS.json`;
-
-    if (!existsSync(registryPath)) {
-      return res.status(404).json({
-        error: 'Credential registry not found',
-        workspace
-      });
-    }
-
-    const registry = JSON.parse(readFileSync(registryPath, 'utf-8'));
-
-    // NEVER send passwords to frontend!
-    const safeRegistry = {
-      app: registry.app,
-      version: registry.version,
-      updated: registry.updated,
-      personas: Object.entries(registry.personas || {}).map(([key, persona]: [string, any]) => ({
-        key,
-        email: persona.email,
-        role: persona.role,
-        name: `${persona.firstname} ${persona.lastname}`,
-        company: persona.company,
-        description: persona.description,
-        usage: persona.usage || ''
-      })),
-      expert_reviewers: Object.entries(registry.expert_reviewers || {}).map(([key, reviewer]: [string, any]) => ({
-        key,
-        name: `${reviewer.firstname} ${reviewer.lastname}`,
-        email: reviewer.email,
-        description: reviewer.description,
-        persona_type: reviewer.persona_type,
-        uses_herbert_login: reviewer.uses_herbert_login || false
-      })),
-      platform_defaults: Object.keys(registry.platform_defaults || {})
-    };
-
-    res.json(safeRegistry);
-  } catch (error) {
-    console.error('[Credentials API] Error loading credential registry:', error);
-    res.status(500).json({ error: 'Failed to load credential registry' });
-  }
-});
-
-// POST /api/workspaces/:workspace/credentials/validate
-// Validates that a persona exists in registry
-app.post('/api/workspaces/:workspace/credentials/validate', async (req, res) => {
-  try {
-    const { workspace } = req.params;
-    const { persona } = req.body;
-
-    if (!persona) {
-      return res.status(400).json({ valid: false, error: 'Persona parameter required' });
-    }
-
-    const registryPath = `/root/orchestrator/workspaces/${workspace}/CREDENTIALS.json`;
-
-    if (!existsSync(registryPath)) {
-      return res.status(404).json({ valid: false, error: 'Registry not found' });
-    }
-
-    const registry = JSON.parse(readFileSync(registryPath, 'utf-8'));
-
-    const personaExists = (
-      (registry.personas && registry.personas[persona]) ||
-      (registry.expert_reviewers && registry.expert_reviewers[persona]) ||
-      (registry.platform_defaults && registry.platform_defaults[persona])
-    );
-
-    if (!personaExists) {
-      return res.json({ valid: false, error: 'Persona not found' });
-    }
-
-    const personaData =
-      registry.personas?.[persona] ||
-      registry.expert_reviewers?.[persona] ||
-      registry.platform_defaults?.[persona];
-
-    res.json({
-      valid: true,
-      email: personaData.email,
-      name: `${personaData.firstname || ''} ${personaData.lastname || ''}`.trim() || persona
-    });
-
-  } catch (error) {
-    console.error('[Credentials API] Error validating persona:', error);
-    res.status(500).json({ valid: false, error: 'Validation failed' });
   }
 });
 
@@ -2304,10 +2390,7 @@ app.post('/api/team/chat/:personaId', async (req, res) => {
 
   try {
     // Load Persona System Prompt
-    // Use local path on macOS, remote path on server
-    const personasPath = process.platform === 'darwin'
-      ? '/Users/rafael/Documents/GitHub/orchestrator/team/personas'
-      : '/root/projekte/orchestrator/team/personas';
+    const personasPath = '/root/projekte/orchestrator/team/personas';
     const files = await readdir(personasPath);
     const personaFile = files.find(f => f.startsWith(personaId + '-') && f.endsWith('.md'));
 
@@ -2419,8 +2502,6 @@ app.post('/api/files/move', async (req, res) => {
   }
 
   const op = operation || 'move';
-  const sourceIsRemote = isRemotePath(sourcePath);
-  const targetIsRemote = isRemotePath(targetDir);
 
   try {
     const sourceFilename = sourcePath.split('/').pop() || 'file';
@@ -2428,88 +2509,34 @@ app.post('/api/files/move', async (req, res) => {
       ? `${targetDir}${sourceFilename}`
       : `${targetDir}/${sourceFilename}`;
 
-    // Both remote: SSH mv/cp
-    if (sourceIsRemote && targetIsRemote) {
-      const cmd = op === 'move' ? 'mv' : 'cp';
-      await sshExec(`mkdir -p ${targetDir} && ${cmd} ${sourcePath} ${targetPath}`);
-      broadcast({ type: 'file-change', path: targetPath, event: 'add' });
-      if (op === 'move') {
-        broadcast({ type: 'file-change', path: sourcePath, event: 'unlink' });
-      }
-      res.json({ ok: true, targetPath, operation: op, remote: true });
+    // All paths are local (server runs on dev server)
+    const resolvedSource = resolvePath(sourcePath);
+    const resolvedTarget = resolvePath(targetPath);
+    const resolvedTargetDir = resolvePath(targetDir);
+
+    if (!existsSync(resolvedSource)) {
+      res.status(404).json({ error: 'source file not found' });
       return;
     }
 
-    // Both local: fs.copyFileSync/renameSync
-    if (!sourceIsRemote && !targetIsRemote) {
-      const resolvedSource = resolvePath(sourcePath);
-      const resolvedTarget = resolvePath(targetPath);
-      const resolvedTargetDir = resolvePath(targetDir);
+    mkdirSync(resolvedTargetDir, { recursive: true });
 
-      if (!existsSync(resolvedSource)) {
-        res.status(404).json({ error: 'source file not found' });
-        return;
-      }
-
-      mkdirSync(resolvedTargetDir, { recursive: true });
-
-      if (op === 'move') {
-        const { renameSync } = await import('fs');
-        renameSync(resolvedSource, resolvedTarget);
-      } else {
-        const { copyFileSync } = await import('fs');
-        copyFileSync(resolvedSource, resolvedTarget);
-      }
-
-      broadcast({ type: 'file-change', path: resolvedTarget, event: 'add' });
-      if (op === 'move') {
-        broadcast({ type: 'file-change', path: resolvedSource, event: 'unlink' });
-      }
-      res.json({ ok: true, targetPath: resolvedTarget, operation: op, remote: false });
-      return;
+    if (op === 'move') {
+      const { renameSync } = await import('fs');
+      renameSync(resolvedSource, resolvedTarget);
+    } else {
+      const { copyFileSync } = await import('fs');
+      copyFileSync(resolvedSource, resolvedTarget);
     }
 
-    // Mixed (local→remote or remote→local): use scp
-    if (sourceIsRemote && !targetIsRemote) {
-      // Remote → Local: scp from server
-      const resolvedTarget = resolvePath(targetPath);
-      const resolvedTargetDir = resolvePath(targetDir);
-      mkdirSync(resolvedTargetDir, { recursive: true });
-      await execAsync(`scp root@${REMOTE_HOST}:${sourcePath} ${resolvedTarget}`);
-      if (op === 'move') {
-        await sshExec(`rm ${sourcePath}`);
-        broadcast({ type: 'file-change', path: sourcePath, event: 'unlink' });
-      }
-      broadcast({ type: 'file-change', path: resolvedTarget, event: 'add' });
-      res.json({ ok: true, targetPath: resolvedTarget, operation: op, mixed: 'remote→local' });
-      return;
-    }
-
-    if (!sourceIsRemote && targetIsRemote) {
-      // Local → Remote: scp to server
-      const resolvedSource = resolvePath(sourcePath);
-      if (!existsSync(resolvedSource)) {
-        res.status(404).json({ error: 'source file not found' });
-        return;
-      }
-      await sshExec(`mkdir -p ${targetDir}`);
-      await execAsync(`scp ${resolvedSource} root@${REMOTE_HOST}:${targetPath}`);
-      if (op === 'move') {
-        unlinkSync(resolvedSource);
-        broadcast({ type: 'file-change', path: resolvedSource, event: 'unlink' });
-      }
-      broadcast({ type: 'file-change', path: targetPath, event: 'add' });
-      res.json({ ok: true, targetPath, operation: op, mixed: 'local→remote' });
-      return;
-    }
-
-    res.status(500).json({ error: 'unreachable path logic' });
+    // file-change broadcasts removed — no frontend consumer
+    res.json({ ok: true, targetPath: resolvedTarget, operation: op });
   } catch (err: any) {
     res.status(500).json({ error: `File operation failed: ${err.message}` });
   }
 });
 
-// --- CUI Sync (build + pm2 restart, optional git pull) ---
+// --- CUI Sync (git pull + build + systemd restart) ---
 const WORKSPACE_ROOT = resolve(import.meta.dirname ?? __dirname, '..');
 let _syncInProgress = false;
 
@@ -2521,7 +2548,7 @@ app.post('/api/cui-sync', async (_req, res) => {
   _syncInProgress = true;
   broadcast({ type: 'cui-sync', status: 'started' });
 
-  const PATH_PREFIX = '/opt/homebrew/bin:/usr/local/bin:' + (process.env.PATH || '');
+  const PATH_PREFIX = '/usr/local/bin:' + (process.env.PATH || '');
   const devEnv = { ...process.env, PATH: PATH_PREFIX, NODE_ENV: 'development' };
   const execOpts = { cwd: WORKSPACE_ROOT, env: devEnv, timeout: 120_000 };
 
@@ -2549,13 +2576,10 @@ app.post('/api/cui-sync', async (_req, res) => {
     _pendingChanges = []; // Clear pending changes after successful build
     res.json({ ok: true, git: gitResult, build: builtMatch?.[1] || 'ok' });
 
-    // 4. Schedule pm2 restart (after response is sent)
-    setTimeout(async () => {
-      try {
-        await execAsync('pm2 restart cui-workspace', { env: { ...process.env, PATH: PATH_PREFIX } });
-      } catch (err: any) {
-        console.error('[Sync] pm2 restart failed:', err.message);
-      }
+    // 4. Schedule restart (after response is sent) — systemd will restart the process
+    setTimeout(() => {
+      console.log('[Sync] Build complete, exiting for systemd restart');
+      process.exit(0);
     }, 500);
 
   } catch (err: any) {
@@ -2571,7 +2595,7 @@ let _changeDebounce: ReturnType<typeof setTimeout> | null = null;
 
 const changeWatcher = watch([
   join(WORKSPACE_ROOT, 'src'),
-  // join(WORKSPACE_ROOT, 'server'), // disabled: production mode
+  join(WORKSPACE_ROOT, 'server'),
 ], {
   ignored: /(node_modules|dist|\.git|__pycache__)/,
   persistent: true,
@@ -2587,15 +2611,15 @@ changeWatcher.on('all', (event, filePath) => {
   if (!/\.(ts|tsx|css|html|json)$/.test(filePath)) return;
   if (filePath.includes('/dist/') || filePath.includes('/node_modules/')) return;
   const rel = relative(WORKSPACE_ROOT, filePath);
-  console.log(`[ChangeWatch] ${event}: ${rel}`);
+  // No per-file console.log — only log summary when broadcasting
   if (!_pendingChanges.includes(rel)) _pendingChanges.push(rel);
 
-  // Debounce: notify frontend after 2s quiet period
+  // Debounce: notify frontend after 5s quiet period (was 2s — too aggressive during Syncthing bursts)
   if (_changeDebounce) clearTimeout(_changeDebounce);
   _changeDebounce = setTimeout(() => {
-    broadcast({ type: 'cui-update-available', files: _pendingChanges.slice(0, 20), count: _pendingChanges.length });
     console.log(`[ChangeWatch] Update available: ${_pendingChanges.length} files changed`);
-  }, 2000);
+    broadcast({ type: 'cui-update-available', files: _pendingChanges.slice(0, 20), count: _pendingChanges.length });
+  }, 5000);
 });
 
 console.log('[ChangeWatch] Watching src/ and server/ for changes (notify-only, no auto-build)');
@@ -2603,6 +2627,108 @@ console.log('[ChangeWatch] Watching src/ and server/ for changes (notify-only, n
 // API: get pending changes
 app.get('/api/cui-sync/pending', (_req, res) => {
   res.json({ pending: _pendingChanges.length > 0, files: _pendingChanges.slice(0, 20), count: _pendingChanges.length, syncing: _syncInProgress });
+});
+
+// --- Syncthing Control API ---
+// Controls the LOCAL Syncthing instance on this server (127.0.0.1:8384)
+const SYNCTHING_URL = 'http://127.0.0.1:8384';
+const SYNCTHING_API_KEY = process.env.SYNCTHING_API_KEY || 'ZHieF7vzTmgXQ7gcUZysPo5KM7fhCKdk';
+
+async function syncthingFetch(path: string, method = 'GET'): Promise<any> {
+  const res = await fetch(`${SYNCTHING_URL}${path}`, {
+    method,
+    headers: { 'X-API-Key': SYNCTHING_API_KEY },
+  });
+  if (!res.ok) throw new Error(`Syncthing API ${path}: ${res.status} ${res.statusText}`);
+  const text = await res.text();
+  return text ? JSON.parse(text) : {};
+}
+
+// GET /api/syncthing/status — paused state, last sync time, connection info
+app.get('/api/syncthing/status', async (_req, res) => {
+  try {
+    const [system, connections, folderStats, devices] = await Promise.all([
+      syncthingFetch('/rest/system/status'),
+      syncthingFetch('/rest/system/connections'),
+      syncthingFetch('/rest/stats/folder'),
+      syncthingFetch('/rest/config/devices'),
+    ]);
+
+    // Find last synced file across all folders
+    let lastSyncAt = '';
+    let lastFile = '';
+    for (const [, stats] of Object.entries(folderStats) as [string, any][]) {
+      const at = stats.lastFile?.at || '';
+      if (at > lastSyncAt && at > '2000') { // Ignore zero dates
+        lastSyncAt = at;
+        lastFile = stats.lastFile?.filename || '';
+      }
+    }
+
+    // Check connections
+    const conns = connections.connections || {};
+    let anyConnected = false;
+    for (const [, conn] of Object.entries(conns) as [string, any][]) {
+      if (conn.connected) anyConnected = true;
+    }
+
+    // Check if any remote device is paused (skip own device)
+    const remoteDevices = (devices as any[]).filter((d: any) => d.deviceID !== system.myID);
+    const allPaused = remoteDevices.length > 0 && remoteDevices.every((d: any) => d.paused);
+
+    res.json({
+      paused: allPaused,
+      connected: anyConnected,
+      lastSyncAt: lastSyncAt || null,
+      lastFile: lastFile || null,
+      uptime: system.uptime,
+      myID: system.myID?.substring(0, 7),
+    });
+  } catch (err: any) {
+    res.status(502).json({ error: `Syncthing unreachable: ${err.message}` });
+  }
+});
+
+// POST /api/syncthing/pause — pause all device connections
+app.post('/api/syncthing/pause', async (_req, res) => {
+  try {
+    const devices: any[] = await syncthingFetch('/rest/config/devices');
+    for (const device of devices) {
+      if (!device.paused) {
+        device.paused = true;
+        await fetch(`${SYNCTHING_URL}/rest/config/devices/${device.deviceID}`, {
+          method: 'PATCH',
+          headers: { 'X-API-Key': SYNCTHING_API_KEY, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ paused: true }),
+        });
+      }
+    }
+    console.log('[Syncthing] All devices paused');
+    res.json({ ok: true, paused: true });
+  } catch (err: any) {
+    res.status(502).json({ error: `Syncthing pause failed: ${err.message}` });
+  }
+});
+
+// POST /api/syncthing/resume — resume all device connections
+app.post('/api/syncthing/resume', async (_req, res) => {
+  try {
+    const devices: any[] = await syncthingFetch('/rest/config/devices');
+    for (const device of devices) {
+      if (device.paused) {
+        device.paused = false;
+        await fetch(`${SYNCTHING_URL}/rest/config/devices/${device.deviceID}`, {
+          method: 'PATCH',
+          headers: { 'X-API-Key': SYNCTHING_API_KEY, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ paused: false }),
+        });
+      }
+    }
+    console.log('[Syncthing] All devices resumed');
+    res.json({ ok: true, paused: false });
+  } catch (err: any) {
+    res.status(502).json({ error: `Syncthing resume failed: ${err.message}` });
+  }
 });
 
 // --- Control API ---
@@ -2666,18 +2792,20 @@ app.post('/api/control/cui/cwd', (req, res) => {
 // ADMIN APIS - Werking Report Proxy
 // ============================================================
 
-const WR_PROD_URL = process.env.WERKING_REPORT_URL ?? 'https://werking-report.vercel.app';
-const WR_STAGING_URL = process.env.WERKING_REPORT_STAGING_URL ?? 'https://werking-report-git-develop-rafael-engelmanns-projects.vercel.app';
+const WR_PROD_URL = process.env.WERKING_REPORT_URL ?? 'https://werkingflow-platform.vercel.app';
+const WR_STAGING_URL = process.env.WERKING_REPORT_STAGING_URL ?? 'https://werkingflow-platform-git-develop-rafael-engelmanns-projects.vercel.app';
+const WR_LOCAL_URL = process.env.WERKING_REPORT_LOCAL_URL ?? 'http://localhost:3008';
 const WR_ADMIN_SECRET = process.env.WERKING_REPORT_ADMIN_SECRET ?? process.env.ADMIN_SECRET ?? '';
 
 // Runtime-switchable env mode (persists across restarts via file)
-type WrEnvMode = 'production' | 'staging';
+type WrEnvMode = 'production' | 'staging' | 'local';
 const WR_ENV_MODE_FILE = '/tmp/cui-wr-env-mode.json';
 function loadWrEnvMode(): WrEnvMode {
   try {
     if (existsSync(WR_ENV_MODE_FILE)) {
       const data = JSON.parse(readFileSync(WR_ENV_MODE_FILE, 'utf8'));
       if (data.mode === 'staging') return 'staging';
+      if (data.mode === 'local') return 'local';
     }
   } catch {}
   return 'production'; // default
@@ -2686,7 +2814,11 @@ function saveWrEnvMode(mode: WrEnvMode) {
   try { writeFileSync(WR_ENV_MODE_FILE, JSON.stringify({ mode })); } catch {}
 }
 let wrEnvMode: WrEnvMode = loadWrEnvMode();
-function wrBase(): string { return wrEnvMode === 'staging' ? WR_STAGING_URL : WR_PROD_URL; }
+function wrBase(): string {
+  return wrEnvMode === 'staging' ? WR_STAGING_URL
+    : wrEnvMode === 'local' ? WR_LOCAL_URL
+    : WR_PROD_URL;
+}
 console.log(`[WR Env] Loaded mode: ${wrEnvMode} → ${wrBase()}`);
 
 function wrAdminHeaders(): Record<string, string> {
@@ -2694,125 +2826,243 @@ function wrAdminHeaders(): Record<string, string> {
   return { 'x-admin-secret': WR_ADMIN_SECRET, 'Content-Type': 'application/json' };
 }
 
+/**
+ * Safe proxy helper: forwards request to WR backend, handles HTML errors gracefully.
+ * Returns JSON always — never forwards raw HTML to the client.
+ */
+async function wrProxy(url: string, init?: RequestInit): Promise<{ status: number; body: unknown }> {
+  const response = await fetch(url, { ...init, headers: { ...wrAdminHeaders(), ...init?.headers } });
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    return { status: response.status, body: await response.json() };
+  }
+  // Non-JSON response (HTML error page, 404, etc.)
+  const text = await response.text();
+  const snippet = text.slice(0, 200).replace(/<[^>]*>/g, '').trim();
+  return {
+    status: response.status >= 400 ? response.status : 502,
+    body: { error: `Non-JSON response (HTTP ${response.status}): ${snippet || 'empty response'}` },
+  };
+}
+
 // GET /api/admin/wr/env — current env mode
 app.get('/api/admin/wr/env', (_req, res) => {
-  res.json({ mode: wrEnvMode, urls: { production: WR_PROD_URL, staging: WR_STAGING_URL } });
+  res.json({ mode: wrEnvMode, urls: { production: WR_PROD_URL, staging: WR_STAGING_URL, local: WR_LOCAL_URL } });
 });
 
 // POST /api/admin/wr/env — switch env mode
 app.post('/api/admin/wr/env', (req, res) => {
   const { mode } = req.body as { mode?: string };
-  if (mode !== 'production' && mode !== 'staging') {
-    res.status(400).json({ error: 'mode must be "production" or "staging"' });
+  if (mode !== 'production' && mode !== 'staging' && mode !== 'local') {
+    res.status(400).json({ error: 'mode must be "production", "staging", or "local"' });
     return;
   }
-  wrEnvMode = mode;
-  saveWrEnvMode(mode); // persist across restarts
+  wrEnvMode = mode as WrEnvMode;
+  saveWrEnvMode(wrEnvMode); // persist across restarts
   console.log(`[Admin Proxy] WR env switched to: ${wrEnvMode} → ${wrBase()}`);
   broadcast({ type: 'wr-env-changed', mode: wrEnvMode });
   res.json({ ok: true, mode: wrEnvMode, url: wrBase() });
 });
 
 app.get('/api/admin/wr/users', async (_req, res) => {
-  try {
-    const response = await fetch(`${wrBase()}/api/admin/users`, { headers: wrAdminHeaders() });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (err: any) {
-    console.error('[Admin Proxy] GET /api/admin/wr/users error:', err);
-    res.status(500).json({ error: err.message });
-  }
+  try { const r = await wrProxy(`${wrBase()}/api/admin/users`); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/admin/wr/users/:id/approve', async (req, res) => {
-  try {
-    const response = await fetch(`${wrBase()}/api/admin/users/${req.params.id}/approve`, {
-      method: 'POST', headers: wrAdminHeaders(),
-    });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (err: any) {
-    console.error('[Admin Proxy] POST /api/admin/wr/users/:id/approve error:', err);
-    res.status(500).json({ error: err.message });
-  }
+  try { const r = await wrProxy(`${wrBase()}/api/admin/users/${req.params.id}/approve`, { method: 'POST' }); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/admin/wr/users/:id/verify', async (req, res) => {
+  try { const r = await wrProxy(`${wrBase()}/api/admin/users/${req.params.id}/verify`, { method: 'POST' }); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/admin/wr/billing/overview', async (_req, res) => {
+  try { const r = await wrProxy(`${wrBase()}/api/admin/billing/overview`); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/admin/wr/usage/stats', async (req, res) => {
+  try { const r = await wrProxy(`${wrBase()}/api/admin/usage/stats?period=${req.query.period || 'month'}`); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/admin/wr/usage/activity', async (_req, res) => {
+  try { const r = await wrProxy(`${wrBase()}/api/admin/usage/activity`); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/admin/wr/feedback', async (_req, res) => {
+  try { const r = await wrProxy(`${wrBase()}/api/admin/feedback`); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/admin/wr/system-health', async (_req, res) => {
+  try { const r = await wrProxy(`${wrBase()}/api/admin/system-health`); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/admin/wr/usage/trend', async (_req, res) => {
+  try { const r = await wrProxy(`${wrBase()}/api/admin/usage/trend`); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+// ============================================================
+// ADMIN APIS - Extended Platform Admin Proxy Routes
+// ============================================================
+
+// Dashboard / Stats
+app.get('/api/admin/wr/stats', async (_req, res) => {
+  try { const r = await wrProxy(`${wrBase()}/api/admin/stats`); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+app.get('/api/admin/wr/health', async (_req, res) => {
+  try { const r = await wrProxy(`${wrBase()}/api/admin/health`); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+app.get('/api/admin/wr/infrastructure', async (_req, res) => {
+  try { const r = await wrProxy(`${wrBase()}/api/admin/infrastructure`); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+app.get('/api/admin/wr/supabase-health', async (_req, res) => {
+  try { const r = await wrProxy(`${wrBase()}/api/admin/supabase-health`); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+// Tenant CRUD
+app.get('/api/admin/wr/tenants', async (req, res) => {
+  try { const qs = new URLSearchParams(req.query as Record<string, string>).toString(); const r = await wrProxy(`${wrBase()}/api/admin/tenants${qs ? '?' + qs : ''}`); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+app.post('/api/admin/wr/tenants', async (req, res) => {
+  try { const r = await wrProxy(`${wrBase()}/api/admin/tenants`, { method: 'POST', body: JSON.stringify(req.body) }); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+app.put('/api/admin/wr/tenants/:id', async (req, res) => {
+  try { const r = await wrProxy(`${wrBase()}/api/admin/tenants/${req.params.id}`, { method: 'PUT', body: JSON.stringify(req.body) }); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+app.delete('/api/admin/wr/tenants/:id', async (req, res) => {
+  try { const r = await wrProxy(`${wrBase()}/api/admin/tenants/${req.params.id}`, { method: 'DELETE' }); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+// Developer Tokens
+app.get('/api/admin/wr/developer-tokens', async (_req, res) => {
+  try { const r = await wrProxy(`${wrBase()}/api/admin/developer-tokens`); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+app.post('/api/admin/wr/developer-tokens', async (req, res) => {
+  try { const r = await wrProxy(`${wrBase()}/api/admin/developer-tokens`, { method: 'POST', body: JSON.stringify(req.body) }); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+app.delete('/api/admin/wr/developer-tokens/:id', async (req, res) => {
+  try { const r = await wrProxy(`${wrBase()}/api/admin/developer-tokens/${req.params.id}`, { method: 'DELETE' }); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+// Audit Logs
+app.get('/api/admin/wr/audit', async (req, res) => {
+  try { const qs = new URLSearchParams(req.query as Record<string, string>).toString(); const r = await wrProxy(`${wrBase()}/api/admin/audit${qs ? '?' + qs : ''}`); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+// Platform Config
+app.get('/api/admin/wr/config', async (_req, res) => {
+  try { const r = await wrProxy(`${wrBase()}/api/admin/config`); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+app.post('/api/admin/wr/config', async (req, res) => {
+  try { const r = await wrProxy(`${wrBase()}/api/admin/config`, { method: 'POST', body: JSON.stringify(req.body) }); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+// AI Usage
+app.get('/api/admin/wr/ai-usage', async (_req, res) => {
+  try { const r = await wrProxy(`${wrBase()}/api/admin/ai-usage`); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+// Billing (extended)
+app.get('/api/admin/wr/billing', async (_req, res) => {
+  try { const r = await wrProxy(`${wrBase()}/api/admin/billing`); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+// Vercel Deploy Trigger
+app.post('/api/admin/wr/deploy', async (req, res) => {
+  try { const r = await wrProxy(`${wrBase()}/api/admin/services/vercel/deploy`, { method: 'POST', body: JSON.stringify(req.body) }); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+// Hetzner Restart
+app.post('/api/admin/wr/hetzner/restart', async (req, res) => {
+  try { const r = await wrProxy(`${wrBase()}/api/admin/services/hetzner/restart`, { method: 'POST', body: JSON.stringify(req.body) }); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+// User creation (via Supabase admin API directly from CUI server)
+app.post('/api/admin/wr/users/create', async (req, res) => {
+  const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? '';
+  const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? '';
+  if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
+    res.status(500).json({ error: 'Supabase credentials not configured' });
+    return;
+  }
   try {
-    const response = await fetch(`${wrBase()}/api/admin/users/${req.params.id}/verify`, {
-      method: 'POST', headers: wrAdminHeaders(),
+    const { email, password, name, role } = req.body;
+    if (!email || !password) {
+      res.status(400).json({ error: 'email and password required' });
+      return;
+    }
+    const response = await fetch(`${SUPABASE_URL}/auth/v1/admin/users`, {
+      method: 'POST',
+      headers: {
+        'apikey': SERVICE_ROLE_KEY,
+        'Authorization': `Bearer ${SERVICE_ROLE_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        email,
+        password,
+        email_confirm: true,
+        user_metadata: { name: name || '', role: role || 'user' },
+      }),
     });
     const data = await response.json();
     res.status(response.status).json(data);
   } catch (err: any) {
-    console.error('[Admin Proxy] POST /api/admin/wr/users/:id/verify error:', err);
+    console.error('[Admin] POST /api/admin/wr/users/create error:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-app.get('/api/admin/wr/billing/overview', async (_req, res) => {
-  try {
-    const response = await fetch(`${wrBase()}/api/admin/billing/overview`, { headers: wrAdminHeaders() });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (err: any) {
-    console.error('[Admin Proxy] GET /api/admin/wr/billing/overview error:', err);
-    res.status(500).json({ error: err.message });
+// User deletion
+app.delete('/api/admin/wr/users/:id', async (req, res) => {
+  const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? '';
+  const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? '';
+  if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
+    res.status(500).json({ error: 'Supabase credentials not configured' });
+    return;
   }
-});
-
-app.get('/api/admin/wr/usage/stats', async (req, res) => {
   try {
-    const period = req.query.period || 'month';
-    const response = await fetch(`${wrBase()}/api/admin/usage/stats?period=${period}`, { headers: wrAdminHeaders() });
+    const response = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${req.params.id}`, {
+      method: 'DELETE',
+      headers: {
+        'apikey': SERVICE_ROLE_KEY,
+        'Authorization': `Bearer ${SERVICE_ROLE_KEY}`,
+      },
+    });
+    if (response.status === 204) {
+      res.json({ ok: true });
+      return;
+    }
     const data = await response.json();
     res.status(response.status).json(data);
   } catch (err: any) {
-    console.error('[Admin Proxy] GET /api/admin/wr/usage/stats error:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/admin/wr/usage/activity', async (_req, res) => {
-  try {
-    const response = await fetch(`${wrBase()}/api/admin/usage/activity`, { headers: wrAdminHeaders() });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (err: any) {
-    console.error('[Admin Proxy] GET /api/admin/wr/usage/activity error:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/admin/wr/feedback', async (_req, res) => {
-  try {
-    const response = await fetch(`${wrBase()}/api/admin/feedback`, { headers: wrAdminHeaders() });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (err: any) {
-    console.error('[Admin Proxy] GET /api/admin/wr/feedback error:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/admin/wr/system-health', async (_req, res) => {
-  try {
-    const response = await fetch(`${wrBase()}/api/admin/system-health`, { headers: wrAdminHeaders() });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (err: any) {
-    console.error('[Admin Proxy] GET /api/admin/wr/system-health error:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/admin/wr/usage/trend', async (_req, res) => {
-  try {
-    const response = await fetch(`${wrBase()}/api/admin/usage/trend`, { headers: wrAdminHeaders() });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (err: any) {
-    console.error('[Admin Proxy] GET /api/admin/wr/usage/trend error:', err);
+    console.error('[Admin] DELETE /api/admin/wr/users/:id error:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -2823,7 +3073,7 @@ const VERCEL_APPS = [
   { name: 'werking-energy', projectSlug: 'werking-energy' },
   { name: 'platform', projectSlug: 'platform-werkingflow' },
   { name: 'engelmann', projectSlug: 'engelmann' },
-  { name: 'tecc-safety', projectSlug: 'tecc-safety' },
+  { name: 'werking-safety', projectSlug: 'werking-safety' },
 ];
 
 app.get('/api/ops/deployments', async (_req, res) => {
@@ -2986,159 +3236,235 @@ app.get('/api/screenshot', (_req, res) => {
   res.json({ screenshots: list });
 });
 
+// Error reports from frontend screenshot capture
+const screenshotErrors = new Map<string, { error: string; at: string }>();
+
+// POST /api/screenshot/:panel/error — frontend reports screenshot failure
+app.post('/api/screenshot/:panel/error', (req, res) => {
+  const { panel } = req.params;
+  const { error } = req.body as { error?: string };
+  console.error(`[Screenshot] Frontend error for "${panel}": ${error}`);
+  screenshotErrors.set(panel, { error: error || 'unknown', at: new Date().toISOString() });
+  res.json({ ok: true });
+});
+
+// Panel listing from frontend DOM introspection
+let lastPanelList: { panels: Array<{ nodeId: string; visible: boolean; size: string }>; timestamp: string } | null = null;
+
+// POST /api/screenshot/panels — frontend reports available panels
+app.post('/api/screenshot/panels', (req, res) => {
+  lastPanelList = req.body as typeof lastPanelList;
+  console.log(`[Panels] DOM reports ${lastPanelList?.panels?.length ?? 0} panels`);
+  res.json({ ok: true });
+});
+
+// GET /api/panels — trigger frontend to list all panel node IDs in the DOM
+app.get('/api/panels', async (_req, res) => {
+  lastPanelList = null;
+  broadcast({ type: 'control:list-panels' });
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 200));
+    if (lastPanelList) {
+      res.json(lastPanelList);
+      return;
+    }
+  }
+  res.status(408).json({ error: 'No panel list received from frontend (is a browser connected?)' });
+});
+
 // POST /api/control/screenshot/request — trigger frontend to capture a panel screenshot
-// panel: component name (e.g. "admin-wr") OR nodeId
-// timeout: optional ms to wait before responding (default 3000)
+// panel: component name (e.g. "admin-wr") OR nodeId (full or 6-char short)
+// wait: optional ms to wait (default 12000 — allows auto-add + render)
+// contentWait: optional ms the frontend waits after panel is visible before capturing (default 2000)
+// saveTo: optional absolute file path to save the PNG to
 app.post('/api/control/screenshot/request', async (req, res) => {
-  const { panel, wait } = req.body as { panel?: string; wait?: number };
+  const { panel, wait, contentWait, saveTo } = req.body as { panel?: string; wait?: number; contentWait?: number; saveTo?: string };
   if (!panel) { res.status(400).json({ error: 'panel required' }); return; }
-  const waitMs = Math.min(wait ?? 3000, 15000);
-  broadcast({ type: 'control:screenshot-request', panel });
-  // Wait for screenshot to arrive (poll panelScreenshots)
+  const waitMs = Math.min(wait ?? 12000, 30000);
+  screenshotErrors.delete(panel);
+  // Step 1: Ensure panel exists and is visible (LayoutManager adds/activates it)
+  broadcast({ type: 'control:ensure-panel', component: panel });
+  broadcast({ type: 'control:select-tab', target: panel });
+  // Step 2: Wait for panel to render, then request screenshot
+  await new Promise(r => setTimeout(r, 1500));
+  broadcast({ type: 'control:screenshot-request', panel, contentWait: contentWait ?? 2000 });
+  // Wait for screenshot OR error to arrive
   const before = panelScreenshots.get(panel)?.capturedAt;
   const deadline = Date.now() + waitMs;
   while (Date.now() < deadline) {
     await new Promise(r => setTimeout(r, 200));
+    const err = screenshotErrors.get(panel);
+    if (err) {
+      res.status(422).json({ error: err.error, panel });
+      return;
+    }
     const current = panelScreenshots.get(panel);
     if (current && current.capturedAt !== before) {
-      res.json({ ok: true, panel, capturedAt: current.capturedAt, url: `/api/screenshot/${panel}.png` });
+      // Optionally copy to saveTo path
+      if (saveTo && current.filePath) {
+        try { copyFileSync(current.filePath, saveTo); } catch (e: any) {
+          console.error(`[Screenshot] Failed to copy to ${saveTo}:`, e.message);
+        }
+      }
+      res.json({ ok: true, panel, capturedAt: current.capturedAt, url: `/api/screenshot/${panel}.png`, ...(saveTo ? { savedTo: saveTo } : {}) });
       return;
     }
   }
-  res.status(408).json({ error: `Screenshot timeout after ${waitMs}ms — panel may not be visible` });
+  res.status(408).json({ error: `Screenshot timeout after ${waitMs}ms — panel may not be visible or no browser connected` });
 });
 
-// GET /api/dev/screenshot-live — Server-side screenshot using Playwright (dev/debugging only)
-app.get('/api/dev/screenshot-live', async (req, res) => {
-  // Support both panel type (data-panel) and node ID (data-node-id)
-  const panelType = req.query.panel as string;
-  const nodeId = req.query.nodeId as string;
-  const wait = Math.min(parseInt(req.query.wait as string) || 3000, 15000);
+// Shared Playwright helper: open CUI, navigate to project + tab, return page & browser
+async function openCuiPanel(opts: { project?: string; tab?: string; nodeId?: string; wait?: number }) {
+  const playwright = await import('playwright-core');
+  const browser = await playwright.chromium.launch({ headless: true, args: ['--no-sandbox'] });
+  const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+  await page.goto('http://localhost:4005', { timeout: 20000 });
+  await page.waitForSelector('.flexlayout__layout', { timeout: 10000 });
+  await page.waitForTimeout(2000);
 
-  if (!panelType && !nodeId) {
-    res.status(400).json({ error: 'Either panel or nodeId required' });
-    return;
+  // Navigate to project tab if specified
+  if (opts.project) {
+    await page.evaluate((proj) => {
+      for (const btn of document.querySelectorAll('button')) {
+        if ((btn.title || '').toLowerCase().includes(proj.toLowerCase())) { btn.click(); break; }
+      }
+    }, opts.project);
+    await page.waitForTimeout(2000);
   }
 
-  try {
-    const playwright = await import('playwright-core');
-    const browser = await playwright.chromium.launch({ headless: true });
-    const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
-
-    const targetDesc = nodeId ? `node=${nodeId}` : `panel=${panelType}`;
-    console.log(`[Screenshot] Opening http://localhost:4005 for ${targetDesc}...`);
-    await page.goto('http://localhost:4005', { waitUntil: 'domcontentloaded', timeout: 20000 });
-
-    // Wait for flexlayout
-    await page.waitForSelector('.flexlayout__layout', { timeout: 5000 });
-
-    // Build selector based on nodeId or panelType
-    const selector = nodeId ? `[data-node-id="${nodeId}"]` : `[data-panel="${panelType}"]`;
-
-    // Check if panel exists
-    const panelExists = await page.locator(selector).count();
-    if (panelExists === 0) {
-      console.log(`[Screenshot] Panel ${targetDesc} not visible`);
-
-      // If searching by panel type, try to add it via dropdown
-      if (panelType && !nodeId) {
-        console.log(`[Screenshot] Trying to add panel type ${panelType}...`);
-        await page.evaluate((pt) => {
-          const select = document.querySelector('select[title="Tab hinzufuegen"]') as HTMLSelectElement;
-          if (select) {
-            select.value = pt;
-            select.dispatchEvent(new Event('change', { bubbles: true }));
-          }
-        }, panelType);
-        await page.waitForTimeout(2000);
-      } else {
-        // If searching by node ID, try to activate the tab
-        console.log(`[Screenshot] Trying to activate node ${nodeId}...`);
-        await page.evaluate((nid) => {
-          // Find tab with matching data-node-id and click it
-          const allTabs = Array.from(document.querySelectorAll('.flexlayout__tab'));
-          for (const tab of allTabs) {
-            const content = tab.closest('.flexlayout__tabset')?.querySelector(`[data-node-id="${nid}"]`);
-            if (content) {
-              (tab as HTMLElement).click();
-              break;
-            }
-          }
-        }, nodeId);
-        await page.waitForTimeout(1000);
+  // Click on specific tab if specified
+  if (opts.tab) {
+    await page.evaluate((tabName) => {
+      for (const t of document.querySelectorAll('.flexlayout__tab_button_content')) {
+        if (t.textContent === tabName) { (t as HTMLElement).click(); break; }
       }
+    }, opts.tab);
+    await page.waitForTimeout(opts.wait ?? 3000);
+  }
+
+  return { browser, page };
+}
+
+// GET /api/capture — Server-side screenshot using Playwright (no WebSocket needed)
+// Query params:
+//   target=full | target=<nodeId> | project=Team&tab=Virtual Office
+//   wait=3000 (ms to wait for content to load)
+//   mode=png (default) | mode=json (returns metadata + base64)
+app.get('/api/capture', async (req, res) => {
+  const target = req.query.target as string || 'full';
+  const project = req.query.project as string;
+  const tab = req.query.tab as string;
+  const wait = Math.min(parseInt(req.query.wait as string) || 3000, 15000);
+
+  try {
+    const { browser, page } = await openCuiPanel({ project, tab, wait });
+
+    let screenshot: Buffer;
+    let desc: string;
+
+    if (target === 'full') {
+      screenshot = await page.screenshot({ type: 'png', fullPage: false }) as Buffer;
+      desc = project ? `${project}/${tab || 'default'}` : 'full';
+    } else {
+      // Find element by nodeId (full or partial)
+      const selector = await page.evaluate((id) => {
+        // Exact match
+        let el = document.querySelector(`[data-node-id="${id}"]`);
+        if (el) return `[data-node-id="${id}"]`;
+        // Partial match
+        for (const e of document.querySelectorAll('[data-node-id]')) {
+          const nid = e.getAttribute('data-node-id') || '';
+          if (nid.startsWith(id)) return `[data-node-id="${nid}"]`;
+        }
+        return null;
+      }, target);
+
+      if (!selector) {
+        const available = await page.evaluate(() =>
+          Array.from(document.querySelectorAll('[data-node-id]')).map(e => e.getAttribute('data-node-id'))
+        );
+        await browser.close();
+        res.status(404).json({ error: `Panel "${target}" not found`, available });
+        return;
+      }
+
+      const el = page.locator(selector);
+      screenshot = await el.screenshot({ type: 'png' }) as Buffer;
+      desc = `node-${target}`;
     }
 
-    // Wait for panel to be visible
-    await page.waitForSelector(selector, { timeout: 5000 });
-
-    // Wait for content to load
-    await page.waitForTimeout(wait);
-
-    // Take screenshot
-    const screenshot = await page.screenshot({ type: 'png', fullPage: false });
     await browser.close();
 
     // Save to file
-    const fileName = nodeId ? `node-${nodeId}` : `panel-${panelType}`;
-    const filePath = `${SCREENSHOT_DIR}/${fileName}-live-${Date.now()}.png`;
+    const filePath = `${SCREENSHOT_DIR}/${desc.replace(/[^a-zA-Z0-9-]/g, '_')}-live-${Date.now()}.png`;
     writeFileSync(filePath, screenshot);
 
-    console.log(`[Screenshot] ✓ Saved live screenshot: ${filePath}`);
+    // Store in panelScreenshots map so it's retrievable via /api/screenshot/:panel.png
+    const meta: PanelScreenshot = { panel: target, capturedAt: new Date().toISOString(), width: 0, height: 0, filePath };
+    panelScreenshots.set(target, meta);
 
-    // Return as PNG image
+    console.log(`[Screenshot] Playwright: ${desc} (${screenshot.length} bytes) → ${filePath}`);
+
     res.setHeader('Content-Type', 'image/png');
-    res.setHeader('Content-Disposition', `inline; filename="${fileName}-live.png"`);
+    res.setHeader('Cache-Control', 'no-cache');
     res.send(screenshot);
-
   } catch (error: any) {
-    console.error('[Screenshot] Error:', error.message);
+    console.error('[Screenshot] Playwright error:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
 
-// List all panel node IDs from the current layout
-app.get('/api/dev/panel-ids', async (req, res) => {
+// Backward-compatible alias
+app.get('/api/dev/screenshot-live', (req, res) => {
+  const nodeId = req.query.nodeId as string;
+  const panel = req.query.panel as string;
+  const target = nodeId || panel || 'full';
+  res.redirect(`/api/capture?target=${encodeURIComponent(target)}&wait=${req.query.wait || '3000'}`);
+});
+
+// GET /api/capture/panels — List all panels via Playwright
+app.get('/api/capture/panels', async (req, res) => {
+  const project = req.query.project as string;
   try {
-    const playwright = await import('playwright-core');
-    const browser = await playwright.chromium.launch({ headless: true });
-    const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+    const { browser, page } = await openCuiPanel({ project });
 
-    await page.goto('http://localhost:4005', { waitUntil: 'domcontentloaded', timeout: 20000 });
-    await page.waitForSelector('.flexlayout__layout', { timeout: 5000 });
-
-    // Extract all panel IDs and their types
-    const panels = await page.evaluate(() => {
-      const results: Array<{ nodeId: string; panelType: string | null; tabName: string | null }> = [];
-      const allPanels = Array.from(document.querySelectorAll('[data-node-id]'));
-
-      for (const panel of allPanels) {
-        const nodeId = panel.getAttribute('data-node-id');
-        const panelType = panel.getAttribute('data-panel');
-
-        // Try to find the tab name
-        let tabName: string | null = null;
-        const tabs = Array.from(document.querySelectorAll('.flexlayout__tab'));
-        for (const tab of tabs) {
-          const tabContent = (tab as HTMLElement).closest('.flexlayout__tabset')?.querySelector(`[data-node-id="${nodeId}"]`);
-          if (tabContent) {
-            tabName = (tab as HTMLElement).querySelector('.flexlayout__tab_button_content')?.textContent?.trim() || null;
-            break;
-          }
-        }
-
-        if (nodeId) {
-          results.push({ nodeId, panelType, tabName });
-        }
+    // Get all projects
+    const projects = await page.evaluate(() => {
+      const results: string[] = [];
+      for (const btn of document.querySelectorAll('button')) {
+        const title = btn.title || '';
+        const m = title.match(/^(.+?)\s*—/);
+        if (m) results.push(m[1].trim());
       }
       return results;
     });
 
+    // Get panels for current project
+    const panels = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('[data-node-id]')).map(el => {
+        const rect = el.getBoundingClientRect();
+        return {
+          nodeId: el.getAttribute('data-node-id'),
+          visible: rect.width > 0 && rect.height > 0,
+          size: `${Math.round(rect.width)}x${Math.round(rect.height)}`,
+        };
+      })
+    );
+
+    // Get tab names
+    const tabs = await page.evaluate(() => {
+      const seen = new Set<string>();
+      return Array.from(document.querySelectorAll('.flexlayout__tab_button_content'))
+        .filter(el => { const r = el.getBoundingClientRect(); return r.top > 25 && r.top < 100; })
+        .map(el => el.textContent?.trim() || '')
+        .filter(t => { if (seen.has(t) || !t) return false; seen.add(t); return true; });
+    });
+
     await browser.close();
 
-    res.json({ panels, count: panels.length });
+    res.json({ projects, currentProject: project || projects[0], tabs, panels });
   } catch (error: any) {
-    console.error('[Panel IDs] Error:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
@@ -3162,26 +3488,85 @@ app.post('/api/control/layout/reset', (_req, res) => {
   res.json({ ok: true });
 });
 
-// --- Rebuild & Restart Endpoint ---
+// --- Dev Server Watchdog Proxy ---
+// Proxies /watchdog/* to the watchdog panel running on the remote dev server
+const WATCHDOG_HOST = 'localhost';
+const WATCHDOG_PORT = 9090;
+app.use('/watchdog', (req, res) => {
+  const targetPath = req.url === '/' || req.url === '' ? '/' : req.url;
+  const proxyReq = httpRequest({
+    hostname: WATCHDOG_HOST,
+    port: WATCHDOG_PORT,
+    path: targetPath,
+    method: req.method,
+    headers: { ...req.headers, host: `${WATCHDOG_HOST}:${WATCHDOG_PORT}` },
+  }, (proxyRes) => {
+    res.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
+    proxyRes.pipe(res);
+  });
+  proxyReq.on('error', () => {
+    res.status(502).json({ error: `Dev Server Watchdog not reachable (${WATCHDOG_HOST}:${WATCHDOG_PORT})` });
+  });
+  req.pipe(proxyReq);
+});
+
+// --- Rebuild & Restart Endpoints ---
+
+// Helper: restart CUI server after build (systemd handles the restart)
+function restartCuiServer() {
+  console.log('[Restart] Exiting — systemd will restart the process');
+  setTimeout(() => process.exit(0), 500);
+}
+
+// Helper: trigger watchdog to restart all enabled dev servers
+function triggerWatchdogCheck() {
+  try {
+    const postReq = httpRequest({ hostname: WATCHDOG_HOST, port: WATCHDOG_PORT, path: '/api/check', method: 'POST', timeout: 3000 }, () => {
+      console.log('[Rebuild] Watchdog check triggered');
+    });
+    postReq.on('error', () => { console.log('[Rebuild] Watchdog not available (skipped)'); });
+    postReq.end();
+  } catch { /* watchdog not running, skip */ }
+}
+
+// POST /api/rebuild — legacy rebuild (vite build + restart)
 app.post('/api/rebuild', (_req, res) => {
   console.log('[Rebuild] Starting frontend rebuild...');
   broadcast({ type: 'cui-rebuilding' });
   res.json({ status: 'rebuilding', message: 'Build gestartet, Server startet gleich neu...' });
   setTimeout(() => {
-    exec('cd /root/projekte/werkingflow/autopilot/cui && npx vite build 2>&1', (err, stdout) => {
+    exec(`cd "${WORKSPACE_ROOT}" && npx vite build 2>&1`, (err, stdout) => {
       if (err) { console.error('[Rebuild] Build failed:', err.message); return; }
       console.log('[Rebuild] Build done:', stdout.trim().split('\n').pop());
-      console.log('[Rebuild] Restarting server...');
-      const wrSecret = process.env.WERKING_REPORT_ADMIN_SECRET ?? '';
-      const wrUrl = process.env.WERKING_REPORT_URL ?? '';
-      const wrStagingUrl = process.env.WERKING_REPORT_STAGING_URL ?? '';
-      const vercelToken = process.env.VERCEL_TOKEN ?? '';
-      const restartCmd = `cd /root/projekte/werkingflow/autopilot/cui && WERKING_REPORT_ADMIN_SECRET="${wrSecret}" WERKING_REPORT_URL="${wrUrl}" WERKING_REPORT_STAGING_URL="${wrStagingUrl}" VERCEL_TOKEN="${vercelToken}" NODE_ENV=production PORT=4005 nohup npx tsx server/index.ts > ~/cui-server.log 2>&1 &`;
-      exec(restartCmd, () => {
-        setTimeout(() => process.exit(0), 500);
-      });
+      triggerWatchdogCheck();
+      restartCuiServer();
     });
   }, 200);
+});
+
+// POST /api/rebuild-frontend — called by ProjectTabs Rebuild button
+app.post('/api/rebuild-frontend', async (_req, res) => {
+  console.log('[Rebuild-Frontend] Starting...');
+  broadcast({ type: 'cui-rebuilding' });
+
+  const PATH_PREFIX = '/usr/local/bin:' + (process.env.PATH || '');
+  const buildEnv = { ...process.env, PATH: PATH_PREFIX, NODE_ENV: 'production' };
+
+  try {
+    const { stdout } = await execAsync(`npx vite build 2>&1`, { cwd: WORKSPACE_ROOT, env: buildEnv, timeout: 120_000 });
+    const builtMatch = stdout.match(/built in ([\d.]+s)/);
+    console.log('[Rebuild-Frontend] Build done:', builtMatch?.[1] || stdout.trim().split('\n').pop());
+    broadcast({ type: 'cui-sync', status: 'built', detail: builtMatch?.[1] || 'ok' });
+    triggerWatchdogCheck();
+    res.json({ ok: true, detail: builtMatch?.[1] || 'ok' });
+
+    // Restart after response
+    setTimeout(() => restartCuiServer(), 500);
+  } catch (err: any) {
+    console.error('[Rebuild-Frontend] Failed:', err.message);
+    broadcast({ type: 'cui-sync', status: 'error', detail: err.message });
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // --- Knowledge Registry (Document Knowledge System) ---
@@ -3205,6 +3590,9 @@ async function agentReadJsonlLastN(filePath: string, n: number): Promise<any[]> 
     return lines.slice(-n).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
   } catch { return []; }
 }
+
+// --- Agent API Proxy to Hetzner ---
+// Server runs on dev server — agents are local, no proxy needed.
 
 app.get('/api/agents/status', async (_req, res) => {
   const agents = await Promise.all(Object.entries(AGENT_REGISTRY).map(async ([id, info]) => {
@@ -3303,39 +3691,8 @@ const PROMPTS_DIR = `${AGENTS_DIR}/prompts`;
 const CLAUDE_LOGS_DIR = '/root/projekte/local-storage/backends/team-agents/logs';
 const runningClaudes = new Map<string, ReturnType<typeof spawn>>();
 
-// Activity Stream Broadcasting
-const activityClients: ServerResponse[] = [];
-
-function broadcastActivity(event: {
-  timestamp: string;
-  personaId: string;
-  personaName: string;
-  action: string; // "started", "completed", "error", "wrote", "messaged", "approved", "rejected"
-  description: string;
-  progress?: number;
-}) {
-  const data = `data: ${JSON.stringify(event)}\n\n`;
-  activityClients.forEach(client => {
-    try {
-      client.write(data);
-    } catch (err) {
-      // Client disconnected, will be cleaned up
-    }
-  });
-  console.log(`[Activity] Broadcast: ${event.personaName} - ${event.action}`);
-}
-
-// POST /api/test/broadcast-activity — Test endpoint to manually broadcast activity
-app.post('/api/test/broadcast-activity', (req, res) => {
-  const event = req.body;
-  if (!event.timestamp) event.timestamp = new Date().toISOString();
-  broadcastActivity(event);
-  res.json({ success: true, broadcast: event });
-});
-
-
 const CLAUDE_AGENT_REGISTRY: Record<string, { name: string; schedule: string; task_type: string }> = {
-  'rafbot':          { name: 'Rafbot',           schedule: 'tägl. 06:00',    task_type: 'SYNC' },
+  'rafbot':          { name: 'Rafbot',           schedule: 'on-demand',      task_type: 'META' },
   'kai-hoffmann':    { name: 'Kai Hoffmann',    schedule: 'Mo 09:00',       task_type: 'SCAN' },
   'birgit-bauer':    { name: 'Birgit Bauer',    schedule: 'Mo 10:00',       task_type: 'SYNC' },
   'max-weber':       { name: 'Max Weber',        schedule: 'Di 09:00',       task_type: 'DECIDE' },
@@ -3365,7 +3722,29 @@ app.get('/api/agents/claude/status', async (_req, res) => {
     } catch { /**/ }
     let inbox_count = 0;
     try { inbox_count = ((await fsAgentPromises.readFile(`${AGENTS_DIR}/inbox/${id}.md`, 'utf-8')).match(/^---$/gm) ?? []).length; } catch { /**/ }
-    return { id, name: info.name, schedule: info.schedule, task_type: info.task_type, status: runningClaudes.has(id) ? 'working' : 'idle' as const, last_run, last_outcome, inbox_count };
+    let approvals_count = 0;
+    try {
+      const appDir = `${AGENTS_DIR}/approvals/${id}`;
+      const files = await fsAgentPromises.readdir(appDir).catch(() => [] as string[]);
+      approvals_count = files.filter(f => f.endsWith('.pending')).length;
+    } catch { /**/ }
+    return {
+      id,
+      persona_id: id,
+      persona_name: info.name,
+      schedule: info.schedule,
+      task_type: info.task_type,
+      status: runningClaudes.has(id) ? 'working' as const : 'idle' as const,
+      last_run,
+      last_outcome,
+      last_actions: 0,
+      last_action_types: [] as string[],
+      last_trigger: null as string | null,
+      next_run: '',
+      has_pending_approvals: approvals_count > 0,
+      approvals_count,
+      inbox_count,
+    };
   }));
   res.json({ agents });
 });
@@ -3433,37 +3812,21 @@ app.post('/api/agents/claude/run', async (req, res) => {
   // Remove CLAUDECODE env var so nested claude sessions are allowed
   const spawnEnv = { ...process.env };
   delete (spawnEnv as Record<string, string | undefined>).CLAUDECODE;
-  const proc = spawn('claude', ['--dangerously-skip-permissions', '--print', '-p', fullPrompt], { cwd: '/root/projekte/werkingflow', stdio: ['ignore', 'pipe', 'pipe'], env: spawnEnv });
+  // Always pipe prompt via stdin (avoids ARG_MAX limits for long prompts)
+  const isRoot = process.getuid?.() === 0;
+  const cmd = isRoot ? 'sudo' : 'claude';
+  const args = isRoot
+    ? ['-u', 'claude-user', 'claude', '--dangerously-skip-permissions', '--print']
+    : ['--dangerously-skip-permissions', '--print'];
+  const proc = spawn(cmd, args, { cwd: '/root/projekte/werkingflow', stdio: ['pipe', 'pipe', 'pipe'], env: spawnEnv });
+  if (!proc.stdin) throw new Error(`Failed to open stdin for ${persona_id}`);
+  proc.stdin.write(fullPrompt);
+  proc.stdin.end();
   const writeLog = (s: string) => fsAgentPromises.appendFile(logFile, s).catch(() => {});
   writeLog(`[${now}] ${info.name} gestartet — ${taskDesc}\n${'─'.repeat(60)}\n\n`);
-
-  // Broadcast agent started
-  broadcastActivity({
-    timestamp: new Date().toISOString(),
-    personaId: persona_id,
-    personaName: info.name,
-    action: 'started',
-    description: taskDesc,
-    progress: 0
-  });
-
   proc.stdout?.on('data', (d: Buffer) => writeLog(d.toString()));
   proc.stderr?.on('data', (d: Buffer) => writeLog(`[ERR] ${d.toString()}`));
-  proc.on('close', (code) => {
-    runningClaudes.delete(persona_id);
-    writeLog(`\n${'─'.repeat(60)}\n[DONE] Exit: ${code}\n`);
-    console.log(`[ClaudeAgent:${persona_id}] done (${code})`);
-
-    // Broadcast agent completed or error
-    broadcastActivity({
-      timestamp: new Date().toISOString(),
-      personaId: persona_id,
-      personaName: info.name,
-      action: code === 0 ? 'completed' : 'error',
-      description: code === 0 ? `${runMode} completed successfully` : `Exited with code ${code}`,
-      progress: code === 0 ? 100 : undefined
-    });
-  });
+  proc.on('close', (code) => { runningClaudes.delete(persona_id); writeLog(`\n${'─'.repeat(60)}\n[DONE] Exit: ${code}\n`); console.log(`[ClaudeAgent:${persona_id}] done (${code})`); });
   runningClaudes.set(persona_id, proc);
   console.log(`[ClaudeAgent] Starting ${persona_id} (${runMode}) → ${logFile}`);
   const planFile = runMode === 'plan' ? `${persona_id}-${Date.now()}.md` : (plan_id ?? null);
@@ -3536,16 +3899,6 @@ app.post('/api/agents/business/approve', async (req, res) => {
     lines.splice(index, 1);
     await fsAgentPromises.writeFile(BUSINESS_QUEUE, lines.join('\n') + (lines.length > 0 ? '\n' : ''));
 
-    // Broadcast approval event
-    broadcastActivity({
-      timestamp: new Date().toISOString(),
-      personaId: entry.persona || 'unknown',
-      personaName: entry.persona || 'Unknown',
-      action: 'approved',
-      description: `Document approved: ${finalPath.replace(`${BUSINESS_DIR}/`, '')}`,
-      progress: 100
-    });
-
     // Auto-commit (approved option from questions)
     const message = commit_message ?? `Approved by Rafael: ${finalPath.replace(`${BUSINESS_DIR}/`, '')}`;
     const { execAsync } = await import('child_process');
@@ -3580,56 +3933,9 @@ app.post('/api/agents/business/reject', async (req, res) => {
     lines.splice(index, 1);
     await fsAgentPromises.writeFile(BUSINESS_QUEUE, lines.join('\n') + (lines.length > 0 ? '\n' : ''));
 
-    // Broadcast rejection event
-    broadcastActivity({
-      timestamp: new Date().toISOString(),
-      personaId: entry.persona || 'unknown',
-      personaName: entry.persona || 'Unknown',
-      action: 'rejected',
-      description: `Document rejected: ${entry.file.replace(`${BUSINESS_DIR}/`, '')}`,
-      progress: 0
-    });
-
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: String(err) });
-  }
-});
-
-// GET /api/agents/persona/:id — get individual persona data
-app.get('/api/agents/persona/:id', async (req, res) => {
-  try {
-    const personaPath = `${AGENTS_DIR}/personas/${req.params.id}.md`;
-    const content = await fsAgentPromises.readFile(personaPath, 'utf-8');
-
-    const persona: Record<string, any> = { id: req.params.id };
-
-    // Parse header
-    const headerMatch = content.match(/^#\s+(.+?)\s+-\s+(.+?)$/m);
-    if (headerMatch) {
-      persona.name = headerMatch[1].trim();
-      persona.role = headerMatch[2].trim();
-    }
-
-    // Parse MBTI
-    const mbtiMatch = content.match(/\*\*MBTI\*\*:\s+(.+?)$/m);
-    if (mbtiMatch) persona.mbti = mbtiMatch[1].trim();
-
-    // Parse Specialty
-    const specialtyMatch = content.match(/\*\*Specialty\*\*:\s+(.+?)$/m);
-    if (specialtyMatch) persona.specialty = specialtyMatch[1].trim();
-
-    // Parse Team
-    const teamMatch = content.match(/\*\*Team\*\*:\s+(.+?)$/m);
-    if (teamMatch) persona.team = teamMatch[1].trim();
-
-    // Parse Motto
-    const mottoMatch = content.match(/>\s+"(.+?)"/);
-    if (mottoMatch) persona.motto = mottoMatch[1].trim();
-
-    res.json(persona);
-  } catch (err) {
-    res.status(404).json({ error: 'Persona not found' });
   }
 });
 
@@ -3650,120 +3956,70 @@ app.get(/^\/api\/agents\/business\/diff\/(.+)$/, async (req, res) => {
   }
 });
 
-// ============================================================================
-// API COMMAND SYSTEM - Complete programmatic control
-// ============================================================================
+// --- Persona Tagging Endpoints ---
+const PERSONA_TAG_SCRIPT = '/root/projekte/orchestrator/scripts/update-persona-tags.sh';
+const ORCHESTRATOR_DATA_DIR = '/root/projekte/orchestrator/data';
 
-// POST /api/commands/run-agent — Run any agent with optional test mode
-app.post('/api/commands/run-agent', async (req, res) => {
-  const { persona_id, task, test_mode } = req.body as { persona_id: string; task?: string; test_mode?: boolean };
-
+// POST /api/persona-tags/update — Start persona tagging update
+app.post('/api/persona-tags/update', async (_req, res) => {
   try {
-    // If test_mode, prepend test instruction to task
-    let finalTask = task || '';
-    if (test_mode) {
-      finalTask = `[TEST MODE] Generate dummy test data for the Virtual Office:\n- Create sample approvals\n- Write test inbox messages\n- Generate sample reports\n\nOriginal task: ${task || 'General testing'}`;
-    }
+    console.log('[Persona Tags] Starting update...');
 
-    const response = await fetch(`http://localhost:${PORT}/api/agents/claude/run`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ persona_id, mode: 'plan', task: finalTask })
+    // Spawn script in background (only on server where script exists)
+    const child = spawn(PERSONA_TAG_SCRIPT, [], {
+      detached: true,
+      stdio: 'ignore',
+      cwd: '/root/projekte/orchestrator'
     });
 
-    const data = await response.json();
-    res.json({ success: true, ...data });
+    // CRITICAL: handle spawn errors to prevent process crash (ENOENT on local dev)
+    child.on('error', (err) => {
+      console.error(`[Persona Tags] Spawn error: ${err.message}`);
+    });
+
+    child.unref();
+
+    res.json({ status: 'started' });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+    console.error('[Persona Tags] Update error:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// POST /api/commands/approve-all — Approve all pending items
-app.post('/api/commands/approve-all', async (_req, res) => {
+// GET /api/persona-tags/status — Get tagging status for all apps
+app.get('/api/persona-tags/status', async (_req, res) => {
   try {
-    const raw = await fsAgentPromises.readFile(BUSINESS_QUEUE, 'utf-8');
-    const lines = raw.trim().split('\n').filter(Boolean);
-    const approved: string[] = [];
+    const apps = ['werking-report', 'engelmann', 'werking-energy', 'werking-safety'];
+    const statusData: Record<string, any> = {};
 
-    for (let i = lines.length - 1; i >= 0; i--) {
-      try {
-        const entry = JSON.parse(lines[i]);
-        const pendingPath = entry.file;
-        const finalPath = pendingPath.replace(/\.pending$/, '');
-        await fsAgentPromises.rename(pendingPath, finalPath);
-        approved.push(finalPath);
-      } catch (err) {
-        console.error(`[ApproveAll] Failed to approve index ${i}:`, err);
+    for (const app of apps) {
+      const enrichedPath = `${ORCHESTRATOR_DATA_DIR}/${app}/enriched.json`;
+      const tagsPath = `${ORCHESTRATOR_DATA_DIR}/${app}/persona-tags.json`;
+
+      if (existsSync(enrichedPath)) {
+        try {
+          const enrichedContent = readFileSync(enrichedPath, 'utf-8');
+          const enrichedData = JSON.parse(enrichedContent);
+          const totalIds = enrichedData.summary?.total_ids || 0;
+
+          statusData[app] = {
+            total_ids: totalIds,
+            has_tags: existsSync(tagsPath),
+            enriched_mtime: statSync(enrichedPath).mtimeMs / 1000,
+          };
+
+          if (existsSync(tagsPath)) {
+            statusData[app].tags_mtime = statSync(tagsPath).mtimeMs / 1000;
+          }
+        } catch (err) {
+          console.error(`[Persona Tags] Error reading ${app}:`, err);
+        }
       }
     }
 
-    // Clear queue
-    await fsAgentPromises.writeFile(BUSINESS_QUEUE, '');
-
-    res.json({ success: true, approved_count: approved.length, files: approved });
+    res.json(statusData);
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// POST /api/commands/trigger-rafbot-test — Special endpoint to trigger Rafbot in test mode
-app.post('/api/commands/trigger-rafbot-test', async (_req, res) => {
-  try {
-    const response = await fetch(`http://localhost:${PORT}/api/commands/run-agent`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        persona_id: 'rafbot',
-        test_mode: true,
-        task: 'Fill the Virtual Office with test data to demonstrate all features'
-      })
-    });
-
-    const data = await response.json();
-    res.json(data);
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// GET /api/commands/status — Get complete system status
-app.get('/api/commands/status', async (_req, res) => {
-  try {
-    // Get agent status
-    const agentsResponse = await fetch(`http://localhost:${PORT}/api/agents/claude/status`);
-    const agentsData = await agentsResponse.json();
-
-    // Get pending approvals
-    const pendingResponse = await fetch(`http://localhost:${PORT}/api/agents/business/pending`);
-    const pendingData = await pendingResponse.json();
-
-    // Count inbox messages
-    let totalInboxCount = 0;
-    const inboxDir = `${AGENTS_DIR}/inbox`;
-    try {
-      const inboxFiles = await fsAgentPromises.readdir(inboxDir);
-      for (const file of inboxFiles.filter(f => f.endsWith('.md'))) {
-        const content = await fsAgentPromises.readFile(`${inboxDir}/${file}`, 'utf-8');
-        const count = (content.match(/^---$/gm) || []).length;
-        totalInboxCount += count;
-      }
-    } catch { /* inbox dir might not exist */ }
-
-    res.json({
-      agents: {
-        total: agentsData.agents?.length || 0,
-        working: agentsData.agents?.filter((a: any) => a.status === 'working').length || 0,
-        idle: agentsData.agents?.filter((a: any) => a.status === 'idle').length || 0,
-      },
-      approvals: {
-        pending: pendingData.pending?.length || 0
-      },
-      inbox: {
-        total_messages: totalInboxCount
-      },
-      timestamp: new Date().toISOString()
-    });
-  } catch (err: any) {
+    console.error('[Persona Tags] Status error:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -3775,30 +4031,18 @@ app.get('/api/agents/activity-stream', (_req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
 
-  // Add client to broadcast list
-  activityClients.push(res);
-  console.log(`[Activity] Client connected (total: ${activityClients.length})`);
-
   // Send initial ping
   res.write(`data: ${JSON.stringify({ timestamp: new Date().toISOString(), action: 'connected' })}\n\n`);
 
-  // Keepalive ping every 30 seconds
+  // For now, send a ping every 30 seconds to keep connection alive
+  // In production, this would emit events when agents actually do work
   const interval = setInterval(() => {
-    try {
-      res.write(`data: ${JSON.stringify({ timestamp: new Date().toISOString(), action: 'ping' })}\n\n`);
-    } catch (err) {
-      clearInterval(interval);
-    }
+    res.write(`data: ${JSON.stringify({ timestamp: new Date().toISOString(), action: 'ping' })}\n\n`);
   }, 30000);
 
   // Cleanup on client disconnect
   _req.on('close', () => {
     clearInterval(interval);
-    const index = activityClients.indexOf(res);
-    if (index > -1) {
-      activityClients.splice(index, 1);
-      console.log(`[Activity] Client disconnected (total: ${activityClients.length})`);
-    }
   });
 });
 
@@ -3808,7 +4052,7 @@ app.get('/api/agents/recommendations', async (_req, res) => {
     const urgent: Array<any> = [];
     const recommended: Array<any> = [];
 
-    // Check business approvals for old items
+    // 1. Check business approvals for old items (URGENT if >3 days)
     try {
       const raw = await fsAgentPromises.readFile(BUSINESS_QUEUE, 'utf-8');
       const lines = raw.trim().split('\n').filter(Boolean);
@@ -3821,398 +4065,513 @@ app.get('/api/agents/recommendations', async (_req, res) => {
         if (ageDays > 3) {
           urgent.push({
             title: `Business approval overdue: ${entry.file.split('/').pop().replace('.pending', '')}`,
-            description: `Pending for ${ageDays} days - blocking ${entry.persona}`,
+            description: `Pending for ${ageDays} days - may be blocking ${entry.persona}`,
             ageDays,
-            personaId: entry.persona
+            personaId: entry.persona,
+            personaName: entry.persona
+          });
+        } else if (ageDays > 1) {
+          recommended.push({
+            title: `Review: ${entry.file.split('/').pop().replace('.pending', '')}`,
+            description: `Pending for ${ageDays} days from ${entry.persona}`,
+            ageDays,
+            personaId: entry.persona,
+            personaName: entry.persona
           });
         }
       });
     } catch {}
 
-    // TODO: Add more recommendation logic (overdue agents, idle agents, etc.)
+    // 2. Check for agents with scheduled runs that are overdue
+    try {
+      const agentStatusRes = await fetch('http://localhost:4005/api/agents/claude/status');
+      if (agentStatusRes.ok) {
+        const { agents } = await agentStatusRes.json();
 
-    res.json({ urgent, recommended, tips: { idle_agents: 0, blocking_count: urgent.length } });
+        agents.forEach((agent: any) => {
+          // Check if agent has schedule and last run was >7 days ago
+          if (agent.last_run) {
+            const daysSinceRun = Math.floor((Date.now() - new Date(agent.last_run).getTime()) / 86400000);
+
+            if (daysSinceRun > 7 && agent.schedule && agent.schedule !== 'on-demand') {
+              recommended.push({
+                title: `Run ${agent.persona_name}`,
+                description: `Last run was ${daysSinceRun} days ago (scheduled: ${agent.schedule})`,
+                personaId: agent.persona_id,
+                personaName: agent.persona_name
+              });
+            }
+          } else if (agent.schedule && agent.schedule !== 'on-demand') {
+            // Never run but has schedule
+            recommended.push({
+              title: `First run: ${agent.persona_name}`,
+              description: `Never run yet (scheduled: ${agent.schedule})`,
+              personaId: agent.persona_id,
+              personaName: agent.persona_name
+            });
+          }
+        });
+      }
+    } catch {}
+
+    // 3. Count idle vs working agents for tips
+    let idleCount = 0;
+    let workingCount = 0;
+    try {
+      const agentStatusRes = await fetch('http://localhost:4005/api/agents/claude/status');
+      if (agentStatusRes.ok) {
+        const { agents } = await agentStatusRes.json();
+        idleCount = agents.filter((a: any) => a.status === 'idle').length;
+        workingCount = agents.filter((a: any) => a.status === 'working').length;
+      }
+    } catch {}
+
+    res.json({
+      urgent,
+      recommended,
+      tips: {
+        idle_agents: idleCount,
+        working_agents: workingCount,
+        blocking_count: urgent.length
+      }
+    });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
 });
 
-// GET /api/claude-code/stats-v2 — Claude Code JSONL usage stats (Account-based)
-app.get('/api/claude-code/stats-v2', async (_req, res) => {
+// GET /api/agents/persona/:id — get parsed persona data
+app.get('/api/agents/persona/:id', async (req, res) => {
+  const { id } = req.params;
+  const personaPath = `/root/projekte/orchestrator/team/personas/${id}.md`;
+
   try {
-    const claudeDir = join(homedir(), '.claude', 'projects');
-    if (!existsSync(claudeDir)) {
-      res.json({ error: 'No Claude Code data found', accounts: [], alerts: [] });
-      return;
-    }
+    const content = await fsAgentPromises.readFile(personaPath, 'utf-8');
 
-    // Load scraped usage data (from scrape-claude-usage.ts)
-    let scrapedData: Record<string, any> = {};
-    const scrapedPath = join(import.meta.dirname ?? __dirname, 'claude-usage-scraped.json');
-    try {
-      if (existsSync(scrapedPath)) {
-        const scrapedContent = readFileSync(scrapedPath, 'utf-8');
-        const scrapedArray = JSON.parse(scrapedContent);
-        // Convert array to account-keyed object
-        scrapedArray.forEach((item: any) => {
-          scrapedData[item.account] = item;
-        });
-      }
-    } catch (err) {
-      console.error('[CC-Usage] Failed to load scraped data:', err);
-    }
-
-    // Account-to-Workspace mapping (Claude Code limits are per account, not per workspace!)
-    const ACCOUNT_MAP: Record<string, string[]> = {
-      'rafael': [
-        '-root-orchestrator-workspaces-administration',
-        '-root-orchestrator-workspaces-team',
-        '-root-orchestrator-workspaces-diverse',
-        '-root-projekte-orchestrator',
-      ],
-      'office': [
-        '-root-orchestrator-workspaces-werking-report',
-        '-root-orchestrator-workspaces-werking-energy',
-        '-root-orchestrator-workspaces-werkingsafety',
-      ],
-      'engelmann': [
-        '-root-orchestrator-workspaces-engelmann-ai-hub',
-      ],
-      'local': [
-        '-root-projekte-werkingflow',
-        '-tmp',
-      ],
+    // Simple inline parser (matches personaParser.ts logic)
+    const persona: Record<string, any> = {
+      id,
+      name: '',
+      role: '',
+      mbti: '',
+      strengths: [],
+      weaknesses: [],
+      responsibilities: [],
+      collaboration: [],
+      scenarios: []
     };
 
-    // Reverse mapping: workspace -> account
-    const workspaceToAccount: Record<string, string> = {};
-    Object.entries(ACCOUNT_MAP).forEach(([account, workspaces]) => {
-      workspaces.forEach(ws => workspaceToAccount[ws] = account);
-    });
-
-    interface WorkspaceData {
-      name: string;
-      sessions: number;
-      tokens: number;
-      inputTokens: number;
-      outputTokens: number;
-      cacheCreation: number;
-      cacheRead: number;
-      lastActivity: number | null;
-      models: Record<string, number>;
-      storageBytes: number;
-      timestamps: number[]; // For 5h-window detection
+    // Extract name and role from header
+    const headerMatch = content.match(/^#\s+(.+?)\s+-\s+(.+?)$/m);
+    if (headerMatch) {
+      persona.name = headerMatch[1].trim();
+      persona.role = headerMatch[2].trim();
     }
 
-    const workspaceData: Record<string, WorkspaceData> = {};
+    // Extract MBTI
+    const mbtiMatch = content.match(/\*\*MBTI\*\*:\s+(.+?)$/m);
+    if (mbtiMatch) persona.mbti = mbtiMatch[1].trim();
 
-    // Parse all workspaces
-    const entries = readdirSync(claudeDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
+    // Extract Specialty
+    const specialtyMatch = content.match(/\*\*Spezialgebiet\*\*:\s+(.+?)$/m);
+    if (specialtyMatch) persona.specialty = specialtyMatch[1].trim();
 
-      const workspacePath = join(claudeDir, entry.name);
-      const jsonlFiles = readdirSync(workspacePath)
-        .filter(f => f.endsWith('.jsonl') && !f.includes('/subagents/'));
+    // Extract Reports To
+    const reportsToMatch = content.match(/\*\*Berichtet an\*\*:\s+(.+?)$/m);
+    if (reportsToMatch) persona.reportsTo = reportsToMatch[1].trim();
 
-      let inputTokens = 0;
-      let outputTokens = 0;
-      let cacheCreation = 0;
-      let cacheRead = 0;
-      let lastActivity: number | null = null;
-      const models: Record<string, number> = {};
-      let storageBytes = 0;
-      const timestamps: number[] = [];
+    // Extract metadata
+    const teamMatch = content.match(/\*\*Team\*\*:\s+(.+?)$/m);
+    if (teamMatch) persona.team = teamMatch[1].trim();
 
-      // Parse each JSONL file
-      for (const jsonlFile of jsonlFiles) {
-        const jsonlPath = join(workspacePath, jsonlFile);
-        storageBytes += statSync(jsonlPath).size;
+    const deptMatch = content.match(/\*\*Department\*\*:\s+(.+?)$/m);
+    if (deptMatch) persona.department = deptMatch[1].trim();
 
-        try {
-          const content = readFileSync(jsonlPath, 'utf-8');
-          const lines = content.trim().split('\n').filter(Boolean);
+    // Extract motto
+    const mottoMatch = content.match(/>\s+"(.+?)"/);
+    if (mottoMatch) persona.motto = mottoMatch[1].trim();
 
-          for (const line of lines) {
+    // Extract Strengths
+    const strengthsSection = content.match(/###\s+Stärken\s*([\s\S]*?)(?=###|##|$)/);
+    if (strengthsSection) {
+      const items = strengthsSection[1].match(/^-\s+(.+?)$/gm);
+      if (items) persona.strengths = items.map((item: string) => item.replace(/^-\s+/, '').trim());
+    }
+
+    // Extract Weaknesses
+    const weaknessesSection = content.match(/###\s+Schwächen\s*([\s\S]*?)(?=###|##|$)/);
+    if (weaknessesSection) {
+      const items = weaknessesSection[1].match(/^-\s+(.+?)$/gm);
+      if (items) persona.weaknesses = items.map((item: string) => item.replace(/^-\s+/, '').trim());
+    }
+
+    // Extract Responsibilities
+    const responsSection = content.match(/##\s+Verantwortlichkeiten\s*([\s\S]*?)(?=##|$)/);
+    if (responsSection) {
+      const items = responsSection[1].match(/^\d+\.\s+\*\*(.+?)\*\*\s+—\s+(.+?)$/gm);
+      if (items) {
+        persona.responsibilities = items.map((item: string) => {
+          const match = item.match(/^\d+\.\s+\*\*(.+?)\*\*\s+—\s+(.+?)$/);
+          return match ? `${match[1]}: ${match[2]}` : item;
+        });
+      }
+    }
+
+    // Extract Collaboration
+    const collabSection = content.match(/##\s+Zusammenarbeit\s*([\s\S]*?)(?=##|$)/);
+    if (collabSection) {
+      const rows = collabSection[1].match(/^\|\s+\*\*(.+?)\*\*\s+\|\s+(.+?)\s+\|$/gm);
+      if (rows) {
+        persona.collaboration = rows.map((row: string) => {
+          const match = row.match(/^\|\s+\*\*(.+?)\*\*\s+\|\s+(.+?)\s+\|$/);
+          return match ? { person: match[1].trim(), reason: match[2].trim() } : null;
+        }).filter(Boolean);
+      }
+    }
+
+    res.json(persona);
+  } catch (err) {
+    res.status(404).json({ error: 'Persona not found' });
+  }
+});
+
+// --- CPU Profile API (triggers renderer-side V8 profiling via WebSocket) ---
+let pendingProfileResolve: ((result: unknown) => void) | null = null;
+app.post('/api/cpu-profile', (_req, res) => {
+  broadcast({ type: 'control:cpu-profile' });
+  const timeout = setTimeout(() => {
+    pendingProfileResolve = null;
+    res.json({ error: 'timeout - no response from renderer within 10s' });
+  }, 10000);
+  pendingProfileResolve = (result) => {
+    clearTimeout(timeout);
+    pendingProfileResolve = null;
+    res.json(result);
+  };
+});
+
+// GET /api/agents/team/structure — get team org chart + RACI matrix
+app.get('/api/agents/team/structure', async (_req, res) => {
+  const personasDir = '/root/projekte/orchestrator/team/personas';
+
+  try {
+    const files = await fsAgentPromises.readdir(personasDir);
+    const mdFiles = files.filter(f => f.endsWith('.md'));
+
+    const personas: Array<any> = [];
+
+    for (const file of mdFiles) {
+      const id = file.replace('.md', '');
+      const content = await fsAgentPromises.readFile(`${personasDir}/${file}`, 'utf-8');
+
+      const persona: Record<string, any> = { id, responsibilities: [], collaboration: [] };
+
+      // Extract name, role, reportsTo
+      const headerMatch = content.match(/^#\s+(.+?)\s+-\s+(.+?)$/m);
+      if (headerMatch) {
+        persona.name = headerMatch[1].trim();
+        persona.role = headerMatch[2].trim();
+      }
+
+      const reportsToMatch = content.match(/\*\*Berichtet an\*\*:\s+(.+?)$/m);
+      if (reportsToMatch) persona.reportsTo = reportsToMatch[1].trim();
+
+      const teamMatch = content.match(/\*\*Team\*\*:\s+(.+?)$/m);
+      if (teamMatch) persona.team = teamMatch[1].trim();
+
+      const deptMatch = content.match(/\*\*Department\*\*:\s+(.+?)$/m);
+      if (deptMatch) persona.department = deptMatch[1].trim();
+
+      // Extract responsibilities
+      const responsSection = content.match(/##\s+Verantwortlichkeiten\s*([\s\S]*?)(?=##|$)/);
+      if (responsSection) {
+        const items = responsSection[1].match(/^\d+\.\s+\*\*(.+?)\*\*\s+—\s+(.+?)$/gm);
+        if (items) {
+          persona.responsibilities = items.map((item: string) => {
+            const match = item.match(/^\d+\.\s+\*\*(.+?)\*\*\s+—\s+(.+?)$/);
+            return match ? `${match[1]}: ${match[2]}` : item;
+          });
+        }
+      }
+
+      // Extract collaboration
+      const collabSection = content.match(/##\s+Zusammenarbeit\s*([\s\S]*?)(?=##|$)/);
+      if (collabSection) {
+        const rows = collabSection[1].match(/^\|\s+\*\*(.+?)\*\*\s+\|\s+(.+?)\s+\|$/gm);
+        if (rows) {
+          persona.collaboration = rows.map((row: string) => {
+            const match = row.match(/^\|\s+\*\*(.+?)\*\*\s+\|\s+(.+?)\s+\|$/);
+            return match ? { person: match[1].trim(), reason: match[2].trim() } : null;
+          }).filter(Boolean);
+        }
+      }
+
+      personas.push(persona);
+    }
+
+    // Build org chart
+    const nodeMap = new Map();
+    personas.forEach(p => {
+      nodeMap.set(p.id, { id: p.id, name: p.name, role: p.role, children: [] });
+    });
+
+    const roots: Array<any> = [];
+    personas.forEach(p => {
+      const node = nodeMap.get(p.id);
+      if (p.reportsTo) {
+        const parentName = p.reportsTo.toLowerCase().replace(/\s+/g, '-');
+        const parent = nodeMap.get(parentName);
+        if (parent) {
+          parent.children.push(node);
+        } else {
+          roots.push(node);
+        }
+      } else {
+        roots.push(node);
+      }
+    });
+
+    // Build RACI matrix (simplified - just owners and responsible)
+    const raciMatrix: Array<any> = [];
+    const taskMap = new Map();
+
+    personas.forEach(p => {
+      p.responsibilities.forEach((resp: string) => {
+        const [task] = resp.split(':');
+        const taskKey = task.trim().toLowerCase();
+
+        if (!taskMap.has(taskKey)) {
+          taskMap.set(taskKey, {
+            task: task.trim(),
+            owner: p.name,
+            responsible: [p.name],
+            approver: [],
+            consulted: []
+          });
+        }
+      });
+    });
+
+    raciMatrix.push(...Array.from(taskMap.values()));
+
+    res.json({ orgChart: roots, raciMatrix, personas });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// --- Claude Code Usage Stats (CC-Usage) ---
+const CC_ACCOUNTS = [
+  { id: "rafael", name: "rafael.engelmann", homeDir: "/home/claude-user/.cui-account1" },
+  { id: "engelmann", name: "engelmann.rafaelo", homeDir: "/home/claude-user/.cui-account2" },
+  { id: "office", name: "office@data-energyneering", homeDir: "/home/claude-user/.cui-account3" },
+];
+const SCRAPED_FILE = resolve(import.meta.dirname ?? ".", "..", "claude-usage-scraped.json");
+const WEEKLY_LIMIT_ESTIMATE = 45_000_000; // Conservative Pro plan estimate
+
+app.get("/api/claude-code/stats-v2", async (_req, res) => {
+  try {
+    // Load scraped data if available
+    let scrapedMap: Record<string, any> = {};
+    try {
+      if (existsSync(SCRAPED_FILE)) {
+        const scraped = JSON.parse(readFileSync(SCRAPED_FILE, "utf-8"));
+        for (const entry of scraped) {
+          const key = entry.account?.toLowerCase().replace(/@.*/, "").replace(/\..+/, "");
+          if (key) scrapedMap[key] = entry;
+        }
+      }
+    } catch { /* scraped data optional */ }
+
+    const now = Date.now();
+    const ONE_HOUR = 3600_000;
+    const ONE_DAY = 86400_000;
+    const ONE_WEEK = 7 * ONE_DAY;
+    const accounts: any[] = [];
+    const alerts: any[] = [];
+
+    for (const acc of CC_ACCOUNTS) {
+      const projectsDir = join(acc.homeDir, ".claude", "projects");
+      let workspaces: string[] = [];
+      let totalSessions = 0;
+      let totalInputTokens = 0;
+      let totalOutputTokens = 0;
+      let totalCacheCreation = 0;
+      let totalCacheRead = 0;
+      let lastActivity: string | null = null;
+      let models: Record<string, number> = {};
+      let recentTokens = 0; // last 24h
+      let windowTokens = 0; // last 5h
+      let lastWindowMsg: string | null = null;
+
+      try {
+        if (existsSync(projectsDir)) {
+          workspaces = readdirSync(projectsDir).filter(d => {
+            try { return statSync(join(projectsDir, d)).isDirectory(); } catch { return false; }
+          });
+
+          for (const ws of workspaces) {
+            const wsDir = join(projectsDir, ws);
+            let jsonlFiles: string[] = [];
             try {
-              const entry = JSON.parse(line);
+              jsonlFiles = readdirSync(wsDir).filter(f => f.endsWith(".jsonl") && /^[0-9a-f]{8}-/.test(f));
+            } catch { continue; }
 
-              // Track timestamps for 5h-window detection
-              if (entry.timestamp) {
-                const ts = new Date(entry.timestamp).getTime();
-                timestamps.push(ts);
-                if (!lastActivity || ts > lastActivity) {
-                  lastActivity = ts;
+            totalSessions += jsonlFiles.length;
+
+            for (const file of jsonlFiles) {
+              try {
+                const content = readFileSync(join(wsDir, file), "utf-8");
+                const lines = content.split("\n").filter(Boolean);
+
+                for (const line of lines) {
+                  try {
+                    const entry = JSON.parse(line);
+                    if (entry.type !== "assistant" || !entry.message?.usage) continue;
+
+                    const usage = entry.message.usage;
+                    const model = entry.message.model || "unknown";
+                    const ts = entry.timestamp ? new Date(entry.timestamp).getTime() : 0;
+
+                    const input = (usage.input_tokens || 0);
+                    const output = (usage.output_tokens || 0);
+                    const cacheCreate = (usage.cache_creation_input_tokens || 0);
+                    const cacheRead = (usage.cache_read_input_tokens || 0);
+
+                    totalInputTokens += input;
+                    totalOutputTokens += output;
+                    totalCacheCreation += cacheCreate;
+                    totalCacheRead += cacheRead;
+
+                    models[model] = (models[model] || 0) + input + output;
+
+                    if (entry.timestamp && (!lastActivity || entry.timestamp > lastActivity)) {
+                      lastActivity = entry.timestamp;
+                    }
+
+                    // Recent activity tracking
+                    if (ts > now - ONE_DAY) {
+                      recentTokens += input + output;
+                    }
+                    if (ts > now - 5 * ONE_HOUR) {
+                      windowTokens += input + output;
+                      if (!lastWindowMsg || (entry.timestamp && entry.timestamp > lastWindowMsg)) {
+                        lastWindowMsg = entry.timestamp;
+                      }
+                    }
+                  } catch { /* skip malformed lines */ }
                 }
-              }
+              } catch { /* skip unreadable files */ }
+            }
+          }
+        }
+      } catch { /* account dir issues */ }
 
-              // Aggregate token usage
-              const usage = entry.usage || entry.message?.usage;
-              if (usage) {
-                inputTokens += usage.input_tokens ?? 0;
-                outputTokens += usage.output_tokens ?? 0;
-                cacheCreation += usage.cache_creation_input_tokens ?? 0;
-                cacheRead += usage.cache_read_input_tokens ?? 0;
-              }
+      const totalTokens = totalInputTokens + totalOutputTokens;
+      const burnRatePerHour = recentTokens > 0 ? recentTokens / 24 : 0;
+      const weeklyProjection = burnRatePerHour * 24 * 7;
 
-              // Track model usage
-              if (entry.message?.model) {
-                models[entry.message.model] = (models[entry.message.model] ?? 0) + 1;
+      // Merge with scraped data
+      const scraped = scrapedMap[acc.id];
+      let weeklyLimitPercent = weeklyProjection > 0 ? (weeklyProjection / WEEKLY_LIMIT_ESTIMATE) * 100 : 0;
+      let weeklyLimitActual = 0;
+      let dataSource: string = "jsonl-estimated";
+      let scrapedTimestamp: string | null = null;
+      let nextWindowReset: string | null = null;
+
+      if (scraped) {
+        weeklyLimitPercent = scraped.weeklyAllModels?.percent ?? weeklyLimitPercent;
+        weeklyLimitActual = scraped.weeklyAllModels?.percent ? Math.round(WEEKLY_LIMIT_ESTIMATE * scraped.weeklyAllModels.percent / 100) : 0;
+        dataSource = totalTokens > 0 ? "hybrid" : "scraped";
+        scrapedTimestamp = scraped.timestamp || null;
+      }
+
+      // Calculate 5h window reset
+      if (lastWindowMsg) {
+        const windowStart = new Date(lastWindowMsg).getTime();
+        nextWindowReset = new Date(windowStart + 5 * ONE_HOUR).toISOString();
+      }
+
+      // Status determination
+      let status: string = "safe";
+      if (weeklyLimitPercent >= 80) { status = "critical"; }
+      else if (weeklyLimitPercent >= 50) { status = "warning"; }
+
+      // Generate alerts
+      if (status === "critical") {
+        alerts.push({
+          severity: "critical",
+          title: `${acc.id.toUpperCase()} nähert sich dem Limit`,
+          description: `Weekly usage at ${weeklyLimitPercent.toFixed(0)}%. Consider switching workload to another account.`,
+          accountName: acc.id,
+        });
+      }
+
+      // Calculate storage
+      let storageBytes = 0;
+      try {
+        if (existsSync(projectsDir)) {
+          const dirs = readdirSync(projectsDir);
+          for (const d of dirs) {
+            try {
+              const files = readdirSync(join(projectsDir, d));
+              for (const f of files) {
+                try { storageBytes += statSync(join(projectsDir, d, f)).size; } catch {}
               }
             } catch {}
           }
-        } catch {}
-      }
-
-      workspaceData[entry.name] = {
-        name: entry.name,
-        sessions: jsonlFiles.length,
-        tokens: inputTokens + outputTokens,
-        inputTokens,
-        outputTokens,
-        cacheCreation,
-        cacheRead,
-        lastActivity,
-        models,
-        storageBytes,
-        timestamps: timestamps.sort((a, b) => a - b), // Sort chronologically
-      };
-    }
-
-    // Aggregate by account
-    const accounts: Array<{
-      accountName: string;
-      workspaces: string[];
-      totalTokens: number;
-      totalSessions: number;
-      totalInputTokens: number;
-      totalOutputTokens: number;
-      totalCacheCreation: number;
-      totalCacheRead: number;
-      lastActivity: string | null;
-      models: Record<string, number>;
-      storageBytes: number;
-      burnRatePerHour: number;
-      weeklyProjection: number;
-      weeklyLimitPercent: number;
-      status: 'safe' | 'warning' | 'critical';
-      nextWindowReset: string | null;
-      currentWindowTokens: number;
-    }> = [];
-
-    const now = Date.now();
-    const weekStart = now - (7 * 24 * 60 * 60 * 1000);
-    const WEEKLY_LIMIT = 10_000_000; // ~10M tokens/week for Pro (conservative estimate)
-    const WINDOW_5H = 5 * 60 * 60 * 1000;
-
-    Object.entries(ACCOUNT_MAP).forEach(([accountName, workspaceNames]) => {
-      let totalTokens = 0;
-      let totalSessions = 0;
-      let totalInput = 0;
-      let totalOutput = 0;
-      let totalCacheCreation = 0;
-      let totalCacheRead = 0;
-      let lastActivity: number | null = null;
-      const models: Record<string, number> = {};
-      let storageBytes = 0;
-      const allTimestamps: number[] = [];
-
-      workspaceNames.forEach(wsName => {
-        const ws = workspaceData[wsName];
-        if (!ws) return;
-
-        totalTokens += ws.tokens;
-        totalSessions += ws.sessions;
-        totalInput += ws.inputTokens;
-        totalOutput += ws.outputTokens;
-        totalCacheCreation += ws.cacheCreation;
-        totalCacheRead += ws.cacheRead;
-        storageBytes += ws.storageBytes;
-        allTimestamps.push(...ws.timestamps);
-
-        if (ws.lastActivity && (!lastActivity || ws.lastActivity > lastActivity)) {
-          lastActivity = ws.lastActivity;
         }
-
-        Object.entries(ws.models).forEach(([model, count]) => {
-          models[model] = (models[model] ?? 0) + count;
-        });
-      });
-
-      // Calculate burn rate (tokens/hour) - last 24h only
-      const last24h = now - (24 * 60 * 60 * 1000);
-      const recentTokens = allTimestamps.filter(ts => ts >= last24h).length * 50; // Rough estimate: 50 tokens/message
-      const burnRatePerHour = recentTokens / 24;
-
-      // Weekly projection
-      const tokensThisWeek = allTimestamps.filter(ts => ts >= weekStart).length * 50;
-      const daysElapsed = Math.max(1, (now - weekStart) / (24 * 60 * 60 * 1000));
-      const dailyAverage = tokensThisWeek / daysElapsed;
-      const weeklyProjection = dailyAverage * 7;
-      const weeklyLimitPercent = (weeklyProjection / WEEKLY_LIMIT) * 100;
-
-      // 5h-window detection: find latest message cluster
-      let nextWindowReset: number | null = null;
-      let currentWindowTokens = 0;
-      if (allTimestamps.length > 0) {
-        const sorted = [...allTimestamps].sort((a, b) => b - a); // Newest first
-        const latestTimestamp = sorted[0];
-
-        // Find all messages in current 5h window
-        const windowStart = latestTimestamp - WINDOW_5H;
-        const windowMessages = sorted.filter(ts => ts >= windowStart);
-        currentWindowTokens = windowMessages.length * 50; // Rough estimate
-
-        // Next reset = 5h after first message in window
-        const oldestInWindow = Math.min(...windowMessages);
-        nextWindowReset = oldestInWindow + WINDOW_5H;
-      }
-
-      // Apply scraped data if available (real limits from claude.ai)
-      const scraped = scrapedData[accountName];
-      let finalWeeklyPercent = weeklyLimitPercent;
-      let finalWeeklyLimit = WEEKLY_LIMIT;
-      let finalWindowReset = nextWindowReset;
-      let dataSource: 'jsonl-estimated' | 'scraped' | 'hybrid' = 'jsonl-estimated';
-
-      if (scraped && scraped.weeklyAllModels && scraped.weeklyAllModels.percent !== null) {
-        // Use real scraped weekly percent from claude.ai/settings/usage
-        finalWeeklyPercent = scraped.weeklyAllModels.percent;
-        dataSource = 'scraped';
-
-        // Calculate actual limit from scraped percent
-        if (totalTokens > 0 && finalWeeklyPercent > 0) {
-          finalWeeklyLimit = Math.round((totalTokens / (finalWeeklyPercent / 100)));
-        }
-
-        // Use scraped session reset if available
-        if (scraped.currentSession && scraped.currentSession.resetIn) {
-          try {
-            // Parse relative time like "in 4 Std. 15 Min." or absolute date
-            const resetStr = scraped.currentSession.resetIn;
-            if (resetStr.includes('Std.') || resetStr.includes('Min.')) {
-              // Relative time parsing would go here
-              // For now, keep JSONL-based estimate
-            } else {
-              finalWindowReset = new Date(resetStr).getTime();
-            }
-          } catch {}
-        }
-      }
-
-      // Status determination (use final percent)
-      let status: 'safe' | 'warning' | 'critical' = 'safe';
-      if (finalWeeklyPercent > 80) status = 'critical';
-      else if (finalWeeklyPercent > 60) status = 'warning';
+      } catch {}
 
       accounts.push({
-        accountName,
-        workspaces: workspaceNames.filter(ws => workspaceData[ws]),
+        accountName: acc.id,
+        workspaces,
         totalTokens,
         totalSessions,
-        totalInputTokens: totalInput,
-        totalOutputTokens: totalOutput,
+        totalInputTokens,
+        totalOutputTokens,
         totalCacheCreation,
         totalCacheRead,
-        lastActivity: lastActivity ? new Date(lastActivity).toISOString() : null,
+        lastActivity,
         models,
         storageBytes,
         burnRatePerHour: Math.round(burnRatePerHour),
         weeklyProjection: Math.round(weeklyProjection),
-        weeklyLimitPercent: Math.round(finalWeeklyPercent * 10) / 10,
-        weeklyLimitActual: finalWeeklyLimit,
+        weeklyLimitPercent: Math.round(weeklyLimitPercent * 10) / 10,
+        weeklyLimitActual,
         status,
-        nextWindowReset: finalWindowReset ? new Date(finalWindowReset).toISOString() : null,
-        currentWindowTokens: Math.round(currentWindowTokens),
+        nextWindowReset,
+        currentWindowTokens: windowTokens,
         dataSource,
-        scrapedTimestamp: scraped?.timestamp || null,
+        scrapedTimestamp,
+        scraped: scraped ? { plan: scraped.plan, currentSession: scraped.currentSession, weeklyAllModels: scraped.weeklyAllModels, weeklySonnet: scraped.weeklySonnet, extraUsage: scraped.extraUsage } : null,
       });
-    });
-
-    // Sort by status (critical first) then by last activity
-    accounts.sort((a, b) => {
-      const statusOrder = { critical: 0, warning: 1, safe: 2 };
-      if (statusOrder[a.status] !== statusOrder[b.status]) {
-        return statusOrder[a.status] - statusOrder[b.status];
-      }
-      if (!a.lastActivity && !b.lastActivity) return 0;
-      if (!a.lastActivity) return 1;
-      if (!b.lastActivity) return -1;
-      return new Date(b.lastActivity).getTime() - new Date(a.lastActivity).getTime();
-    });
-
-    // Generate alerts
-    const alerts: Array<{ severity: 'critical' | 'warning' | 'info'; title: string; description: string; accountName: string }> = [];
-
-    accounts.forEach(acc => {
-      if (acc.status === 'critical') {
-        const daysUntilLimit = ((WEEKLY_LIMIT - acc.weeklyProjection) / acc.burnRatePerHour / 24);
-        alerts.push({
-          severity: 'critical',
-          title: `Account "${acc.accountName}" critical`,
-          description: `${acc.weeklyLimitPercent}% of weekly limit projected. Limit reached in ~${Math.max(0, daysUntilLimit).toFixed(1)} days at current burn rate (${acc.burnRatePerHour.toLocaleString()} tok/h).`,
-          accountName: acc.accountName,
-        });
-      } else if (acc.status === 'warning') {
-        alerts.push({
-          severity: 'warning',
-          title: `Account "${acc.accountName}" warning`,
-          description: `${acc.weeklyLimitPercent}% of weekly limit projected. Monitor usage closely.`,
-          accountName: acc.accountName,
-        });
-      }
-
-      // Window reset alerts
-      if (acc.nextWindowReset && acc.currentWindowTokens > 800_000) {
-        const resetIn = new Date(acc.nextWindowReset).getTime() - now;
-        const hoursUntilReset = Math.max(0, resetIn / (60 * 60 * 1000));
-        alerts.push({
-          severity: 'info',
-          title: `5h-Window active on "${acc.accountName}"`,
-          description: `${(acc.currentWindowTokens / 1000).toFixed(0)}K tokens in current window. Reset in ${hoursUntilReset.toFixed(1)}h.`,
-          accountName: acc.accountName,
-        });
-      }
-    });
+    }
 
     res.json({
       accounts,
       alerts,
-      weeklyLimit: WEEKLY_LIMIT,
+      weeklyLimit: WEEKLY_LIMIT_ESTIMATE,
       timestamp: new Date().toISOString(),
     });
   } catch (err: any) {
-    res.status(500).json({ error: `Failed to parse Claude Code data: ${err.message}` });
+    console.error("[CC-Usage] Stats error:", err.message);
+    res.status(500).json({ error: err.message });
   }
 });
-
 // --- Serve Frontend in Production ---
 if (PROD) {
   const distPath = resolve(import.meta.dirname ?? __dirname, '..', 'dist');
-
-  // Watchdog proxy: /watchdog/* -> localhost:9090
-  app.use('/watchdog', (req, res) => {
-    const targetUrl = 'http://localhost:9090' + req.url;
-    const proxyReq = httpRequest(targetUrl, { method: req.method, headers: req.headers }, (proxyRes) => {
-      res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
-      proxyRes.pipe(res);
-    });
-    proxyReq.on('error', () => res.status(502).send('Watchdog not available'));
-    req.pipe(proxyReq);
-  });
-
   if (existsSync(distPath)) {
-    // Prevent HTML caching — ensures new JS bundles are always loaded after rebuild
-    app.use((req, res, next) => {
-      if (req.path === '/' || req.path.endsWith('.html')) {
-        res.set('Cache-Control', 'no-store, must-revalidate');
-      }
-      next();
-    });
-    app.use(express.static(distPath));
-    // SPA fallback
+    // Hashed assets (JS/CSS) can be cached forever
+    app.use('/assets', express.static(join(distPath, 'assets'), { maxAge: '1y', immutable: true }));
+    // index.html must never be cached (it references hashed assets)
+    app.use(express.static(distPath, { etag: false, lastModified: false, setHeaders: (res, filePath) => {
+      if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    }}));
+    // SPA fallback — also no-cache
     app.use((_req, res) => {
-      res.set('Cache-Control', 'no-store');
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.sendFile(join(distPath, 'index.html'));
     });
   }

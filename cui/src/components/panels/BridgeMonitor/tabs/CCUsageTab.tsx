@@ -1,71 +1,100 @@
 import { useState, useEffect, useCallback } from 'react';
-import { StatCard, Toolbar, ErrorBanner, LoadingSpinner, SectionFlat, StatusBadge, formatTokens } from '../shared';
+import { Toolbar, ErrorBanner, LoadingSpinner, SectionFlat, StatusBadge } from '../shared';
+
+interface ScrapedData {
+  plan: string;
+  currentSession: { percent: number; resetIn: string };
+  weeklyAllModels: { percent: number; resetDate: string };
+  weeklySonnet: { percent: number; resetDate: string };
+  extraUsage: { percent: number; spent: string; limit: string; balance: string };
+}
 
 interface AccountData {
   accountName: string;
-  workspaces: string[];
   totalTokens: number;
   totalSessions: number;
   totalInputTokens: number;
   totalOutputTokens: number;
   totalCacheCreation: number;
   totalCacheRead: number;
+  workspaces: string[];
   lastActivity: string | null;
   models: Record<string, number>;
-  storageBytes: number;
   burnRatePerHour: number;
-  weeklyProjection: number;
   weeklyLimitPercent: number;
-  weeklyLimitActual: number;
   status: 'safe' | 'warning' | 'critical';
-  nextWindowReset: string | null;
-  currentWindowTokens: number;
-  dataSource: 'jsonl-estimated' | 'scraped' | 'hybrid';
+  dataSource: string;
   scrapedTimestamp: string | null;
+  scraped: ScrapedData | null;
 }
 
 interface Alert {
   severity: 'critical' | 'warning' | 'info';
   title: string;
   description: string;
-  accountName: string;
 }
 
 interface StatsData {
   accounts: AccountData[];
   alerts: Alert[];
-  weeklyLimit: number;
   timestamp: string;
-  error?: string;
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
 }
 
-function timeAgo(isoDate: string | null): string {
-  if (!isoDate) return 'Never';
-  const ms = Date.now() - new Date(isoDate).getTime();
-  const minutes = Math.floor(ms / 60000);
-  const hours = Math.floor(ms / 3600000);
-  const days = Math.floor(ms / 86400000);
-  if (days > 0) return `${days}d ago`;
-  if (hours > 0) return `${hours}h ago`;
-  if (minutes > 0) return `${minutes}m ago`;
-  return 'Just now';
+function timeAgo(iso: string | null): string {
+  if (!iso) return 'Never';
+  const ms = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(ms / 60000);
+  if (m < 1) return 'Just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
 }
 
-function timeUntil(isoDate: string | null): string {
-  if (!isoDate) return 'Unknown';
-  const ms = new Date(isoDate).getTime() - Date.now();
-  if (ms < 0) return 'Now available';
-  const minutes = Math.floor(ms / 60000);
-  const hours = Math.floor(ms / 3600000);
-  if (hours > 0) return `${hours}h ${minutes % 60}m`;
-  return `${minutes}m`;
+/** Color based on percentage */
+function pctColor(pct: number): string {
+  if (pct >= 80) return 'var(--tn-red)';
+  if (pct >= 50) return 'var(--tn-orange)';
+  return 'var(--tn-green)';
+}
+
+/** Progress bar */
+function ProgressBar({ percent, color }: { percent: number; color: string }) {
+  return (
+    <div style={{ height: 6, background: 'var(--tn-border)', borderRadius: 3, overflow: 'hidden', marginTop: 4 }}>
+      <div style={{
+        height: '100%',
+        width: `${Math.min(100, percent)}%`,
+        background: color,
+        borderRadius: 3,
+        transition: 'width 0.5s ease',
+      }} />
+    </div>
+  );
+}
+
+/** Single usage metric row */
+function UsageRow({ label, percent, resetText, sub }: { label: string; percent: number; resetText: string; sub?: string }) {
+  const color = pctColor(percent);
+  return (
+    <div style={{ padding: '8px 0', borderBottom: '1px solid var(--tn-border)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 2 }}>
+        <span style={{ fontSize: 11, color: 'var(--tn-text)' }}>{label}</span>
+        <span style={{ fontSize: 14, fontWeight: 700, fontFamily: 'monospace', color }}>{percent}%</span>
+      </div>
+      <ProgressBar percent={percent} color={color} />
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 3 }}>
+        <span style={{ fontSize: 9, color: 'var(--tn-text-muted)' }}>{resetText}</span>
+        {sub && <span style={{ fontSize: 9, color: 'var(--tn-text-muted)' }}>{sub}</span>}
+      </div>
+    </div>
+  );
 }
 
 export default function CCUsageTab() {
@@ -79,16 +108,13 @@ export default function CCUsageTab() {
     setError('');
     try {
       const res = await fetch('/api/claude-code/stats-v2');
-      const data: StatsData = await res.json();
-
-      if (data.error) {
-        setError(data.error);
-      } else {
-        setStats(data);
-      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (data.error) setError(data.error);
+      else setStats(data);
       setLastRefresh(new Date());
     } catch (err: any) {
-      setError(`Fehler: ${err.message}`);
+      setError(err.message);
     } finally {
       setLoading(false);
     }
@@ -96,168 +122,121 @@ export default function CCUsageTab() {
 
   useEffect(() => {
     fetchStats();
-    const interval = setInterval(fetchStats, 60000); // Refresh every 60s
-    return () => clearInterval(interval);
+    const iv = setInterval(fetchStats, 60000);
+    return () => clearInterval(iv);
   }, [fetchStats]);
 
   return (
     <div style={{ padding: 12 }}>
-      <Toolbar lastRefresh={lastRefresh} loading={loading} onRefresh={fetchStats} />
+      <Toolbar lastRefresh={lastRefresh} loading={loading} onRefresh={fetchStats} autoRefresh={60} />
       {error && <ErrorBanner message={error} />}
+
+      {loading && <LoadingSpinner text="Lade Claude Code Stats..." />}
 
       {!loading && stats && (
         <>
-          {/* Alerts Section */}
+          {/* Alerts */}
           {stats.alerts.length > 0 && (
             <div style={{ marginBottom: 16 }}>
               {stats.alerts.map((alert, i) => {
-                const bgColor = {
-                  critical: 'rgba(247,118,142,0.15)',
-                  warning: 'rgba(224,175,104,0.15)',
-                  info: 'rgba(122,162,247,0.15)',
+                const colors = {
+                  critical: { bg: 'rgba(247,118,142,0.15)', border: 'rgba(247,118,142,0.4)', text: 'var(--tn-red)' },
+                  warning: { bg: 'rgba(224,175,104,0.15)', border: 'rgba(224,175,104,0.4)', text: 'var(--tn-orange)' },
+                  info: { bg: 'rgba(122,162,247,0.15)', border: 'rgba(122,162,247,0.4)', text: 'var(--tn-blue)' },
                 }[alert.severity];
-                const borderColor = {
-                  critical: 'rgba(247,118,142,0.4)',
-                  warning: 'rgba(224,175,104,0.4)',
-                  info: 'rgba(122,162,247,0.4)',
-                }[alert.severity];
-                const textColor = {
-                  critical: 'var(--tn-red)',
-                  warning: 'var(--tn-orange)',
-                  info: 'var(--tn-blue)',
-                }[alert.severity];
-                const icon = {
-                  critical: '🔴',
-                  warning: '⚠️',
-                  info: 'ℹ️',
-                }[alert.severity];
-
                 return (
-                  <div key={i} style={{
-                    background: bgColor,
-                    border: `1px solid ${borderColor}`,
-                    borderRadius: 5,
-                    padding: 10,
-                    marginBottom: 8,
-                  }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                      <span style={{ fontSize: 14 }}>{icon}</span>
-                      <span style={{ fontSize: 11, fontWeight: 700, color: textColor }}>
-                        {alert.title}
-                      </span>
-                    </div>
-                    <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', lineHeight: 1.4 }}>
-                      {alert.description}
-                    </div>
+                  <div key={i} style={{ background: colors.bg, border: `1px solid ${colors.border}`, borderRadius: 5, padding: 10, marginBottom: 8 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: colors.text, marginBottom: 2 }}>{alert.title}</div>
+                    <div style={{ fontSize: 10, color: 'var(--tn-text-muted)' }}>{alert.description}</div>
                   </div>
                 );
               })}
             </div>
           )}
 
-          {/* Account Overview Cards */}
+          {/* Account Cards */}
           <SectionFlat title="Claude Code Accounts">
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {stats.accounts.map((acc, i) => {
-                // Use actual limit if available (from manual override), else estimated
-                const effectiveLimit = acc.weeklyLimitActual || stats.weeklyLimit;
-                const tokensRemaining = effectiveLimit - acc.totalTokens;
-                const daysUntilLimit = tokensRemaining > 0 && acc.burnRatePerHour > 0
-                  ? (tokensRemaining / acc.burnRatePerHour / 24)
-                  : 999;
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {stats.accounts.map((acc) => {
+                const s = acc.scraped;
+                const borderColor = acc.status === 'critical' ? 'var(--tn-red)' : acc.status === 'warning' ? 'var(--tn-orange)' : 'var(--tn-border)';
 
                 return (
-                  <div key={i} style={{
-                    background: 'var(--tn-bg-dark)',
-                    border: `2px solid ${acc.status === 'critical' ? 'var(--tn-red)' : acc.status === 'warning' ? 'var(--tn-orange)' : 'var(--tn-border)'}`,
-                    borderRadius: 6,
-                    padding: 12,
-                  }}>
+                  <div key={acc.accountName} style={{ background: 'var(--tn-bg-dark)', border: `2px solid ${borderColor}`, borderRadius: 6, padding: 12 }}>
                     {/* Header */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--tn-text)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--tn-text)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                           {acc.accountName}
                         </span>
-                        <StatusBadge status={acc.status === 'critical' ? 'error' : acc.status === 'warning' ? 'paused' : 'ok'} />
-                        {acc.dataSource === 'scraped' && (
-                          <span style={{
-                            fontSize: 8,
-                            fontWeight: 700,
-                            padding: '2px 6px',
-                            borderRadius: 3,
-                            background: 'rgba(158,206,106,0.2)',
-                            color: 'var(--tn-green)',
-                            letterSpacing: '0.05em',
-                          }}>
-                            LIVE
+                        {s?.plan && (
+                          <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 3, background: 'rgba(187,154,247,0.2)', color: 'var(--tn-purple)', letterSpacing: '0.05em' }}>
+                            {s.plan}
                           </span>
                         )}
+                        <StatusBadge status={acc.status === 'critical' ? 'error' : acc.status === 'warning' ? 'paused' : 'ok'} />
+                        {acc.dataSource.includes('hybrid') || acc.dataSource === 'scraped' ? (
+                          <span style={{ fontSize: 8, fontWeight: 700, padding: '2px 6px', borderRadius: 3, background: 'rgba(158,206,106,0.2)', color: 'var(--tn-green)', letterSpacing: '0.05em' }}>LIVE</span>
+                        ) : null}
                       </div>
                       <span style={{ fontSize: 9, color: 'var(--tn-text-muted)' }}>
-                        Last active: {timeAgo(acc.lastActivity)}
+                        {acc.scrapedTimestamp ? `Scraped: ${timeAgo(acc.scrapedTimestamp)}` : `Active: ${timeAgo(acc.lastActivity)}`}
                       </span>
                     </div>
 
-                    {/* Metrics Grid */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 8, marginBottom: 10 }}>
-                      <div style={{ background: 'rgba(0,0,0,0.2)', borderRadius: 4, padding: 8 }}>
-                        <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginBottom: 3 }}>
-                          {acc.dataSource === 'scraped' ? 'Weekly Usage (Live)' : 'Weekly Projection'}
-                        </div>
-                        <div style={{
-                          fontSize: 16,
-                          fontWeight: 700,
-                          fontFamily: 'monospace',
-                          color: acc.status === 'critical' ? 'var(--tn-red)' : acc.status === 'warning' ? 'var(--tn-orange)' : 'var(--tn-green)',
-                        }}>
-                          {acc.weeklyLimitPercent.toFixed(1)}%
-                        </div>
-                        <div style={{ fontSize: 8, color: 'var(--tn-text-muted)' }}>
-                          {acc.dataSource === 'scraped'
-                            ? `${formatTokens(acc.totalTokens)} / ${formatTokens(acc.weeklyLimitActual)}`
-                            : `${formatTokens(acc.weeklyProjection)} / ${formatTokens(stats.weeklyLimit)}`
-                          }
+                    {/* Usage Bars (from scraped data) */}
+                    {s ? (
+                      <div style={{ marginBottom: 12 }}>
+                        <UsageRow label="Aktuelle Sitzung" percent={s.currentSession.percent} resetText={s.currentSession.resetIn} />
+                        <UsageRow label="Weekly — Alle Modelle" percent={s.weeklyAllModels.percent} resetText={s.weeklyAllModels.resetDate} />
+                        <UsageRow label="Weekly — Nur Sonnet" percent={s.weeklySonnet.percent} resetText={s.weeklySonnet.resetDate} />
+                        {s.extraUsage.percent > 0 && (
+                          <UsageRow
+                            label="Extra Usage (Kosten)"
+                            percent={s.extraUsage.percent}
+                            resetText={`${s.extraUsage.spent} / ${s.extraUsage.limit}`}
+                            sub={s.extraUsage.balance ? `Guthaben: ${s.extraUsage.balance}` : undefined}
+                          />
+                        )}
+                      </div>
+                    ) : (
+                      <div style={{ padding: 12, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 10, background: 'rgba(0,0,0,0.2)', borderRadius: 4, marginBottom: 12 }}>
+                        Keine Live-Daten — Scraper noch nicht gelaufen
+                      </div>
+                    )}
+
+                    {/* Metrics Grid (from JSONL) */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 6, marginBottom: 8 }}>
+                      <div style={{ background: 'rgba(0,0,0,0.2)', borderRadius: 4, padding: 6 }}>
+                        <div style={{ fontSize: 8, color: 'var(--tn-text-muted)', marginBottom: 2 }}>Burn Rate</div>
+                        <div style={{ fontSize: 14, fontWeight: 700, fontFamily: 'monospace', color: 'var(--tn-blue)' }}>
+                          {(acc.burnRatePerHour / 1000).toFixed(1)}K<span style={{ fontSize: 9, fontWeight: 400 }}>/h</span>
                         </div>
                       </div>
-
-                      <div style={{ background: 'rgba(0,0,0,0.2)', borderRadius: 4, padding: 8 }}>
-                        <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginBottom: 3 }}>Burn Rate</div>
-                        <div style={{ fontSize: 16, fontWeight: 700, fontFamily: 'monospace', color: 'var(--tn-blue)' }}>
-                          {(acc.burnRatePerHour / 1000).toFixed(1)}K
-                        </div>
-                        <div style={{ fontSize: 8, color: 'var(--tn-text-muted)' }}>tokens/hour</div>
-                      </div>
-
-                      <div style={{ background: 'rgba(0,0,0,0.2)', borderRadius: 4, padding: 8 }}>
-                        <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginBottom: 3 }}>Limit Reached In</div>
-                        <div style={{ fontSize: 16, fontWeight: 700, fontFamily: 'monospace', color: 'var(--tn-text)' }}>
-                          {daysUntilLimit < 999 ? `${daysUntilLimit.toFixed(1)}d` : '∞'}
-                        </div>
-                        <div style={{ fontSize: 8, color: 'var(--tn-text-muted)' }}>
-                          {tokensRemaining > 0 ? `${formatTokens(tokensRemaining)} left` : 'Limit exceeded'}
+                      <div style={{ background: 'rgba(0,0,0,0.2)', borderRadius: 4, padding: 6 }}>
+                        <div style={{ fontSize: 8, color: 'var(--tn-text-muted)', marginBottom: 2 }}>Sessions</div>
+                        <div style={{ fontSize: 14, fontWeight: 700, fontFamily: 'monospace', color: 'var(--tn-text)' }}>
+                          {acc.totalSessions}
                         </div>
                       </div>
-
-                      <div style={{ background: 'rgba(0,0,0,0.2)', borderRadius: 4, padding: 8 }}>
-                        <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginBottom: 3 }}>5h-Window Reset</div>
-                        <div style={{ fontSize: 16, fontWeight: 700, fontFamily: 'monospace', color: 'var(--tn-purple)' }}>
-                          {timeUntil(acc.nextWindowReset)}
+                      <div style={{ background: 'rgba(0,0,0,0.2)', borderRadius: 4, padding: 6 }}>
+                        <div style={{ fontSize: 8, color: 'var(--tn-text-muted)', marginBottom: 2 }}>Total Tokens</div>
+                        <div style={{ fontSize: 14, fontWeight: 700, fontFamily: 'monospace', color: 'var(--tn-text)' }}>
+                          {formatTokens(acc.totalTokens)}
                         </div>
-                        <div style={{ fontSize: 8, color: 'var(--tn-text-muted)' }}>
-                          {acc.currentWindowTokens > 0 ? `${formatTokens(acc.currentWindowTokens)} used` : 'Window idle'}
+                      </div>
+                      <div style={{ background: 'rgba(0,0,0,0.2)', borderRadius: 4, padding: 6 }}>
+                        <div style={{ fontSize: 8, color: 'var(--tn-text-muted)', marginBottom: 2 }}>Cache Reads</div>
+                        <div style={{ fontSize: 14, fontWeight: 700, fontFamily: 'monospace', color: 'var(--tn-blue)' }}>
+                          {formatTokens(acc.totalCacheRead)}
                         </div>
                       </div>
                     </div>
 
-                    {/* Workspaces & Details */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 8, borderTop: '1px solid var(--tn-border)' }}>
-                      <div style={{ fontSize: 9, color: 'var(--tn-text-muted)' }}>
-                        <strong>{acc.totalSessions}</strong> sessions across <strong>{acc.workspaces.length}</strong> workspace{acc.workspaces.length !== 1 ? 's' : ''}
-                      </div>
-                      <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', fontFamily: 'monospace' }}>
-                        {formatTokens(acc.totalTokens)} total tokens
-                      </div>
+                    {/* Footer */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: 'var(--tn-text-muted)', paddingTop: 6, borderTop: '1px solid var(--tn-border)' }}>
+                      <span>{acc.workspaces.length} workspaces</span>
+                      <span>In: {formatTokens(acc.totalInputTokens)} | Out: {formatTokens(acc.totalOutputTokens)}</span>
                     </div>
                   </div>
                 );
@@ -265,61 +244,20 @@ export default function CCUsageTab() {
             </div>
           </SectionFlat>
 
-          {/* Global Stats */}
-          <SectionFlat title="Global Statistics">
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <StatCard
-                label="Total Accounts"
-                value={String(stats.accounts.length)}
-                sub={`${stats.accounts.filter(a => a.status === 'critical').length} critical, ${stats.accounts.filter(a => a.status === 'warning').length} warning`}
-              />
-              <StatCard
-                label="Total Tokens"
-                value={formatTokens(stats.accounts.reduce((sum, a) => sum + a.totalTokens, 0))}
-                sub={`Input: ${formatTokens(stats.accounts.reduce((sum, a) => sum + a.totalInputTokens, 0))}`}
-              />
-              <StatCard
-                label="Total Sessions"
-                value={String(stats.accounts.reduce((sum, a) => sum + a.totalSessions, 0))}
-                sub={`Across ${stats.accounts.flatMap(a => a.workspaces).length} workspaces`}
-              />
-              <StatCard
-                label="Cache Performance"
-                value={formatTokens(stats.accounts.reduce((sum, a) => sum + a.totalCacheRead, 0))}
-                sub="Cache reads saved"
-                color="var(--tn-blue)"
-              />
-            </div>
-          </SectionFlat>
-
-          {/* Info Box */}
-          <div style={{
-            background: 'rgba(122,162,247,0.1)',
-            border: '1px solid rgba(122,162,247,0.3)',
-            borderRadius: 5,
-            padding: 10,
-            marginTop: 12,
-          }}>
+          {/* Scraped Data Info */}
+          <div style={{ background: 'rgba(122,162,247,0.1)', border: '1px solid rgba(122,162,247,0.3)', borderRadius: 5, padding: 10, marginTop: 12 }}>
             <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', lineHeight: 1.5 }}>
-              <strong style={{ color: 'var(--tn-blue)' }}>ℹ️ Info:</strong> Daten basieren auf lokalem JSONL-Parsing.
+              <strong style={{ color: 'var(--tn-blue)' }}>Datenquellen:</strong>
               <br />
-              <strong>Weekly Limit:</strong> {formatTokens(stats.weeklyLimit)} (konservative Pro-Schätzung)
+              <strong>Live-Daten:</strong> Playwright-Scraping von claude.ai/settings/usage (alle 4h)
               <br />
-              <strong>5h-Window:</strong> Heuristik basierend auf Message-Clustering
+              <strong>JSONL-Daten:</strong> Lokales Parsing der Conversation-Dateien
               <br />
-              <strong>Burn-Rate:</strong> Berechnet aus letzten 24h Aktivität
+              <strong>Burn Rate:</strong> Berechnet aus den letzten 24h
             </div>
           </div>
         </>
       )}
-
-      {!loading && !stats && !error && (
-        <div style={{ padding: 30, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>
-          Keine Claude Code Daten gefunden.
-        </div>
-      )}
-
-      {loading && <LoadingSpinner text="Lade Claude Code Stats..." />}
     </div>
   );
 }

@@ -142,21 +142,48 @@ export default function NotesPanel({ projectId }: NotesPanelProps) {
           }}
         />
       ) : (
-        <textarea
-          value={sharedNotes}
-          readOnly
-          placeholder="Auto-generated credentials from seed data...\n\nRun: npm run generate:shared-notes"
-          spellCheck={false}
-          style={{
-            flex: 1, resize: 'none', padding: '10px 12px',
-            background: 'var(--tn-bg)', color: 'var(--tn-text-muted)',
-            border: 'none', outline: 'none',
-            fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
-            fontSize: 12, lineHeight: 1.6,
-            cursor: 'default',
-            userSelect: 'text',
-          }}
-        />
+        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+          <div style={{ padding: '4px 12px', borderBottom: '1px solid var(--tn-border)', display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+            <span style={{ fontSize: 10, color: 'var(--tn-text-muted)', flex: 1 }}>
+              {sharedNotes ? 'Credentials aus CLAUDE.md / Scenarios' : 'Noch nicht generiert'}
+            </span>
+            <button
+              onClick={() => {
+                setSaveStatus('saving');
+                fetch(`${API}/shared-notes/refresh`, { method: 'POST' })
+                  .then(r => r.json())
+                  .then(() => {
+                    fetch(`${API}/shared-notes`).then(r => r.json()).then(d => setSharedNotes(d.content ?? ''));
+                    setSaveStatus('saved');
+                    setTimeout(() => setSaveStatus('idle'), 2000);
+                  })
+                  .catch(() => setSaveStatus('idle'));
+              }}
+              style={{
+                padding: '2px 8px', fontSize: 9, borderRadius: 3, cursor: 'pointer',
+                background: 'rgba(16,185,129,0.15)', border: '1px solid rgba(16,185,129,0.3)',
+                color: '#10B981', fontWeight: 600,
+              }}
+            >
+              Refresh
+            </button>
+          </div>
+          <textarea
+            value={sharedNotes}
+            readOnly
+            placeholder="Keine Credentials geladen.\n\nKlicke 'Refresh' um Zugangsdaten aus CLAUDE.md Dateien zu laden."
+            spellCheck={false}
+            style={{
+              flex: 1, resize: 'none', padding: '10px 12px',
+              background: 'var(--tn-bg)', color: 'var(--tn-text)',
+              border: 'none', outline: 'none',
+              fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
+              fontSize: 12, lineHeight: 1.6,
+              cursor: 'default',
+              userSelect: 'text',
+            }}
+          />
+        </div>
       )}
     </div>
   );

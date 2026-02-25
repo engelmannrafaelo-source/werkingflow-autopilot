@@ -49,6 +49,7 @@
     "electron-builder": "^26.7.0",
     "esbuild": "^0.27.3",
     "glob": "^10.5.0",
+    "playwright": "^1.58.2",
     "tailwindcss": "^4.1.18",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",

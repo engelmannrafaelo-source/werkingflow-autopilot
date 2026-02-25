@@ -1,7 +1,50 @@
-import { useCallback, useRef, useState, useEffect } from 'react';
-import { Layout, Model, TabNode, TabSetNode, BorderNode, IJsonModel, ITabSetRenderValues, ITabRenderValues, Actions, DockLocation } from 'flexlayout-react';
+import { useCallback, useRef, useState, useEffect, useMemo } from 'react';
+import { Layout, Model, TabNode, TabSetNode, BorderNode, IJsonModel, ITabSetRenderValues, ITabRenderValues, Actions, DockLocation, Rect } from 'flexlayout-react';
 import type { CuiStates } from '../types';
+import { copyToClipboard } from '../utils/clipboard';
+
+// --- flexlayout-react CPU fix ---
+// flexlayout's internal useLayoutEffect hooks (no dep arrays) call getBoundingClientRect
+// on every render and trigger redrawInternal() when sub-pixel float comparisons fail.
+// This creates a continuous render loop consuming 100%+ CPU on a single core.
+// Fix: Tolerance-based comparison stops re-render triggers from sub-pixel float jitter.
+// Both equals() and equalSize() use strict === on getBoundingClientRect floats.
+// equalSize() is critical: it's used in arePropsEqual to decide if tab CONTENT re-renders.
+// Without this patch, ALL visible tab content re-renders on every flexlayout frame.
+Rect.prototype.equals = function patchedEquals(rect: Rect | undefined) {
+  if (!rect) return false;
+  return Math.abs(this.x - rect.x) < 0.5
+    && Math.abs(this.y - rect.y) < 0.5
+    && Math.abs(this.width - rect.width) < 0.5
+    && Math.abs(this.height - rect.height) < 0.5;
+};
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- patching library method
+const rectProto = Rect.prototype as any;
+rectProto.equalSize = function patchedEqualSize(rect: Rect | undefined) {
+  if (!rect) return false;
+  return Math.abs(this.width - rect.width) < 0.5
+    && Math.abs(this.height - rect.height) < 0.5;
+};
+
+// Throttle LayoutInternal.redrawInternal to max 4 calls/sec.
+// Each call triggers full LayoutInternal render → useLayoutEffect hooks → getBoundingClientRect
+// → forced synchronous browser layout. At 60fps this consumes 100% CPU.
+// Layout ref → Layout class → selfRef → LayoutInternal (where redrawInternal lives).
+function patchLayoutRedraw(layoutRef: any) {
+  const internal = layoutRef?.selfRef?.current;
+  if (!internal || internal._redrawPatched) return;
+  const orig = internal.redrawInternal;
+  if (typeof orig !== 'function') return;
+  let scheduled = false;
+  internal.redrawInternal = (reason?: string) => {
+    if (scheduled) return;
+    scheduled = true;
+    setTimeout(() => { scheduled = false; orig.call(internal, reason); }, 250);
+  };
+  internal._redrawPatched = true;
+}
 import CuiPanel from './panels/CuiPanel';
+import CuiLitePanel from './panels/CuiLitePanel';
 import NativeChat from './panels/NativeChat';
 import ImageDrop from './panels/ImageDrop';
 import BrowserPanel from './panels/BrowserPanel';
@@ -13,6 +56,7 @@ import WerkingReportAdmin from './panels/WerkingReportAdmin/WerkingReportAdmin';
 import LinkedInPanel from './panels/LinkedInPanel';
 import BridgeMonitor from './panels/BridgeMonitor/BridgeMonitor';
 import SystemHealth from './panels/SystemHealth';
+import WatchdogPanel from './panels/WatchdogPanel';
 import LayoutBuilder from './LayoutBuilder';
 import '../styles/office.css';
 
@@ -130,6 +174,12 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(null);
   const activeDirRef = useRef<string>(workDir);
   const controlWsRef = useRef<WebSocket | null>(null);
+
+  // Refs for stable Layout callback props (prevent Layout re-render → revision++ → ALL tab content re-render)
+  const cuiStatesRef = useRef(cuiStates);
+  cuiStatesRef.current = cuiStates;
+  const onCuiStateResetRef = useRef(onCuiStateReset);
+  onCuiStateResetRef.current = onCuiStateReset;
   const modelRef = useRef<Model | null>(null);
   modelRef.current = model;
 
@@ -175,8 +225,10 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     const nodeId = node.getId();
 
     // Wrapper with data-node-id for screenshot targeting
+    // contain: strict limits layout recalculation scope when flexlayout measures via getBoundingClientRect
+    const cleanNodeId = nodeId.replace(/^#/, '');
     const wrapWithId = (children: React.ReactNode) => (
-      <div data-node-id={nodeId} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <div data-node-id={cleanNodeId} style={{ height: '100%', display: 'flex', flexDirection: 'column', contain: 'strict' }}>
         {children}
       </div>
     );
@@ -184,6 +236,9 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     switch (component) {
       case 'cui':
         return wrapWithId(<CuiPanel accountId={config.accountId} projectId={projectId} workDir={workDir} panelId={nodeId} isTabVisible={node.isVisible()}
+          onRouteChange={(route) => updateNodeConfig(nodeId, { _route: route })} />);
+      case 'cui-lite':
+        return wrapWithId(<CuiLitePanel accountId={config.accountId} projectId={projectId} workDir={workDir} panelId={nodeId} isTabVisible={node.isVisible()}
           onRouteChange={(route) => updateNodeConfig(nodeId, { _route: route })} />);
       case 'chat': {
         const accountId = config.accountId || 'rafael';
@@ -207,6 +262,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       case 'mission':
         return wrapWithId(<MissionControl projectId={config.projectId || projectId} workDir={config.workDir || workDir} />);
       case 'office':
+      case 'virtual-office':
         return wrapWithId(<OfficePanel projectId={projectId} workDir={workDir} />);
       case 'admin-wr':
         return wrapWithId(<WerkingReportAdmin />);
@@ -216,6 +272,8 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         return wrapWithId(<BridgeMonitor />);
       case 'system-health':
         return wrapWithId(<SystemHealth />);
+      case 'watchdog':
+        return wrapWithId(<WatchdogPanel />);
       default:
         return wrapWithId(
           <div style={{ padding: 20, color: 'var(--tn-text-muted)' }}>
@@ -265,10 +323,11 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     saveLayout(newModel);
   }, [workDir, saveLayout]);
 
-  const addTab = useCallback((type: 'cui' | 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor', config: Record<string, string>, targetId: string) => {
+  const addTab = useCallback((type: 'cui' | 'cui-lite' | 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'watchdog', config: Record<string, string>, targetId: string) => {
     if (!model) return;
     const names: Record<string, string> = {
       cui: config.accountId ? config.accountId.charAt(0).toUpperCase() + config.accountId.slice(1) : 'CUI',
+      'cui-lite': config.accountId ? config.accountId.charAt(0).toUpperCase() + config.accountId.slice(1) + ' Lite' : 'CUI Lite',
       browser: 'Browser',
       preview: 'File Preview',
       notes: 'Notes',
@@ -279,6 +338,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       linkedin: 'LinkedIn Marketing 🔗',
       'system-health': 'System Health',
       'bridge-monitor': 'Bridge Monitor',
+      watchdog: 'Dev Server Watchdog',
     };
     if (type === 'preview' && !config.watchPath) {
       config.watchPath = activeDirRef.current || workDir;
@@ -303,8 +363,10 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           if (!val) return;
           if (val.startsWith('cui:')) {
             addTab('cui', { accountId: val.split(':')[1] }, node.getId());
+          } else if (val.startsWith('lite:')) {
+            addTab('cui-lite', { accountId: val.split(':')[1] }, node.getId());
           } else {
-            addTab(val as 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor', {}, node.getId());
+            addTab(val as 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'watchdog', {}, node.getId());
           }
           e.target.value = '';
         }}
@@ -323,10 +385,9 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       >
         <option value="">+</option>
         <optgroup label="CUI">
-          <option value="cui:rafael">Rafael</option>
-          <option value="cui:engelmann">Engelmann</option>
-          <option value="cui:office">Office</option>
-          <option value="cui:local">Lokal</option>
+          <option value="lite:rafael">Rafael</option>
+          <option value="lite:engelmann">Engelmann</option>
+          <option value="lite:office">Office</option>
         </optgroup>
         <option value="browser">Browser</option>
         <option value="preview">File Preview</option>
@@ -336,114 +397,101 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         <option value="office">Virtual Office 👥</option>
         <option value="admin-wr">Werking Report Admin</option>
         <option value="system-health">System Health</option>
+        <option value="watchdog">Dev Server Watchdog</option>
         <option value="linkedin">LinkedIn Marketing 🔗</option>
         <option value="bridge-monitor">Bridge Monitor</option>
       </select>
     );
   }, [addTab]);
 
-  // Force flexlayout to re-render CUI tabs when states change
-  // (flexlayout only re-renders tabs when their model node changes)
+  // When cuiStates changes, update tab header dots via DOM (no React re-render needed).
+  // Direct DOM manipulation avoids triggering flexlayout's expensive render/layout cycle.
   useEffect(() => {
     if (!model) return;
     model.visitNodes((node) => {
-      if (node.getType() === 'tab') {
-        const tab = node as TabNode;
-        if (tab.getComponent() === 'cui') {
-          const cuiId = tab.getConfig()?.accountId;
-          if (!cuiId) return;
-          const state = cuiStates[cuiId] || 'idle';
-          const currentState = tab.getConfig()?._cuiState;
-          if (currentState !== state) {
-            model.doAction(Actions.updateNodeAttributes(tab.getId(), {
-              config: { ...tab.getConfig(), _cuiState: state },
-            }));
-          }
+      if (node.getType() !== 'tab') return;
+      const tab = node as TabNode;
+      if (tab.getComponent() !== 'cui') return;
+      const cuiId = tab.getConfig()?.accountId;
+      if (!cuiId) return;
+      const state = cuiStates[cuiId];
+      // Find the tab button element by flexlayout's data attribute
+      const tabEl = document.querySelector(`[data-layout-path="${tab.getId()}"]`)
+        ?? document.querySelector(`.flexlayout__tab_button[data-node="${tab.getId()}"]`);
+      if (!tabEl) return;
+      let dot = tabEl.querySelector('.cui-state-dot') as HTMLElement;
+      if (state === 'processing' || state === 'done') {
+        if (!dot) {
+          dot = document.createElement('span');
+          dot.className = 'cui-state-dot';
+          Object.assign(dot.style, { width: '7px', height: '7px', borderRadius: '50%', display: 'inline-block', marginRight: '4px', flexShrink: '0' });
+          tabEl.insertBefore(dot, tabEl.firstChild);
         }
+        dot.style.background = state === 'processing' ? '#9ece6a' : '#e0af68';
+      } else if (dot) {
+        dot.remove();
       }
     });
   }, [model, cuiStates]);
 
   // Reset CUI state to idle when user selects a CUI tab
   const handleAction = useCallback((action: any) => {
-    if (action.type === 'FlexLayout_SelectTab' && onCuiStateReset && model) {
+    if (action.type === 'FlexLayout_SelectTab' && model) {
       const nodeId = action.data?.tabNode;
       if (nodeId) {
         try {
           const node = model.getNodeById(nodeId);
           if (node && (node as TabNode).getComponent?.() === 'cui') {
             const cuiId = (node as TabNode).getConfig?.()?.accountId;
-            if (cuiId && cuiStates[cuiId] === 'done') {
-              onCuiStateReset(cuiId);
+            if (cuiId && cuiStatesRef.current[cuiId] === 'done') {
+              onCuiStateResetRef.current?.(cuiId);
             }
           }
         } catch { /* node might not exist */ }
       }
     }
     return action;
-  }, [model, cuiStates, onCuiStateReset]);
+  }, [model]);
 
-  // Color indicators on CUI tabs based on state + show node ID
+  // CUI state indicators on tabs (stable JSX refs to avoid per-render allocation)
+  const processingDot = <span key="dot" style={{ width: 7, height: 7, borderRadius: '50%', background: '#9ece6a', display: 'inline-block', marginRight: 4, flexShrink: 0 }} />;
+  const doneDot = <span key="dot" style={{ width: 7, height: 7, borderRadius: '50%', background: '#e0af68', display: 'inline-block', marginRight: 4, flexShrink: 0 }} />;
+
   const onRenderTab = useCallback((node: TabNode, renderValues: ITabRenderValues) => {
-    const nodeId = node.getId();
-
-    // Add node ID badge (visible on hover)
+    // Show node ID badge on every tab — clickable to copy full ID
+    const fullId = node.getId().replace(/^#/, '');
+    const shortId = fullId.slice(0, 6);
     renderValues.buttons.push(
       <span
         key="node-id"
-        title={`Panel ID: ${nodeId}\nClick to copy`}
+        title={`Click to copy: ${fullId}`}
         onClick={(e) => {
           e.stopPropagation();
-          navigator.clipboard.writeText(nodeId);
-          // Brief visual feedback
-          (e.target as HTMLElement).style.background = 'var(--tn-green)';
-          setTimeout(() => {
-            (e.target as HTMLElement).style.background = 'var(--tn-bg-dark)';
-          }, 200);
+          copyToClipboard(fullId);
+          const el = e.currentTarget;
+          el.textContent = 'copied!';
+          el.style.color = 'var(--tn-green)';
+          setTimeout(() => { el.textContent = shortId; el.style.color = 'var(--tn-text-muted)'; }, 1200);
         }}
         style={{
-          fontSize: 8,
-          fontFamily: 'monospace',
-          padding: '2px 4px',
-          borderRadius: 2,
-          background: 'var(--tn-bg-dark)',
-          color: 'var(--tn-text-muted)',
-          cursor: 'pointer',
-          opacity: 0.4,
-          transition: 'opacity 0.15s',
-          userSelect: 'none',
+          fontSize: 9, color: 'var(--tn-text-muted)', opacity: 0.7,
+          fontFamily: 'monospace', marginLeft: 6, cursor: 'pointer',
+          padding: '1px 4px', borderRadius: 3,
+          background: 'var(--tn-surface-alt)',
         }}
-        onMouseEnter={(e) => { (e.target as HTMLElement).style.opacity = '1'; }}
-        onMouseLeave={(e) => { (e.target as HTMLElement).style.opacity = '0.4'; }}
-      >
-        #{nodeId}
-      </span>
+      >{shortId}</span>
     );
 
-    // CUI state indicators
     if (node.getComponent() !== 'cui') return;
     const cuiId = node.getConfig()?.accountId;
     if (!cuiId) return;
-    const state = cuiStates[cuiId];
+    const state = cuiStatesRef.current[cuiId];
     if (state === 'processing') {
-      renderValues.leading = (
-        <span style={{
-          width: 7, height: 7, borderRadius: '50%',
-          background: '#9ece6a',
-          display: 'inline-block', marginRight: 4, flexShrink: 0,
-          animation: 'pulse 1.5s ease-in-out infinite',
-        }} />
-      );
+      renderValues.leading = processingDot;
     } else if (state === 'done') {
-      renderValues.leading = (
-        <span style={{
-          width: 7, height: 7, borderRadius: '50%',
-          background: '#e0af68',
-          display: 'inline-block', marginRight: 4, flexShrink: 0,
-        }} />
-      );
+      renderValues.leading = doneDot;
     }
-  }, [cuiStates]);
+  }, []);
 
   // Control API: listen for panel/layout commands + report panel state
   useEffect(() => {
@@ -497,6 +545,62 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         if (msg.type === 'control:layout-reset') {
           handleResetLayout();
           setTimeout(reportPanels, 200);
+        }
+        // Select/activate a tab by nodeId or component name (e.g. "admin-wr")
+        if (msg.type === 'control:select-tab' && model && msg.target) {
+          let foundId = '';
+          model.visitNodes((node) => {
+            if (foundId) return;
+            if (node.getType() === 'tab') {
+              const tab = node as TabNode;
+              if (tab.getId() === msg.target || tab.getComponent() === msg.target) {
+                foundId = tab.getId();
+              }
+            }
+          });
+          if (foundId) {
+            model.doAction(Actions.selectTab(foundId));
+            ws.send(JSON.stringify({ type: 'tab-selected', nodeId: foundId, target: msg.target }));
+          } else {
+            ws.send(JSON.stringify({ type: 'tab-select-failed', target: msg.target, error: 'not found' }));
+          }
+        }
+        // Ensure a panel exists and is visible: find by component, add if missing, select if hidden
+        if (msg.type === 'control:ensure-panel' && model && msg.component) {
+          let foundId = '';
+          model.visitNodes((node) => {
+            if (foundId) return;
+            if (node.getType() === 'tab') {
+              const tab = node as TabNode;
+              if (tab.getComponent() === msg.component) foundId = tab.getId();
+            }
+          });
+          if (!foundId) {
+            // Panel doesn't exist — add it
+            let targetId = '';
+            model.visitNodes((node) => { if (!targetId && node.getType() === 'tabset') targetId = node.getId(); });
+            if (targetId) {
+              const nameMap: Record<string, string> = { 'admin-wr': 'Werking Report Admin', 'browser': 'Browser', 'images': 'Images', 'notes': 'Notes' };
+              model.doAction(Actions.addNode(
+                { type: 'tab', name: nameMap[msg.component] || msg.component, component: msg.component, config: msg.config || {} },
+                targetId, DockLocation.CENTER, -1
+              ));
+              // Find the newly added tab
+              model.visitNodes((node) => {
+                if (node.getType() === 'tab') {
+                  const tab = node as TabNode;
+                  if (tab.getComponent() === msg.component) foundId = tab.getId();
+                }
+              });
+            }
+          }
+          if (foundId) {
+            model.doAction(Actions.selectTab(foundId));
+            reportPanels();
+            ws.send(JSON.stringify({ type: 'panel-ensured', nodeId: foundId, component: msg.component }));
+          } else {
+            ws.send(JSON.stringify({ type: 'panel-ensure-failed', component: msg.component, error: 'could not add' }));
+          }
         }
         // --- Conversation Activation: open CUI panels for selected conversations ---
         if (msg.type === 'control:activate-conversations' && model && msg.plan) {
@@ -707,16 +811,18 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     onAttentionChange(hasAttention);
   }, [model, cuiStates, onAttentionChange]);
 
-  if (!model) {
-    return (
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>
-        Loading layout...
-      </div>
-    );
-  }
+  // Patch flexlayout's redrawInternal to prevent continuous render loop
+  useEffect(() => {
+    if (layoutRef.current) patchLayoutRedraw(layoutRef.current);
+  }, [model]);
 
-  return (
-    <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
+  // Memoize Layout element: Layout is a class component without shouldComponentUpdate.
+  // Without this, every LayoutManager re-render (e.g. cuiStates change) causes
+  // Layout.render() → this.revision++ → ALL visible tab content re-renders.
+  // Must be before any early returns to satisfy React's rules of hooks.
+  const layoutElement = useMemo(() => {
+    if (!model) return null;
+    return (
       <Layout
         ref={layoutRef}
         model={model}
@@ -726,6 +832,20 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         onRenderTabSet={onRenderTabSet}
         onRenderTab={onRenderTab}
       />
+    );
+  }, [model, factory, handleModelChange, handleAction, onRenderTabSet, onRenderTab]);
+
+  if (!model) {
+    return (
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>
+        Loading layout...
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ flex: 1, position: 'relative', minHeight: 0, contain: 'layout style' }}>
+      {layoutElement}
 
       {/* Floating toolbar */}
       <div style={{

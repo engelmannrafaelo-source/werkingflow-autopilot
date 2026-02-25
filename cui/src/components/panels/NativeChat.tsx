@@ -107,7 +107,8 @@ export default function NativeChat({ accountId, proxyPort }: NativeChatProps) {
         }
       }
 
-      const response = await fetch(`http://localhost:${proxyPort}/api/chat/completions`, {
+      const host = window.location.hostname || 'localhost';
+      const response = await fetch(`http://${host}:${proxyPort}/api/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

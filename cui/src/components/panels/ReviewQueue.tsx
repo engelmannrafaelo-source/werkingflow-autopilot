@@ -9,48 +9,43 @@ export default function ReviewQueue() {
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
+  const destroyedRef = useRef(false);
 
   useEffect(() => {
+    destroyedRef.current = false;
     loadReviews();
     connectWebSocket();
 
     return () => {
+      destroyedRef.current = true;
       wsRef.current?.close();
+      wsRef.current = null;
     };
   }, []);
 
   function connectWebSocket() {
+    if (destroyedRef.current) return;
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
-
-    ws.onopen = () => {
-      console.log('[ReviewQueue] WebSocket connected');
-    };
 
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-
         if (data.type === 'document-edit-pending') {
           setReviews(prev => [...prev, data.edit]);
         } else if (data.type === 'document-edit-approved' || data.type === 'document-edit-rejected') {
-          loadReviews(); // Refresh list
+          loadReviews();
           if (selectedReview?.id === data.edit.id) {
-            setSelectedReview(null); // Close detail view
+            setSelectedReview(null);
           }
         }
-      } catch (err) {
-        console.error('[ReviewQueue] WebSocket message error:', err);
-      }
-    };
-
-    ws.onerror = (err) => {
-      console.error('[ReviewQueue] WebSocket error:', err);
+      } catch {}
     };
 
     ws.onclose = () => {
-      console.log('[ReviewQueue] WebSocket closed - reconnecting in 5s');
-      setTimeout(connectWebSocket, 5000);
+      if (!destroyedRef.current) {
+        setTimeout(connectWebSocket, 10000);
+      }
     };
 
     wsRef.current = ws;

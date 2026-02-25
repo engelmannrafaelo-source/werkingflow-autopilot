@@ -21,9 +21,9 @@ export interface PanelConfig {
   watchPath?: string;
 }
 
-// Ports are LOCAL proxy ports (workspace server proxies to dev server)
-// Rafael/Engelmann/Office: localhost:5001-5003 → 100.121.161.109:4001-4003
-// Lokal: localhost:5004 → localhost:4004
+// Proxy ports on the CUI workspace server (all localhost on the dev server)
+// Rafael/Engelmann/Office: :5001-5003 → :4001-4003
+// Lokal: :5004 → :4004
 export const ACCOUNTS: Account[] = [
   { id: 'rafael', label: 'Rafael', port: 5001, host: '', color: '#7aa2f7' },
   { id: 'engelmann', label: 'Engelmann', port: 5002, host: '', color: '#bb9af7' },

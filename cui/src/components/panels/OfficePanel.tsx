@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import TaskBoard from './TaskBoard';
 import PersonaChat from './PersonaChat';
 import ReviewQueue from './ReviewQueue';
@@ -6,24 +6,28 @@ import MeetingRoomView from './MeetingRoomView';
 import KnowledgeGraphView from './KnowledgeGraphView';
 import ScanDocumentsButton from './ScanDocumentsButton';
 import PersonaDocumentList from './PersonaDocumentList';
+import AgentDashboard from './AgentDashboard';
+import CommandSidebar from './CommandSidebar';
+import VirtualOffice from './VirtualOffice';
 
 const API = '/api';
 
 // --- Types ---
 interface PersonaCard {
-  id: string;              // 'max', 'vera', 'sarah', ...
-  name: string;            // 'Max Weber'
-  role: string;            // 'CTO'
-  mbti: string;            // 'ENTJ'
+  id: string;
+  name: string;
+  role: string;
+  mbti: string;
   status: 'idle' | 'working' | 'blocked' | 'review';
-  worklistPath: string;    // '/root/.../worklists/max.md'
-  lastUpdated: string;     // ISO timestamp
-  // Virtual Office Metadaten
-  team?: string;           // 'Engineering', 'Business', 'Leadership'
-  department?: string;     // 'Technical', 'Sales & Marketing', etc.
-  table?: string;          // 'leadership', 'engineering', 'business'
+  worklistPath: string;
+  lastUpdated: string;
+  team?: string;
+  department?: string;
+  table?: string;
   governance?: 'auto-commit' | 'review-required';
-  reportsTo?: string | null;  // 'Rafael', 'Max', 'Otto', etc.
+  reportsTo?: string | null;
+  specialty?: string;
+  motto?: string;
 }
 
 interface OfficePanelProps {
@@ -31,15 +35,15 @@ interface OfficePanelProps {
   workDir?: string;
 }
 
+type OfficePanelView = 'dashboard' | 'office' | 'chat' | 'tasks' | 'reviews' | 'knowledge' | 'agents';
+
 export default function OfficePanel({ projectId, workDir }: OfficePanelProps) {
   const [personas, setPersonas] = useState<PersonaCard[]>([]);
   const [selected, setSelected] = useState<PersonaCard | null>(null);
-  const [worklist, setWorklist] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [view, setView] = useState<'grid' | 'room' | 'tasks' | 'chat' | 'reviews' | 'knowledge'>('room');
+  const [view, setView] = useState<OfficePanelView>('dashboard');
 
-  // Load personas on mount
   useEffect(() => {
     loadPersonas();
   }, []);
@@ -48,44 +52,29 @@ export default function OfficePanel({ projectId, workDir }: OfficePanelProps) {
     try {
       setLoading(true);
       setError(null);
-      const response = await fetch(`${API}/team/personas`);
-      if (!response.ok) throw new Error(`Failed to load personas: ${response.statusText}`);
-      const data = await response.json();
-      setPersonas(data);
+      const res = await fetch(`${API}/team/personas`);
+      if (!res.ok) throw new Error(`Failed: ${res.statusText}`);
+      setPersonas(await res.json());
     } catch (err: any) {
-      console.error('[OfficePanel] Load personas error:', err);
       setError(err.message);
     } finally {
       setLoading(false);
     }
   }
 
-  async function selectPersona(persona: PersonaCard) {
+  function selectPersona(persona: PersonaCard) {
     setSelected(persona);
-    try {
-      const response = await fetch(`${API}/team/worklist/${persona.id}`);
-      if (!response.ok) {
-        setWorklist(`# ${persona.name}\n\n_No worklist found._`);
-        return;
-      }
-      const content = await response.text();
-      setWorklist(content);
-    } catch (err: any) {
-      console.error(`[OfficePanel] Load worklist error for ${persona.id}:`, err);
-      setWorklist(`# ${persona.name}\n\n_Error loading worklist: ${err.message}_`);
-    }
+  }
+
+  // When a persona-agent is selected in sidebar, highlight matching persona
+  function handleAgentPersonaSelect(personaId: string) {
+    const persona = personas.find(p => p.id === personaId);
+    if (persona) setSelected(persona);
   }
 
   if (loading) {
     return (
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        height: '100%',
-        color: 'var(--tn-text-muted)',
-        fontSize: 12,
-      }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--tn-text-muted)', fontSize: 12 }}>
         Loading virtual office...
       </div>
     );
@@ -93,226 +82,129 @@ export default function OfficePanel({ projectId, workDir }: OfficePanelProps) {
 
   if (error) {
     return (
-      <div style={{
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        height: '100%',
-        gap: '1rem',
-        padding: '1rem',
-      }}>
-        <div style={{ color: 'var(--tn-red)', fontSize: 14 }}>
-          Error loading office: {error}
-        </div>
-        <button
-          onClick={loadPersonas}
-          style={{
-            padding: '6px 12px',
-            background: 'var(--tn-blue)',
-            color: 'white',
-            border: 'none',
-            borderRadius: 4,
-            cursor: 'pointer',
-            fontSize: 12,
-          }}
-        >
-          Retry
-        </button>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: '1rem', padding: '1rem' }}>
+        <div style={{ color: 'var(--tn-red)', fontSize: 14 }}>Error loading office: {error}</div>
+        <button onClick={loadPersonas} style={{ padding: '6px 12px', background: 'var(--tn-blue)', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 12 }}>Retry</button>
       </div>
     );
   }
 
   return (
     <div className="office-panel">
-      {/* Header with Tabs */}
+      {/* Header — alle Tabs */}
       <div className="office-header">
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          <button
-            onClick={() => setView('grid')}
-            style={{
-              padding: '6px 12px',
-              background: view === 'grid' ? 'var(--tn-blue)' : 'var(--tn-bg)',
-              color: view === 'grid' ? 'white' : 'var(--tn-text-muted)',
-              border: '1px solid var(--tn-border)',
-              borderRadius: 4,
-              cursor: 'pointer',
-              fontSize: 12,
-              fontWeight: view === 'grid' ? 600 : 400,
-            }}
-          >
-            👥 Team
-          </button>
-          <button
-            onClick={() => setView('room')}
-            style={{
-              padding: '6px 12px',
-              background: view === 'room' ? 'var(--tn-blue)' : 'var(--tn-bg)',
-              color: view === 'room' ? 'white' : 'var(--tn-text-muted)',
-              border: '1px solid var(--tn-border)',
-              borderRadius: 4,
-              cursor: 'pointer',
-              fontSize: 12,
-              fontWeight: view === 'room' ? 600 : 400,
-            }}
-          >
-            🏢 Meeting Room
-          </button>
-          <button
-            onClick={() => setView('reviews')}
-            style={{
-              padding: '6px 12px',
-              background: view === 'reviews' ? 'var(--tn-blue)' : 'var(--tn-bg)',
-              color: view === 'reviews' ? 'white' : 'var(--tn-text-muted)',
-              border: '1px solid var(--tn-border)',
-              borderRadius: 4,
-              cursor: 'pointer',
-              fontSize: 12,
-              fontWeight: view === 'reviews' ? 600 : 400,
-            }}
-          >
-            📝 Reviews
-          </button>
-          <button
-            onClick={() => setView('tasks')}
-            style={{
-              padding: '6px 12px',
-              background: view === 'tasks' ? 'var(--tn-blue)' : 'var(--tn-bg)',
-              color: view === 'tasks' ? 'white' : 'var(--tn-text-muted)',
-              border: '1px solid var(--tn-border)',
-              borderRadius: 4,
-              cursor: 'pointer',
-              fontSize: 12,
-              fontWeight: view === 'tasks' ? 600 : 400,
-            }}
-          >
-            📋 Tasks
-          </button>
-          <button
-            onClick={() => setView('knowledge')}
-            style={{
-              padding: '6px 12px',
-              background: view === 'knowledge' ? 'var(--tn-blue)' : 'var(--tn-bg)',
-              color: view === 'knowledge' ? 'white' : 'var(--tn-text-muted)',
-              border: '1px solid var(--tn-border)',
-              borderRadius: 4,
-              cursor: 'pointer',
-              fontSize: 12,
-              fontWeight: view === 'knowledge' ? 600 : 400,
-            }}
-          >
-            📚 Knowledge
-          </button>
-          {selected && (
+        <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          {([
+            ['dashboard', '🎛️ Dashboard'],
+            ['office',   '🏢 Office'],
+            ['tasks',    '📋 Tasks'],
+            ['reviews',  '📝 Reviews'],
+            ['knowledge','📚 Knowledge'],
+            ['agents',   '🤖 Agents'],
+          ] as [OfficePanelView, string][]).map(([v, label]) => (
             <button
-              onClick={() => setView('chat')}
+              key={v}
+              onClick={() => setView(v)}
               style={{
-                padding: '6px 12px',
-                background: view === 'chat' ? 'var(--tn-blue)' : 'var(--tn-bg)',
-                color: view === 'chat' ? 'white' : 'var(--tn-text-muted)',
+                padding: '5px 11px',
+                background: view === v ? 'var(--tn-blue)' : 'var(--tn-bg)',
+                color: view === v ? 'white' : 'var(--tn-text-muted)',
                 border: '1px solid var(--tn-border)',
                 borderRadius: 4,
                 cursor: 'pointer',
                 fontSize: 12,
-                fontWeight: view === 'chat' ? 600 : 400,
+                fontWeight: view === v ? 600 : 400,
               }}
             >
-              💬 Chat with {selected.name}
+              {label}
             </button>
-          )}
+          ))}
+          <button
+            onClick={() => setView('chat')}
+            style={{
+              padding: '5px 11px',
+              background: view === 'chat' ? 'var(--tn-blue)' : 'var(--tn-bg)',
+              color: view === 'chat' ? 'white' : 'var(--tn-text-muted)',
+              border: '1px solid var(--tn-border)',
+              borderRadius: 4,
+              cursor: 'pointer',
+              fontSize: 12,
+              fontWeight: view === 'chat' ? 600 : 400,
+            }}
+          >
+            {selected ? `💬 ${selected.name.split(' ')[0]}` : '💬 Chat'}
+          </button>
         </div>
-        <span style={{ fontSize: 11, color: 'var(--tn-text-muted)' }}>
-          {personas.length} Team Members
+        <span style={{ fontSize: 11, color: 'var(--tn-text-muted)', flexShrink: 0 }}>
+          {personas.length} Members
         </span>
       </div>
 
-      {/* View Content */}
-      {view === 'grid' && (
-        <>
-          {/* Persona Grid */}
-          <div className="persona-grid">
-            {personas.map((persona) => (
-              <div
-                key={persona.id}
-                className={`persona-card ${selected?.id === persona.id ? 'selected' : ''}`}
-                onClick={() => selectPersona(persona)}
-              >
-                <div className="persona-avatar">
-                  {persona.name.split(' ').map(n => n[0]).join('')}
-                </div>
-                <div className="persona-info">
-                  <div className="persona-name">{persona.name}</div>
-                  <div className="persona-role">{persona.role}</div>
-                  <div className="persona-mbti">{persona.mbti}</div>
-                </div>
-                <div className={`persona-status ${persona.status}`}>
-                  {persona.status}
-                </div>
-              </div>
-            ))}
-          </div>
+      {/* Body: Main + Command Sidebar (or full-width dashboard) */}
+      {view === 'dashboard' ? (
+        /* Full-width dashboard (no sidebar) */
+        <VirtualOffice projectId={projectId} workDir={workDir} />
+      ) : (
+        <div className="office-body">
+          {/* Main Content */}
+          <div className="office-main">
+            {view === 'office' && (
+              <MeetingRoomView
+                personas={personas}
+                onSelectPersona={(p) => { selectPersona(p); }}
+                selected={selected}
+              />
+            )}
 
-          {/* Worklist Viewer */}
-          {selected && (
-            <div className="worklist-viewer">
-              <div className="worklist-header">
-                <h4 style={{ margin: 0, fontSize: 13, color: 'var(--tn-text)' }}>
-                  {selected.name}'s Worklist
-                </h4>
-                <span style={{ fontSize: 10, color: 'var(--tn-text-muted)' }}>
-                  Last updated: {new Date(selected.lastUpdated).toLocaleString()}
-                </span>
-              </div>
-              <div className="worklist-content">
-                <pre style={{
-                  whiteSpace: 'pre-wrap',
-                  wordWrap: 'break-word',
-                  fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
-                  fontSize: 11,
-                  lineHeight: 1.6,
-                  color: 'var(--tn-text)',
-                  margin: 0,
-                }}>
-                  {worklist}
-                </pre>
-              </div>
+            {view === 'tasks' && (
+              <TaskBoard personaId={selected?.id} />
+            )}
+
+          {view === 'chat' && (
+            selected
+              ? <PersonaChat personaId={selected.id} personaName={selected.name} />
+              : (
+                <div style={{ padding: '2rem', textAlign: 'center' }}>
+                  <div style={{ color: 'var(--tn-text-muted)', fontSize: 12, marginBottom: '1rem' }}>
+                    Persona im Meeting Room auswählen um zu chatten.
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', justifyContent: 'center', maxWidth: 500, margin: '0 auto' }}>
+                    {personas.slice(0, 8).map(p => (
+                      <button
+                        key={p.id}
+                        onClick={() => { selectPersona(p); }}
+                        style={{ padding: '5px 10px', background: 'var(--tn-bg)', border: '1px solid var(--tn-border)', borderRadius: 4, cursor: 'pointer', fontSize: 11, color: 'var(--tn-text)' }}
+                      >
+                        {p.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )
+          )}
+
+          {view === 'reviews' && <ReviewQueue />}
+
+          {view === 'knowledge' && (
+            <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'auto' }}>
+              <ScanDocumentsButton />
+              <KnowledgeGraphView
+                personas={personas}
+                onPersonaClick={(personaId) => {
+                  const p = personas.find(x => x.id === personaId);
+                  if (p) selectPersona(p);
+                }}
+                selected={selected}
+              />
+              {selected && <PersonaDocumentList personaId={selected.id} personaName={selected.name} />}
             </div>
           )}
-        </>
-      )}
 
-      {view === 'tasks' && (
-        <TaskBoard personaId={selected?.id} />
-      )}
+          {view === 'agents' && <AgentDashboard />}
+          </div>
 
-      {view === 'chat' && selected && (
-        <PersonaChat personaId={selected.id} personaName={selected.name} />
-      )}
-
-      {view === 'reviews' && (
-        <ReviewQueue />
-      )}
-
-      {view === 'room' && (
-        <MeetingRoomView
-          personas={personas}
-          onSelectPersona={selectPersona}
-          selected={selected}
-        />
-      )}
-
-      {view === 'knowledge' && (
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'auto' }}>
-          <ScanDocumentsButton />
-          <KnowledgeGraphView
-            personas={personas}
-            onPersonaClick={(personaId) => {
-              const persona = personas.find((p) => p.id === personaId);
-              if (persona) selectPersona(persona);
-            }}
-            selected={selected}
-          />
-          {selected && <PersonaDocumentList personaId={selected.id} personaName={selected.name} />}
+          {/* Command Center Sidebar — always visible (except in dashboard view) */}
+          <CommandSidebar onPersonaAgentSelect={handleAgentPersonaSelect} />
         </div>
       )}
     </div>

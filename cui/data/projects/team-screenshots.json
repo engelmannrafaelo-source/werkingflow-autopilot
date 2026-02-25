@@ -1,0 +1,8 @@
+{
+  "id": "team-screenshots",
+  "name": "Team (Screenshots)",
+  "description": "Team workspace - screenshot capture mode",
+  "workDir": "/root/projekte/orchestrator/team",
+  "defaultLayout": "team-screenshots",
+  "icon": "📸"
+}
