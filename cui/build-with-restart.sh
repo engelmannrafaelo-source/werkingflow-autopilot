@@ -43,7 +43,7 @@ echo "===[2/4]=== Building Frontend ==="
 cd "$APP_DIR"
 
 # Load env vars
-[ -f /root/.bash_env ] && source /root/.bash_env
+[ -f /root/.bash_env ] && source /home/claude-user/.bashrc
 
 # Build frontend
 npm run build

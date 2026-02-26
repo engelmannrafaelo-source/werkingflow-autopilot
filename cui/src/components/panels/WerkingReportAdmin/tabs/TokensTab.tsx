@@ -56,14 +56,15 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          tenantId: 'default-tenant', // TODO: Get from selected tenant
           name: newName,
           scopes: newScopes.split(',').map(s => s.trim()),
-          expiresInDays: parseInt(newExpiry) || 30,
+          expiresInDays: parseInt(newExpiry) || null,
         }),
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
-      if (data.token) setNewToken(data.token);
+      if (data.plainToken) setNewToken(data.plainToken);
       setNewName('');
       setShowCreate(false);
       await fetchTokens();

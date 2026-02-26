@@ -1,14 +1,15 @@
 import { useState, useMemo, useCallback, type JSX } from 'react';
 import type { IJsonModel } from 'flexlayout-react';
+const ACCOUNT_LABELS: Record<string, string> = { rafael: "Engelmann", engelmann: "Gmail", office: "Office", local: "Lokal" };
 
 // --- Panel options for cell assignment ---
 const PANEL_OPTIONS = [
-  { value: 'cui:rafael', label: 'CUI: Rafael' },
-  { value: 'cui:engelmann', label: 'CUI: Engelmann' },
+  { value: 'cui:rafael', label: 'CUI: Engelmann' },
+  { value: 'cui:engelmann', label: 'CUI: Gmail' },
   { value: 'cui:office', label: 'CUI: Office' },
   { value: 'cui:local', label: 'CUI: Local' },
-  { value: 'chat:rafael', label: 'Chat: Rafael 🖼️' },
-  { value: 'chat:engelmann', label: 'Chat: Engelmann 🖼️' },
+  { value: 'chat:rafael', label: 'Chat: Engelmann 🖼️' },
+  { value: 'chat:engelmann', label: 'Chat: Gmail 🖼️' },
   { value: 'chat:office', label: 'Chat: Office 🖼️' },
   { value: 'chat:local', label: 'Chat: Local 🖼️' },
   { value: 'images', label: 'Images' },
@@ -20,7 +21,6 @@ const PANEL_OPTIONS = [
   { value: 'admin-wr', label: 'Werking Report Admin' },
   { value: 'linkedin', label: 'LinkedIn Marketing 🔗' },
   { value: 'bridge-monitor', label: 'Bridge Monitor (Old)' },
-  { value: 'attribution-dashboard', label: 'Attribution Dashboard 📊' },
 ];
 
 const CELL_DEFAULTS = [
@@ -87,11 +87,11 @@ interface PanelConfig {
 function panelFromValue(value: string, workDir: string): PanelConfig {
   if (value.startsWith('cui:')) {
     const accountId = value.split(':')[1];
-    return { component: 'cui', name: accountId.charAt(0).toUpperCase() + accountId.slice(1), config: { accountId } };
+    return { component: 'cui', name: ACCOUNT_LABELS[accountId] || accountId, config: { accountId } };
   }
   if (value.startsWith('chat:')) {
     const accountId = value.split(':')[1];
-    return { component: 'chat', name: `Chat: ${accountId.charAt(0).toUpperCase() + accountId.slice(1)}`, config: { accountId } };
+    return { component: 'chat', name: `Chat: ${ACCOUNT_LABELS[accountId] || accountId}`, config: { accountId } };
   }
   switch (value) {
     case 'images':   return { component: 'images', name: 'Images', config: {} };
@@ -103,7 +103,6 @@ function panelFromValue(value: string, workDir: string): PanelConfig {
     case 'admin-wr': return { component: 'admin-wr', name: 'Werking Report Admin', config: {} };
     case 'linkedin':                return { component: 'linkedin', name: 'LinkedIn Marketing 🔗', config: {} };
     case 'bridge-monitor':          return { component: 'bridge-monitor', name: 'Bridge Monitor', config: {} };
-    case 'attribution-dashboard':   return { component: 'attribution-dashboard', name: 'Attribution Dashboard 📊', config: {} };
     default:                        throw new Error(`Unknown panel type: ${value}`);
   }
 }

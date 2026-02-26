@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
 
 const ACCOUNTS = [
-  { id: 'rafael', label: 'Rafael (Remote)' },
+  { id: 'rafael', label: 'Gmail (Remote)' },
   { id: 'engelmann', label: 'Engelmann (Remote)' },
   { id: 'office', label: 'Office (Remote)' },
   { id: 'local', label: 'Local' },
@@ -84,8 +84,19 @@ export default function ImageDrop() {
       }
       const data: UploadResult = await resp.json();
       setResult(data);
+      // Auto-copy readCommand to clipboard
+      if (data.readCommand) {
+        try {
+          await copyToClipboard(data.readCommand);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 3000);
+        } catch {}
+      }
     } catch (err: any) {
-      setError(err.message);
+      const msg = err.message === "Failed to fetch"
+        ? "Upload fehlgeschlagen (Verbindung abgebrochen). Bilder evtl. zu gross — versuche kleinere Bilder oder einzeln hochladen."
+        : err.message;
+      setError(msg);
     } finally {
       setUploading(false);
     }

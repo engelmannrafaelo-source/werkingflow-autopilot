@@ -16,7 +16,7 @@ interface ContentBlock {
 }
 
 interface Message {
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant' | 'system' | 'rate_limit';
   content: string | ContentBlock[];
   timestamp?: string;
 }
@@ -73,7 +73,22 @@ const markdownComponents = {
 };
 
 // --- Tool Use Block (interactive) ---
-function ToolUseBlock({ block, onRespond }: { block: ContentBlock; onRespond?: (text: string) => void }) {
+function ToolUseBlock({ block, onRespond, workDir }: { block: ContentBlock; onRespond?: (text: string) => void; workDir?: string }) {
+  const [planText, setPlanText] = useState<string | null>(null);
+  const [planLoading, setPlanLoading] = useState(false);
+  const [responded, setResponded] = useState(false);
+
+  // Load plan text when ExitPlanMode block is rendered
+  useEffect(() => {
+    if (block.name !== 'ExitPlanMode' || !workDir || planText !== null) return;
+    setPlanLoading(true);
+    fetch(`/api/file-read?path=${encodeURIComponent(workDir + '/.claude/plan.md')}`)
+      .then(r => r.ok ? r.text() : Promise.reject('not found'))
+      .then(text => setPlanText(text))
+      .catch(() => setPlanText(''))
+      .finally(() => setPlanLoading(false));
+  }, [block.name, workDir, planText]);
+
   if (block.name === 'AskUserQuestion' && block.input?.questions) {
     const questions = block.input.questions as Array<{
       question: string;
@@ -113,18 +128,34 @@ function ToolUseBlock({ block, onRespond }: { block: ContentBlock; onRespond?: (
   }
 
   if (block.name === 'ExitPlanMode') {
-    // Extract allowed prompts if available
     const allowedPrompts = block.input?.allowedPrompts as Array<{ tool: string; prompt: string }> | undefined;
+    const handleClick = (text: string) => {
+      if (responded) return;
+      setResponded(true);
+      onRespond?.(text);
+    };
 
     return (
       <div style={{ margin: '8px 0', padding: '10px 14px', background: 'rgba(245,158,11,0.08)', borderRadius: 6, border: '1px solid rgba(245,158,11,0.2)' }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: '#F59E0B', marginBottom: 8 }}>
           Plan bereit zur Freigabe
         </div>
-        {/* Show allowed prompts if available */}
-        {allowedPrompts && allowedPrompts.length > 0 && (
+        {/* Plan text from .claude/plan.md */}
+        {planLoading && <div style={{ fontSize: 11, color: 'var(--tn-text-muted)', marginBottom: 8 }}>Plan wird geladen...</div>}
+        {planText && (
           <details style={{ marginBottom: 8 }} open>
             <summary style={{ fontSize: 11, color: '#F59E0B', cursor: 'pointer', marginBottom: 4 }}>
+              Plan anzeigen ({planText.length > 1000 ? `${Math.round(planText.length / 1000)}k Zeichen` : `${planText.length} Zeichen`})
+            </summary>
+            <div style={{ padding: '8px 10px', borderRadius: 4, background: 'var(--tn-bg)', border: '1px solid var(--tn-border)', fontSize: 12, lineHeight: 1.6, maxHeight: 300, overflow: 'auto', color: 'var(--tn-text)' }}>
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{planText}</ReactMarkdown>
+            </div>
+          </details>
+        )}
+        {/* Permissions */}
+        {allowedPrompts && allowedPrompts.length > 0 && (
+          <details style={{ marginBottom: 8 }}>
+            <summary style={{ fontSize: 11, color: 'var(--tn-text-muted)', cursor: 'pointer', marginBottom: 4 }}>
               Berechtigungen ({allowedPrompts.length})
             </summary>
             <div style={{ padding: '6px 8px', borderRadius: 4, background: 'var(--tn-bg)', border: '1px solid var(--tn-border)', fontSize: 11, lineHeight: 1.5 }}>
@@ -136,20 +167,26 @@ function ToolUseBlock({ block, onRespond }: { block: ContentBlock; onRespond?: (
             </div>
           </details>
         )}
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button
-            onClick={() => onRespond?.('yes')}
-            style={{ padding: '6px 16px', borderRadius: 4, cursor: 'pointer', background: '#10B981', border: 'none', color: '#fff', fontSize: 12, fontWeight: 600 }}
-          >
-            Freigeben
-          </button>
-          <button
-            onClick={() => onRespond?.('no, please revise the plan')}
-            style={{ padding: '6px 16px', borderRadius: 4, cursor: 'pointer', background: '#EF4444', border: 'none', color: '#fff', fontSize: 12, fontWeight: 600 }}
-          >
-            Ablehnen
-          </button>
-        </div>
+        {responded ? (
+          <div style={{ fontSize: 12, color: '#10B981', fontWeight: 600, padding: '6px 0' }}>
+            Freigegeben — wird ausgefuehrt...
+          </div>
+        ) : (
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              onClick={() => handleClick('yes')}
+              style={{ padding: '6px 16px', borderRadius: 4, cursor: 'pointer', background: '#10B981', border: 'none', color: '#fff', fontSize: 12, fontWeight: 600 }}
+            >
+              Freigeben
+            </button>
+            <button
+              onClick={() => handleClick('no, please revise the plan')}
+              style={{ padding: '6px 16px', borderRadius: 4, cursor: 'pointer', background: '#EF4444', border: 'none', color: '#fff', fontSize: 12, fontWeight: 600 }}
+            >
+              Ablehnen
+            </button>
+          </div>
+        )}
       </div>
     );
   }
@@ -208,7 +245,7 @@ function ToolUseBlock({ block, onRespond }: { block: ContentBlock; onRespond?: (
 }
 
 // --- Message Row ---
-function MessageRow({ msg, onRespond, isLast }: { msg: Message; onRespond?: (text: string) => void; isLast: boolean }) {
+function MessageRow({ msg, onRespond, isLast, workDir }: { msg: Message; onRespond?: (text: string) => void; isLast: boolean; workDir?: string }) {
   const blocks: ContentBlock[] = typeof msg.content === 'string'
     ? [{ type: 'text', text: msg.content }]
     : Array.isArray(msg.content) ? msg.content : [];
@@ -228,6 +265,21 @@ function MessageRow({ msg, onRespond, isLast }: { msg: Message; onRespond?: (tex
   const text = textBlocks.map(b => b.text || '').join('\n');
   if (!text.trim() && toolUseBlocks.length === 0) return null;
 
+  // Rate limit messages get special styling
+  if (msg.role === 'rate_limit') {
+    return (
+      <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--tn-border)', background: 'rgba(239,68,68,0.08)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+          <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: '#EF4444' }}>Rate Limit</span>
+          {msg.timestamp && <span style={{ fontSize: 10, color: 'var(--tn-text-muted)' }}>{new Date(msg.timestamp).toLocaleTimeString()}</span>}
+        </div>
+        <div style={{ fontSize: 12, color: '#EF4444', lineHeight: 1.5 }}>
+          {typeof msg.content === 'string' ? msg.content : 'Nutzungslimit erreicht. Bitte anderen Account verwenden oder warten.'}
+        </div>
+      </div>
+    );
+  }
+
   // Detect if message contains ExitPlanMode to style plan text
   const hasExitPlan = toolUseBlocks.some(b => b.name === 'ExitPlanMode');
 
@@ -236,9 +288,9 @@ function MessageRow({ msg, onRespond, isLast }: { msg: Message; onRespond?: (tex
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
         <span style={{
           fontSize: 11, fontWeight: 600, textTransform: 'uppercase',
-          color: msg.role === 'assistant' ? 'var(--tn-green)' : 'var(--tn-blue)',
+          color: msg.role === 'assistant' ? 'var(--tn-green)' : msg.role === 'system' ? 'var(--tn-orange)' : 'var(--tn-blue)',
         }}>
-          {msg.role === 'assistant' ? 'Claude' : 'User'}
+          {msg.role === 'assistant' ? 'Claude' : msg.role === 'system' ? 'System' : 'User'}
         </span>
         {msg.timestamp && (
           <span style={{ fontSize: 10, color: 'var(--tn-text-muted)' }}>
@@ -278,7 +330,7 @@ function MessageRow({ msg, onRespond, isLast }: { msg: Message; onRespond?: (tex
       )}
       {/* Interactive tool_use blocks (last assistant message only) */}
       {interactiveBlocks.map((block, i) => (
-        <ToolUseBlock key={i} block={block} onRespond={onRespond} />
+        <ToolUseBlock key={i} block={block} onRespond={onRespond} workDir={workDir} />
       ))}
     </div>
   );
@@ -306,6 +358,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   const [attention, setAttention] = useState<'idle' | 'working' | 'needs_attention'>('idle');
   const [attentionReason, setAttentionReason] = useState<string | undefined>();
   const [permissions, setPermissions] = useState<Permission[]>([]);
+  const [rateLimitMessage, setRateLimitMessage] = useState<string | null>(null);
   const [convName, setConvName] = useState('');
   const [planMode, setPlanMode] = useState(false);
   const [liveMode, setLiveMode] = useState(false);
@@ -335,8 +388,8 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         setPermissions(data.permissions || []);
         setConvName(data.summary || '');
         setIsAgentDone(!!data.isAgentDone);
-        // If server reports rateLimited but state doesn't reflect it yet, show it
-        if (data.rateLimited && attention !== 'needs_attention') {
+        // If server reports rateLimited, always show rate limit state
+        if (data.rateLimited) {
           setAttention('needs_attention');
           setAttentionReason('rate_limit');
         }
@@ -345,11 +398,15 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         const states = await statesResp.json();
         const myState = states[selectedId];
         if (myState) {
-          setAttention(myState.state || 'idle');
-          setAttentionReason(myState.reason);
+          // Don't override rate_limit state from poll with stale states
+          if (!(attentionReason === 'rate_limit' && myState.state === 'idle')) {
+            setAttention(myState.state || 'idle');
+            setAttentionReason(myState.reason);
+          }
         } else {
           setAttention('idle');
           setAttentionReason(undefined);
+            setRateLimitMessage(null);
         }
       }
     } catch (err) {
@@ -391,6 +448,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
           if (msg.state === 'processing') {
             setAttention('working');
             setAttentionReason(undefined);
+            setRateLimitMessage(null);
           }
           if (msg.state === 'done') {
             setAttention('idle');
@@ -401,6 +459,12 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
               setTimeout(pollNow, 2000);
               setTimeout(pollNow, 5000);
             }
+          }
+          if (msg.state === "error" && msg.message) {
+            setAttention("needs_attention");
+            setAttentionReason("rate_limit");
+            setRateLimitMessage(msg.message);
+            if (sessionId) setTimeout(pollNow, 1000);
           }
         }
         // Queue refresh on state changes
@@ -441,6 +505,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     setMessages(prev => [...prev, { role: 'user', content: msg, timestamp: new Date().toISOString() }]);
     setIsAgentDone(false);
     setAttentionReason(undefined);
+            setRateLimitMessage(null);
     try {
       const resp = await fetch('/api/mission/send', {
         method: 'POST',
@@ -450,6 +515,16 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       if (!resp.ok) {
         const errData = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
         setMessages(prev => [...prev, { role: 'system', content: `Fehler: ${errData.error || 'Senden fehlgeschlagen'}`, timestamp: new Date().toISOString() }]);
+      } else {
+        const data = await resp.json().catch(() => ({}));
+        // Server auto-recovered from broken resume → switch to new session
+        if (data.resumeFailed && data.sessionId) {
+          console.log(`[CuiLite] Resume failed, switched to new session: ${data.sessionId}`);
+          setSessionId(data.sessionId);
+          try { localStorage.setItem(getSessionKey(selectedId), data.sessionId); } catch {}
+          onRouteChange?.(`/c/${data.sessionId}`);
+          setMessages([{ role: 'system', content: 'Neue Session gestartet (alte Session konnte nicht fortgesetzt werden)', timestamp: new Date().toISOString() }, { role: 'user', content: msg, timestamp: new Date().toISOString() }]);
+        }
       }
     } catch (err) {
       console.error('[CuiLite] Send error:', err);
@@ -461,7 +536,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     setTimeout(pollNow, 5000);
     setTimeout(pollNow, 10000);
     setTimeout(pollNow, 20000);
-  }, [input, sessionId, selectedId, workDir, planMode, pollNow]);
+  }, [input, sessionId, selectedId, workDir, planMode, pollNow, onRouteChange]);
 
   // Respond to tool_use blocks (AskUserQuestion, ExitPlanMode, EnterPlanMode)
   const handleRespond = useCallback(async (text: string) => {
@@ -469,17 +544,26 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     setIsLoading(true);
     setMessages(prev => [...prev, { role: 'user', content: text, timestamp: new Date().toISOString() }]);
     try {
-      await fetch('/api/mission/send', {
+      const resp = await fetch('/api/mission/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ accountId: selectedId, sessionId, message: text, workDir }),
       });
+      if (resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        if (data.resumeFailed && data.sessionId) {
+          console.log(`[CuiLite] Respond: resume failed, new session: ${data.sessionId}`);
+          setSessionId(data.sessionId);
+          try { localStorage.setItem(getSessionKey(selectedId), data.sessionId); } catch {}
+          onRouteChange?.(`/c/${data.sessionId}`);
+        }
+      }
     } catch (err) {
       console.error('[CuiLite] Respond error:', err);
     }
     setIsLoading(false);
     setTimeout(pollNow, 1000);
-  }, [sessionId, selectedId, workDir, pollNow]);
+  }, [sessionId, selectedId, workDir, pollNow, onRouteChange]);
 
   const handlePermission = useCallback(async (permId: string, action: 'approve' | 'deny') => {
     try {
@@ -514,6 +598,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     setPermissions([]);
     setAttention('idle');
     setAttentionReason(undefined);
+            setRateLimitMessage(null);
     try { localStorage.setItem(getSessionKey(selectedId), sid); } catch {}
     onRouteChange?.(`/c/${sid}`);
   }, [onRouteChange, selectedId]);
@@ -546,6 +631,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     setConvName('');
     setAttention('idle');
     setAttentionReason(undefined);
+            setRateLimitMessage(null);
     setLiveMode(false);
     try { localStorage.removeItem(getSessionKey(selectedId)); } catch {}
     onRouteChange?.('');
@@ -586,6 +672,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
             setMessages([]);
             setAttention('idle');
             setAttentionReason(undefined);
+            setRateLimitMessage(null);
             setLiveMode(false);
             try { localStorage.setItem(storageKey, newAcct); } catch {}
           }}
@@ -700,7 +787,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
           }}>
             {attentionReason === 'plan' ? 'Plan wartet auf Freigabe'
               : attentionReason === 'question' ? 'Claude hat eine Frage'
-              : attentionReason === 'rate_limit' ? 'Rate Limit — Warte und versuche erneut'
+              : attentionReason === 'rate_limit' ? 'Rate Limit — Account hat das Nutzungslimit erreicht. Anderen Account verwenden!'
               : attentionReason === 'error' ? 'Fehler aufgetreten'
               : 'Aktion erforderlich'}
           </span>
@@ -796,7 +883,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
               </div>
             )}
             {messages.map((msg, i) => (
-              <MessageRow key={i} msg={msg} onRespond={handleRespond} isLast={i === messages.length - 1} />
+              <MessageRow key={i} msg={msg} onRespond={handleRespond} isLast={i === messages.length - 1} workDir={workDir} />
             ))}
             <div ref={messagesEndRef} />
           </div>

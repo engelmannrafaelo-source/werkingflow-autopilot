@@ -263,8 +263,16 @@ router.post('/documents/edit', async (req, res) => {
 
 // GET /api/team/reviews - Pending Reviews
 router.get('/reviews', async (req, res) => {
+  const logDebug = (msg: string) => {
+    console.log(msg);
+    require('fs').appendFileSync('/tmp/review-debug.log', `${new Date().toISOString()} ${msg}\n`);
+  };
+
+  logDebug(`[DocumentManager] GET /reviews - edits.length BEFORE: ${edits.length}`);
   await ensureDemoDataLoaded();
+  logDebug(`[DocumentManager] GET /reviews - edits.length AFTER: ${edits.length}`);
   const pending = edits.filter(e => e.status === 'pending');
+  logDebug(`[DocumentManager] Returning ${pending.length} pending reviews`);
   res.json(pending);
 });
 

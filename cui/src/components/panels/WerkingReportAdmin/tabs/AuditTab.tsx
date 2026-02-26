@@ -2,15 +2,19 @@ import { useState, useEffect, useCallback } from 'react';
 
 interface AuditEntry {
   id: string;
-  action: string;
-  userId?: string;
-  userEmail?: string;
-  tenantId?: string;
-  tenantName?: string;
-  details?: string | Record<string, unknown>;
-  ipAddress?: string;
   timestamp: string;
-  [key: string]: unknown;
+  action: string;
+  actor: {
+    id: string;
+    email: string;
+    ip: string;
+  };
+  resource: {
+    type: string;
+    id: string;
+  };
+  metadata: Record<string, any>;
+  userAgent: string;
 }
 
 export default function AuditTab({ envMode }: { envMode?: string }) {

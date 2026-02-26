@@ -3816,12 +3816,12 @@ app.post('/api/rebuild', (_req, res) => {
 
 // Panel configuration with start commands
 const PANEL_CONFIGS = [
-  { name: 'Platform', port: 3004, path: '/root/projekte/werkingflow/platform', startCmd: 'npm run build:local' },
+  { name: 'Platform', port: 3004, path: '/root/projekte/werkingflow/platform', startCmd: 'npm run build:user' },
   { name: 'Dashboard', port: 3333, path: '/root/projekte/werkingflow/dashboard', startCmd: 'python3 -m dashboard.app &' },
-  { name: 'Werking-Report', port: 3008, path: '/root/projekte/werking-report', startCmd: 'npm run build:local' },
-  { name: 'Werking-Energy', port: 3007, path: '/root/projekte/apps/werking-energy', startCmd: 'npm run build:local' },
-  { name: 'Engelmann', port: 3009, path: '/root/projekte/engelmann-ai-hub', startCmd: 'npm run build:local' },
-  { name: 'Safety', port: 3006, path: '/root/projekte/werking-safety/frontend', startCmd: 'npm run build:local' },
+  { name: 'Werking-Report', port: 3008, path: '/root/projekte/werking-report', startCmd: 'npm run build:user' },
+  { name: 'Werking-Energy', port: 3007, path: '/root/projekte/apps/werking-energy', startCmd: 'npm run build:user' },
+  { name: 'Engelmann', port: 3009, path: '/root/projekte/engelmann-ai-hub', startCmd: 'npm run build:user' },
+  { name: 'Safety', port: 3006, path: '/root/projekte/werking-safety/frontend', startCmd: 'npm run build:user' },
 ];
 
 // GET /api/panel-health — Check which panel dependencies are running
@@ -5135,43 +5135,185 @@ async function bridgeFetch(path: string, options: any = {}) {
 }
 
 // Overview: Quick stats + Sankey data
-// Simple proxy endpoints to new Bridge metrics API
-
 app.get('/api/bridge/metrics/overview', async (_req, res) => {
   try {
-    const data = await bridgeFetch('/metrics/overview');
-    res.json(data);
+    const [health, sessions] = await Promise.all([
+      bridgeFetch('/health'),
+      bridgeFetch('/sessions'),
+    ]);
+
+    // Quick stats from health endpoint
+    const quickStats = {
+      totalRequests24h: health.metrics?.requests_24h || 0,
+      totalTokens24h: health.metrics?.tokens_24h || 0,
+      currentSpendEur: health.metrics?.cost_today_eur || 0,
+      errorRate: health.metrics?.error_rate || 0,
+      activeRequests: sessions?.active || 0,
+    };
+
+    // Build Sankey data: User → App → Model → Provider
+    const sankeyNodes: any[] = [];
+    const sankeyLinks: any[] = [];
+    const nodeMap = new Map<string, number>();
+
+    const addNode = (name: string, category: string) => {
+      if (!nodeMap.has(name)) {
+        nodeMap.set(name, sankeyNodes.length);
+        sankeyNodes.push({ name, category });
+      }
+      return nodeMap.get(name)!;
+    };
+
+    // Parse session data to build flow
+    if (health.metrics?.top_users) {
+      for (const [user, data] of Object.entries(health.metrics.top_users as Record<string, any>)) {
+        const userIdx = addNode(user, 'user');
+
+        for (const [app, appData] of Object.entries(data.apps || {})) {
+          const appIdx = addNode(app, 'app');
+          sankeyLinks.push({ source: userIdx, target: appIdx, value: (appData as any).tokens || 0 });
+
+          for (const [model, modelData] of Object.entries((appData as any).models || {})) {
+            const modelIdx = addNode(model, 'model');
+            sankeyLinks.push({ source: appIdx, target: modelIdx, value: (modelData as any).tokens || 0 });
+
+            const provider = (modelData as any).provider || 'anthropic';
+            const providerIdx = addNode(provider, 'provider');
+            sankeyLinks.push({ source: modelIdx, target: providerIdx, value: (modelData as any).tokens || 0 });
+          }
+        }
+      }
+    }
+
+    res.json({
+      quickStats,
+      sankey: { nodes: sankeyNodes, links: sankeyLinks },
+      timestamp: new Date().toISOString(),
+    });
   } catch (err: any) {
     console.error('[Bridge] Overview error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
+// Usage: Token analytics over time
 app.get('/api/bridge/metrics/usage', async (req, res) => {
   try {
-    const limit = req.query.limit ? `?limit=${req.query.limit}` : '';
-    const data = await bridgeFetch(`/metrics/usage${limit}`);
-    res.json(data);
+    const period = req.query.period || '24h'; // 24h, 7d, 30d
+    const metrics = await bridgeFetch(`/metrics/usage?period=${period}`);
+
+    // Time-series data for Recharts
+    const timeSeries = (metrics.timeseries || []).map((entry: any) => ({
+      timestamp: entry.timestamp,
+      promptTokens: entry.prompt_tokens || 0,
+      completionTokens: entry.completion_tokens || 0,
+      totalTokens: (entry.prompt_tokens || 0) + (entry.completion_tokens || 0),
+    }));
+
+    // Top apps/users
+    const topApps = (metrics.by_app || [])
+      .sort((a: any, b: any) => b.tokens - a.tokens)
+      .slice(0, 10)
+      .map((a: any) => ({ name: a.app, tokens: a.tokens }));
+
+    const topUsers = (metrics.by_user || [])
+      .sort((a: any, b: any) => b.tokens - a.tokens)
+      .slice(0, 10)
+      .map((u: any) => ({ name: u.user, tokens: u.tokens }));
+
+    // Model distribution
+    const modelDistribution = Object.entries(metrics.by_model || {}).map(([model, data]: [string, any]) => ({
+      model,
+      tokens: data.tokens,
+      percent: data.percent,
+    }));
+
+    res.json({
+      timeSeries,
+      topApps,
+      topUsers,
+      modelDistribution,
+      totals: {
+        tokens: metrics.total_tokens || 0,
+        requests: metrics.total_requests || 0,
+      },
+    });
   } catch (err: any) {
     console.error('[Bridge] Usage error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
+// Cost: Financial breakdown
 app.get('/api/bridge/metrics/cost', async (_req, res) => {
   try {
-    const data = await bridgeFetch('/metrics/cost');
-    res.json(data);
+    const cost = await bridgeFetch('/metrics/cost');
+
+    // Drill-down structure: Total → Provider → Model → User
+    const byProvider = Object.entries(cost.by_provider || {}).map(([provider, data]: [string, any]) => ({
+      provider,
+      cost: data.cost_eur || 0,
+      tokens: data.tokens || 0,
+      costPerToken: data.cost_per_1k_tokens || 0,
+    }));
+
+    const byModel = Object.entries(cost.by_model || {}).map(([model, data]: [string, any]) => ({
+      model,
+      cost: data.cost_eur || 0,
+      tokens: data.tokens || 0,
+    }));
+
+    const byUser = Object.entries(cost.by_user || {}).map(([user, data]: [string, any]) => ({
+      user,
+      cost: data.cost_eur || 0,
+      tokens: data.tokens || 0,
+    }));
+
+    res.json({
+      totals: {
+        cost: cost.total_cost_eur || 0,
+        tokens: cost.total_tokens || 0,
+        budget: cost.monthly_budget_eur || 0,
+        budgetUsedPercent: cost.budget_used_percent || 0,
+      },
+      byProvider,
+      byModel,
+      byUser,
+    });
   } catch (err: any) {
     console.error('[Bridge] Cost error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
+// Limits: Rate limit monitoring
 app.get('/api/bridge/metrics/limits', async (_req, res) => {
   try {
-    const data = await bridgeFetch('/metrics/limits');
-    res.json(data);
+    const limits = await bridgeFetch('/metrics/limits');
+
+    // Per-provider rate limit status
+    const providers = Object.entries(limits.providers || {}).map(([provider, data]: [string, any]) => ({
+      provider,
+      current: data.current || 0,
+      limit: data.limit || 0,
+      percent: data.percent || 0,
+      resetAt: data.reset_at,
+      status: data.percent >= 95 ? 'critical' : data.percent >= 80 ? 'warning' : data.percent >= 60 ? 'caution' : 'safe',
+    }));
+
+    // Historical rate limit hits
+    const history = (limits.history || []).map((event: any) => ({
+      timestamp: event.timestamp,
+      provider: event.provider,
+      model: event.model,
+      reason: event.reason,
+    }));
+
+    res.json({
+      providers,
+      history,
+      lastUpdated: new Date().toISOString(),
+    });
   } catch (err: any) {
     console.error('[Bridge] Limits error:', err.message);
     // Fallback: Return empty data if endpoint doesn't exist (404)
@@ -5184,16 +5326,35 @@ app.get('/api/bridge/metrics/limits', async (_req, res) => {
   }
 });
 
+// Activity: Real-time request feed
 app.get('/api/bridge/metrics/activity', async (req, res) => {
   try {
-    const limit = req.query.limit ? `?limit=${req.query.limit}` : '';
-    const data = await bridgeFetch(`/metrics/activity${limit}`);
-    res.json(data);
+    const limit = parseInt(req.query.limit as string) || 100;
+    const activity = await bridgeFetch(`/metrics/activity?limit=${limit}`);
+
+    const requests = (activity.requests || []).map((r: any) => ({
+      id: r.id,
+      timestamp: r.timestamp,
+      user: r.user,
+      app: r.app,
+      model: r.model,
+      provider: r.provider,
+      tokens: r.tokens,
+      cost: r.cost_eur,
+      latency: r.latency_ms,
+      status: r.status,
+    }));
+
+    res.json({
+      requests,
+      total: activity.total || 0,
+    });
   } catch (err: any) {
     console.error('[Bridge] Activity error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
+
 // --- Serve Frontend in Production ---
 if (PROD) {
   const distPath = resolve(import.meta.dirname ?? __dirname, '..', 'dist');
@@ -5252,114 +5413,3 @@ process.on('SIGTERM', () => {
 server.listen(PORT, () => {
   console.log(`CUI Workspace ${PROD ? '(production)' : '(dev)'} on http://localhost:${PORT}`);
 });
-
-// --- Bridge Metrics (Direct DB Access) ---
-import * as metricsDb from './metrics-db.js';
-
-// NEW: Metrics from PostgreSQL (faster, more reliable than Bridge API)
-app.get('/api/bridge-db/metrics/overview', async (req, res) => {
-  try {
-    const hours = parseInt(req.query.hours as string) || 24;
-    const stats = await metricsDb.getRealtimeStats(hours);
-    res.json({
-      health: 'healthy', // Assume healthy if DB responds
-      worker: 'aggregated', // DB aggregates all workers
-      uptime_hours: hours,
-      total_requests: stats.total_requests || 0,
-      avg_response_time: stats.avg_response_time_ms ? stats.avg_response_time_ms / 1000 : 0,
-      success_rate: stats.success_rate || 100,
-      active_sessions: stats.active_sessions || 0,
-      timestamp: stats.timestamp || new Date().toISOString(),
-    });
-  } catch (err: any) {
-    console.error('[Metrics DB] Overview error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/bridge-db/metrics/cost', async (req, res) => {
-  try {
-    const days = parseInt(req.query.days as string) || 30;
-    const breakdown = await metricsDb.getCostBreakdown(days);
-    const stats = await metricsDb.getRealtimeStats(days * 24);
-
-    res.json({
-      total_requests: stats.total_requests || 0,
-      estimated_tokens: stats.total_tokens || 0,
-      estimated_cost_usd: parseFloat(stats.total_cost_usd || '0'),
-      breakdown: breakdown.reduce((acc: any, row: any) => {
-        acc[row.model] = {
-          requests: row.requests,
-          tokens: row.tokens,
-          cost_usd: parseFloat(row.cost_usd || '0'),
-        };
-        return acc;
-      }, {}),
-      note: `Statistics from last ${days} days (PostgreSQL)`,
-      timestamp: new Date().toISOString(),
-    });
-  } catch (err: any) {
-    console.error('[Metrics DB] Cost error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/bridge-db/metrics/usage', async (req, res) => {
-  try {
-    const days = parseInt(req.query.days as string) || 7;
-    const endpoints = await metricsDb.getEndpointUsage(days);
-    const stats = await metricsDb.getRealtimeStats(days * 24);
-
-    res.json({
-      total_requests: stats.total_requests || 0,
-      endpoints: endpoints.map((row: any) => ({
-        endpoint: row.endpoint,
-        requests: row.requests,
-        avg_response_time: row.avg_response_time_ms ? row.avg_response_time_ms / 1000 : 0,
-      })),
-      timestamp: new Date().toISOString(),
-    });
-  } catch (err: any) {
-    console.error('[Metrics DB] Usage error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/bridge-db/metrics/activity', async (req, res) => {
-  try {
-    const limit = parseInt(req.query.limit as string) || 50;
-    const requests = await metricsDb.getActivityFeed(limit);
-
-    res.json({
-      total_today: requests.length,
-      requests: requests.map((row: any) => ({
-        timestamp: row.timestamp,
-        endpoint: row.endpoint,
-        model: row.model,
-        tokens: row.total_tokens,
-        cost_usd: parseFloat(row.cost_usd || '0'),
-        response_time_ms: row.response_time_ms,
-        success: row.success,
-        error: row.error_type,
-        worker: row.worker_instance,
-      })),
-      timestamp: new Date().toISOString(),
-    });
-  } catch (err: any) {
-    console.error('[Metrics DB] Activity error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Admin: Trigger daily stats refresh
-app.post('/api/bridge-db/admin/refresh-stats', async (req, res) => {
-  try {
-    const targetDate = req.body?.date; // Optional: YYYY-MM-DD
-    const result = await metricsDb.refreshDailyStats(targetDate);
-    res.json(result);
-  } catch (err: any) {
-    console.error('[Metrics DB] Refresh error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-

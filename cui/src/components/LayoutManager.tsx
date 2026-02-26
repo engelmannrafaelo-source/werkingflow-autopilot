@@ -2,6 +2,7 @@ import { useCallback, useRef, useState, useEffect, useMemo } from 'react';
 import { Layout, Model, TabNode, TabSetNode, BorderNode, IJsonModel, ITabSetRenderValues, ITabRenderValues, Actions, DockLocation, Rect } from 'flexlayout-react';
 import type { CuiStates } from '../types';
 import { copyToClipboard } from '../utils/clipboard';
+const ACCOUNT_LABELS: Record<string, string> = { rafael: "Engelmann", engelmann: "Gmail", office: "Office", local: "Lokal" };
 
 // --- flexlayout-react CPU fix ---
 // flexlayout's internal useLayoutEffect hooks (no dep arrays) call getBoundingClientRect
@@ -43,7 +44,6 @@ function patchLayoutRedraw(layoutRef: any) {
   };
   internal._redrawPatched = true;
 }
-import CuiPanel from './panels/CuiPanel';
 import CuiLitePanel from './panels/CuiLitePanel';
 import NativeChat from './panels/NativeChat';
 import ImageDrop from './panels/ImageDrop';
@@ -52,11 +52,11 @@ import FilePreview from './panels/FilePreview';
 import NotesPanel from './panels/NotesPanel';
 import MissionControl from './panels/MissionControl';
 import OfficePanel from './panels/OfficePanel';
+import KnowledgeFullscreen from './panels/KnowledgeFullscreen';
 import ErrorBoundary from './ErrorBoundary';
 import WerkingReportAdmin from './panels/WerkingReportAdmin/WerkingReportAdmin';
 import LinkedInPanel from './panels/LinkedInPanel';
 import BridgeMonitor from './panels/BridgeMonitor/BridgeMonitor';
-import AttributionDashboard from './panels/AttributionDashboard';
 import SystemHealth from './panels/SystemHealth';
 import WatchdogPanel from './panels/WatchdogPanel';
 import PanelConnectivityGuard from './panels/PanelConnectivityGuard';
@@ -93,9 +93,9 @@ function defaultLayout(workDir: string): IJsonModel {
               children: [
                 {
                   type: 'tab',
-                  name: 'Rafael',
+                  name: 'CUI',
                   component: 'cui',
-                  config: { accountId: 'rafael' },
+                  config: {},
                 },
               ],
             },
@@ -129,9 +129,9 @@ function defaultLayout(workDir: string): IJsonModel {
               children: [
                 {
                   type: 'tab',
-                  name: 'Engelmann',
+                  name: 'CUI',
                   component: 'cui',
-                  config: { accountId: 'engelmann' },
+                  config: {},
                 },
               ],
             },
@@ -238,8 +238,6 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
 
     switch (component) {
       case 'cui':
-        return wrapWithId(<CuiPanel accountId={config.accountId} projectId={projectId} workDir={workDir} panelId={nodeId} isTabVisible={node.isVisible()}
-          onRouteChange={(route) => updateNodeConfig(nodeId, { _route: route })} />);
       case 'cui-lite':
         return wrapWithId(<CuiLitePanel accountId={config.accountId} projectId={projectId} workDir={workDir} panelId={nodeId} isTabVisible={node.isVisible()}
           onRouteChange={(route) => updateNodeConfig(nodeId, { _route: route })} />);
@@ -271,6 +269,13 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
             <OfficePanel projectId={projectId} workDir={workDir} />
           </ErrorBoundary>
         );
+      case 'knowledge':
+      case 'knowledge-fullscreen':
+        return wrapWithId(
+          <ErrorBoundary>
+            <KnowledgeFullscreen projectId={projectId} workDir={workDir} />
+          </ErrorBoundary>
+        );
       case 'admin-wr':
         return wrapWithId(<WerkingReportAdmin />);
       case 'linkedin':
@@ -286,25 +291,17 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         );
       case 'bridge-monitor':
         return wrapWithId(
+          <ErrorBoundary>
           <PanelConnectivityGuard
-            panelName="Bridge"
-            checkUrl="http://localhost:8000/health"
-            port={8000}
-            startCommand="# Bridge runs on Hetzner - check server status"
+            panelName="Bridge (Hetzner)"
+            checkUrl="http://49.12.72.66:8000/health"
+            startCommand="# Bridge runs on Hetzner (49.12.72.66:8000)
+ssh root@49.12.72.66 'docker ps | grep ai-bridge'
+ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
           >
             <BridgeMonitor />
           </PanelConnectivityGuard>
-        );
-      case 'attribution-dashboard':
-        return wrapWithId(
-          <PanelConnectivityGuard
-            panelName="Dashboard"
-            checkUrl="http://localhost:3333/api/version"
-            port={3333}
-            startCommand="cd /root/projekte/werkingflow/dashboard && python3 -m dashboard.app"
-          >
-            <AttributionDashboard />
-          </PanelConnectivityGuard>
+          </ErrorBoundary>
         );
       case 'system-health':
         return wrapWithId(<SystemHealth />);
@@ -359,11 +356,11 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     saveLayout(newModel);
   }, [workDir, saveLayout]);
 
-  const addTab = useCallback((type: 'cui' | 'cui-lite' | 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'attribution-dashboard' | 'watchdog', config: Record<string, string>, targetId: string) => {
+  const addTab = useCallback((type: 'cui' | 'cui-lite' | 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'watchdog', config: Record<string, string>, targetId: string) => {
     if (!model) return;
     const names: Record<string, string> = {
-      cui: config.accountId ? config.accountId.charAt(0).toUpperCase() + config.accountId.slice(1) : 'CUI',
-      'cui-lite': config.accountId ? config.accountId.charAt(0).toUpperCase() + config.accountId.slice(1) + ' Lite' : 'CUI Lite',
+      cui: 'CUI',
+      'cui-lite': 'CUI',
       browser: 'Browser',
       preview: 'File Preview',
       notes: 'Notes',
@@ -374,7 +371,6 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       linkedin: 'LinkedIn Marketing 🔗',
       'system-health': 'System Health',
       'bridge-monitor': 'Bridge Monitor',
-      'attribution-dashboard': 'Attribution Dashboard 📊',
       watchdog: 'Dev Server Watchdog',
     };
     if (type === 'preview' && !config.watchPath) {
@@ -398,12 +394,10 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         onChange={(e) => {
           const val = e.target.value;
           if (!val) return;
-          if (val.startsWith('cui:')) {
-            addTab('cui', { accountId: val.split(':')[1] }, node.getId());
-          } else if (val.startsWith('lite:')) {
-            addTab('cui-lite', { accountId: val.split(':')[1] }, node.getId());
+          if (val === 'cui') {
+            addTab('cui', {}, node.getId());
           } else {
-            addTab(val as 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'attribution-dashboard' | 'watchdog', {}, node.getId());
+            addTab(val as 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'watchdog', {}, node.getId());
           }
           e.target.value = '';
         }}
@@ -421,11 +415,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         }}
       >
         <option value="">+</option>
-        <optgroup label="CUI">
-          <option value="lite:rafael">Rafael</option>
-          <option value="lite:engelmann">Engelmann</option>
-          <option value="lite:office">Office</option>
-        </optgroup>
+        <option value="cui">CUI</option>
         <option value="browser">Browser</option>
         <option value="preview">File Preview</option>
         <option value="notes">Notes</option>
@@ -437,7 +427,6 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         <option value="watchdog">Dev Server Watchdog</option>
         <option value="linkedin">LinkedIn Marketing 🔗</option>
         <option value="bridge-monitor">Bridge Monitor (Old)</option>
-        <option value="attribution-dashboard">Attribution Dashboard 📊</option>
       </select>
     );
   }, [addTab]);
@@ -646,27 +635,27 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
             .find(p => p.projectId === projectId);
           if (!myPlan) return;
 
-          // 1. Inventory existing CUI panels
-          const existingPanels: Array<{ nodeId: string; accountId: string }> = [];
+          // 1. Inventory existing CUI panels (generic, no account binding)
+          const existingPanels: string[] = [];
           model.visitNodes((node) => {
             if (node.getType() === 'tab') {
               const tab = node as TabNode;
-              if (tab.getComponent() === 'cui') {
-                existingPanels.push({ nodeId: tab.getId(), accountId: tab.getConfig()?.accountId || '' });
+              if (tab.getComponent() === 'cui' || tab.getComponent() === 'cui-lite') {
+                existingPanels.push(tab.getId());
               }
             }
           });
 
-          // 2. Match conversations to existing panels (same accountId first)
+          // 2. Match conversations to available panels (round-robin)
           const assignments: Array<{ panelId: string; sessionId: string }> = [];
           const usedPanels = new Set<string>();
           const unmatched: Array<{ sessionId: string; accountId: string }> = [];
 
           for (const conv of myPlan.conversations) {
-            const panel = existingPanels.find(p => p.accountId === conv.accountId && !usedPanels.has(p.nodeId));
+            const panel = existingPanels.find(id => !usedPanels.has(id));
             if (panel) {
-              assignments.push({ panelId: panel.nodeId, sessionId: conv.sessionId });
-              usedPanels.add(panel.nodeId);
+              assignments.push({ panelId: panel, sessionId: conv.sessionId });
+              usedPanels.add(panel);
             } else {
               unmatched.push(conv);
             }
@@ -677,7 +666,6 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           model.visitNodes((node) => { if (node.getType() === 'tabset') tabsetCount++; });
 
           for (const conv of unmatched) {
-            // Find tabset with fewest children
             let targetId = '';
             let minTabs = Infinity;
             model.visitNodes((node) => {
@@ -689,23 +677,22 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
             });
             if (!targetId) continue;
 
-            const tabName = conv.accountId.charAt(0).toUpperCase() + conv.accountId.slice(1);
             const dockLocation = tabsetCount < 6
               ? (tabsetCount % 2 === 0 ? DockLocation.RIGHT : DockLocation.BOTTOM)
               : DockLocation.CENTER;
 
             model.doAction(Actions.addNode(
-              { type: 'tab', name: tabName, component: 'cui', config: { accountId: conv.accountId } },
+              { type: 'tab', name: 'CUI', component: 'cui', config: {} },
               targetId, dockLocation, -1
             ));
             tabsetCount++;
 
-            // Find the new node (last CUI tab with this accountId that isn't already assigned)
+            // Find the new node
             let newPanelId = '';
             model.visitNodes((node) => {
               if (node.getType() === 'tab') {
                 const tab = node as TabNode;
-                if (tab.getComponent() === 'cui' && tab.getConfig()?.accountId === conv.accountId
+                if ((tab.getComponent() === 'cui' || tab.getComponent() === 'cui-lite')
                     && !usedPanels.has(tab.getId()) && !assignments.some(a => a.panelId === tab.getId())) {
                   newPanelId = tab.getId();
                 }
@@ -751,13 +738,13 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         return;
       }
 
-      // Same logic as the WS handler: inventory, match, split, navigate
-      const existingPanels: Array<{ nodeId: string; accountId: string }> = [];
+      // Same logic as the WS handler: inventory, match, split, navigate (generic, no account binding)
+      const existingPanels: string[] = [];
       model.visitNodes((node) => {
         if (node.getType() === 'tab') {
           const tab = node as TabNode;
-          if (tab.getComponent() === 'cui') {
-            existingPanels.push({ nodeId: tab.getId(), accountId: tab.getConfig()?.accountId || '' });
+          if (tab.getComponent() === 'cui' || tab.getComponent() === 'cui-lite') {
+            existingPanels.push(tab.getId());
           }
         }
       });
@@ -767,10 +754,10 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       const unmatched: Array<{ sessionId: string; accountId: string }> = [];
 
       for (const conv of myPlan.conversations) {
-        const panel = existingPanels.find(p => p.accountId === conv.accountId && !usedPanels.has(p.nodeId));
+        const panel = existingPanels.find(id => !usedPanels.has(id));
         if (panel) {
-          assignments.push({ panelId: panel.nodeId, sessionId: conv.sessionId });
-          usedPanels.add(panel.nodeId);
+          assignments.push({ panelId: panel, sessionId: conv.sessionId });
+          usedPanels.add(panel);
         } else {
           unmatched.push(conv);
         }
@@ -791,13 +778,12 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         });
         if (!targetId) continue;
 
-        const tabName = conv.accountId.charAt(0).toUpperCase() + conv.accountId.slice(1);
         const dockLocation = tabsetCount < 6
           ? (tabsetCount % 2 === 0 ? DockLocation.RIGHT : DockLocation.BOTTOM)
           : DockLocation.CENTER;
 
         model.doAction(Actions.addNode(
-          { type: 'tab', name: tabName, component: 'cui', config: { accountId: conv.accountId } },
+          { type: 'tab', name: 'CUI', component: 'cui', config: {} },
           targetId, dockLocation, -1
         ));
         tabsetCount++;
@@ -806,7 +792,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         model.visitNodes((node) => {
           if (node.getType() === 'tab') {
             const tab = node as TabNode;
-            if (tab.getComponent() === 'cui' && tab.getConfig()?.accountId === conv.accountId
+            if ((tab.getComponent() === 'cui' || tab.getComponent() === 'cui-lite')
                 && !usedPanels.has(tab.getId()) && !assignments.some(a => a.panelId === tab.getId())) {
               newPanelId = tab.getId();
             }

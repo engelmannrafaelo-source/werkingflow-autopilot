@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { BRIDGE_URL, bridgeJson } from './shared';
+// New Business-Focused Tabs
+import OverviewTab from './tabs/OverviewTab';
+import UsageAnalyticsTab from './tabs/UsageAnalyticsTab';
+import CostAnalyticsTab from './tabs/CostAnalyticsTab';
+import RateLimitsTab from './tabs/RateLimitsTab';
+import ActivityFeedTab from './tabs/ActivityFeedTab';
+// Legacy Technical Tabs
 import StatusTab from './tabs/StatusTab';
-import WorkersTab from './tabs/WorkersTab';
-import AuslastungTab from './tabs/AuslastungTab';
-import SessionsTab from './tabs/SessionsTab';
-import TestTab from './tabs/TestTab';
 import MetrikenTab from './tabs/MetrikenTab';
-import KostenTab from './tabs/KostenTab';
 import CCUsageTab from './tabs/CCUsageTab';
 
 interface Tab {
@@ -24,13 +26,15 @@ interface QuickStatus {
 
 export default function BridgeMonitor() {
   const tabs: Tab[] = [
-    { key: 'status',     label: 'Status',      component: <StatusTab /> },
-    { key: 'workers',    label: 'Workers',      component: <WorkersTab /> },
-    { key: 'auslastung', label: 'Auslastung',   component: <AuslastungTab /> },
-    { key: 'sessions',   label: 'Sessions',     component: <SessionsTab /> },
-    { key: 'test',       label: 'Test',         component: <TestTab /> },
+    // Business Analytics (Primary)
+    { key: 'overview',   label: 'Overview',     component: <OverviewTab /> },
+    { key: 'usage',      label: 'Usage',        component: <UsageAnalyticsTab /> },
+    { key: 'cost',       label: 'Cost',         component: <CostAnalyticsTab /> },
+    { key: 'limits',     label: 'Limits',       component: <RateLimitsTab /> },
+    { key: 'activity',   label: 'Activity',     component: <ActivityFeedTab /> },
+    // Technical Deep-Dive (Secondary)
+    { key: 'status',     label: 'Status',       component: <StatusTab /> },
     { key: 'metriken',   label: 'Metriken',     component: <MetrikenTab /> },
-    { key: 'kosten',     label: 'Kosten',       component: <KostenTab /> },
     { key: 'cc-usage',   label: 'CC-Usage',     component: <CCUsageTab /> },
   ];
 

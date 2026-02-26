@@ -31,20 +31,39 @@ interface AgentDetailModalProps {
   agent: AgentStatus;
   onClose: () => void;
   onRunAgent?: (personaId: string, task?: string) => void;
+  onOpenChat?: (personaId: string) => void;
+  initialTab?: Tab;
 }
 
-type Tab = 'overview' | 'history' | 'current';
+interface InboxMessage {
+  from: string;
+  subject: string;
+  date: string;
+  body: string;
+}
 
-export default function AgentDetailModal({ agent, onClose, onRunAgent }: AgentDetailModalProps) {
-  const [tab, setTab] = useState<Tab>('overview');
+interface Approval {
+  file: string;
+  summary: string;
+  timestamp: string;
+}
+
+type Tab = 'overview' | 'history' | 'current' | 'inbox' | 'approvals';
+
+export default function AgentDetailModal({ agent, onClose, onRunAgent, onOpenChat, initialTab = 'overview' }: AgentDetailModalProps) {
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [persona, setPersona] = useState<PersonaData | null>(null);
   const [memory, setMemory] = useState<MemoryEntry[]>([]);
+  const [inbox, setInbox] = useState<InboxMessage[]>([]);
+  const [approvals, setApprovals] = useState<Approval[]>([]);
   const [loading, setLoading] = useState(true);
   const [customTask, setCustomTask] = useState('');
 
   useEffect(() => {
     loadPersonaData();
     loadMemory();
+    loadInbox();
+    loadApprovals();
   }, [agent.persona_id]);
 
   async function loadPersonaData() {
@@ -67,6 +86,28 @@ export default function AgentDetailModal({ agent, onClose, onRunAgent }: AgentDe
       setMemory(data.memory || []);
     } catch (err) {
       console.error('Failed to load memory:', err);
+    }
+  }
+
+  async function loadInbox() {
+    try {
+      const res = await fetch(`${API}/agents/inbox/${agent.persona_id}`);
+      if (!res.ok) throw new Error('Failed to load inbox');
+      const data = await res.json();
+      setInbox(data.messages || []);
+    } catch (err) {
+      console.error('Failed to load inbox:', err);
+    }
+  }
+
+  async function loadApprovals() {
+    try {
+      const res = await fetch(`${API}/agents/approvals/${agent.persona_id}`);
+      if (!res.ok) throw new Error('Failed to load approvals');
+      const data = await res.json();
+      setApprovals(data.approvals || []);
+    } catch (err) {
+      console.error('Failed to load approvals:', err);
     }
   }
 
@@ -113,7 +154,7 @@ export default function AgentDetailModal({ agent, onClose, onRunAgent }: AgentDe
           alignItems: 'center',
           justifyContent: 'space-between'
         }}>
-          <div>
+          <div style={{ flex: 1 }}>
             <div style={{
               fontSize: 16,
               fontWeight: 600,
@@ -129,6 +170,28 @@ export default function AgentDetailModal({ agent, onClose, onRunAgent }: AgentDe
               {persona?.role || agent.schedule}
             </div>
           </div>
+          {onOpenChat && (
+            <button
+              onClick={() => {
+                onOpenChat(agent.persona_id);
+                onClose();
+              }}
+              style={{
+                padding: '6px 12px',
+                background: 'var(--tn-blue)',
+                color: 'white',
+                border: 'none',
+                borderRadius: 6,
+                fontSize: 11,
+                fontWeight: 600,
+                cursor: 'pointer',
+                marginRight: 12,
+                transition: 'all 0.2s ease'
+              }}
+            >
+              💬 Chat
+            </button>
+          )}
           <button
             onClick={onClose}
             style={{
@@ -155,6 +218,8 @@ export default function AgentDetailModal({ agent, onClose, onRunAgent }: AgentDe
         }}>
           {[
             { id: 'overview', label: '📋 Overview' },
+            { id: 'inbox', label: `📬 Inbox ${agent.inbox_count > 0 ? `(${agent.inbox_count})` : ''}` },
+            { id: 'approvals', label: `✅ Approvals ${agent.approvals_count > 0 ? `(${agent.approvals_count})` : ''}` },
             { id: 'history', label: '📜 History' },
             { id: 'current', label: '⚡ Current' }
           ].map(({ id, label }) => (
@@ -190,6 +255,10 @@ export default function AgentDetailModal({ agent, onClose, onRunAgent }: AgentDe
             </div>
           ) : tab === 'overview' ? (
             <OverviewTab persona={persona} agent={agent} />
+          ) : tab === 'inbox' ? (
+            <InboxTab messages={inbox} />
+          ) : tab === 'approvals' ? (
+            <ApprovalsTab approvals={approvals} personaId={agent.persona_id} />
           ) : tab === 'history' ? (
             <HistoryTab memory={memory} />
           ) : (
@@ -446,6 +515,142 @@ function Section({ title, children }: { title: string; children: React.ReactNode
         {title}
       </div>
       {children}
+    </div>
+  );
+}
+
+function InboxTab({ messages }: { messages: InboxMessage[] }) {
+  if (messages.length === 0) {
+    return (
+      <div style={{ textAlign: 'center', padding: 40, color: 'var(--tn-text-muted)', fontSize: 12 }}>
+        📭 No messages in inbox
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {messages.map((msg, i) => (
+        <div
+          key={i}
+          style={{
+            padding: 16,
+            background: 'var(--tn-bg)',
+            border: '1px solid var(--tn-border)',
+            borderRadius: 8
+          }}
+        >
+          <div style={{ 
+            fontSize: 13, 
+            fontWeight: 600, 
+            color: 'var(--tn-text)',
+            marginBottom: 4
+          }}>
+            {msg.subject || 'No Subject'}
+          </div>
+          <div style={{ 
+            fontSize: 11, 
+            color: 'var(--tn-text-muted)',
+            marginBottom: 12
+          }}>
+            From: {msg.from} • {new Date(msg.date).toLocaleDateString()}
+          </div>
+          <div style={{
+            fontSize: 12,
+            color: 'var(--tn-text)',
+            lineHeight: 1.6,
+            whiteSpace: 'pre-wrap'
+          }}>
+            {msg.body}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ApprovalsTab({ approvals, personaId }: { approvals: Approval[]; personaId: string }) {
+  if (approvals.length === 0) {
+    return (
+      <div style={{ textAlign: 'center', padding: 40, color: 'var(--tn-text-muted)', fontSize: 12 }}>
+        ✅ No pending approvals
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {approvals.map((approval, i) => (
+        <div
+          key={i}
+          style={{
+            padding: 16,
+            background: 'var(--tn-bg)',
+            border: '1px solid var(--tn-orange)',
+            borderLeft: '4px solid var(--tn-orange)',
+            borderRadius: 8
+          }}
+        >
+          <div style={{ 
+            fontSize: 13, 
+            fontWeight: 600, 
+            color: 'var(--tn-text)',
+            marginBottom: 4
+          }}>
+            {approval.file.replace('.pending', '')}
+          </div>
+          <div style={{ 
+            fontSize: 11, 
+            color: 'var(--tn-text-muted)',
+            marginBottom: 12
+          }}>
+            Pending since: {new Date(approval.timestamp).toLocaleString()}
+          </div>
+          <div style={{
+            fontSize: 12,
+            color: 'var(--tn-text)',
+            lineHeight: 1.6,
+            whiteSpace: 'pre-wrap',
+            marginBottom: 12
+          }}>
+            {approval.summary}
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              style={{
+                flex: 1,
+                padding: '6px 12px',
+                background: 'var(--tn-green)',
+                color: 'white',
+                border: 'none',
+                borderRadius: 6,
+                fontSize: 11,
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+              onClick={() => alert('Approve functionality coming soon')}
+            >
+              ✓ Approve
+            </button>
+            <button
+              style={{
+                flex: 1,
+                padding: '6px 12px',
+                background: 'var(--tn-red)',
+                color: 'white',
+                border: 'none',
+                borderRadius: 6,
+                fontSize: 11,
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+              onClick={() => alert('Reject functionality coming soon')}
+            >
+              ✗ Reject
+            </button>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

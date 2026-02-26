@@ -4,7 +4,7 @@ interface PanelConnectivityGuardProps {
   children: ReactNode;
   panelName: string;
   checkUrl: string;
-  port: number;
+  port?: number; // Optional for remote services
   startCommand: string;
 }
 
@@ -23,16 +23,29 @@ export default function PanelConnectivityGuard({
 
     const checkConnectivity = async () => {
       try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 3000);
+        // Check if URL is external (not localhost/127.0.0.1)
+        const isExternal = checkUrl.includes('://') && !checkUrl.includes('localhost') && !checkUrl.includes('127.0.0.1');
 
-        const response = await fetch(checkUrl, {
-          method: 'HEAD',
-          signal: controller.signal,
-          cache: 'no-store'
-        });
+        let response;
+        if (isExternal) {
+          // Use proxy for external URLs to bypass CORS
+          const proxyUrl = `/api/health-check-proxy?url=${encodeURIComponent(checkUrl)}`;
+          const proxyResponse = await fetch(proxyUrl, { cache: 'no-store' });
+          const data = await proxyResponse.json();
+          response = { ok: data.ok };
+        } else {
+          // Direct check for local URLs
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 3000);
 
-        clearTimeout(timeoutId);
+          response = await fetch(checkUrl, {
+            method: 'HEAD',
+            signal: controller.signal,
+            cache: 'no-store'
+          });
+
+          clearTimeout(timeoutId);
+        }
 
         if (!cancelled) {
           setIsOnline(response.ok);
@@ -112,7 +125,7 @@ export default function PanelConnectivityGuard({
           maxWidth: 400,
           lineHeight: 1.5
         }}>
-          The {panelName} backend service is not running on port {port}.
+          The {panelName} backend service is not reachable{port ? ` on port ${port}` : ''}.
           This panel cannot display data without an active backend connection.
         </div>
 

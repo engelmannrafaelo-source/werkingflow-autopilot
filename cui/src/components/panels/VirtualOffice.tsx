@@ -5,6 +5,11 @@ import ActionItems from './ActionItems';
 import TeamOrgChart from './TeamOrgChart';
 import ResponsibilityMatrix from './ResponsibilityMatrix';
 import QuickStartBanner from '../onboarding/QuickStartBanner';
+import KnowledgeGraphView from './KnowledgeGraphView';
+import PersonaChat from './PersonaChat';
+import ScanDocumentsButton from './ScanDocumentsButton';
+import PersonaDocumentList from './PersonaDocumentList';
+import AgentDetailModal from '../modals/AgentDetailModal';
 
 const API = '/api';
 
@@ -57,7 +62,10 @@ export default function VirtualOffice({ projectId, workDir }: VirtualOfficeProps
   const [actionItems, setActionItems] = useState<ActionItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
-  const [centerView, setCenterView] = useState<'grid' | 'org' | 'raci'>('grid');
+  const [centerView, setCenterView] = useState<'tables' | 'grid' | 'org' | 'raci'>('tables'); // Default to 4 Tables view
+  const [rightView, setRightView] = useState<'actions' | 'knowledge' | 'chat'>('actions'); // Right panel tabs
+  const [detailModalAgent, setDetailModalAgent] = useState<AgentStatus | null>(null);
+  const [detailModalTab, setDetailModalTab] = useState<'overview' | 'inbox' | 'approvals' | 'history' | 'current'>('overview');
 
   // Fetch agent status
   const loadAgents = useCallback(async () => {
@@ -309,9 +317,10 @@ export default function VirtualOffice({ projectId, workDir }: VirtualOfficeProps
             background: 'var(--tn-surface)'
           }}>
             {[
+              { id: 'tables', label: '📊 4 Tables' },
               { id: 'grid', label: '🎯 Agent Grid' },
               { id: 'org', label: '🏢 Org Chart' },
-              { id: 'raci', label: '📊 RACI Matrix' }
+              { id: 'raci', label: '📋 RACI Matrix' }
             ].map(({ id, label }) => (
               <button
                 key={id}
@@ -335,16 +344,34 @@ export default function VirtualOffice({ projectId, workDir }: VirtualOfficeProps
 
           {/* View Content */}
           <div style={{ flex: 1, overflow: 'auto' }}>
+            {centerView === 'tables' && (
+              <FourTablesView
+                agents={agents}
+                selectedAgent={selectedAgent}
+                onSelectAgent={setSelectedAgent}
+                onOpenDetails={(agent, tab) => {
+                  setDetailModalAgent(agent);
+                  setDetailModalTab(tab);
+                }}
+              />
+            )}
             {centerView === 'grid' && (
               <AgentGrid
                 agents={agents}
                 selectedAgent={selectedAgent}
                 onSelectAgent={setSelectedAgent}
                 onAgentUpdate={loadAgents}
+                onOpenChat={(personaId) => {
+                  setSelectedAgent(personaId);
+                  setRightView('chat');
+                }}
               />
             )}
             {centerView === 'org' && (
-              <TeamOrgChart onNodeClick={(nodeId) => setSelectedAgent(nodeId)} />
+              <TeamOrgChart
+                onNodeClick={(nodeId) => setSelectedAgent(nodeId)}
+                selectedNode={selectedAgent}
+              />
             )}
             {centerView === 'raci' && (
               <ResponsibilityMatrix />
@@ -352,7 +379,7 @@ export default function VirtualOffice({ projectId, workDir }: VirtualOfficeProps
           </div>
         </div>
 
-        {/* Right Panel - Action Items */}
+        {/* Right Panel - Actions / Knowledge / Chat */}
         <div style={{
           width: 320,
           borderLeft: '1px solid var(--tn-border)',
@@ -360,18 +387,389 @@ export default function VirtualOffice({ projectId, workDir }: VirtualOfficeProps
           flexDirection: 'column',
           background: 'var(--tn-surface)'
         }}>
-          <ActionItems
-            items={actionItems}
-            onItemClick={(item) => {
-              if (item.quickAction) {
-                // Navigate to quick action
-                window.location.hash = item.quickAction;
-              }
-            }}
-            onRefresh={loadActionItems}
-          />
+          {/* Right Panel Tabs */}
+          <div style={{
+            padding: '12px 16px',
+            borderBottom: '1px solid var(--tn-border)',
+            display: 'flex',
+            gap: 6,
+            background: 'var(--tn-bg)'
+          }}>
+            {[
+              { id: 'actions', label: '🎯 Actions', badge: actionItems.length },
+              { id: 'knowledge', label: '📚 Knowledge', badge: 0 },
+              { id: 'chat', label: '💬 Chat', badge: 0 }
+            ].map(({ id, label, badge }) => (
+              <button
+                key={id}
+                onClick={() => setRightView(id as any)}
+                style={{
+                  flex: 1,
+                  padding: '6px 8px',
+                  background: rightView === id ? 'var(--tn-blue)' : 'transparent',
+                  color: rightView === id ? 'white' : 'var(--tn-text-muted)',
+                  border: 'none',
+                  borderRadius: 6,
+                  fontSize: 11,
+                  fontWeight: rightView === id ? 600 : 400,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease',
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                {label}
+                {badge > 0 && ` (${badge})`}
+              </button>
+            ))}
+          </div>
+
+          {/* Right Panel Content */}
+          <div style={{ flex: 1, overflow: 'auto' }}>
+            {rightView === 'actions' && (
+              <ActionItems
+                items={actionItems}
+                onItemClick={(item) => {
+                  if (item.quickAction) {
+                    window.location.hash = item.quickAction;
+                  }
+                }}
+                onRefresh={loadActionItems}
+              />
+            )}
+
+            {rightView === 'knowledge' && (
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                height: '100%',
+                overflow: 'auto'
+              }}>
+                <div style={{ padding: 12 }}>
+                  <ScanDocumentsButton />
+                </div>
+                <KnowledgeGraphView
+                  personas={agents.map(a => ({
+                    id: a.persona_id,
+                    name: a.persona_name,
+                    role: a.schedule,
+                    status: a.status,
+                    mbti: '',
+                    worklistPath: '',
+                    lastUpdated: a.last_run || ''
+                  }))}
+                  onPersonaClick={(personaId) => {
+                    setSelectedAgent(personaId);
+                  }}
+                  selected={selectedAgent ? {
+                    id: selectedAgent,
+                    name: agents.find(a => a.persona_id === selectedAgent)?.persona_name || '',
+                    role: agents.find(a => a.persona_id === selectedAgent)?.schedule || '',
+                    status: agents.find(a => a.persona_id === selectedAgent)?.status || 'idle',
+                    mbti: '',
+                    worklistPath: '',
+                    lastUpdated: agents.find(a => a.persona_id === selectedAgent)?.last_run || ''
+                  } : null}
+                />
+                {selectedAgent && (
+                  <PersonaDocumentList
+                    personaId={selectedAgent}
+                    personaName={agents.find(a => a.persona_id === selectedAgent)?.persona_name || ''}
+                  />
+                )}
+              </div>
+            )}
+
+            {rightView === 'chat' && (
+              <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+                {selectedAgent ? (
+                  <PersonaChat
+                    personaId={selectedAgent}
+                    personaName={agents.find(a => a.persona_id === selectedAgent)?.persona_name || ''}
+                  />
+                ) : (
+                  <div style={{
+                    flex: 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexDirection: 'column',
+                    gap: 16,
+                    padding: 20
+                  }}>
+                    <div style={{
+                      fontSize: 13,
+                      color: 'var(--tn-text-muted)',
+                      textAlign: 'center'
+                    }}>
+                      💬 Select an agent to start chatting
+                    </div>
+                    <div style={{
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      gap: 8,
+                      justifyContent: 'center'
+                    }}>
+                      {agents.slice(0, 6).map(agent => (
+                        <button
+                          key={agent.persona_id}
+                          onClick={() => {
+                            setSelectedAgent(agent.persona_id);
+                          }}
+                          style={{
+                            padding: '6px 12px',
+                            background: 'var(--tn-bg)',
+                            border: '1px solid var(--tn-border)',
+                            borderRadius: 6,
+                            cursor: 'pointer',
+                            fontSize: 11,
+                            color: 'var(--tn-text)',
+                            transition: 'all 0.2s ease'
+                          }}
+                        >
+                          {agent.persona_name.split(' ')[0]}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
+
+      {/* Agent Detail Modal */}
+      {detailModalAgent && (
+        <AgentDetailModal
+          agent={detailModalAgent}
+          initialTab={detailModalTab}
+          onClose={() => {
+            setDetailModalAgent(null);
+            setDetailModalTab('overview');
+          }}
+          onRunAgent={(personaId) => {
+            // Refresh agents after running
+            setTimeout(loadAgents, 2000);
+          }}
+          onOpenChat={(personaId) => {
+            setSelectedAgent(personaId);
+            setRightView('chat');
+            setDetailModalAgent(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// 4 Tables View Component - Product, Revenue, Delivery, Operations
+function FourTablesView({ agents, selectedAgent, onSelectAgent, onOpenDetails }: {
+  agents: AgentStatus[];
+  selectedAgent: string | null;
+  onSelectAgent: (id: string) => void;
+  onOpenDetails?: (agent: AgentStatus, tab: 'inbox' | 'approvals') => void;
+}) {
+  // Define the 4 tables structure with agent assignments
+  const tables = [
+    {
+      id: 'product',
+      title: '📊 Product Table',
+      description: 'Customer-facing: Marketing, Sales, Customer Success, UX',
+      agentIds: ['mira-marketing', 'vera-vertrieb', 'chris-customer', 'anna-ux']
+    },
+    {
+      id: 'revenue',
+      title: '💰 Revenue Table',
+      description: 'Money & Growth: Sales, Finance, Revenue Operations',
+      agentIds: ['vera-vertrieb', 'finn-finanzen', 'birgit-bauer', 'david-sales', 'emma-sales', 'michael-sales']
+    },
+    {
+      id: 'delivery',
+      title: '🚀 Delivery Table',
+      description: 'Engineering & Product: Development, DevOps, QA, Docs',
+      agentIds: ['max-weber', 'sarah-koch', 'klaus-schmidt', 'herbert-sicher', 'lisa-mueller', 'tim-berger', 'peter-doku']
+    },
+    {
+      id: 'operations',
+      title: '⚙️ Operations Table',
+      description: 'Internal Ops: Operations, IT, Infrastructure',
+      agentIds: ['otto-operations', 'felix-cio', 'kai-ops', 'finn-finanzen']
+    }
+  ];
+
+  return (
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: 'repeat(2, 1fr)',
+      gap: 16,
+      padding: 16,
+      height: '100%',
+      overflow: 'auto'
+    }}>
+      {tables.map(table => {
+        const tableAgents = agents.filter(a => table.agentIds.includes(a.persona_id));
+
+        return (
+          <div
+            key={table.id}
+            style={{
+              background: 'var(--tn-surface)',
+              border: '1px solid var(--tn-border)',
+              borderRadius: 12,
+              padding: 16,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 12
+            }}
+          >
+            {/* Table Header */}
+            <div>
+              <div style={{
+                fontSize: 15,
+                fontWeight: 600,
+                color: 'var(--tn-text)',
+                marginBottom: 4
+              }}>
+                {table.title}
+              </div>
+              <div style={{
+                fontSize: 11,
+                color: 'var(--tn-text-muted)',
+                marginBottom: 8
+              }}>
+                {table.description}
+              </div>
+              <div style={{
+                fontSize: 10,
+                color: 'var(--tn-text-muted)',
+                opacity: 0.7
+              }}>
+                {tableAgents.length} Members
+              </div>
+            </div>
+
+            {/* Table Members */}
+            <div style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8
+            }}>
+              {tableAgents.length === 0 ? (
+                <div style={{
+                  textAlign: 'center',
+                  padding: 20,
+                  color: 'var(--tn-text-muted)',
+                  fontSize: 11
+                }}>
+                  No agents assigned
+                </div>
+              ) : (
+                tableAgents.map(agent => {
+                  const isSelected = selectedAgent === agent.persona_id;
+                  const hasInbox = agent.inbox_count > 0;
+                  const hasApprovals = agent.approvals_count > 0;
+
+                  return (
+                    <div
+                      key={agent.persona_id}
+                      onClick={() => onSelectAgent(agent.persona_id)}
+                      style={{
+                        padding: 10,
+                        background: isSelected ? 'var(--tn-blue-dim)' : 'var(--tn-bg)',
+                        border: `1px solid ${isSelected ? 'var(--tn-blue)' : 'var(--tn-border)'}`,
+                        borderRadius: 6,
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10
+                      }}
+                    >
+                      {/* Status Dot */}
+                      <div style={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: '50%',
+                        background: agent.status === 'working' ? 'var(--tn-yellow)' : 'var(--tn-green)',
+                        flexShrink: 0
+                      }} />
+
+                      {/* Name & Role */}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{
+                          fontSize: 12,
+                          fontWeight: 600,
+                          color: 'var(--tn-text)',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis'
+                        }}>
+                          {agent.persona_name}
+                        </div>
+                        <div style={{
+                          fontSize: 10,
+                          color: 'var(--tn-text-muted)',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis'
+                        }}>
+                          {agent.schedule}
+                        </div>
+                      </div>
+
+                      {/* Badges */}
+                      <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                        {hasInbox && (
+                          <div
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onOpenDetails?.(agent, 'inbox');
+                            }}
+                            onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.05)'}
+                            onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
+                            style={{
+                              fontSize: 10,
+                              fontWeight: 600,
+                              color: 'white',
+                              background: 'var(--tn-blue)',
+                              padding: '2px 6px',
+                              borderRadius: 10,
+                              cursor: 'pointer',
+                              transition: 'transform 0.2s ease'
+                            }}>
+                            📬 {agent.inbox_count}
+                          </div>
+                        )}
+                        {hasApprovals && (
+                          <div
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onOpenDetails?.(agent, 'approvals');
+                            }}
+                            onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.05)'}
+                            onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
+                            style={{
+                              fontSize: 10,
+                              fontWeight: 600,
+                              color: 'white',
+                              background: 'var(--tn-orange)',
+                              padding: '2px 6px',
+                              borderRadius: 10,
+                              cursor: 'pointer',
+                              transition: 'transform 0.2s ease'
+                            }}>
+                            ✅ {agent.approvals_count}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

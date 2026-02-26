@@ -9,6 +9,7 @@ interface AgentGridProps {
   selectedAgent: string | null;
   onSelectAgent: (agentId: string | null) => void;
   onAgentUpdate: () => void;
+  onOpenChat?: (personaId: string) => void;
 }
 
 function getStatusColor(status: string): string {
@@ -61,7 +62,7 @@ function getTaskTypeEmoji(personaName: string): string {
   return taskTypeMap[personaName] || '🤖';
 }
 
-export default function AgentGrid({ agents, selectedAgent, onSelectAgent, onAgentUpdate }: AgentGridProps) {
+export default function AgentGrid({ agents, selectedAgent, onSelectAgent, onAgentUpdate, onOpenChat }: AgentGridProps) {
   const [runningAgent, setRunningAgent] = useState<string | null>(null);
   const [detailModalAgent, setDetailModalAgent] = useState<AgentStatus | null>(null);
 
@@ -92,7 +93,7 @@ export default function AgentGrid({ agents, selectedAgent, onSelectAgent, onAgen
       <div style={{
         padding: 16,
         display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+        gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
         gap: 12,
         alignContent: 'start'
       }}>
@@ -108,11 +109,13 @@ export default function AgentGrid({ agents, selectedAgent, onSelectAgent, onAgen
               background: isSelected ? 'var(--tn-surface-hover)' : 'var(--tn-surface)',
               border: `1px solid ${isSelected ? 'var(--tn-blue)' : 'var(--tn-border)'}`,
               borderRadius: 8,
-              padding: 12,
+              padding: 10,
               cursor: 'pointer',
               transition: 'all 0.2s ease',
               position: 'relative',
-              minHeight: 160
+              minHeight: 120,
+              display: 'flex',
+              flexDirection: 'column'
             }}
             onMouseEnter={(e) => {
               if (!isSelected) {
@@ -147,18 +150,18 @@ export default function AgentGrid({ agents, selectedAgent, onSelectAgent, onAgen
 
             {/* Agent Icon */}
             <div style={{
-              fontSize: 24,
-              marginBottom: 8
+              fontSize: 20,
+              marginBottom: 6
             }}>
               {getTaskTypeEmoji(agent.persona_id)}
             </div>
 
             {/* Agent Name */}
             <div style={{
-              fontSize: 13,
+              fontSize: 12,
               fontWeight: 600,
               color: 'var(--tn-text)',
-              marginBottom: 2,
+              marginBottom: 1,
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap'
@@ -168,9 +171,9 @@ export default function AgentGrid({ agents, selectedAgent, onSelectAgent, onAgen
 
             {/* Role/Schedule */}
             <div style={{
-              fontSize: 10,
+              fontSize: 9,
               color: 'var(--tn-text-muted)',
-              marginBottom: 10,
+              marginBottom: 8,
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap'
@@ -180,35 +183,37 @@ export default function AgentGrid({ agents, selectedAgent, onSelectAgent, onAgen
 
             {/* Status Line */}
             <div style={{
-              fontSize: 10,
+              fontSize: 9,
               color: getStatusColor(agent.status),
-              marginBottom: 8,
+              marginBottom: 6,
               display: 'flex',
               alignItems: 'center',
-              gap: 4
+              gap: 3
             }}>
               <span>{getStatusLabel(agent.status)}</span>
               {agent.last_actions > 0 && (
-                <span style={{ color: 'var(--tn-text-muted)' }}>
-                  • {agent.last_actions} actions
+                <span style={{ color: 'var(--tn-text-muted)', fontSize: 8 }}>
+                  • {agent.last_actions}
                 </span>
               )}
             </div>
 
             {/* Last Run */}
             <div style={{
-              fontSize: 10,
+              fontSize: 9,
               color: 'var(--tn-text-muted)',
-              marginBottom: 10
+              marginBottom: 8,
+              flex: 1
             }}>
-              {agent.last_run ? `Last run: ${formatTimeAgo(agent.last_run)}` : 'Never run'}
+              {agent.last_run ? formatTimeAgo(agent.last_run) : 'Never'}
             </div>
 
             {/* Action Buttons */}
             <div style={{
               display: 'flex',
-              gap: 6,
-              marginTop: 'auto'
+              gap: 4,
+              marginTop: 'auto',
+              alignItems: 'center'
             }}>
               <button
                 onClick={(e) => {
@@ -218,12 +223,12 @@ export default function AgentGrid({ agents, selectedAgent, onSelectAgent, onAgen
                 disabled={isRunning}
                 style={{
                   flex: 1,
-                  padding: '6px 10px',
+                  padding: '5px 8px',
                   background: isRunning ? 'var(--tn-surface-alt)' : 'var(--tn-blue)',
                   color: isRunning ? 'var(--tn-text-muted)' : 'white',
                   border: 'none',
                   borderRadius: 4,
-                  fontSize: 10,
+                  fontSize: 9,
                   fontWeight: 600,
                   cursor: isRunning ? 'not-allowed' : 'pointer',
                   transition: 'opacity 0.2s ease'
@@ -235,39 +240,31 @@ export default function AgentGrid({ agents, selectedAgent, onSelectAgent, onAgen
                   e.currentTarget.style.opacity = '1';
                 }}
               >
-                {isRunning ? 'Running...' : '▶ Run'}
+                {isRunning ? '...' : '▶'}
               </button>
 
-              {(agent.inbox_count > 0 || agent.approvals_count > 0) && (
+              {agent.inbox_count > 0 && (
                 <div style={{
-                  display: 'flex',
-                  gap: 4,
-                  alignItems: 'center'
+                  padding: '3px 5px',
+                  background: 'var(--tn-blue)',
+                  color: 'white',
+                  borderRadius: 3,
+                  fontSize: 8,
+                  fontWeight: 600
                 }}>
-                  {agent.inbox_count > 0 && (
-                    <div style={{
-                      padding: '4px 6px',
-                      background: 'var(--tn-blue)',
-                      color: 'white',
-                      borderRadius: 4,
-                      fontSize: 9,
-                      fontWeight: 600
-                    }}>
-                      📬 {agent.inbox_count}
-                    </div>
-                  )}
-                  {agent.approvals_count > 0 && (
-                    <div style={{
-                      padding: '4px 6px',
-                      background: 'var(--tn-orange)',
-                      color: 'white',
-                      borderRadius: 4,
-                      fontSize: 9,
-                      fontWeight: 600
-                    }}>
-                      ⚠️ {agent.approvals_count}
-                    </div>
-                  )}
+                  📬 {agent.inbox_count}
+                </div>
+              )}
+              {agent.approvals_count > 0 && (
+                <div style={{
+                  padding: '3px 5px',
+                  background: 'var(--tn-orange)',
+                  color: 'white',
+                  borderRadius: 3,
+                  fontSize: 8,
+                  fontWeight: 600
+                }}>
+                  ✅ {agent.approvals_count}
                 </div>
               )}
             </div>
@@ -295,6 +292,7 @@ export default function AgentGrid({ agents, selectedAgent, onSelectAgent, onAgen
             runAgent(personaId);
             setDetailModalAgent(null);
           }}
+          onOpenChat={onOpenChat}
         />
       )}
     </>

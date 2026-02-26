@@ -22,10 +22,10 @@ export interface PanelConfig {
 }
 
 // Proxy ports on the CUI workspace server (all localhost on the dev server)
-// Rafael/Engelmann/Office: :5001-5003 → :4001-4003
+// Gmail/Engelmann/Office: :5001-5003 → :4001-4003
 // Lokal: :5004 → :4004
 export const ACCOUNTS: Account[] = [
-  { id: 'rafael', label: 'Rafael', port: 5001, host: '', color: '#7aa2f7' },
+  { id: 'rafael', label: 'Gmail', port: 5001, host: '', color: '#7aa2f7' },
   { id: 'engelmann', label: 'Engelmann', port: 5002, host: '', color: '#bb9af7' },
   { id: 'office', label: 'Office', port: 5003, host: '', color: '#9ece6a' },
   { id: 'local', label: 'Lokal', port: 5004, host: '', color: '#e0af68' },

@@ -51,21 +51,83 @@ export default function ResponsibilityMatrix() {
       padding: 20,
       overflow: 'auto'
     }}>
+      {/* Header with Tooltip */}
       <div style={{
-        fontSize: 14,
-        fontWeight: 600,
-        color: 'var(--tn-text)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
         marginBottom: 12
       }}>
-        📊 Responsibility Matrix (RACI)
+        <div style={{
+          fontSize: 14,
+          fontWeight: 600,
+          color: 'var(--tn-text)'
+        }}>
+          📊 Responsibility Matrix (RACI)
+        </div>
+        <div
+          title="RACI Matrix shows who is Responsible, Accountable, Consulted, and Informed for each task. Use this to understand team ownership and collaboration patterns."
+          style={{
+            fontSize: 11,
+            color: 'var(--tn-text-muted)',
+            cursor: 'help',
+            padding: '2px 6px',
+            background: 'var(--tn-surface-alt)',
+            borderRadius: 4,
+            fontWeight: 600
+          }}
+        >
+          ℹ️ What is this?
+        </div>
       </div>
 
+      {/* Detailed Legend */}
       <div style={{
-        fontSize: 10,
-        color: 'var(--tn-text-muted)',
-        marginBottom: 20
+        padding: 12,
+        background: 'var(--tn-surface-alt)',
+        borderRadius: 8,
+        marginBottom: 16
       }}>
-        <strong>Legend:</strong> O = Owner (owns the outcome) • R = Responsible (does the work)
+        <div style={{
+          fontSize: 11,
+          fontWeight: 600,
+          color: 'var(--tn-text)',
+          marginBottom: 8
+        }}>
+          Legend:
+        </div>
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(2, 1fr)',
+          gap: 8,
+          fontSize: 10,
+          color: 'var(--tn-text)'
+        }}>
+          <div>
+            <span style={{ fontWeight: 600, color: 'var(--tn-blue)' }}>O = Owner</span>
+            <div style={{ color: 'var(--tn-text-muted)', fontSize: 9 }}>
+              Owns the outcome, makes final decisions
+            </div>
+          </div>
+          <div>
+            <span style={{ fontWeight: 600, color: 'var(--tn-green)' }}>R = Responsible</span>
+            <div style={{ color: 'var(--tn-text-muted)', fontSize: 9 }}>
+              Does the actual work
+            </div>
+          </div>
+          <div>
+            <span style={{ fontWeight: 600, color: 'var(--tn-orange)' }}>A = Approver</span>
+            <div style={{ color: 'var(--tn-text-muted)', fontSize: 9 }}>
+              Must approve before completion
+            </div>
+          </div>
+          <div>
+            <span style={{ fontWeight: 600, color: 'var(--tn-text-muted)' }}>C = Consulted</span>
+            <div style={{ color: 'var(--tn-text-muted)', fontSize: 9 }}>
+              Provides input and expertise
+            </div>
+          </div>
+        </div>
       </div>
 
       <div style={{

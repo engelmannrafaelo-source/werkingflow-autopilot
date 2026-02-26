@@ -1,0 +1,23 @@
+{
+  "app_id": "cui",
+  "app_name": "CUI Workspace",
+  "ports": {
+    "local": 4005,
+    "staging": null,
+    "production": null,
+    "proxy_range": [5001, 5004]
+  },
+  "build": {
+    "command": "npm run build",
+    "validate": "dist/index.html",
+    "cache_dirs": ["node_modules/.vite", "node_modules/.cache", "dist"]
+  },
+  "start": {
+    "command": "npx tsx server/index.ts",
+    "env_mode": "production"
+  },
+  "health": {
+    "endpoint": "/api/version",
+    "timeout": 5000
+  }
+}

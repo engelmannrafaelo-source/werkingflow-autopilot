@@ -44,7 +44,7 @@ export default function DashboardTab({ envMode }: { envMode?: string }) {
         fetch('/api/admin/wr/stats').catch(() => null),
         fetch('/api/admin/wr/health').catch(() => null),
         fetch('/api/admin/wr/infrastructure').catch(() => null),
-        fetch('/api/admin/wr/billing').catch(() => null),
+        fetch('/api/admin/wr/billing/overview').catch(() => null),
       ]);
       if (statsRes?.ok) setStats(await statsRes.json());
       if (healthRes?.ok) setHealth(await healthRes.json());

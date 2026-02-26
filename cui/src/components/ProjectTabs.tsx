@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, memo } from 'react';
-import { type Project } from '../types';
+import { type Project, ACCOUNTS } from '../types';
 
 interface ProjectTabsProps {
   projects: Project[];
@@ -14,6 +14,151 @@ interface ProjectTabsProps {
 }
 
 type SyncState = 'idle' | 'syncing' | 'done' | 'error';
+
+// --- Account Usage Types ---
+interface UsageAccount {
+  accountId: string;
+  accountName: string;
+  status: 'safe' | 'warning' | 'critical';
+  scraped: {
+    currentSession: { percent: number; resetIn: string };
+    weeklyAllModels: { percent: number; resetDate: string };
+    weeklySonnet: { percent: number; resetDate: string };
+    extraUsage: { percent: number; spent: string; limit: string; balance: string };
+  } | null;
+}
+
+function usagePctColor(pct: number): string {
+  if (pct >= 80) return 'var(--tn-red)';
+  if (pct >= 50) return 'var(--tn-orange)';
+  return 'var(--tn-green)';
+}
+
+// Shorten reset strings: "Zurücksetzung in 1 Std. 59 Min." → "1h59m", "Zurücksetzung Sa., 09:00" → "Sa 09:00"
+// Also handles English: "Resets in 5 hr 59 min" → "5h59m", "Resets Tue 9:59 AM" → "Tue 9:59"
+function shortenReset(raw: string): string {
+  if (!raw) return '';
+  // "in X Std. Y Min." or "in X hr Y min"
+  const durMatch = raw.match(/(\d+)\s*(?:Std\.|hr)\s*(\d+)\s*(?:Min\.|min)/);
+  if (durMatch) return `${durMatch[1]}h${durMatch[2]}m`;
+  // "in Y Min." or "in Y min"
+  const minOnly = raw.match(/in\s*(\d+)\s*(?:Min\.|min)/);
+  if (minOnly) return `${minOnly[1]}m`;
+  // Weekday + time: "Sa., 09:00" or "Tue 9:59 AM"
+  const dayMatch = raw.match(/(Mo|Di|Mi|Do|Fr|Sa|So|Mon|Tue|Wed|Thu|Fri|Sat|Sun)\.?,?\s*([\d:]+)/i);
+  if (dayMatch) return `${dayMatch[1]} ${dayMatch[2]}`;
+  return raw.replace(/^(Zurücksetzung|Resets?)\s*/i, '').trim();
+}
+
+// --- Usage Pill (single account) ---
+function UsagePill({ account }: { account: UsageAccount }) {
+  const accountDef = ACCOUNTS.find(a => a.id === account.accountId);
+  const color = accountDef?.color || 'var(--tn-text-muted)';
+  const s = account.scraped;
+  const shortName = account.accountName.slice(0, 3).toUpperCase();
+  const weeklyPct = s?.weeklyAllModels.percent ?? 0;
+  const sessionPct = s?.currentSession.percent ?? 0;
+  const weeklyColor = usagePctColor(weeklyPct);
+  const sessionColor = usagePctColor(sessionPct);
+
+  const sessionReset = s ? shortenReset(s.currentSession.resetIn) : '';
+  const weeklyReset = s ? shortenReset(s.weeklyAllModels.resetDate) : '';
+
+  const tooltip = s
+    ? [
+        account.accountName,
+        `Aktuelle Sitzung: ${sessionPct}%${s.currentSession.resetIn ? ` (${s.currentSession.resetIn})` : ''}`,
+        `Weekly (alle): ${weeklyPct}% — ${s.weeklyAllModels.resetDate}`,
+        `Weekly (Sonnet): ${s.weeklySonnet.percent}% — ${s.weeklySonnet.resetDate}`,
+        s.extraUsage.percent > 0 ? `Extra: ${s.extraUsage.spent} / ${s.extraUsage.limit}` : null,
+      ].filter(Boolean).join('\n')
+    : `${account.accountName}: Keine Daten`;
+
+  return (
+    <div
+      title={tooltip}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 4,
+        padding: '2px 6px',
+        borderRadius: 4,
+        background: account.status === 'critical'
+          ? 'rgba(247,118,142,0.12)'
+          : account.status === 'warning'
+            ? 'rgba(224,175,104,0.08)'
+            : 'rgba(255,255,255,0.03)',
+        border: `1px solid ${account.status === 'critical' ? 'rgba(247,118,142,0.4)' : 'rgba(255,255,255,0.06)'}`,
+        cursor: 'default',
+        WebkitAppRegion: 'no-drag',
+      } as React.CSSProperties}
+    >
+      <span style={{ fontSize: 9, fontWeight: 700, color, letterSpacing: '0.02em', lineHeight: 1 }}>
+        {shortName}
+      </span>
+      {s ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 1, width: 44 }}>
+          {/* Weekly bar + reset */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+            <div style={{ flex: 1, height: 3, background: 'rgba(255,255,255,0.08)', borderRadius: 1.5, overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${Math.min(100, weeklyPct)}%`, background: weeklyColor, borderRadius: 1.5, transition: 'width 0.5s ease' }} />
+            </div>
+          </div>
+          {/* Session bar + reset */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+            <div style={{ flex: 1, height: 2, background: 'rgba(255,255,255,0.06)', borderRadius: 1, overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${Math.min(100, sessionPct)}%`, background: sessionColor, borderRadius: 1, transition: 'width 0.5s ease' }} />
+            </div>
+          </div>
+        </div>
+      ) : (
+        <span style={{ fontSize: 8, color: 'var(--tn-text-muted)', opacity: 0.5 }}>?</span>
+      )}
+      {s && (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 0, lineHeight: 1 }}>
+          <span style={{ fontSize: 7, fontWeight: 600, fontFamily: 'monospace', color: weeklyColor, whiteSpace: 'nowrap' }}>
+            {weeklyPct}% {weeklyReset && <span style={{ opacity: 0.6, fontWeight: 400 }}>{weeklyReset}</span>}
+          </span>
+          {sessionReset && (
+            <span style={{ fontSize: 6, fontFamily: 'monospace', color: sessionColor, opacity: 0.7, whiteSpace: 'nowrap' }}>
+              {sessionPct}% {sessionReset}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- Usage Bars (all accounts) ---
+function UsageBars() {
+  const [accounts, setAccounts] = useState<UsageAccount[]>([]);
+  const pollRef = useRef<ReturnType<typeof setInterval>>(null);
+
+  const fetchUsage = useCallback(() => {
+    fetch('/api/claude-code/stats-v2')
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data?.accounts) return;
+        setAccounts(data.accounts.filter((a: UsageAccount) => a.accountId !== 'local'));
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    fetchUsage();
+    pollRef.current = setInterval(fetchUsage, 120_000);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [fetchUsage]);
+
+  if (accounts.length === 0) return null;
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginRight: 8 }}>
+      {accounts.map(acc => <UsagePill key={acc.accountId} account={acc} />)}
+    </div>
+  );
+}
 
 // --- Syncthing Toggle ---
 function SyncthingToggle() {
@@ -356,6 +501,9 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
 
       {/* Spacer */}
       <div style={{ flex: 1 }} />
+
+      {/* Account Usage Bars */}
+      <UsageBars />
 
       {/* Syncthing toggle */}
       <SyncthingToggle />

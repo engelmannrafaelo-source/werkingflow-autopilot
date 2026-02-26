@@ -16,7 +16,8 @@ const __dirname = dirname(__filename);
 const OUTPUT = join(__dirname, '../data/credentials.json');
 
 const HOME = homedir();
-const GH = join(HOME, 'Documents/GitHub');
+const GH_MAC = join(HOME, 'Documents/GitHub');
+const GH = existsSync(join(GH_MAC, 'werkingflow/platform/CLAUDE.md')) ? GH_MAC : '/root/projekte';
 
 // Try local Mac paths first, then Hetzner
 const PLATFORM_ROOT = existsSync(join(GH, 'werkingflow/platform'))
@@ -167,7 +168,8 @@ function extractCredsFromClaude(text: string): User[] {
     users.push({ email: envEmail[1], password: envPass[1], role: 'admin', notes: '.env config' });
   }
 
-  return users;
+  // Filter false positives (table headers parsed as emails)
+  return users.filter(u => u.email.includes('@') && !u.email.startsWith('Password'));
 }
 
 for (const src of sources) {
@@ -278,22 +280,18 @@ if (existsSync(scenariosDir)) {
 
       const isEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 
-      if (scenario.persona?.email && isEmail(scenario.persona.email)) {
+      // Only use actual login credentials, NOT persona character emails
+      const creds = scenario.credentials?.test_user;
+      if (creds?.email && isEmail(creds.email) && creds.password) {
         addUser(app, name, {
-          name: scenario.persona.name,
-          email: scenario.persona.email,
-          role: scenario.persona.rolle || scenario.persona.typ,
+          name: scenario.persona?.name,
+          email: creds.email,
+          password: creds.password,
+          role: scenario.persona?.rolle || scenario.persona?.typ,
           environments: { local: scenario.endpoints?.local_url, staged: scenario.endpoints?.base_url },
           scenarios: [scenarioName],
         });
         scenarioCount++;
-      }
-      if (scenario.credentials?.test_user?.email && isEmail(scenario.credentials.test_user.email)) {
-        addUser(app, name, {
-          email: scenario.credentials.test_user.email,
-          password: scenario.credentials.test_user.password,
-          scenarios: [scenarioName],
-        });
       }
     } catch {}
   }

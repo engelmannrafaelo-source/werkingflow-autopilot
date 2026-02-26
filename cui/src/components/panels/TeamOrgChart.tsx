@@ -11,9 +11,10 @@ interface TeamNode {
 
 interface TeamOrgChartProps {
   onNodeClick?: (nodeId: string) => void;
+  selectedNode?: string | null;
 }
 
-export default function TeamOrgChart({ onNodeClick }: TeamOrgChartProps) {
+export default function TeamOrgChart({ onNodeClick, selectedNode }: TeamOrgChartProps) {
   const [orgChart, setOrgChart] = useState<TeamNode[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -70,7 +71,7 @@ export default function TeamOrgChart({ onNodeClick }: TeamOrgChartProps) {
         gap: 20
       }}>
         {orgChart.map(root => (
-          <TreeNode key={root.id} node={root} onNodeClick={onNodeClick} level={0} />
+          <TreeNode key={root.id} node={root} onNodeClick={onNodeClick} selectedNode={selectedNode} level={0} />
         ))}
       </div>
     </div>
@@ -80,11 +81,13 @@ export default function TeamOrgChart({ onNodeClick }: TeamOrgChartProps) {
 interface TreeNodeProps {
   node: TeamNode;
   onNodeClick?: (nodeId: string) => void;
+  selectedNode?: string | null;
   level: number;
 }
 
-function TreeNode({ node, onNodeClick, level }: TreeNodeProps) {
+function TreeNode({ node, onNodeClick, selectedNode, level }: TreeNodeProps) {
   const hasChildren = node.children.length > 0;
+  const isSelected = selectedNode === node.id;
 
   return (
     <div style={{
@@ -98,23 +101,31 @@ function TreeNode({ node, onNodeClick, level }: TreeNodeProps) {
         onClick={() => onNodeClick?.(node.id)}
         style={{
           padding: '12px 16px',
-          background: level === 0 ? 'var(--tn-blue)' : 'var(--tn-surface)',
-          border: `1px solid ${level === 0 ? 'var(--tn-blue)' : 'var(--tn-border)'}`,
+          background: isSelected
+            ? 'var(--tn-blue-dim)'
+            : level === 0
+              ? 'var(--tn-blue)'
+              : 'var(--tn-surface)',
+          border: `2px solid ${isSelected ? 'var(--tn-blue)' : level === 0 ? 'var(--tn-blue)' : 'var(--tn-border)'}`,
           borderRadius: 8,
           minWidth: 180,
           textAlign: 'center',
           cursor: onNodeClick ? 'pointer' : 'default',
           transition: 'all 0.2s ease',
-          boxShadow: level === 0 ? '0 2px 8px rgba(0, 122, 255, 0.2)' : 'none'
+          boxShadow: isSelected
+            ? '0 4px 12px rgba(0, 122, 255, 0.3)'
+            : level === 0
+              ? '0 2px 8px rgba(0, 122, 255, 0.2)'
+              : 'none'
         }}
         onMouseEnter={(e) => {
-          if (level > 0) {
+          if (level > 0 && !isSelected) {
             e.currentTarget.style.background = 'var(--tn-surface-hover)';
             e.currentTarget.style.borderColor = 'var(--tn-border-hover)';
           }
         }}
         onMouseLeave={(e) => {
-          if (level > 0) {
+          if (level > 0 && !isSelected) {
             e.currentTarget.style.background = 'var(--tn-surface)';
             e.currentTarget.style.borderColor = 'var(--tn-border)';
           }
@@ -178,7 +189,7 @@ function TreeNode({ node, onNodeClick, level }: TreeNodeProps) {
                   height: 20,
                   background: 'var(--tn-border)'
                 }} />
-                <TreeNode node={child} onNodeClick={onNodeClick} level={level + 1} />
+                <TreeNode node={child} onNodeClick={onNodeClick} selectedNode={selectedNode} level={level + 1} />
               </div>
             ))}
           </div>
