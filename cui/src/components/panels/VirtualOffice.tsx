@@ -10,6 +10,7 @@ import PersonaChat from './PersonaChat';
 import ScanDocumentsButton from './ScanDocumentsButton';
 import PersonaDocumentList from './PersonaDocumentList';
 import AgentDetailModal from '../modals/AgentDetailModal';
+import { BuildInfo } from '../BuildInfo';
 
 const API = '/api';
 
@@ -248,6 +249,7 @@ export default function VirtualOffice({ projectId, workDir }: VirtualOfficeProps
           <span style={{ fontSize: 11, color: 'var(--tn-text-muted)' }}>
             {agents.length} Agents
           </span>
+          <BuildInfo />
         </div>
         <div style={{ display: 'flex', gap: 8, fontSize: 11 }}>
           <div style={{

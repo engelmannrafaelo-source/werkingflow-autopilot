@@ -965,6 +965,26 @@ app.get("/api/version", (_req, res) => {
   });
 });
 
+// Get build timestamp from dist/index.html mtime
+app.get("/api/build-info", (_req, res) => {
+  const distIndexPath = resolve(import.meta.dirname ?? '.', '..', 'dist', 'index.html');
+  let buildTime: string | null = null;
+
+  try {
+    if (existsSync(distIndexPath)) {
+      const stats = statSync(distIndexPath);
+      buildTime = stats.mtime.toISOString();
+    }
+  } catch (err) {
+    console.error('[build-info] Error reading dist/index.html:', err);
+  }
+
+  res.json({
+    buildTime,
+    distExists: existsSync(distIndexPath),
+  });
+});
+
 // Resolve ~ to home directory
 function resolvePath(p: string): string {
   if (p.startsWith('~/') || p === '~') return join(homedir(), p.slice(1));

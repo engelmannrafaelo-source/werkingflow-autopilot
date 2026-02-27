@@ -10,6 +10,7 @@ import ActivityFeedTab from './tabs/ActivityFeedTab';
 import StatusTab from './tabs/StatusTab';
 import MetrikenTab from './tabs/MetrikenTab';
 import CCUsageTab from './tabs/CCUsageTab';
+import { BuildInfo } from '../../BuildInfo';
 
 interface Tab {
   key: string;
@@ -99,6 +100,7 @@ export default function BridgeMonitor() {
           <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--tn-text)', flex: 1 }}>
             BRIDGE MONITOR
           </span>
+          <BuildInfo />
 
           {/* Quick stats badges */}
           {quickStatus && (

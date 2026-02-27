@@ -10,6 +10,7 @@ import DeploymentsTab from './tabs/DeploymentsTab';
 import ConfigTab from './tabs/ConfigTab';
 import FeedbackTab from './tabs/FeedbackTab';
 import PipelineTab from './tabs/PipelineTab';
+import { BuildInfo } from '../../BuildInfo';
 
 type EnvMode = 'production' | 'staging' | 'local';
 
@@ -103,6 +104,7 @@ export default function WerkingReportAdmin() {
           <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--tn-text)', flex: 1 }}>
             WERKING REPORT ADMIN
           </span>
+          <BuildInfo />
 
           {/* Env Toggle */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
