@@ -10,6 +10,8 @@ import DeploymentsTab from './tabs/DeploymentsTab';
 import ConfigTab from './tabs/ConfigTab';
 import FeedbackTab from './tabs/FeedbackTab';
 import PipelineTab from './tabs/PipelineTab';
+import ImpersonationTab from './tabs/ImpersonationTab';
+import SystemHealthTab from './tabs/SystemHealthTab';
 import { BuildInfo } from '../../BuildInfo';
 
 type EnvMode = 'production' | 'staging' | 'local';
@@ -19,14 +21,16 @@ interface Tab {
   label: string;
   component: React.ReactElement;
   group: 'core' | 'ops' | 'data';
+  badge?: number; // Optional badge count (e.g., for alerts)
 }
 
 export default function WerkingReportAdmin() {
   const [envMode, setEnvMode] = useState<EnvMode>('production');
   const [envLoading, setEnvLoading] = useState(false);
   const [envUrl, setEnvUrl] = useState('');
+  const [healthErrorCount, setHealthErrorCount] = useState(0);
 
-  // Load current env mode from server on mount + poll every 5s to stay in sync
+  // Load current env mode from server on mount + listen for real-time changes via WebSocket
   useEffect(() => {
     const loadEnv = () => {
       fetch('/api/admin/wr/env')
@@ -37,8 +41,55 @@ export default function WerkingReportAdmin() {
         })
         .catch(() => {});
     };
+
+    // Initial load
     loadEnv();
-    const interval = setInterval(loadEnv, 5000);
+
+    // Listen for env changes via WebSocket (broadcasted from server on POST /api/admin/wr/env)
+    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const ws = new WebSocket(`${protocol}://${window.location.host}/ws`);
+    let fallbackInterval: NodeJS.Timeout | null = null;
+
+    ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'wr-env-changed' && msg.mode) {
+          console.log('[WR Admin] Env changed via WebSocket:', msg.mode);
+          setEnvMode(msg.mode);
+          // Refetch to get updated URL
+          loadEnv();
+        }
+      } catch (err) {
+        console.warn('[WR Admin] Failed to parse WebSocket message:', err);
+      }
+    };
+
+    ws.onerror = (err) => {
+      console.warn('[WR Admin] WebSocket error, falling back to polling:', err);
+      // Fallback to polling if WebSocket fails (30s instead of 5s to reduce load)
+      if (!fallbackInterval) {
+        fallbackInterval = setInterval(loadEnv, 30000);
+      }
+    };
+
+    return () => {
+      ws.close();
+      if (fallbackInterval) clearInterval(fallbackInterval);
+    };
+  }, []);
+
+  // Poll system health for badge count every 30s
+  useEffect(() => {
+    const checkHealth = () => {
+      fetch('/api/admin/wr/system-health')
+        .then(r => r.json())
+        .then(d => {
+          setHealthErrorCount(d.errorCount || 0);
+        })
+        .catch(() => {});
+    };
+    checkHealth();
+    const interval = setInterval(checkHealth, 30000);
     return () => clearInterval(interval);
   }, []);
 
@@ -61,6 +112,7 @@ export default function WerkingReportAdmin() {
   const tabs: Tab[] = [
     { key: 'dashboard', label: 'Dashboard', component: <DashboardTab envMode={envMode} />, group: 'core' },
     { key: 'users', label: 'Users', component: <UsersTab envMode={envMode} />, group: 'core' },
+    { key: 'impersonation', label: 'Impersonation', component: <ImpersonationTab envMode={envMode} />, group: 'core' },
     { key: 'tenants', label: 'Tenants', component: <TenantsTab envMode={envMode} />, group: 'core' },
     { key: 'billing', label: 'Billing', component: <BillingTab envMode={envMode} />, group: 'data' },
     { key: 'usage', label: 'Usage', component: <UsageTab envMode={envMode} />, group: 'data' },
@@ -68,6 +120,7 @@ export default function WerkingReportAdmin() {
     { key: 'audit', label: 'Audit', component: <AuditTab envMode={envMode} />, group: 'data' },
     { key: 'pipeline', label: 'Pipeline', component: <PipelineTab envMode={envMode} />, group: 'ops' },
     { key: 'deployments', label: 'Deploy', component: <DeploymentsTab envMode={envMode} />, group: 'ops' },
+    { key: 'system-health', label: 'System Health', component: <SystemHealthTab envMode={envMode} />, group: 'ops', badge: healthErrorCount },
     { key: 'config', label: 'Config', component: <ConfigTab envMode={envMode} />, group: 'ops' },
     { key: 'feedback', label: 'Feedback', component: <FeedbackTab envMode={envMode} />, group: 'data' },
   ];
@@ -178,9 +231,28 @@ export default function WerkingReportAdmin() {
                     fontWeight: 600,
                     cursor: 'pointer',
                     transition: 'all 0.15s',
+                    position: 'relative',
                   }}
                 >
                   {tab.label}
+                  {tab.badge != null && tab.badge > 0 && (
+                    <span style={{
+                      position: 'absolute',
+                      top: -4,
+                      right: -4,
+                      background: 'var(--tn-red)',
+                      color: '#fff',
+                      fontSize: 8,
+                      fontWeight: 700,
+                      borderRadius: 8,
+                      padding: '1px 4px',
+                      minWidth: 14,
+                      textAlign: 'center',
+                      boxShadow: '0 0 4px rgba(247,118,142,0.5)',
+                    }}>
+                      {tab.badge}
+                    </span>
+                  )}
                 </button>
               </React.Fragment>
             );
