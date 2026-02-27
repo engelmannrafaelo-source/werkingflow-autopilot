@@ -3310,6 +3310,16 @@ app.post('/api/admin/wr/config', async (req, res) => {
   catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
+// Environments Config (for Pipeline URLs)
+app.get('/api/admin/wr/environments', async (_req, res) => {
+  try { const r = await wrProxy(`${wrBase()}/api/admin/environments`); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+app.post('/api/admin/wr/environments', async (req, res) => {
+  try { const r = await wrProxy(`${wrBase()}/api/admin/environments`, { method: 'POST', body: JSON.stringify(req.body) }); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
 // AI Usage
 app.get('/api/admin/wr/ai-usage', async (_req, res) => {
   try { const r = await wrProxy(`${wrBase()}/api/admin/ai-usage`); res.status(r.status).json(r.body); }
@@ -5206,6 +5216,36 @@ app.get("/api/claude-code/stats-v2", async (_req, res) => {
     console.error("[CC-Usage] Stats error:", err.message);
     res.status(500).json({ error: err.message });
   }
+});
+
+// POST /api/claude-code/scrape-now - Trigger on-demand usage scrape
+app.post("/api/claude-code/scrape-now", async (req, res) => {
+  const { exec } = await import("child_process");
+  const scriptPath = resolve(import.meta.dirname ?? ".", "..", "scripts", "scrape-claude-usage.ts");
+
+  console.log("[CC-Usage] Starting on-demand scrape...");
+
+  exec(`cd ${resolve(import.meta.dirname ?? ".", "..")} && npx tsx ${scriptPath}`, (err, stdout, stderr) => {
+    if (err) {
+      console.error("[CC-Usage] Scrape failed:", err.message);
+      return res.status(500).json({ error: err.message, stderr });
+    }
+
+    console.log("[CC-Usage] Scrape completed:", stdout);
+
+    // Return success with scraped data
+    try {
+      const scrapedData = JSON.parse(readFileSync(SCRAPED_FILE, "utf-8"));
+      res.json({
+        success: true,
+        accounts: scrapedData.length,
+        timestamp: new Date().toISOString(),
+        data: scrapedData
+      });
+    } catch (parseErr: any) {
+      res.json({ success: true, warning: "Scrape completed but could not parse result", stdout });
+    }
+  });
 });
 
 // ========================================

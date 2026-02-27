@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 
 interface EnvironmentHealth {
   name: string;
@@ -9,10 +9,17 @@ interface EnvironmentHealth {
   version?: string;
 }
 
+interface EnvironmentConfig {
+  name: string;
+  url: string;
+  branch: string;
+}
+
 export default function PipelineTab({ envMode }: { envMode?: string }) {
   const [loading, setLoading] = useState(true);
   const [environments, setEnvironments] = useState<EnvironmentHealth[]>([]);
   const [error, setError] = useState('');
+  const [envConfigs, setEnvConfigs] = useState<EnvironmentConfig[]>([]);
 
   const checkEnvironment = async (name: string, url: string, branch?: string): Promise<EnvironmentHealth> => {
     try {
@@ -43,16 +50,39 @@ export default function PipelineTab({ envMode }: { envMode?: string }) {
     }
   };
 
+  // Fetch environment configurations from backend
+  const fetchEnvConfigs = useCallback(async () => {
+    try {
+      const res = await fetch('/api/admin/wr/environments');
+      if (!res.ok) {
+        throw new Error('Failed to fetch environment configs');
+      }
+      const data = await res.json();
+      setEnvConfigs(data.environments || []);
+    } catch (err: any) {
+      console.error('Error fetching env configs:', err);
+      // Fallback to hardcoded defaults
+      setEnvConfigs([
+        { name: 'Local', url: 'http://localhost:3008', branch: 'develop' },
+        { name: 'Staging', url: 'https://werkingflow-platform-git-develop-rafael-engelmanns-projects.vercel.app', branch: 'develop' },
+        { name: 'Production', url: 'https://werkingflow-platform.vercel.app', branch: 'main' },
+      ]);
+    }
+  }, []);
+
   const fetchAll = useCallback(async () => {
     setLoading(true);
     setError('');
 
     try {
-      const checks = await Promise.all([
-        checkEnvironment('Local', 'http://localhost:3008', 'develop'),
-        checkEnvironment('Staging', 'https://werkingflow-platform-git-develop-rafael-engelmanns-projects.vercel.app', 'develop'),
-        checkEnvironment('Production', 'https://werkingflow-platform.vercel.app', 'main'),
-      ]);
+      // Use envConfigs if available, otherwise wait for them to load
+      if (envConfigs.length === 0) {
+        return;
+      }
+
+      const checks = await Promise.all(
+        envConfigs.map(env => checkEnvironment(env.name, env.url, env.branch))
+      );
 
       setEnvironments(checks);
     } catch (err: any) {
@@ -60,9 +90,17 @@ export default function PipelineTab({ envMode }: { envMode?: string }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [envConfigs]);
 
-  useEffect(() => { fetchAll(); }, [fetchAll, envMode]);
+  // Fetch configs on mount
+  useEffect(() => { fetchEnvConfigs(); }, [fetchEnvConfigs]);
+
+  // Fetch health checks when configs are loaded or envMode changes
+  useEffect(() => {
+    if (envConfigs.length > 0) {
+      fetchAll();
+    }
+  }, [envConfigs, envMode, fetchAll]);
 
   const statusColors = {
     healthy: 'var(--tn-green)',
