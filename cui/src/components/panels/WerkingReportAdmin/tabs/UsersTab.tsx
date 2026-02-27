@@ -1,4 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
+import PaginationControls from '@/components/shared/PaginationControls';
+import TableSearch, { FilterConfig } from '@/components/shared/TableSearch';
+import ExportButton from '@/components/shared/ExportButton';
 
 interface AdminUser {
   id: string;
@@ -23,6 +26,13 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
   const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
   const [showCreate, setShowCreate] = useState(false);
   const [search, setSearch] = useState('');
+  const [roleFilter, setRoleFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+
+  // Pagination state
+  const [offset, setOffset] = useState(0);
+  const [limit, setLimit] = useState(50);
+  const [total, setTotal] = useState(0);
 
   // Create form state
   const [newEmail, setNewEmail] = useState('');
@@ -35,16 +45,21 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/admin/wr/users');
+      const params = new URLSearchParams({
+        offset: offset.toString(),
+        limit: limit.toString(),
+      });
+      const res = await fetch(`/api/admin/wr/users?${params}`);
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setUsers(data.users || []);
+      setTotal(data.total || 0);
     } catch (err: any) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [offset, limit]);
 
   useEffect(() => {
     fetchUsers();
@@ -128,6 +143,27 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
     }
   };
 
+  const handleImpersonate = async (userId: string, email: string) => {
+    if (!confirm(`Start impersonation session as "${email}"?`)) return;
+    setProcessingIds(prev => new Set(prev).add(userId));
+    try {
+      const res = await fetch(`/api/admin/wr/users/${userId}/impersonate`, { method: 'POST' });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      const sessionId = data.session?.id || 'unknown';
+      const expiresAt = data.session?.expiresAt ? new Date(data.session.expiresAt).toLocaleString('de-DE') : 'unknown';
+      alert(`Impersonation session started!\n\nSession ID: ${sessionId}\nTarget: ${email}\nExpires: ${expiresAt}\n\nSession is now active.`);
+    } catch (err: any) {
+      alert(`Impersonation failed: ${err.message}`);
+    } finally {
+      setProcessingIds(prev => { const next = new Set(prev); next.delete(userId); return next; });
+    }
+  };
+
+  // Apply client-side filtering (after pagination from server)
   const filteredUsers = users
     .filter(u => {
       if (filter === 'pending') return !u.approved;
@@ -138,7 +174,53 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
       if (!search) return true;
       const s = search.toLowerCase();
       return u.email.toLowerCase().includes(s) || u.name?.toLowerCase().includes(s) || u.tenantName?.toLowerCase().includes(s);
+    })
+    .filter(u => {
+      if (roleFilter && u.role !== roleFilter) return false;
+      if (statusFilter === 'verified' && !u.emailVerified) return false;
+      if (statusFilter === 'unverified' && u.emailVerified) return false;
+      if (statusFilter === 'approved' && !u.approved) return false;
+      if (statusFilter === 'pending' && u.approved) return false;
+      return true;
     });
+
+  const handlePageChange = (newOffset: number) => {
+    setOffset(newOffset);
+  };
+
+  const handlePageSizeChange = (newLimit: number) => {
+    setLimit(newLimit);
+    setOffset(0); // Reset to first page when changing page size
+  };
+
+  const handleSearchChange = useCallback((query: string, filters: Record<string, string>) => {
+    setSearch(query);
+    setRoleFilter(filters.role || '');
+    setStatusFilter(filters.status || '');
+  }, []);
+
+  const searchFilters: FilterConfig[] = [
+    {
+      key: 'role',
+      label: 'Role',
+      options: [
+        { label: 'Admin', value: 'admin' },
+        { label: 'User', value: 'user' },
+      ],
+      placeholder: 'All Roles',
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      options: [
+        { label: 'Verified', value: 'verified' },
+        { label: 'Unverified', value: 'unverified' },
+        { label: 'Approved', value: 'approved' },
+        { label: 'Pending', value: 'pending' },
+      ],
+      placeholder: 'All Statuses',
+    },
+  ];
 
   const inputStyle: React.CSSProperties = {
     padding: '5px 8px', borderRadius: 3, fontSize: 11, background: 'var(--tn-bg)',
@@ -147,9 +229,10 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
 
   return (
     <div style={{ padding: 12 }}>
-      {/* Filter Bar */}
+      {/* Search and Filter Bar */}
       <div style={{ display: 'flex', gap: 6, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 11, color: 'var(--tn-text-muted)', fontWeight: 600 }}>Filter:</span>
+        {/* Quick Filter Buttons */}
+        <span style={{ fontSize: 11, color: 'var(--tn-text-muted)', fontWeight: 600 }}>Quick:</span>
         {(['all', 'pending', 'unverified'] as FilterType[]).map(f => (
           <button key={f} onClick={() => setFilter(f)} style={{
             padding: '3px 10px', borderRadius: 3, fontSize: 10, fontWeight: 600, cursor: 'pointer',
@@ -159,13 +242,31 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
             textTransform: 'capitalize',
           }}>{f}</button>
         ))}
-        <input
+        <div style={{ width: 1, height: 20, background: 'var(--tn-border)', margin: '0 4px' }} />
+
+        {/* Enhanced Search */}
+        <TableSearch
+          onSearch={handleSearchChange}
           placeholder="Search users..."
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          style={{ ...inputStyle, width: 140, marginLeft: 4 }}
+          filters={searchFilters}
+          initialQuery={search}
+          initialFilters={{ role: roleFilter, status: statusFilter }}
         />
+
         <div style={{ flex: 1 }} />
+        <ExportButton
+          data={filteredUsers.map(u => ({
+            email: u.email,
+            name: u.name || '',
+            role: u.role,
+            approved: u.approved ? 'Yes' : 'No',
+            emailVerified: u.emailVerified ? 'Yes' : 'No',
+            tenant: u.tenantName || u.tenantId || '',
+            createdAt: u.createdAt,
+            lastLogin: u.lastLogin || '',
+          }))}
+          filename="users"
+        />
         <button onClick={() => setShowCreate(!showCreate)} style={{
           padding: '4px 12px', borderRadius: 3, fontSize: 10, fontWeight: 600, cursor: 'pointer',
           background: showCreate ? 'var(--tn-red)' : 'var(--tn-green)', border: 'none', color: '#fff',
@@ -228,10 +329,25 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
         <div style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>Loading...</div>
       )}
 
+      {/* Pagination Controls - Top */}
+      {!loading && total > 0 && (
+        <PaginationControls
+          total={total}
+          offset={offset}
+          limit={limit}
+          onPageChange={handlePageChange}
+          onPageSizeChange={handlePageSizeChange}
+        />
+      )}
+
       {/* User Count */}
       {!loading && (
-        <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6 }}>
-          {filteredUsers.length} user(s) {filter !== 'all' ? `(${filter})` : ''} {search ? `matching "${search}"` : ''}
+        <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6, marginTop: 6 }}>
+          {filteredUsers.length} user(s) shown
+          {filter !== 'all' && ` (quick: ${filter})`}
+          {search && ` matching "${search}"`}
+          {roleFilter && ` | role: ${roleFilter}`}
+          {statusFilter && ` | status: ${statusFilter}`}
         </div>
       )}
 
@@ -244,7 +360,7 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
         <div>
           {/* Table Header */}
           <div style={{
-            display: 'grid', gridTemplateColumns: '1fr 120px 100px 60px 60px 60px 120px',
+            display: 'grid', gridTemplateColumns: '1fr 120px 100px 60px 60px 60px 180px',
             gap: 8, padding: '6px 10px', background: 'var(--tn-bg-dark)', borderRadius: 4,
             fontSize: 10, fontWeight: 600, color: 'var(--tn-text-muted)', marginBottom: 4,
           }}>
@@ -256,7 +372,7 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
             const isProcessing = processingIds.has(user.id);
             return (
               <div key={user.id} style={{
-                display: 'grid', gridTemplateColumns: '1fr 120px 100px 60px 60px 60px 120px',
+                display: 'grid', gridTemplateColumns: '1fr 120px 100px 60px 60px 60px 180px',
                 gap: 8, padding: '8px 10px', borderBottom: '1px solid var(--tn-border)',
                 fontSize: 11, alignItems: 'center', opacity: isProcessing ? 0.5 : 1,
               }}>
@@ -306,6 +422,10 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
                       background: 'var(--tn-blue)', border: 'none', color: '#fff', fontWeight: 600,
                     }}>{isProcessing ? '...' : 'Verify'}</button>
                   )}
+                  <button onClick={() => handleImpersonate(user.id, user.email)} disabled={isProcessing} style={{
+                    padding: '3px 6px', borderRadius: 3, fontSize: 9, cursor: isProcessing ? 'not-allowed' : 'pointer',
+                    background: 'var(--tn-blue)', border: 'none', color: '#fff', fontWeight: 600,
+                  }}>{isProcessing ? '...' : 'Impersonate'}</button>
                   <button onClick={() => handleDelete(user.id, user.email)} disabled={isProcessing} style={{
                     padding: '3px 6px', borderRadius: 3, fontSize: 9, cursor: isProcessing ? 'not-allowed' : 'pointer',
                     background: 'rgba(247,118,142,0.15)', border: '1px solid rgba(247,118,142,0.3)',
@@ -316,6 +436,17 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
             );
           })}
         </div>
+      )}
+
+      {/* Pagination Controls - Bottom */}
+      {!loading && total > 0 && (
+        <PaginationControls
+          total={total}
+          offset={offset}
+          limit={limit}
+          onPageChange={handlePageChange}
+          onPageSizeChange={handlePageSizeChange}
+        />
       )}
     </div>
   );

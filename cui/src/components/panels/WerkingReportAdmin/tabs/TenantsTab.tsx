@@ -1,10 +1,15 @@
 import { useState, useEffect, useCallback } from 'react';
+import PaginationControls from '@/components/shared/PaginationControls';
+import ExportButton from '@/components/shared/ExportButton';
+import PlanChangeModal from '../modals/PlanChangeModal';
+import TableSearch, { FilterConfig } from '@/components/shared/TableSearch';
 
 interface Tenant {
   id: string;
   name: string;
   slug?: string;
-  plan?: string;
+  planId?: string;
+  plan?: string; // Legacy support
   status?: string;
   userCount?: number;
   createdAt?: string;
@@ -21,16 +26,18 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
   const [search, setSearch] = useState('');
   const [planFilter, setPlanFilter] = useState('');
   const [processingId, setProcessingId] = useState<string | null>(null);
+  const [changePlanTenant, setChangePlanTenant] = useState<{ id: string; name: string; planId: string } | null>(null);
+
+  // Pagination state
+  const [offset, setOffset] = useState(0);
+  const [limit, setLimit] = useState(50);
+  const [total, setTotal] = useState(0);
 
   // Create form
   const [newName, setNewName] = useState('');
   const [newSlug, setNewSlug] = useState('');
   const [newPlan, setNewPlan] = useState('trial');
   const [creating, setCreating] = useState(false);
-
-  // Edit inline
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editPlan, setEditPlan] = useState('');
 
   const fetchTenants = useCallback(async () => {
     setLoading(true);
@@ -39,17 +46,19 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
       const params = new URLSearchParams();
       if (search) params.set('search', search);
       if (planFilter) params.set('plan', planFilter);
-      params.set('limit', '100');
+      params.set('offset', offset.toString());
+      params.set('limit', limit.toString());
       const res = await fetch(`/api/admin/wr/tenants?${params}`);
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setTenants(data.tenants || data || []);
+      setTotal(data.total || 0);
     } catch (err: any) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
-  }, [search, planFilter]);
+  }, [search, planFilter, offset, limit]);
 
   useEffect(() => { fetchTenants(); }, [fetchTenants, envMode]);
 
@@ -61,7 +70,7 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
       const res = await fetch('/api/admin/wr/tenants', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newName, slug: newSlug || newName.toLowerCase().replace(/[^a-z0-9]/g, '-'), plan: newPlan }),
+        body: JSON.stringify({ name: newName, slug: newSlug || newName.toLowerCase().replace(/[^a-z0-9]/g, '-'), planId: newPlan }),
       });
       if (!res.ok) throw new Error(await res.text());
       setNewName('');
@@ -73,24 +82,6 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
       setError(err.message);
     } finally {
       setCreating(false);
-    }
-  };
-
-  const handleUpdatePlan = async (id: string) => {
-    setProcessingId(id);
-    try {
-      const res = await fetch(`/api/admin/wr/tenants/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ plan: editPlan }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      setEditingId(null);
-      await fetchTenants();
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setProcessingId(null);
     }
   };
 
@@ -117,6 +108,29 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
     return colors[plan] || 'var(--tn-text-muted)';
   };
 
+  const handlePageChange = (newOffset: number) => {
+    setOffset(newOffset);
+  };
+
+  const handlePageSizeChange = (newLimit: number) => {
+    setLimit(newLimit);
+    setOffset(0); // Reset to first page when changing page size
+  };
+
+  const handleSearchChange = useCallback((query: string, filters: Record<string, string>) => {
+    setSearch(query);
+    setPlanFilter(filters.plan || '');
+  }, []);
+
+  const searchFilters: FilterConfig[] = [
+    {
+      key: 'plan',
+      label: 'Plan',
+      options: plans.map(p => ({ label: p.charAt(0).toUpperCase() + p.slice(1), value: p })),
+      placeholder: 'All Plans',
+    },
+  ];
+
   const inputStyle: React.CSSProperties = {
     padding: '5px 8px', borderRadius: 3, fontSize: 11, background: 'var(--tn-bg)',
     border: '1px solid var(--tn-border)', color: 'var(--tn-text)', outline: 'none', width: '100%',
@@ -124,19 +138,37 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
 
   return (
     <div style={{ padding: 12 }}>
-      {/* Toolbar */}
-      <div style={{ display: 'flex', gap: 6, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-        <input
-          placeholder="Search tenants..."
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          style={{ ...inputStyle, width: 160 }}
+      {changePlanTenant && (
+        <PlanChangeModal
+          tenantId={changePlanTenant.id}
+          tenantName={changePlanTenant.name}
+          currentPlanId={changePlanTenant.planId}
+          onClose={() => setChangePlanTenant(null)}
+          onSuccess={fetchTenants}
         />
-        <select value={planFilter} onChange={e => setPlanFilter(e.target.value)} style={{ ...inputStyle, width: 100 }}>
-          <option value="">All Plans</option>
-          {plans.map(p => <option key={p} value={p}>{p}</option>)}
-        </select>
+      )}
+
+      {/* Search and Filter Toolbar */}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+        <TableSearch
+          onSearch={handleSearchChange}
+          placeholder="Search tenants..."
+          filters={searchFilters}
+          initialQuery={search}
+          initialFilters={{ plan: planFilter }}
+        />
         <div style={{ flex: 1 }} />
+        <ExportButton
+          data={tenants.map(t => ({
+            name: t.name,
+            slug: t.slug || '',
+            plan: t.planId || t.plan || '',
+            status: t.status || 'active',
+            userCount: t.userCount ?? 0,
+            createdAt: t.createdAt || '',
+          }))}
+          filename="tenants"
+        />
         <button onClick={() => setView(view === 'create' ? 'list' : 'create')} style={{
           padding: '4px 12px', borderRadius: 3, fontSize: 10, fontWeight: 600, cursor: 'pointer',
           background: view === 'create' ? 'var(--tn-red)' : 'var(--tn-green)',
@@ -186,13 +218,28 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
 
       {loading && <div style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>Loading...</div>}
 
+      {/* Pagination Controls - Top */}
+      {!loading && total > 0 && (
+        <PaginationControls
+          total={total}
+          offset={offset}
+          limit={limit}
+          onPageChange={handlePageChange}
+          onPageSizeChange={handlePageSizeChange}
+        />
+      )}
+
       {!loading && tenants.length === 0 && (
         <div style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 11 }}>No tenants found</div>
       )}
 
       {!loading && tenants.length > 0 && (
         <>
-          <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6 }}>{tenants.length} tenant(s)</div>
+          <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6, marginTop: 6 }}>
+            {tenants.length} tenant(s) shown
+            {search && ` matching "${search}"`}
+            {planFilter && ` | plan: ${planFilter}`}
+          </div>
           <div style={{
             display: 'grid', gridTemplateColumns: '1fr 100px 80px 80px 70px 100px',
             gap: 8, padding: '6px 10px', background: 'var(--tn-bg-dark)', borderRadius: 4,
@@ -203,7 +250,6 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
 
           {tenants.map(t => {
             const isProcessing = processingId === t.id;
-            const isEditing = editingId === t.id;
             return (
               <div key={t.id} style={{
                 display: 'grid', gridTemplateColumns: '1fr 100px 80px 80px 70px 100px',
@@ -216,23 +262,14 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
                 </div>
                 <div style={{ color: 'var(--tn-text-muted)', fontSize: 10 }}>{t.slug || '—'}</div>
                 <div>
-                  {isEditing ? (
-                    <div style={{ display: 'flex', gap: 2 }}>
-                      <select value={editPlan} onChange={e => setEditPlan(e.target.value)} style={{ ...inputStyle, width: 60, padding: '2px 4px', fontSize: 9 }}>
-                        {plans.map(p => <option key={p} value={p}>{p}</option>)}
-                      </select>
-                      <button onClick={() => handleUpdatePlan(t.id)} style={{ padding: '2px 4px', fontSize: 8, background: 'var(--tn-green)', border: 'none', color: '#fff', borderRadius: 2, cursor: 'pointer' }}>OK</button>
-                    </div>
-                  ) : (
-                    <span style={{
-                      padding: '2px 6px', borderRadius: 3, fontSize: 9, fontWeight: 600,
-                      textTransform: 'uppercase', color: planColor(t.plan || ''),
-                      background: `${planColor(t.plan || '')}20`,
-                      cursor: 'pointer',
-                    }} onClick={() => { setEditingId(t.id); setEditPlan(t.plan || 'trial'); }}>
-                      {t.plan || '—'}
-                    </span>
-                  )}
+                  <span style={{
+                    padding: '2px 6px', borderRadius: 3, fontSize: 9, fontWeight: 600,
+                    textTransform: 'uppercase', color: planColor(t.planId || t.plan || ''),
+                    background: `${planColor(t.planId || t.plan || '')}20`,
+                    cursor: 'pointer',
+                  }} onClick={() => setChangePlanTenant({ id: t.id, name: t.name, planId: t.planId || t.plan || 'trial' })}>
+                    {t.planId || t.plan || '—'}
+                  </span>
                 </div>
                 <div style={{ color: 'var(--tn-text-muted)' }}>{t.userCount ?? '—'}</div>
                 <div>
@@ -245,6 +282,11 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
                   </span>
                 </div>
                 <div style={{ display: 'flex', gap: 4 }}>
+                  <button onClick={() => setChangePlanTenant({ id: t.id, name: t.name, planId: t.planId || t.plan || 'trial' })} disabled={isProcessing} style={{
+                    padding: '3px 6px', borderRadius: 3, fontSize: 9, cursor: isProcessing ? 'not-allowed' : 'pointer',
+                    background: 'rgba(125,207,255,0.15)', border: '1px solid rgba(125,207,255,0.3)',
+                    color: 'var(--tn-blue)', fontWeight: 600,
+                  }}>Change Plan</button>
                   <button onClick={() => handleDelete(t.id, t.name)} disabled={isProcessing} style={{
                     padding: '3px 6px', borderRadius: 3, fontSize: 9, cursor: isProcessing ? 'not-allowed' : 'pointer',
                     background: 'rgba(247,118,142,0.15)', border: '1px solid rgba(247,118,142,0.3)',
@@ -254,6 +296,15 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
               </div>
             );
           })}
+
+          {/* Pagination Controls - Bottom */}
+          <PaginationControls
+            total={total}
+            offset={offset}
+            limit={limit}
+            onPageChange={handlePageChange}
+            onPageSizeChange={handlePageSizeChange}
+          />
         </>
       )}
     </div>

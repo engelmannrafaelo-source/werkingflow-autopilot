@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import ExportButton from '@/components/shared/ExportButton';
 
 interface TopUpModalProps {
   tenant: TenantBilling | null;
@@ -586,6 +587,24 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
             </div>
           ) : (
             <div>
+              {/* Export Button */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+                <ExportButton
+                  data={invoices.map(inv => ({
+                    invoiceNumber: inv.invoiceNumber,
+                    tenant: inv.recipientName,
+                    netAmount: inv.netAmount,
+                    taxAmount: inv.taxAmount,
+                    grossAmount: inv.grossAmount,
+                    currency: inv.currency,
+                    status: inv.status,
+                    issueDate: inv.issueDate,
+                    sentAt: inv.sentAt || '',
+                  }))}
+                  filename="invoices"
+                />
+              </div>
+
               {/* Invoice Table Header */}
               <div style={{
                 display: 'grid',

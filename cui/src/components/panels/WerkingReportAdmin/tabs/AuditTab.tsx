@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import ExportButton from '@/components/shared/ExportButton';
 
 interface AuditEntry {
   id: string;
@@ -35,9 +36,10 @@ export default function AuditTab({ envMode }: { envMode?: string }) {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
 
-  // Pagination
+  // Pagination (server-side)
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(50);
+  const [total, setTotal] = useState(0);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const fetchLogs = useCallback(async () => {
@@ -56,8 +58,11 @@ export default function AuditTab({ envMode }: { envMode?: string }) {
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setLogs(data.logs || data.entries || data || []);
+      setTotal(data.total || 0);
     } catch (err: any) {
       setError(err.message);
+      setLogs([]);
+      setTotal(0);
     } finally {
       setLoading(false);
     }
@@ -83,57 +88,22 @@ export default function AuditTab({ envMode }: { envMode?: string }) {
     setPage(1);
   };
 
-  const handleExportCSV = () => {
-    if (logs.length === 0) {
-      alert('No data to export');
-      return;
-    }
-
-    // CSV headers
-    const headers = ['Timestamp', 'Admin User', 'Action', 'Target Type', 'Target ID', 'IP Address', 'Details'];
-
-    // CSV rows
-    const rows = logs.map(log => {
-      const timestamp = new Date(log.timestamp).toISOString();
-      const userEmail = log.actor?.email || log.userEmail || '—';
-      const action = log.action || '—';
-      const targetType = log.resource?.type || '—';
-      const targetId = log.resource?.id || log.tenantId || log.userId || '—';
-      const ip = log.actor?.ip || log.ipAddress || '—';
-      const details = typeof log.details === 'string'
-        ? log.details
-        : log.details
-          ? JSON.stringify(log.details)
-          : log.metadata
-            ? JSON.stringify(log.metadata)
-            : '—';
-
-      // Escape CSV values (handle quotes and commas)
-      const escape = (val: string) => {
-        if (val.includes(',') || val.includes('"') || val.includes('\n')) {
-          return `"${val.replace(/"/g, '""')}"`;
-        }
-        return val;
-      };
-
-      return [timestamp, userEmail, action, targetType, targetId, ip, details].map(escape).join(',');
-    });
-
-    // Combine headers and rows
-    const csv = [headers.join(','), ...rows].join('\n');
-
-    // Create download
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    const url = URL.createObjectURL(blob);
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
-    link.setAttribute('href', url);
-    link.setAttribute('download', `audit-log-${timestamp}.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
+  // Prepare export data
+  const exportData = logs.map(log => ({
+    timestamp: new Date(log.timestamp).toISOString(),
+    adminUser: log.actor?.email || log.userEmail || '—',
+    action: log.action || '—',
+    targetType: log.resource?.type || (log.tenantId ? 'tenant' : log.userId ? 'user' : '—'),
+    targetId: log.resource?.id || log.tenantId || log.userId || '—',
+    ipAddress: log.actor?.ip || log.ipAddress || '—',
+    details: typeof log.details === 'string'
+      ? log.details
+      : log.details
+        ? JSON.stringify(log.details)
+        : log.metadata
+          ? JSON.stringify(log.metadata)
+          : '—',
+  }));
 
   const actionColor = (action: string) => {
     if (action.includes('delete') || action.includes('remove')) return 'var(--tn-red)';
@@ -153,24 +123,8 @@ export default function AuditTab({ envMode }: { envMode?: string }) {
         <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--tn-text)' }}>Audit Logs</span>
         <div style={{ flex: 1 }} />
 
-        {/* Export CSV Button */}
-        <button
-          onClick={handleExportCSV}
-          disabled={logs.length === 0}
-          style={{
-            padding: '4px 10px',
-            borderRadius: 3,
-            fontSize: 10,
-            cursor: logs.length === 0 ? 'not-allowed' : 'pointer',
-            background: 'var(--tn-green)',
-            border: 'none',
-            color: '#fff',
-            fontWeight: 600,
-            opacity: logs.length === 0 ? 0.5 : 1,
-          }}
-        >
-          Export CSV
-        </button>
+        {/* Export Button */}
+        <ExportButton data={exportData} filename="audit-logs" />
 
         <button onClick={fetchLogs} style={{
           padding: '4px 10px', borderRadius: 3, fontSize: 10, cursor: 'pointer',
