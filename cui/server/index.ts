@@ -30,6 +30,7 @@ import { createConnection } from 'net';
 import mime from 'mime-types';
 import httpProxy from 'http-proxy';
 import documentManager, { registerWebSocketClient } from './document-manager.js';
+import * as metricsDb from './metrics-db.js';
 
 const PORT = parseInt(process.env.PORT ?? '4005', 10);
 const PROD = process.env.NODE_ENV === 'production';
@@ -3107,6 +3108,19 @@ app.get('/api/admin/wr/billing/overview', async (_req, res) => {
   catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
+// Top-Up
+app.post('/api/admin/wr/billing/top-up', async (req, res) => {
+  try {
+    const r = await wrProxy(`${wrBase()}/api/admin/billing/top-up`, {
+      method: 'POST',
+      body: JSON.stringify(req.body),
+    });
+    res.status(r.status).json(r.body);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Invoices
 app.get('/api/admin/wr/billing/invoices', async (req, res) => {
   try {
@@ -3148,6 +3162,16 @@ app.get('/api/admin/wr/usage/stats', async (req, res) => {
 app.get('/api/admin/wr/usage/activity', async (_req, res) => {
   try { const r = await wrProxy(`${wrBase()}/api/admin/usage/activity`); res.status(r.status).json(r.body); }
   catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/admin/wr/usage/activity/users', async (req, res) => {
+  try {
+    const tenantId = req.query.tenantId;
+    const r = await wrProxy(`${wrBase()}/api/admin/usage/activity/users?tenantId=${tenantId}`);
+    res.status(r.status).json(r.body);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/admin/wr/feedback', async (_req, res) => {
@@ -5216,46 +5240,8 @@ app.get("/api/file-read", (req, res) => {
   }
 });
 
-
-  if (existsSync(distPath)) {
-    // Hashed assets (JS/CSS) can be cached forever
-    app.use('/assets', express.static(join(distPath, 'assets'), { maxAge: '1y', immutable: true }));
-    // index.html must never be cached (it references hashed assets)
-    app.use(express.static(distPath, { etag: false, lastModified: false, setHeaders: (res, filePath) => {
-      if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    }}));
-    // SPA fallback — also no-cache
-    app.use((_req, res) => {
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-      res.sendFile(join(distPath, 'index.html'));
-    });
-  }
-}
-
-// --- Knowledge Watcher (File Monitoring) ---
-import { KnowledgeWatcher } from './knowledge-watcher.js';
-const knowledgeWatcher = new KnowledgeWatcher({
-  base_path: '/root/projekte/werkingflow/business',
-  ignore_patterns: ['**/archive/**', '**/_archiv/**', '**/.DS_Store', '**/*.pdf', '**/*.html'],
-  debounce_ms: 2000,
-  auto_scan_threshold: 5,
-});
-knowledgeWatcher.start();
-
-process.on('SIGTERM', () => {
-  knowledgeWatcher.stop();
-  process.exit(0);
-});
-
-
-// --- Start ---
-server.listen(PORT, () => {
-  console.log(`CUI Workspace ${PROD ? '(production)' : '(dev)'} on http://localhost:${PORT}`);
-});
-
 // --- Bridge Metrics (Direct DB Access) ---
-import * as metricsDb from './metrics-db.js';
-
+// IMPORTANT: Register BEFORE static middleware to prevent SPA fallback from intercepting
 // NEW: Metrics from PostgreSQL (faster, more reliable than Bridge API)
 app.get('/api/bridge-db/metrics/overview', async (req, res) => {
   try {
@@ -5361,5 +5347,41 @@ app.post('/api/bridge-db/admin/refresh-stats', async (req, res) => {
     console.error('[Metrics DB] Refresh error:', err.message);
     res.status(500).json({ error: err.message });
   }
+});
+
+  if (existsSync(distPath)) {
+    // Hashed assets (JS/CSS) can be cached forever
+    app.use('/assets', express.static(join(distPath, 'assets'), { maxAge: '1y', immutable: true }));
+    // index.html must never be cached (it references hashed assets)
+    app.use(express.static(distPath, { etag: false, lastModified: false, setHeaders: (res, filePath) => {
+      if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    }}));
+    // SPA fallback — also no-cache
+    app.use((_req, res) => {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.sendFile(join(distPath, 'index.html'));
+    });
+  }
+}
+
+// --- Knowledge Watcher (File Monitoring) ---
+import { KnowledgeWatcher } from './knowledge-watcher.js';
+const knowledgeWatcher = new KnowledgeWatcher({
+  base_path: '/root/projekte/werkingflow/business',
+  ignore_patterns: ['**/archive/**', '**/_archiv/**', '**/.DS_Store', '**/*.pdf', '**/*.html'],
+  debounce_ms: 2000,
+  auto_scan_threshold: 5,
+});
+knowledgeWatcher.start();
+
+process.on('SIGTERM', () => {
+  knowledgeWatcher.stop();
+  process.exit(0);
+});
+
+
+// --- Start ---
+server.listen(PORT, () => {
+  console.log(`CUI Workspace ${PROD ? '(production)' : '(dev)'} on http://localhost:${PORT}`);
 });
 

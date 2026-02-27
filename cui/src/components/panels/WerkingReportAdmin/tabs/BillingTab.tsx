@@ -1,5 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 
+interface TopUpModalProps {
+  tenant: TenantBilling | null;
+  onClose: () => void;
+  onSuccess: () => void;
+}
+
 interface Subscription {
   id: string;
   tenantId: string;
@@ -87,6 +93,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
   const [error, setError] = useState('');
   const [showInvoices, setShowInvoices] = useState(false);
   const [showUsage, setShowUsage] = useState(false);
+  const [topUpTenant, setTopUpTenant] = useState<TenantBilling | null>(null);
 
   const fetchBilling = useCallback(async () => {
     setLoading(true);
@@ -691,7 +698,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
               {/* Table Header */}
               <div style={{
                 display: 'grid',
-                gridTemplateColumns: '150px 100px 100px 100px 1fr',
+                gridTemplateColumns: '150px 100px 100px 120px 1fr 80px',
                 gap: 8,
                 padding: '6px 10px',
                 background: 'var(--tn-bg-dark)',
@@ -706,6 +713,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                 <div>Status</div>
                 <div>API Balance</div>
                 <div>Period</div>
+                <div>Actions</div>
               </div>
 
               {/* Table Rows */}
@@ -714,7 +722,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                   key={tenant.tenantId}
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: '150px 100px 100px 100px 1fr',
+                    gridTemplateColumns: '150px 100px 100px 120px 1fr 80px',
                     gap: 8,
                     padding: '8px 10px',
                     borderBottom: '1px solid var(--tn-border)',
@@ -770,11 +778,124 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                       ? `${new Date(tenant.subscription.currentPeriodStart).toLocaleDateString('de-DE')} - ${new Date(tenant.subscription.currentPeriodEnd).toLocaleDateString('de-DE')}`
                       : '-'}
                   </div>
+                  <div>
+                    <button
+                      onClick={() => setTopUpTenant(tenant)}
+                      style={{
+                        padding: '3px 8px',
+                        fontSize: 9,
+                        fontWeight: 600,
+                        background: 'var(--tn-blue)',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: 3,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Top-Up
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
           )}
         </>
+      )}
+
+      {/* Top-Up Modal */}
+      {topUpTenant && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0,0,0,0.7)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+        }}>
+          <div style={{
+            background: 'var(--tn-bg-dark)',
+            border: '1px solid var(--tn-border)',
+            borderRadius: 8,
+            padding: 20,
+            width: 400,
+            maxWidth: '90%',
+          }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--tn-text)', marginBottom: 12 }}>
+              API Balance Top-Up
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--tn-text-muted)', marginBottom: 16 }}>
+              Tenant: <span style={{ color: 'var(--tn-text)', fontWeight: 600 }}>{topUpTenant.tenantName}</span>
+              <br />
+              Current Balance: <span style={{ color: 'var(--tn-blue)', fontWeight: 600 }}>
+                {topUpTenant.apiBalance ? `€${(topUpTenant.apiBalance.balanceEur ?? topUpTenant.apiBalance.balance ?? 0).toFixed(2)}` : '€0.00'}
+              </span>
+            </div>
+
+            {/* Quick Amount Buttons */}
+            <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+              {[10, 50, 100, 500].map(amt => (
+                <button
+                  key={amt}
+                  onClick={async () => {
+                    try {
+                      const res = await fetch('/api/admin/wr/billing/top-up', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          tenantId: topUpTenant.tenantId,
+                          amount: amt,
+                          method: 'manual',
+                          note: `Manual top-up €${amt}`,
+                        }),
+                      });
+                      if (!res.ok) throw new Error(await res.text());
+                      alert(`✅ €${amt} added successfully!`);
+                      setTopUpTenant(null);
+                      fetchBilling();
+                    } catch (err: any) {
+                      alert(`❌ Failed: ${err.message}`);
+                    }
+                  }}
+                  style={{
+                    flex: 1,
+                    padding: '8px',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    background: 'var(--tn-blue)',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: 4,
+                    cursor: 'pointer',
+                  }}
+                >
+                  +€{amt}
+                </button>
+              ))}
+            </div>
+
+            {/* Close Button */}
+            <button
+              onClick={() => setTopUpTenant(null)}
+              style={{
+                width: '100%',
+                padding: '8px',
+                fontSize: 11,
+                fontWeight: 600,
+                background: 'var(--tn-bg)',
+                color: 'var(--tn-text-muted)',
+                border: '1px solid var(--tn-border)',
+                borderRadius: 4,
+                cursor: 'pointer',
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

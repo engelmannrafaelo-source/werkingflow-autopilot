@@ -200,12 +200,13 @@ export default function UsageTab({ envMode }: { envMode?: string }) {
             {statCard('Month', activity.month, 'var(--tn-text-muted)')}
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 140px 70px 70px 60px', gap: 6, padding: '5px 8px', background: 'var(--tn-bg-dark)', borderRadius: 4, fontSize: 9, fontWeight: 600, color: 'var(--tn-text-muted)', marginBottom: 4 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 140px 70px 70px 60px 80px', gap: 6, padding: '5px 8px', background: 'var(--tn-bg-dark)', borderRadius: 4, fontSize: 9, fontWeight: 600, color: 'var(--tn-text-muted)', marginBottom: 4 }}>
             <div>Tenant</div>
             <div>Quota (Gutachten/Jahr)</div>
             <div>This Mo.</div>
             <div>Last Mo.</div>
             <div>Uploads</div>
+            <div>Users</div>
           </div>
 
           {activity.tenants
@@ -215,7 +216,7 @@ export default function UsageTab({ envMode }: { envMode?: string }) {
               const barColor = pct > 80 ? 'var(--tn-red)' : pct > 50 ? 'var(--tn-orange)' : 'var(--tn-green)';
               return (
                 <div key={t.tenantId} style={{ borderBottom: '1px solid var(--tn-border)', padding: '7px 8px', fontSize: 10 }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 140px 70px 70px 60px', gap: 6, alignItems: 'center', marginBottom: 4 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 140px 70px 70px 60px 80px', gap: 6, alignItems: 'center', marginBottom: 4 }}>
                     <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       <span style={{ color: 'var(--tn-text)' }}>{t.tenantName || '--'}</span>
                       <span style={{ color: 'var(--tn-text-muted)', fontSize: 9, marginLeft: 4 }}>{t.tenantId.slice(0, 8)}</span>
@@ -234,6 +235,31 @@ export default function UsageTab({ envMode }: { envMode?: string }) {
                     <div style={{ color: 'var(--tn-text-muted)' }}>{t.requestsLastMonth}</div>
                     <div style={{ color: t.uploadCount > 0 ? 'var(--tn-orange)' : 'var(--tn-text-muted)' }}>
                       {t.uploadCount > 0 ? t.uploadCount + ' files' : '--'}
+                    </div>
+                    <div>
+                      <button
+                        onClick={async () => {
+                          const res = await fetch(`/api/admin/wr/usage/activity/users?tenantId=${t.tenantId}`);
+                          if (res.ok) {
+                            const data = await res.json();
+                            alert(`Users (${data.totalUsers}):\n\n` + data.users.map((u: any) =>
+                              `${u.userEmail}: ${u.gutachtenCount} Gutachten`
+                            ).join('\n'));
+                          }
+                        }}
+                        style={{
+                          padding: '3px 8px',
+                          fontSize: 9,
+                          fontWeight: 600,
+                          background: 'var(--tn-bg)',
+                          color: 'var(--tn-text-muted)',
+                          border: '1px solid var(--tn-border)',
+                          borderRadius: 3,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        View
+                      </button>
                     </div>
                   </div>
                 </div>

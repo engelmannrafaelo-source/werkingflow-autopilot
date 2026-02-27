@@ -9,6 +9,7 @@ import AuditTab from './tabs/AuditTab';
 import DeploymentsTab from './tabs/DeploymentsTab';
 import ConfigTab from './tabs/ConfigTab';
 import FeedbackTab from './tabs/FeedbackTab';
+import PipelineTab from './tabs/PipelineTab';
 
 type EnvMode = 'production' | 'staging' | 'local';
 
@@ -64,6 +65,7 @@ export default function WerkingReportAdmin() {
     { key: 'usage', label: 'Usage', component: <UsageTab envMode={envMode} />, group: 'data' },
     { key: 'tokens', label: 'API Tokens', component: <TokensTab envMode={envMode} />, group: 'ops' },
     { key: 'audit', label: 'Audit', component: <AuditTab envMode={envMode} />, group: 'data' },
+    { key: 'pipeline', label: 'Pipeline', component: <PipelineTab envMode={envMode} />, group: 'ops' },
     { key: 'deployments', label: 'Deploy', component: <DeploymentsTab envMode={envMode} />, group: 'ops' },
     { key: 'config', label: 'Config', component: <ConfigTab envMode={envMode} />, group: 'ops' },
     { key: 'feedback', label: 'Feedback', component: <FeedbackTab envMode={envMode} />, group: 'data' },

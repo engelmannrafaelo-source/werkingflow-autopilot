@@ -36,7 +36,11 @@ export default function DeploymentsTab({ envMode }: { envMode?: string }) {
       ]);
       if (depsRes?.ok) {
         const data = await depsRes.json();
-        setDeployments(data.deployments || []);
+        // Filter: Only WerkING Report deployments
+        const wrDeployments = (data.deployments || []).filter((d: any) =>
+          d.project === 'werking-report' || d.name?.toLowerCase().includes('werking-report')
+        );
+        setDeployments(wrDeployments);
       }
       if (bridgeRes?.ok) {
         setBridgeHealth(await bridgeRes.json());
