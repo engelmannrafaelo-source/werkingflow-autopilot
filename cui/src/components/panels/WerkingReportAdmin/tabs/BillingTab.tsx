@@ -82,6 +82,18 @@ interface Invoice {
   recipientEmail: string;
 }
 
+interface BillingEvent {
+  id: string;
+  tenantId: string;
+  type: 'top_up' | 'charge' | 'refund';
+  amountEur: number;
+  method: string;
+  note?: string;
+  balanceBefore: number;
+  balanceAfter: number;
+  createdAt: string;
+}
+
 export default function BillingTab({ envMode }: { envMode?: string }) {
   const [data, setData] = useState<BillingOverview | null>(null);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -94,6 +106,10 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
   const [showInvoices, setShowInvoices] = useState(false);
   const [showUsage, setShowUsage] = useState(false);
   const [topUpTenant, setTopUpTenant] = useState<TenantBilling | null>(null);
+  const [eventsTenant, setEventsTenant] = useState<TenantBilling | null>(null);
+  const [events, setEvents] = useState<BillingEvent[]>([]);
+  const [loadingEvents, setLoadingEvents] = useState(false);
+  const [downloadingInvoice, setDownloadingInvoice] = useState<string | null>(null);
 
   const fetchBilling = useCallback(async () => {
     setLoading(true);
@@ -145,6 +161,47 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
       console.error('Failed to fetch usage stats:', err);
     } finally {
       setLoadingUsage(false);
+    }
+  }, []);
+
+  const fetchEvents = useCallback(async (tenantId: string) => {
+    setLoadingEvents(true);
+    try {
+      const res = await fetch(`/api/admin/wr/billing/events/${tenantId}`);
+      if (!res.ok) throw new Error(await res.text());
+      const result = await res.json();
+      setEvents(result.events || []);
+    } catch (err: any) {
+      console.error('Failed to fetch billing events:', err);
+      alert(`❌ Failed to fetch events: ${err.message}`);
+    } finally {
+      setLoadingEvents(false);
+    }
+  }, []);
+
+  const downloadInvoicePDF = useCallback(async (invoice: Invoice) => {
+    setDownloadingInvoice(invoice.id);
+    try {
+      const res = await fetch(`/api/admin/wr/billing/invoices/${invoice.id}/pdf?tenantId=${invoice.tenantId}`);
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ error: 'Failed to generate PDF' }));
+        throw new Error(errorData.error || 'Failed to generate PDF');
+      }
+      const html = await res.text();
+      const blob = new Blob([html], { type: 'text/html' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `invoice-${invoice.invoiceNumber}.html`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      console.error('Failed to download invoice PDF:', err);
+      alert(`❌ Failed to download PDF: ${err.message}`);
+    } finally {
+      setDownloadingInvoice(null);
     }
   }, []);
 
@@ -609,13 +666,33 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                     </span>
                   </div>
                   <div style={{ display: 'flex', gap: 4 }}>
+                    <button
+                      onClick={() => downloadInvoicePDF(invoice)}
+                      disabled={downloadingInvoice === invoice.id}
+                      style={{
+                        padding: '3px 8px',
+                        borderRadius: 3,
+                        fontSize: 9,
+                        fontWeight: 600,
+                        background: downloadingInvoice === invoice.id ? 'var(--tn-bg)' : 'var(--tn-blue)',
+                        border: '1px solid var(--tn-border)',
+                        color: downloadingInvoice === invoice.id ? 'var(--tn-text-muted)' : '#fff',
+                        cursor: downloadingInvoice === invoice.id ? 'not-allowed' : 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 4,
+                      }}
+                    >
+                      {downloadingInvoice === invoice.id ? '⏳' : '📄'}
+                      {downloadingInvoice === invoice.id ? 'Downloading...' : 'Download PDF'}
+                    </button>
                     {invoice.pdfUrl && (
                       <a
                         href={invoice.pdfUrl}
                         target="_blank"
                         rel="noopener noreferrer"
                         style={{
-                          padding: '2px 6px',
+                          padding: '3px 8px',
                           borderRadius: 3,
                           fontSize: 9,
                           fontWeight: 600,
@@ -624,9 +701,11 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                           color: 'var(--tn-blue)',
                           textDecoration: 'none',
                           cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
                         }}
                       >
-                        PDF
+                        View
                       </a>
                     )}
                   </div>
@@ -698,7 +777,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
               {/* Table Header */}
               <div style={{
                 display: 'grid',
-                gridTemplateColumns: '150px 100px 100px 120px 1fr 80px',
+                gridTemplateColumns: '150px 100px 100px 120px 1fr 140px',
                 gap: 8,
                 padding: '6px 10px',
                 background: 'var(--tn-bg-dark)',
@@ -722,7 +801,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                   key={tenant.tenantId}
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: '150px 100px 100px 120px 1fr 80px',
+                    gridTemplateColumns: '150px 100px 100px 120px 1fr 140px',
                     gap: 8,
                     padding: '8px 10px',
                     borderBottom: '1px solid var(--tn-border)',
@@ -778,7 +857,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                       ? `${new Date(tenant.subscription.currentPeriodStart).toLocaleDateString('de-DE')} - ${new Date(tenant.subscription.currentPeriodEnd).toLocaleDateString('de-DE')}`
                       : '-'}
                   </div>
-                  <div>
+                  <div style={{ display: 'flex', gap: 4 }}>
                     <button
                       onClick={() => setTopUpTenant(tenant)}
                       style={{
@@ -793,6 +872,24 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                       }}
                     >
                       Top-Up
+                    </button>
+                    <button
+                      onClick={async () => {
+                        setEventsTenant(tenant);
+                        await fetchEvents(tenant.tenantId);
+                      }}
+                      style={{
+                        padding: '3px 8px',
+                        fontSize: 9,
+                        fontWeight: 600,
+                        background: 'var(--tn-bg)',
+                        color: 'var(--tn-text-muted)',
+                        border: '1px solid var(--tn-border)',
+                        borderRadius: 3,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      History
                     </button>
                   </div>
                 </div>
@@ -893,6 +990,230 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
               }}
             >
               Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Billing Events Timeline Modal */}
+      {eventsTenant && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0,0,0,0.7)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+        }}>
+          <div style={{
+            background: 'var(--tn-bg-dark)',
+            border: '1px solid var(--tn-border)',
+            borderRadius: 8,
+            padding: 20,
+            width: 600,
+            maxWidth: '90%',
+            maxHeight: '80vh',
+            display: 'flex',
+            flexDirection: 'column',
+          }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--tn-text)', marginBottom: 12 }}>
+              Billing Events History
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--tn-text-muted)', marginBottom: 16 }}>
+              Tenant: <span style={{ color: 'var(--tn-text)', fontWeight: 600 }}>{eventsTenant.tenantName}</span>
+            </div>
+
+            {/* Events Timeline */}
+            <div style={{
+              flex: 1,
+              overflowY: 'auto',
+              marginBottom: 16,
+              border: '1px solid var(--tn-border)',
+              borderRadius: 4,
+              padding: 12,
+            }}>
+              {loadingEvents ? (
+                <div style={{
+                  padding: 20,
+                  textAlign: 'center',
+                  color: 'var(--tn-text-muted)',
+                  fontSize: 11,
+                }}>
+                  Loading events...
+                </div>
+              ) : events.length === 0 ? (
+                <div style={{
+                  padding: 20,
+                  textAlign: 'center',
+                  color: 'var(--tn-text-muted)',
+                  fontSize: 11,
+                }}>
+                  No billing events found
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {events.map(event => {
+                    const eventDate = new Date(event.createdAt);
+                    const formattedDate = eventDate.toLocaleString('en-US', {
+                      month: 'short',
+                      day: 'numeric',
+                      year: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    });
+
+                    const eventTypeBadge = () => {
+                      switch (event.type) {
+                        case 'top_up':
+                          return {
+                            bg: 'rgba(158,206,106,0.2)',
+                            color: 'var(--tn-green)',
+                            label: 'TOP-UP',
+                          };
+                        case 'charge':
+                          return {
+                            bg: 'rgba(247,118,142,0.2)',
+                            color: 'var(--tn-red)',
+                            label: 'CHARGE',
+                          };
+                        case 'refund':
+                          return {
+                            bg: 'rgba(224,175,104,0.2)',
+                            color: 'var(--tn-orange)',
+                            label: 'REFUND',
+                          };
+                        default:
+                          return {
+                            bg: 'rgba(115,203,255,0.2)',
+                            color: 'var(--tn-blue)',
+                            label: event.type.toUpperCase(),
+                          };
+                      }
+                    };
+
+                    const badge = eventTypeBadge();
+
+                    return (
+                      <div
+                        key={event.id}
+                        style={{
+                          padding: 12,
+                          background: 'var(--tn-bg)',
+                          border: '1px solid var(--tn-border)',
+                          borderRadius: 4,
+                          fontSize: 11,
+                        }}
+                      >
+                        <div style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          marginBottom: 8,
+                        }}>
+                          <span style={{
+                            display: 'inline-block',
+                            padding: '2px 6px',
+                            borderRadius: 3,
+                            fontSize: 9,
+                            fontWeight: 600,
+                            background: badge.bg,
+                            color: badge.color,
+                          }}>
+                            {badge.label}
+                          </span>
+                          <span style={{ color: 'var(--tn-text-muted)', fontSize: 10 }}>
+                            {formattedDate}
+                          </span>
+                        </div>
+
+                        <div style={{
+                          display: 'grid',
+                          gridTemplateColumns: '1fr 1fr',
+                          gap: 8,
+                          marginBottom: 8,
+                        }}>
+                          <div>
+                            <div style={{ color: 'var(--tn-text-muted)', fontSize: 9, marginBottom: 2 }}>
+                              Amount
+                            </div>
+                            <div style={{ color: 'var(--tn-text)', fontWeight: 600 }}>
+                              €{event.amountEur.toFixed(2)}
+                            </div>
+                          </div>
+                          <div>
+                            <div style={{ color: 'var(--tn-text-muted)', fontSize: 9, marginBottom: 2 }}>
+                              Method
+                            </div>
+                            <div style={{ color: 'var(--tn-text-subtle)' }}>
+                              {event.method}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          fontSize: 10,
+                          color: 'var(--tn-text-muted)',
+                          paddingTop: 8,
+                          borderTop: '1px solid var(--tn-border)',
+                        }}>
+                          <span>
+                            Before: <span style={{ fontWeight: 600, color: 'var(--tn-text-subtle)' }}>
+                              €{event.balanceBefore.toFixed(2)}
+                            </span>
+                          </span>
+                          <span>→</span>
+                          <span>
+                            After: <span style={{ fontWeight: 600, color: 'var(--tn-text-subtle)' }}>
+                              €{event.balanceAfter.toFixed(2)}
+                            </span>
+                          </span>
+                        </div>
+
+                        {event.note && (
+                          <div style={{
+                            marginTop: 8,
+                            padding: 6,
+                            background: 'var(--tn-bg-dark)',
+                            borderRadius: 3,
+                            fontSize: 10,
+                            color: 'var(--tn-text-muted)',
+                            fontStyle: 'italic',
+                          }}>
+                            {event.note}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Close Button */}
+            <button
+              onClick={() => {
+                setEventsTenant(null);
+                setEvents([]);
+              }}
+              style={{
+                width: '100%',
+                padding: '8px',
+                fontSize: 11,
+                fontWeight: 600,
+                background: 'var(--tn-bg)',
+                color: 'var(--tn-text-muted)',
+                border: '1px solid var(--tn-border)',
+                borderRadius: 4,
+                cursor: 'pointer',
+              }}
+            >
+              Close
             </button>
           </div>
         </div>

@@ -3141,6 +3141,16 @@ app.post('/api/admin/wr/billing/top-up', async (req, res) => {
   }
 });
 
+// Billing Events
+app.get('/api/admin/wr/billing/events/:tenantId', async (req, res) => {
+  try {
+    const r = await wrProxy(`${wrBase()}/api/admin/billing/events/${req.params.tenantId}`);
+    res.status(r.status).json(r.body);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Invoices
 app.get('/api/admin/wr/billing/invoices', async (req, res) => {
   try {
@@ -3170,6 +3180,27 @@ app.post('/api/admin/wr/billing/invoices/:id/send', async (req, res) => {
     if (!tenantId) return res.status(400).json({ error: 'tenantId required' });
     const r = await wrProxy(`${wrBase()}/api/admin/billing/invoices/${req.params.id}/send?tenantId=${tenantId}`, { method: 'POST' });
     res.status(r.status).json(r.body);
+  }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/admin/wr/billing/invoices/:id/pdf', async (req, res) => {
+  try {
+    const tenantId = req.query.tenantId;
+    if (!tenantId) return res.status(400).json({ error: 'tenantId required' });
+    const response = await fetch(
+      `${wrBase()}/api/admin/billing/invoices/${req.params.id}/pdf?tenantId=${tenantId}`,
+      { headers: wrAdminHeaders() }
+    );
+    if (!response.ok) {
+      const text = await response.text();
+      return res.status(response.status).json({ error: text || 'Failed to generate PDF' });
+    }
+    // Forward HTML response with correct content-type
+    const html = await response.text();
+    res.setHeader('Content-Type', 'text/html');
+    res.setHeader('Content-Disposition', `inline; filename="invoice-${req.params.id}.html"`);
+    res.send(html);
   }
   catch (err: any) { res.status(500).json({ error: err.message }); }
 });
@@ -3365,6 +3396,22 @@ app.delete('/api/admin/wr/users/:id', async (req, res) => {
     console.error('[Admin] DELETE /api/admin/wr/users/:id error:', err);
     res.status(500).json({ error: err.message });
   }
+});
+
+// Impersonation routes
+app.get('/api/admin/wr/impersonation', async (_req, res) => {
+  try { const r = await wrProxy(`${wrBase()}/api/admin/impersonation`); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/admin/wr/users/:id/impersonate', async (req, res) => {
+  try { const r = await wrProxy(`${wrBase()}/api/admin/users/${req.params.id}/impersonate`, { method: 'POST' }); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/admin/wr/impersonation/:id/end', async (req, res) => {
+  try { const r = await wrProxy(`${wrBase()}/api/admin/impersonation/${req.params.id}/end`, { method: 'DELETE' }); res.status(r.status).json(r.body); }
+  catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
 // GET /api/ops/deployments — Vercel deployment status for all tracked apps
