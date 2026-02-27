@@ -8,6 +8,7 @@ interface DevToken {
   prefix?: string;
   scopes?: string[];
   projectId?: string;
+  tenantId?: string;
   expiresAt?: string;
   revokedAt?: string;
   createdAt?: string;
@@ -15,8 +16,15 @@ interface DevToken {
   [key: string]: unknown;
 }
 
+interface Tenant {
+  id: string;
+  name: string;
+  status?: string;
+}
+
 export default function TokensTab({ envMode }: { envMode?: string }) {
   const [tokens, setTokens] = useState<DevToken[]>([]);
+  const [tenants, setTenants] = useState<Tenant[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showCreate, setShowCreate] = useState(false);
@@ -26,8 +34,21 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
   const [newName, setNewName] = useState('');
   const [newScopes, setNewScopes] = useState('read');
   const [newExpiry, setNewExpiry] = useState('30');
+  const [selectedTenant, setSelectedTenant] = useState('');
+  const [filterTenant, setFilterTenant] = useState(''); // For filtering token list
   const [creating, setCreating] = useState(false);
   const [processingId, setProcessingId] = useState<string | null>(null);
+
+  const fetchTenants = useCallback(async () => {
+    try {
+      const res = await fetch('/api/admin/wr/tenants?limit=1000');
+      if (!res.ok) throw new Error('Failed to fetch tenants');
+      const data = await res.json();
+      setTenants(data.tenants || []);
+    } catch (err: any) {
+      console.error('Failed to fetch tenants:', err);
+    }
+  }, []);
 
   const fetchTokens = useCallback(async () => {
     setLoading(true);
@@ -44,10 +65,20 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
     }
   }, []);
 
-  useEffect(() => { fetchTokens(); }, [fetchTokens, envMode]);
+  useEffect(() => {
+    fetchTenants();
+    fetchTokens();
+  }, [fetchTenants, fetchTokens, envMode]);
 
   const handleCreate = async () => {
-    if (!newName.trim()) return;
+    if (!newName.trim()) {
+      setError('Token name is required');
+      return;
+    }
+    if (!selectedTenant) {
+      setError('Please select a tenant');
+      return;
+    }
     setCreating(true);
     setError('');
     setNewToken(null);
@@ -56,7 +87,7 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          tenantId: 'default-tenant', // TODO: Get from selected tenant
+          tenantId: selectedTenant,
           name: newName,
           scopes: newScopes.split(',').map(s => s.trim()),
           expiresInDays: parseInt(newExpiry) || null,
@@ -66,6 +97,7 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
       const data = await res.json();
       if (data.plainToken) setNewToken(data.plainToken);
       setNewName('');
+      setSelectedTenant('');
       setShowCreate(false);
       await fetchTokens();
     } catch (err: any) {
@@ -97,6 +129,11 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
   const isExpired = (t: DevToken) => t.expiresAt && new Date(t.expiresAt) < new Date();
   const isRevoked = (t: DevToken) => !!t.revokedAt;
 
+  // Filter tokens by selected tenant
+  const filteredTokens = filterTenant
+    ? tokens.filter(t => t.tenantId === filterTenant)
+    : tokens;
+
   return (
     <div style={{ padding: 12 }}>
       <div style={{ display: 'flex', gap: 6, marginBottom: 12, alignItems: 'center' }}>
@@ -111,6 +148,26 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
           padding: '3px 10px', borderRadius: 3, fontSize: 10, cursor: 'pointer',
           background: 'var(--tn-bg)', border: '1px solid var(--tn-border)', color: 'var(--tn-text-muted)',
         }}>Refresh</button>
+      </div>
+
+      {/* Tenant filter */}
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginBottom: 3 }}>Filter by Tenant</div>
+        <select
+          value={filterTenant}
+          onChange={(e) => setFilterTenant(e.target.value)}
+          style={inputStyle}
+        >
+          <option value="">All Tenants ({tokens.length})</option>
+          {tenants.map(t => {
+            const count = tokens.filter(tok => tok.tenantId === t.id).length;
+            return (
+              <option key={t.id} value={t.id}>
+                {t.name} ({t.id}) — {count} token{count !== 1 ? 's' : ''}
+              </option>
+            );
+          })}
+        </select>
       </div>
 
       {error && <div style={{ padding: '4px 8px', fontSize: 11, color: 'var(--tn-red)', background: 'rgba(247,118,142,0.1)', borderRadius: 3, marginBottom: 8 }}>{error}</div>}
@@ -138,6 +195,21 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
           background: 'var(--tn-bg-dark)', border: '1px solid var(--tn-green)', borderRadius: 6,
           padding: 12, marginBottom: 12,
         }}>
+          <div style={{ marginBottom: 8 }}>
+            <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginBottom: 3 }}>Tenant *</div>
+            <select
+              value={selectedTenant}
+              onChange={(e) => setSelectedTenant(e.target.value)}
+              style={inputStyle}
+            >
+              <option value="">Select Tenant...</option>
+              {tenants.map(t => (
+                <option key={t.id} value={t.id}>
+                  {t.name} ({t.id})
+                </option>
+              ))}
+            </select>
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px 80px auto', gap: 8, alignItems: 'end' }}>
             <div>
               <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginBottom: 3 }}>Token Name *</div>
@@ -151,10 +223,10 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
               <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginBottom: 3 }}>Expiry (days)</div>
               <input value={newExpiry} onChange={e => setNewExpiry(e.target.value)} type="number" style={inputStyle} />
             </div>
-            <button onClick={handleCreate} disabled={creating || !newName.trim()} style={{
+            <button onClick={handleCreate} disabled={creating || !newName.trim() || !selectedTenant} style={{
               padding: '5px 14px', borderRadius: 3, fontSize: 10, fontWeight: 600,
-              cursor: creating ? 'not-allowed' : 'pointer',
-              background: 'var(--tn-green)', border: 'none', color: '#fff', opacity: creating ? 0.5 : 1,
+              cursor: (creating || !newName.trim() || !selectedTenant) ? 'not-allowed' : 'pointer',
+              background: 'var(--tn-green)', border: 'none', color: '#fff', opacity: (creating || !newName.trim() || !selectedTenant) ? 0.5 : 1,
             }}>
               {creating ? 'Creating...' : 'Generate'}
             </button>
@@ -164,33 +236,39 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
 
       {loading && <div style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>Loading...</div>}
 
-      {!loading && tokens.length === 0 && (
-        <div style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 11 }}>No tokens found</div>
+      {!loading && filteredTokens.length === 0 && (
+        <div style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 11 }}>
+          {tokens.length === 0 ? 'No tokens found' : 'No tokens found for selected tenant'}
+        </div>
       )}
 
-      {!loading && tokens.length > 0 && (
+      {!loading && filteredTokens.length > 0 && (
         <>
           <div style={{
-            display: 'grid', gridTemplateColumns: '1fr 100px 100px 100px 80px 70px',
+            display: 'grid', gridTemplateColumns: '1fr 90px 80px 90px 80px 70px',
             gap: 8, padding: '6px 10px', background: 'var(--tn-bg-dark)', borderRadius: 4,
             fontSize: 10, fontWeight: 600, color: 'var(--tn-text-muted)', marginBottom: 4,
           }}>
-            <div>Name</div><div>Prefix</div><div>Scopes</div><div>Expires</div><div>Status</div><div>Actions</div>
+            <div>Name</div><div>Tenant</div><div>Prefix</div><div>Scopes</div><div>Status</div><div>Actions</div>
           </div>
 
-          {tokens.map(t => {
+          {filteredTokens.map(t => {
             const expired = isExpired(t);
             const revoked = isRevoked(t);
             const isProcessing = processingId === t.id;
+            const tenant = tenants.find(tn => tn.id === t.tenantId);
             return (
               <div key={t.id} style={{
-                display: 'grid', gridTemplateColumns: '1fr 100px 100px 100px 80px 70px',
+                display: 'grid', gridTemplateColumns: '1fr 90px 80px 90px 80px 70px',
                 gap: 8, padding: '8px 10px', borderBottom: '1px solid var(--tn-border)',
                 fontSize: 11, alignItems: 'center', opacity: (expired || revoked) ? 0.5 : 1,
               }}>
                 <div>
                   <div style={{ color: 'var(--tn-text)' }}>{t.name || 'Unnamed'}</div>
                   {t.lastUsedAt && <div style={{ fontSize: 9, color: 'var(--tn-text-muted)' }}>Last used: {new Date(t.lastUsedAt).toLocaleDateString('de-DE')}</div>}
+                </div>
+                <div style={{ fontSize: 9, color: 'var(--tn-text-muted)' }} title={t.tenantId}>
+                  {tenant ? tenant.name : t.tenantId || '—'}
                 </div>
                 <div style={{ fontFamily: 'monospace', fontSize: 10, color: 'var(--tn-text-muted)' }}>{t.prefix || t.token?.slice(0, 12) || '—'}...</div>
                 <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
@@ -200,9 +278,6 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
                       color: 'var(--tn-blue)',
                     }}>{s}</span>
                   ))}
-                </div>
-                <div style={{ color: expired ? 'var(--tn-red)' : 'var(--tn-text-muted)', fontSize: 10 }}>
-                  {t.expiresAt ? new Date(t.expiresAt).toLocaleDateString('de-DE') : 'Never'}
                 </div>
                 <div>
                   <span style={{
