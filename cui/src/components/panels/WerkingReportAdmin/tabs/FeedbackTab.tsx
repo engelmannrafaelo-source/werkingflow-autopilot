@@ -37,10 +37,11 @@ export default function FeedbackTab({ envMode }: { envMode?: string }) {
   }, [fetchFeedback, envMode]);
 
   return (
-    <div style={{ padding: 12 }}>
+    <div data-ai-id="wr-feedback-tab" style={{ padding: 12 }}>
       {/* Refresh Button */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+      <div data-ai-id="wr-feedback-header" style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
         <button
+          data-ai-id="wr-feedback-refresh-btn"
           onClick={fetchFeedback}
           style={{
             padding: '3px 10px',
@@ -58,7 +59,7 @@ export default function FeedbackTab({ envMode }: { envMode?: string }) {
 
       {/* Error */}
       {error && (
-        <div style={{
+        <div data-ai-id="wr-feedback-error" style={{
           padding: '4px 8px',
           fontSize: 11,
           color: 'var(--tn-red)',
@@ -72,7 +73,7 @@ export default function FeedbackTab({ envMode }: { envMode?: string }) {
 
       {/* Loading */}
       {loading && (
-        <div style={{
+        <div data-ai-id="wr-feedback-loading" style={{
           padding: 20,
           textAlign: 'center',
           color: 'var(--tn-text-muted)',
@@ -84,7 +85,7 @@ export default function FeedbackTab({ envMode }: { envMode?: string }) {
 
       {/* Feedback List */}
       {!loading && feedbacks.length === 0 && (
-        <div style={{
+        <div data-ai-id="wr-feedback-empty" style={{
           padding: 20,
           textAlign: 'center',
           color: 'var(--tn-text-muted)',
@@ -95,8 +96,8 @@ export default function FeedbackTab({ envMode }: { envMode?: string }) {
       )}
 
       {!loading && feedbacks.length > 0 && (
-        <div>
-          <div style={{
+        <div data-ai-id="wr-feedback-list">
+          <div data-ai-id="wr-feedback-count" style={{
             fontSize: 12,
             fontWeight: 600,
             color: 'var(--tn-text)',
@@ -106,7 +107,7 @@ export default function FeedbackTab({ envMode }: { envMode?: string }) {
           </div>
 
           {/* Table Header */}
-          <div style={{
+          <div data-ai-id="wr-feedback-table-header" style={{
             display: 'grid',
             gridTemplateColumns: '140px 120px 120px 120px 1fr',
             gap: 8,
@@ -129,6 +130,7 @@ export default function FeedbackTab({ envMode }: { envMode?: string }) {
           {feedbacks.map(fb => (
             <div
               key={fb.id}
+              data-ai-id={`wr-feedback-row-${fb.id}`}
               style={{
                 display: 'grid',
                 gridTemplateColumns: '140px 120px 120px 120px 1fr',
