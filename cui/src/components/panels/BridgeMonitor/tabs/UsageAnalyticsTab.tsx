@@ -236,7 +236,7 @@ export default function UsageAnalyticsTab() {
                     </div>
                     <div style={{ color: 'var(--tn-text-muted)' }}>
                       {endpoint.avg_response_time !== undefined
-                        ? endpoint.avg_response_time.toFixed(3)
+                        ? (endpoint.avg_response_time ?? 0).toFixed(3)
                         : 'N/A'}
                     </div>
                   </div>
@@ -260,7 +260,7 @@ export default function UsageAnalyticsTab() {
 
           {/* Timestamp */}
           <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', textAlign: 'right', marginTop: 20 }}>
-            Last updated: {new Date(data.timestamp).toLocaleString()}
+            Last updated: {data.timestamp ? new Date(data.timestamp).toLocaleString() : 'N/A'}
           </div>
         </>
       )}

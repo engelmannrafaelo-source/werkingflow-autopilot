@@ -135,23 +135,23 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
     : tokens;
 
   return (
-    <div style={{ padding: 12 }}>
-      <div style={{ display: 'flex', gap: 6, marginBottom: 12, alignItems: 'center' }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--tn-text)', flex: 1 }}>Developer API Tokens</span>
-        <button onClick={() => { setShowCreate(!showCreate); setNewToken(null); }} style={{
+    <div data-ai-id="wr-tokens-tab" style={{ padding: 12 }}>
+      <div data-ai-id="wr-tokens-header" style={{ display: 'flex', gap: 6, marginBottom: 12, alignItems: 'center' }}>
+        <span data-ai-id="wr-tokens-title" style={{ fontSize: 12, fontWeight: 600, color: 'var(--tn-text)', flex: 1 }}>Developer API Tokens</span>
+        <button data-ai-id="wr-tokens-create-btn" data-active={showCreate} onClick={() => { setShowCreate(!showCreate); setNewToken(null); }} style={{
           padding: '4px 12px', borderRadius: 3, fontSize: 10, fontWeight: 600, cursor: 'pointer',
           background: showCreate ? 'var(--tn-red)' : 'var(--tn-green)', border: 'none', color: '#fff',
         }}>
           {showCreate ? 'Cancel' : '+ New Token'}
         </button>
-        <button onClick={fetchTokens} style={{
+        <button data-ai-id="wr-tokens-refresh-btn" onClick={fetchTokens} style={{
           padding: '3px 10px', borderRadius: 3, fontSize: 10, cursor: 'pointer',
           background: 'var(--tn-bg)', border: '1px solid var(--tn-border)', color: 'var(--tn-text-muted)',
         }}>Refresh</button>
       </div>
 
       {/* Tenant filter */}
-      <div style={{ marginBottom: 12 }}>
+      <div data-ai-id="wr-tokens-filter" style={{ marginBottom: 12 }}>
         <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginBottom: 3 }}>Filter by Tenant</div>
         <select
           value={filterTenant}
@@ -170,11 +170,11 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
         </select>
       </div>
 
-      {error && <div style={{ padding: '4px 8px', fontSize: 11, color: 'var(--tn-red)', background: 'rgba(247,118,142,0.1)', borderRadius: 3, marginBottom: 8 }}>{error}</div>}
+      {error && <div data-ai-id="wr-tokens-error" style={{ padding: '4px 8px', fontSize: 11, color: 'var(--tn-red)', background: 'rgba(247,118,142,0.1)', borderRadius: 3, marginBottom: 8 }}>{error}</div>}
 
       {/* Newly created token display */}
       {newToken && (
-        <div style={{
+        <div data-ai-id="wr-tokens-new-token-display" style={{
           padding: 10, background: 'rgba(158,206,106,0.1)', border: '1px solid var(--tn-green)',
           borderRadius: 6, marginBottom: 12,
         }}>
@@ -191,7 +191,7 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
 
       {/* Create Form */}
       {showCreate && (
-        <div style={{
+        <div data-ai-id="wr-tokens-create-form" style={{
           background: 'var(--tn-bg-dark)', border: '1px solid var(--tn-green)', borderRadius: 6,
           padding: 12, marginBottom: 12,
         }}>
@@ -223,7 +223,7 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
               <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginBottom: 3 }}>Expiry (days)</div>
               <input value={newExpiry} onChange={e => setNewExpiry(e.target.value)} type="number" style={inputStyle} />
             </div>
-            <button onClick={handleCreate} disabled={creating || !newName.trim() || !selectedTenant} style={{
+            <button data-ai-id="wr-tokens-create-submit" onClick={handleCreate} disabled={creating || !newName.trim() || !selectedTenant} style={{
               padding: '5px 14px', borderRadius: 3, fontSize: 10, fontWeight: 600,
               cursor: (creating || !newName.trim() || !selectedTenant) ? 'not-allowed' : 'pointer',
               background: 'var(--tn-green)', border: 'none', color: '#fff', opacity: (creating || !newName.trim() || !selectedTenant) ? 0.5 : 1,
@@ -234,17 +234,17 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
         </div>
       )}
 
-      {loading && <div style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>Loading...</div>}
+      {loading && <div data-ai-id="wr-tokens-loading" style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>Loading...</div>}
 
       {!loading && filteredTokens.length === 0 && (
-        <div style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 11 }}>
+        <div data-ai-id="wr-tokens-empty" style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 11 }}>
           {tokens.length === 0 ? 'No tokens found' : 'No tokens found for selected tenant'}
         </div>
       )}
 
       {!loading && filteredTokens.length > 0 && (
         <>
-          <div style={{
+          <div data-ai-id="wr-tokens-table-header" style={{
             display: 'grid', gridTemplateColumns: '1fr 90px 80px 90px 80px 70px',
             gap: 8, padding: '6px 10px', background: 'var(--tn-bg-dark)', borderRadius: 4,
             fontSize: 10, fontWeight: 600, color: 'var(--tn-text-muted)', marginBottom: 4,
@@ -258,7 +258,7 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
             const isProcessing = processingId === t.id;
             const tenant = tenants.find(tn => tn.id === t.tenantId);
             return (
-              <div key={t.id} style={{
+              <div key={t.id} data-ai-id={`wr-tokens-row-${t.id}`} style={{
                 display: 'grid', gridTemplateColumns: '1fr 90px 80px 90px 80px 70px',
                 gap: 8, padding: '8px 10px', borderBottom: '1px solid var(--tn-border)',
                 fontSize: 11, alignItems: 'center', opacity: (expired || revoked) ? 0.5 : 1,

@@ -62,8 +62,9 @@ export default function ActivityFeedTab() {
   });
 
   const formatLatency = (ms: number) => {
-    if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
-    return `${ms}ms`;
+    const safeMs = ms ?? 0;
+    if (safeMs >= 1000) return `${(safeMs / 1000).toFixed(1)}s`;
+    return `${safeMs}ms`;
   };
 
   return (
@@ -250,10 +251,10 @@ export default function ActivityFeedTab() {
                   </div>
                   <div style={{ color: 'var(--tn-text-muted)' }}>{req.provider}</div>
                   <div style={{ color: 'var(--tn-purple, #bb9af7)', textAlign: 'right' }}>
-                    {req.tokens.toLocaleString()}
+                    {(req.tokens ?? 0).toLocaleString()}
                   </div>
                   <div style={{ color: 'var(--tn-green)', textAlign: 'right' }}>
-                    €{req.cost.toFixed(3)}
+                    €{(req.cost ?? 0).toFixed(3)}
                   </div>
                   <div
                     style={{

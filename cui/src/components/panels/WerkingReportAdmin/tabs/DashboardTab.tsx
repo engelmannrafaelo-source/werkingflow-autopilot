@@ -94,21 +94,21 @@ export default function DashboardTab({ envMode }: { envMode?: string }) {
   };
 
   return (
-    <div style={{ padding: 12 }}>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
-        <button onClick={fetchAll} style={{
+    <div data-ai-id="wr-dashboard-tab" style={{ padding: 12 }}>
+      <div data-ai-id="wr-dashboard-header" style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+        <button data-ai-id="wr-dashboard-refresh-btn" onClick={fetchAll} style={{
           padding: '3px 10px', borderRadius: 3, fontSize: 10, cursor: 'pointer',
           background: 'var(--tn-bg)', border: '1px solid var(--tn-border)', color: 'var(--tn-text-muted)',
         }}>Refresh</button>
       </div>
 
-      {error && <div style={{ padding: '4px 8px', fontSize: 11, color: 'var(--tn-red)', background: 'rgba(247,118,142,0.1)', borderRadius: 3, marginBottom: 8 }}>{error}</div>}
-      {loading && <div style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>Loading dashboard...</div>}
+      {error && <div data-ai-id="wr-dashboard-error" style={{ padding: '4px 8px', fontSize: 11, color: 'var(--tn-red)', background: 'rgba(247,118,142,0.1)', borderRadius: 3, marginBottom: 8 }}>{error}</div>}
+      {loading && <div data-ai-id="wr-dashboard-loading" style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>Loading dashboard...</div>}
 
       {!loading && (
         <>
           {/* KPI Cards */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 16 }}>
+          <div data-ai-id="wr-dashboard-kpi-cards" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 16 }}>
             {kpiCard('Total Users', stats?.totalUsers ?? '—', 'var(--tn-blue)')}
             {kpiCard('Tenants', stats?.totalTenants ?? '—', 'var(--tn-green)')}
             {kpiCard('MRR', billing?.mrr != null ? `€${billing.mrr.toFixed(2)}` : '—', 'var(--tn-green)')}
@@ -117,9 +117,9 @@ export default function DashboardTab({ envMode }: { envMode?: string }) {
 
           {/* Plan Distribution */}
           {billing?.planDistribution && Object.keys(billing.planDistribution).length > 0 && (
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase' }}>Plan Distribution</div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <div data-ai-id="wr-dashboard-plan-distribution" style={{ marginBottom: 16 }}>
+              <div data-ai-id="wr-dashboard-plan-distribution-title" style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase' }}>Plan Distribution</div>
+              <div data-ai-id="wr-dashboard-plan-distribution-items" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 {Object.entries(billing.planDistribution).map(([plan, count]) => (
                   <div key={plan} style={{
                     padding: '6px 12px',
@@ -137,8 +137,8 @@ export default function DashboardTab({ envMode }: { envMode?: string }) {
           )}
 
           {/* System Health */}
-          <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase' }}>System Health</div>
-          <div style={{
+          <div data-ai-id="wr-dashboard-health-title" style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase' }}>System Health</div>
+          <div data-ai-id="wr-dashboard-health-panel" style={{
             background: 'var(--tn-bg-dark)',
             border: '1px solid var(--tn-border)',
             borderRadius: 6,
@@ -172,8 +172,8 @@ export default function DashboardTab({ envMode }: { envMode?: string }) {
           {/* Infrastructure Services */}
           {infra?.services && infra.services.length > 0 && (
             <>
-              <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase' }}>Infrastructure</div>
-              <div style={{
+              <div data-ai-id="wr-dashboard-infra-title" style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase' }}>Infrastructure</div>
+              <div data-ai-id="wr-dashboard-infra-panel" style={{
                 background: 'var(--tn-bg-dark)',
                 border: '1px solid var(--tn-border)',
                 borderRadius: 6,
@@ -201,8 +201,8 @@ export default function DashboardTab({ envMode }: { envMode?: string }) {
           {/* MRR Trend */}
           {billing?.mrrTrend && billing.mrrTrend.length > 0 && (
             <>
-              <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase' }}>MRR Trend</div>
-              <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end', height: 60, padding: '0 4px', marginBottom: 16 }}>
+              <div data-ai-id="wr-dashboard-mrr-trend-title" style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase' }}>MRR Trend</div>
+              <div data-ai-id="wr-dashboard-mrr-trend-chart" style={{ display: 'flex', gap: 6, alignItems: 'flex-end', height: 60, padding: '0 4px', marginBottom: 16 }}>
                 {billing.mrrTrend.map((m, i) => {
                   const max = Math.max(...billing.mrrTrend!.map(x => x.mrr), 1);
                   const h = Math.max(4, (m.mrr / max) * 50);

@@ -122,26 +122,26 @@ export default function PipelineTab({ envMode }: { envMode?: string }) {
   );
 
   return (
-    <div style={{ padding: 12 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--tn-text)' }}>
+    <div data-ai-id="wr-pipeline-tab" style={{ padding: 12 }}>
+      <div data-ai-id="wr-pipeline-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <div data-ai-id="wr-pipeline-title" style={{ fontSize: 12, fontWeight: 700, color: 'var(--tn-text)' }}>
           Deployment Pipeline
         </div>
-        <button onClick={fetchAll} style={{
+        <button data-ai-id="wr-pipeline-refresh-btn" onClick={fetchAll} style={{
           padding: '3px 10px', borderRadius: 3, fontSize: 10, cursor: 'pointer',
           background: 'var(--tn-bg)', border: '1px solid var(--tn-border)', color: 'var(--tn-text-muted)',
         }}>Refresh</button>
       </div>
 
-      {error && <div style={{ padding: '4px 8px', fontSize: 11, color: 'var(--tn-red)', background: 'rgba(247,118,142,0.1)', borderRadius: 3, marginBottom: 8 }}>{error}</div>}
-      {loading && <div style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>Checking environments...</div>}
+      {error && <div data-ai-id="wr-pipeline-error" style={{ padding: '4px 8px', fontSize: 11, color: 'var(--tn-red)', background: 'rgba(247,118,142,0.1)', borderRadius: 3, marginBottom: 8 }}>{error}</div>}
+      {loading && <div data-ai-id="wr-pipeline-loading" style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>Checking environments...</div>}
 
       {!loading && (
-        <div style={{ display: 'flex', gap: 16, alignItems: 'center', justifyContent: 'center', marginTop: 40 }}>
+        <div data-ai-id="wr-pipeline-envs" style={{ display: 'flex', gap: 16, alignItems: 'center', justifyContent: 'center', marginTop: 40 }}>
           {environments.map((env, idx) => (
             <React.Fragment key={env.name}>
               {/* Environment Card */}
-              <div style={{
+              <div data-ai-id={`wr-pipeline-env-${env.name.toLowerCase()}`} data-status={env.status} style={{
                 background: 'var(--tn-bg-dark)',
                 border: `2px solid ${statusColors[env.status]}`,
                 borderRadius: 8,
@@ -208,14 +208,14 @@ export default function PipelineTab({ envMode }: { envMode?: string }) {
 
       {/* Pipeline Info */}
       {!loading && (
-        <div style={{
+        <div data-ai-id="wr-pipeline-info" style={{
           marginTop: 40,
           padding: 16,
           background: 'var(--tn-bg-dark)',
           border: '1px solid var(--tn-border)',
           borderRadius: 6,
         }}>
-          <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--tn-text-muted)', marginBottom: 8, textTransform: 'uppercase' }}>
+          <div data-ai-id="wr-pipeline-info-title" style={{ fontSize: 10, fontWeight: 600, color: 'var(--tn-text-muted)', marginBottom: 8, textTransform: 'uppercase' }}>
             Pipeline Flow
           </div>
           <div style={{ fontSize: 11, color: 'var(--tn-text)', lineHeight: 1.6 }}>
