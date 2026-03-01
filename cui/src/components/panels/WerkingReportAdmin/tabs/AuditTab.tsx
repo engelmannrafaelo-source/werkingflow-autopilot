@@ -117,16 +117,16 @@ export default function AuditTab({ envMode }: { envMode?: string }) {
   const hasFilters = actionFilter || userFilter || dateFrom || dateTo;
 
   return (
-    <div style={{ padding: 12 }}>
+    <div data-ai-id="wr-audit-tab" style={{ padding: 12 }}>
       {/* Header */}
-      <div style={{ display: 'flex', gap: 6, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--tn-text)' }}>Audit Logs</span>
+      <div data-ai-id="wr-audit-header" style={{ display: 'flex', gap: 6, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+        <span data-ai-id="wr-audit-title" style={{ fontSize: 12, fontWeight: 600, color: 'var(--tn-text)' }}>Audit Logs</span>
         <div style={{ flex: 1 }} />
 
         {/* Export Button */}
         <ExportButton data={exportData} filename="audit-logs" />
 
-        <button onClick={fetchLogs} style={{
+        <button data-ai-id="wr-audit-refresh-btn" onClick={fetchLogs} style={{
           padding: '4px 10px', borderRadius: 3, fontSize: 10, cursor: 'pointer',
           background: 'var(--tn-bg)', border: '1px solid var(--tn-border)', color: 'var(--tn-text-muted)',
         }}>
@@ -135,7 +135,7 @@ export default function AuditTab({ envMode }: { envMode?: string }) {
       </div>
 
       {/* Filters */}
-      <div style={{
+      <div data-ai-id="wr-audit-filters" style={{
         display: 'grid',
         gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
         gap: 8,
@@ -285,7 +285,7 @@ export default function AuditTab({ envMode }: { envMode?: string }) {
       </div>
 
       {error && (
-        <div style={{
+        <div data-ai-id="wr-audit-error" style={{
           padding: '6px 10px',
           fontSize: 11,
           color: 'var(--tn-red)',
@@ -298,7 +298,7 @@ export default function AuditTab({ envMode }: { envMode?: string }) {
       )}
 
       {loading && (
-        <div style={{
+        <div data-ai-id="wr-audit-loading" style={{
           padding: 20,
           textAlign: 'center',
           color: 'var(--tn-text-muted)',
@@ -309,7 +309,7 @@ export default function AuditTab({ envMode }: { envMode?: string }) {
       )}
 
       {!loading && logs.length === 0 && (
-        <div style={{
+        <div data-ai-id="wr-audit-empty" style={{
           padding: 20,
           textAlign: 'center',
           color: 'var(--tn-text-muted)',
@@ -320,9 +320,9 @@ export default function AuditTab({ envMode }: { envMode?: string }) {
       )}
 
       {!loading && logs.length > 0 && (
-        <div>
+        <div data-ai-id="wr-audit-table">
           {/* Table Header */}
-          <div style={{
+          <div data-ai-id="wr-audit-table-header" style={{
             display: 'grid',
             gridTemplateColumns: '130px 120px 150px 90px 100px 1fr',
             gap: 8,
@@ -351,8 +351,9 @@ export default function AuditTab({ envMode }: { envMode?: string }) {
             const ipAddress = log.actor?.ip || log.ipAddress || '—';
 
             return (
-              <div key={log.id}>
+              <div key={log.id} data-ai-id={`wr-audit-row-${log.id}`}>
                 <div
+                  data-ai-id={`wr-audit-row-main-${log.id}`}
                   onClick={() => setExpandedId(isExpanded ? null : log.id)}
                   style={{
                     display: 'grid',
