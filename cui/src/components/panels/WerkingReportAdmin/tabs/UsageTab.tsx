@@ -102,10 +102,10 @@ export default function UsageTab({ envMode }: { envMode?: string }) {
   };
 
   return (
-    <div style={{ padding: 12 }}>
-      <div style={{ display: 'flex', gap: 6, marginBottom: 12, alignItems: 'center' }}>
+    <div data-ai-id="wr-usage-tab" style={{ padding: 12 }}>
+      <div data-ai-id="wr-usage-header" style={{ display: 'flex', gap: 6, marginBottom: 12, alignItems: 'center' }}>
         {(['current', 'trend', 'activity'] as ViewMode[]).map(v => (
-          <button key={v} onClick={() => setView(v)} style={{
+          <button key={v} data-ai-id={`wr-usage-view-${v}`} data-active={view === v} onClick={() => setView(v)} style={{
             padding: '3px 10px', borderRadius: 3, fontSize: 10, fontWeight: 600, cursor: 'pointer',
             background: view === v ? 'rgba(122,162,247,0.2)' : 'var(--tn-bg)',
             border: `1px solid ${view === v ? 'var(--tn-blue)' : 'var(--tn-border)'}`,
@@ -113,15 +113,15 @@ export default function UsageTab({ envMode }: { envMode?: string }) {
           }}>{viewLabels[v]}</button>
         ))}
         <div style={{ flex: 1 }} />
-        <button onClick={fetchAll} style={{ padding: '3px 10px', borderRadius: 3, fontSize: 10, cursor: 'pointer', background: 'var(--tn-bg)', border: '1px solid var(--tn-border)', color: 'var(--tn-text-muted)' }}>Refresh</button>
+        <button data-ai-id="wr-usage-refresh-btn" onClick={fetchAll} style={{ padding: '3px 10px', borderRadius: 3, fontSize: 10, cursor: 'pointer', background: 'var(--tn-bg)', border: '1px solid var(--tn-border)', color: 'var(--tn-text-muted)' }}>Refresh</button>
       </div>
 
-      {error && <div style={{ padding: '4px 8px', fontSize: 11, color: 'var(--tn-red)', background: 'rgba(247,118,142,0.1)', borderRadius: 3, marginBottom: 8 }}>{error}</div>}
-      {loading && <div style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>Loading...</div>}
+      {error && <div data-ai-id="wr-usage-error" style={{ padding: '4px 8px', fontSize: 11, color: 'var(--tn-red)', background: 'rgba(247,118,142,0.1)', borderRadius: 3, marginBottom: 8 }}>{error}</div>}
+      {loading && <div data-ai-id="wr-usage-loading" style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>Loading...</div>}
 
       {!loading && view === 'current' && data && (
         <>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 16 }}>
+          <div data-ai-id="wr-usage-current-stats" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 16 }}>
             {statCard('Cost (EUR)', '\u20ac' + data.totals.cost.toFixed(2), 'var(--tn-green)')}
             {statCard('Tokens', (data.totals.tokens / 1000).toFixed(1) + 'K', 'var(--tn-blue)')}
             {statCard('Requests', '' + data.totals.requests, 'var(--tn-orange)')}
@@ -129,8 +129,8 @@ export default function UsageTab({ envMode }: { envMode?: string }) {
           </div>
 
           {chartData.length > 0 && (
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6, fontWeight: 600 }}>TOP TENANTS BY COST</div>
+            <div data-ai-id="wr-usage-current-chart" style={{ marginBottom: 16 }}>
+              <div data-ai-id="wr-usage-current-chart-title" style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6, fontWeight: 600 }}>TOP TENANTS BY COST</div>
               <ResponsiveContainer width="100%" height={120}>
                 <BarChart data={chartData} margin={{ top: 0, right: 0, bottom: 0, left: 0 }}>
                   <XAxis dataKey="name" tick={{ fontSize: 9, fill: 'var(--tn-text-muted)' }} />
@@ -142,12 +142,12 @@ export default function UsageTab({ envMode }: { envMode?: string }) {
             </div>
           )}
 
-          <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6, fontWeight: 600 }}>ALL TENANTS</div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 70px 70px 60px 50px', gap: 6, padding: '5px 8px', background: 'var(--tn-bg-dark)', borderRadius: 4, fontSize: 9, fontWeight: 600, color: 'var(--tn-text-muted)', marginBottom: 4 }}>
+          <div data-ai-id="wr-usage-current-tenants-title" style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6, fontWeight: 600 }}>ALL TENANTS</div>
+          <div data-ai-id="wr-usage-current-tenants-header" style={{ display: 'grid', gridTemplateColumns: '1fr 70px 70px 60px 50px', gap: 6, padding: '5px 8px', background: 'var(--tn-bg-dark)', borderRadius: 4, fontSize: 9, fontWeight: 600, color: 'var(--tn-text-muted)', marginBottom: 4 }}>
             <div>Tenant</div><div>Cost</div><div>Tokens</div><div>Req</div><div>Docs</div>
           </div>
           {data.tenants.filter(t => t.tokens > 0 || t.requests > 0).sort((a, b) => b.cost - a.cost).map(t => (
-            <div key={t.tenantId} style={{ display: 'grid', gridTemplateColumns: '1fr 70px 70px 60px 50px', gap: 6, padding: '6px 8px', borderBottom: '1px solid var(--tn-border)', fontSize: 10, alignItems: 'center' }}>
+            <div key={t.tenantId} data-ai-id={`wr-usage-current-tenant-${t.tenantId}`} style={{ display: 'grid', gridTemplateColumns: '1fr 70px 70px 60px 50px', gap: 6, padding: '6px 8px', borderBottom: '1px solid var(--tn-border)', fontSize: 10, alignItems: 'center' }}>
               <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 <span style={{ color: 'var(--tn-text)' }}>{t.tenantName || '--'}</span>
                 <span style={{ color: 'var(--tn-text-muted)', fontSize: 9, marginLeft: 4 }}>{t.tenantId.slice(0, 8)}</span>
@@ -166,7 +166,7 @@ export default function UsageTab({ envMode }: { envMode?: string }) {
 
       {!loading && view === 'trend' && trend && (
         <>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 16 }}>
+          <div data-ai-id="wr-usage-trend-stats" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 16 }}>
             {statCard('Total Cost (6M)', '\u20ac' + trend.totalCost.toFixed(2), 'var(--tn-green)')}
             {statCard('Total Tokens (6M)', (trend.totalTokens / 1000).toFixed(1) + 'K', 'var(--tn-blue)')}
             {statCard('Total Requests (6M)', '' + trend.totalRequests, 'var(--tn-orange)')}
