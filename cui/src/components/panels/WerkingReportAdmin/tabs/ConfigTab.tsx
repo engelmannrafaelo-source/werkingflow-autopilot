@@ -95,25 +95,25 @@ export default function ConfigTab({ envMode }: { envMode?: string }) {
   };
 
   return (
-    <div style={{ padding: 12 }}>
-      <div style={{ display: 'flex', gap: 6, marginBottom: 12, alignItems: 'center' }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--tn-text)', flex: 1 }}>Platform Configuration</span>
-        <button onClick={() => setShowAdd(!showAdd)} style={{
+    <div data-ai-id="wr-config-tab" style={{ padding: 12 }}>
+      <div data-ai-id="wr-config-header" style={{ display: 'flex', gap: 6, marginBottom: 12, alignItems: 'center' }}>
+        <span data-ai-id="wr-config-title" style={{ fontSize: 12, fontWeight: 600, color: 'var(--tn-text)', flex: 1 }}>Platform Configuration</span>
+        <button data-ai-id="wr-config-add-btn" data-active={showAdd} onClick={() => setShowAdd(!showAdd)} style={{
           padding: '4px 12px', borderRadius: 3, fontSize: 10, fontWeight: 600, cursor: 'pointer',
           background: showAdd ? 'var(--tn-red)' : 'var(--tn-green)', border: 'none', color: '#fff',
         }}>
           {showAdd ? 'Cancel' : '+ Add Config'}
         </button>
-        <button onClick={fetchConfig} style={{
+        <button data-ai-id="wr-config-refresh-btn" onClick={fetchConfig} style={{
           padding: '3px 10px', borderRadius: 3, fontSize: 10, cursor: 'pointer',
           background: 'var(--tn-bg)', border: '1px solid var(--tn-border)', color: 'var(--tn-text-muted)',
         }}>Refresh</button>
       </div>
 
-      {error && <div style={{ padding: '4px 8px', fontSize: 11, color: 'var(--tn-red)', background: 'rgba(247,118,142,0.1)', borderRadius: 3, marginBottom: 8 }}>{error}</div>}
+      {error && <div data-ai-id="wr-config-error" style={{ padding: '4px 8px', fontSize: 11, color: 'var(--tn-red)', background: 'rgba(247,118,142,0.1)', borderRadius: 3, marginBottom: 8 }}>{error}</div>}
 
       {showAdd && (
-        <div style={{
+        <div data-ai-id="wr-config-add-form" style={{
           background: 'var(--tn-bg-dark)', border: '1px solid var(--tn-green)', borderRadius: 6,
           padding: 12, marginBottom: 12,
         }}>
@@ -126,7 +126,7 @@ export default function ConfigTab({ envMode }: { envMode?: string }) {
               <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginBottom: 3 }}>Value (string or JSON)</div>
               <input value={newValue} onChange={e => setNewValue(e.target.value)} placeholder='true / 42 / "text" / {"obj": 1}' style={inputStyle} />
             </div>
-            <button onClick={handleAdd} disabled={saving || !newKey.trim()} style={{
+            <button data-ai-id="wr-config-add-submit" onClick={handleAdd} disabled={saving || !newKey.trim()} style={{
               padding: '5px 14px', borderRadius: 3, fontSize: 10, fontWeight: 600,
               cursor: saving ? 'not-allowed' : 'pointer',
               background: 'var(--tn-green)', border: 'none', color: '#fff', opacity: saving ? 0.5 : 1,
@@ -135,18 +135,18 @@ export default function ConfigTab({ envMode }: { envMode?: string }) {
         </div>
       )}
 
-      {loading && <div style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>Loading...</div>}
+      {loading && <div data-ai-id="wr-config-loading" style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>Loading...</div>}
 
       {!loading && configs.length === 0 && (
-        <div style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 11 }}>No configuration entries found</div>
+        <div data-ai-id="wr-config-empty" style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 11 }}>No configuration entries found</div>
       )}
 
       {!loading && configs.length > 0 && (
-        <div>
+        <div data-ai-id="wr-config-list">
           {configs.map(cfg => {
             const isEditing = editingKey === cfg.key;
             return (
-              <div key={cfg.key} style={{
+              <div key={cfg.key} data-ai-id={`wr-config-entry-${cfg.key}`} style={{
                 padding: '10px 12px', borderBottom: '1px solid var(--tn-border)',
                 background: isEditing ? 'rgba(122,162,247,0.05)' : 'transparent',
               }}>
