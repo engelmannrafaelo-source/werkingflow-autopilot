@@ -127,7 +127,7 @@ export default function AuslastungTab() {
               <StatCard
                 label="Requests gesamt"
                 value={String(totalRequests)}
-                sub={totalRequests === 0 ? 'Worker-Restart → Counter reset' : m?.average_duration ? `Ø ${m.average_duration.toFixed(1)}s` : undefined}
+                sub={totalRequests === 0 ? 'Worker-Restart → Counter reset' : m?.average_duration ? `Ø ${(m.average_duration ?? 0).toFixed(1)}s` : undefined}
               />
               <StatCard
                 label="CLI-Tasks"
@@ -151,7 +151,7 @@ export default function AuslastungTab() {
             {/* Memory Bar */}
             <div style={{ background: 'var(--tn-bg-dark)', borderRadius: 5, padding: '8px 10px' }}>
               <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 4 }}>
-                Memory ({rl.memory_used_gb.toFixed(1)} GB / {rl.memory_total_gb.toFixed(1)} GB · Threshold: {rl.memory_threshold}%)
+                Memory ({(rl.memory_used_gb ?? 0).toFixed(1)} GB / {(rl.memory_total_gb ?? 0).toFixed(1)} GB · Threshold: {rl.memory_threshold ?? 0}%)
               </div>
               <Meter value={rl.memory_used_gb} max={rl.memory_total_gb} color={memColor} />
             </div>

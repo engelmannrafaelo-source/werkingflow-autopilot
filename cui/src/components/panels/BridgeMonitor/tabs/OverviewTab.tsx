@@ -161,15 +161,15 @@ export default function OverviewTab() {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 20 }}>
             {statCard(
               'Avg Response Time',
-              `${data.avg_response_time.toFixed(2)}s`,
+              `${(data.avg_response_time ?? 0).toFixed(2)}s`,
               'var(--tn-text)',
               '⏱️'
             )}
             {statCard(
               'Success Rate',
-              `${data.success_rate.toFixed(1)}%`,
-              data.success_rate >= 99 ? 'var(--tn-green)' : data.success_rate >= 95 ? 'var(--tn-orange)' : 'var(--tn-red)',
-              data.success_rate >= 99 ? '✅' : data.success_rate >= 95 ? '⚠️' : '❌'
+              `${(data.success_rate ?? 0).toFixed(1)}%`,
+              (data.success_rate ?? 0) >= 99 ? 'var(--tn-green)' : (data.success_rate ?? 0) >= 95 ? 'var(--tn-orange)' : 'var(--tn-red)',
+              (data.success_rate ?? 0) >= 99 ? '✅' : (data.success_rate ?? 0) >= 95 ? '⚠️' : '❌'
             )}
           </div>
 

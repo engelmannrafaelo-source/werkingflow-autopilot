@@ -236,7 +236,7 @@ export default function UsageAnalyticsTab() {
                     </div>
                     <div style={{ color: 'var(--tn-text-muted)' }}>
                       {endpoint.avg_response_time !== undefined
-                        ? endpoint.avg_response_time.toFixed(3)
+                        ? (endpoint.avg_response_time ?? 0).toFixed(3)
                         : 'N/A'}
                     </div>
                   </div>

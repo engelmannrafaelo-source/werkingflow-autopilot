@@ -147,7 +147,7 @@ export default function CostAnalyticsTab() {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 20 }}>
             {statCard(
               'Total Cost (USD)',
-              `$${data.estimated_cost_usd.toFixed(2)}`,
+              `$${(data.estimated_cost_usd ?? 0).toFixed(2)}`,
               'var(--tn-green)',
               '💰'
             )}
@@ -260,7 +260,7 @@ export default function CostAnalyticsTab() {
                       {formatNumber(entry.tokens)}
                     </div>
                     <div style={{ color: 'var(--tn-green)' }}>
-                      ${entry.cost.toFixed(4)}
+                      ${(entry.cost ?? 0).toFixed(4)}
                     </div>
                   </div>
                 ))}
