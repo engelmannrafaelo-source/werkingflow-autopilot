@@ -56,7 +56,8 @@ interface StatsData {
   timestamp: string;
 }
 
-function formatTokens(n: number): string {
+function formatTokens(n: number | undefined | null): string {
+  if (n == null || isNaN(n)) return "0";
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return String(n);
@@ -229,16 +230,20 @@ export default function CCUsageTab() {
           {stats.combinedJsonl && (
             <SectionFlat title="JSONL Stats (alle Accounts, shared)">
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 6, marginBottom: 8 }}>
-                <MetricBox label="Burn Rate" value={`${(stats.combinedJsonl.burnRatePerHour / 1000).toFixed(1)}K/h`} color="var(--tn-blue)" />
-                <MetricBox label="Sessions" value={String(stats.combinedJsonl.totalSessions)} />
-                <MetricBox label="Total Tokens" value={formatTokens(stats.combinedJsonl.totalTokens)} />
-                <MetricBox label="Cache Reads" value={formatTokens(stats.combinedJsonl.totalCacheRead)} color="var(--tn-blue)" />
-                <MetricBox label="Cache Creation" value={formatTokens(stats.combinedJsonl.totalCacheCreation)} color="var(--tn-purple)" />
-                <MetricBox label="Storage" value={`${(stats.combinedJsonl.storageBytes / (1024 * 1024)).toFixed(0)} MB`} />
+                <MetricBox
+                  label="Burn Rate"
+                  value={stats.combinedJsonl.burnRatePerHour ? `${(stats.combinedJsonl.burnRatePerHour / 1000).toFixed(1)}K/h` : "N/A"}
+                  color="var(--tn-blue)"
+                />
+                <MetricBox label="Sessions" value={String(stats.combinedJsonl.totalSessions ?? 0)} />
+                <MetricBox label="Total Tokens" value={formatTokens(stats.combinedJsonl.totalTokens ?? 0)} />
+                <MetricBox label="Cache Reads" value={formatTokens(stats.combinedJsonl.totalCacheRead ?? 0)} color="var(--tn-blue)" />
+                <MetricBox label="Cache Creation" value={formatTokens(stats.combinedJsonl.totalCacheCreation ?? 0)} color="var(--tn-purple)" />
+                <MetricBox label="Storage" value={stats.combinedJsonl.storageBytes ? `${(stats.combinedJsonl.storageBytes / (1024 * 1024)).toFixed(0)} MB` : "N/A"} />
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "var(--tn-text-muted)", paddingTop: 6, borderTop: "1px solid var(--tn-border)" }}>
-                <span>{stats.combinedJsonl.workspaceCount} workspaces</span>
-                <span>In: {formatTokens(stats.combinedJsonl.totalInputTokens)} | Out: {formatTokens(stats.combinedJsonl.totalOutputTokens)}</span>
+                <span>{stats.combinedJsonl.workspaceCount ?? 0} workspaces</span>
+                <span>In: {formatTokens(stats.combinedJsonl.totalInputTokens ?? 0)} | Out: {formatTokens(stats.combinedJsonl.totalOutputTokens ?? 0)}</span>
                 <span>Last: {timeAgo(stats.combinedJsonl.lastActivity)}</span>
               </div>
             </SectionFlat>
