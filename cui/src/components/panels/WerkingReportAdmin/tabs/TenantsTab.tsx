@@ -137,7 +137,7 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
   };
 
   return (
-    <div style={{ padding: 12 }}>
+    <div data-ai-id="wr-tenants-tab" style={{ padding: 12 }}>
       {changePlanTenant && (
         <PlanChangeModal
           tenantId={changePlanTenant.id}
@@ -149,7 +149,7 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
       )}
 
       {/* Search and Filter Toolbar */}
-      <div style={{ display: 'flex', gap: 6, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+      <div data-ai-id="wr-tenants-toolbar" style={{ display: 'flex', gap: 6, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
         <TableSearch
           onSearch={handleSearchChange}
           placeholder="Search tenants..."
@@ -169,28 +169,28 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
           }))}
           filename="tenants"
         />
-        <button onClick={() => setView(view === 'create' ? 'list' : 'create')} style={{
+        <button data-ai-id="wr-tenants-create-btn" data-active={view === 'create'} onClick={() => setView(view === 'create' ? 'list' : 'create')} style={{
           padding: '4px 12px', borderRadius: 3, fontSize: 10, fontWeight: 600, cursor: 'pointer',
           background: view === 'create' ? 'var(--tn-red)' : 'var(--tn-green)',
           border: 'none', color: '#fff',
         }}>
           {view === 'create' ? 'Cancel' : '+ New Tenant'}
         </button>
-        <button onClick={fetchTenants} style={{
+        <button data-ai-id="wr-tenants-refresh-btn" onClick={fetchTenants} style={{
           padding: '3px 10px', borderRadius: 3, fontSize: 10, cursor: 'pointer',
           background: 'var(--tn-bg)', border: '1px solid var(--tn-border)', color: 'var(--tn-text-muted)',
         }}>Refresh</button>
       </div>
 
-      {error && <div style={{ padding: '4px 8px', fontSize: 11, color: 'var(--tn-red)', background: 'rgba(247,118,142,0.1)', borderRadius: 3, marginBottom: 8 }}>{error}</div>}
+      {error && <div data-ai-id="wr-tenants-error" style={{ padding: '4px 8px', fontSize: 11, color: 'var(--tn-red)', background: 'rgba(247,118,142,0.1)', borderRadius: 3, marginBottom: 8 }}>{error}</div>}
 
       {/* Create Form */}
       {view === 'create' && (
-        <div style={{
+        <div data-ai-id="wr-tenants-create-form" style={{
           background: 'var(--tn-bg-dark)', border: '1px solid var(--tn-green)', borderRadius: 6,
           padding: 12, marginBottom: 12,
         }}>
-          <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--tn-green)', marginBottom: 8 }}>Create New Tenant</div>
+          <div data-ai-id="wr-tenants-create-title" style={{ fontSize: 11, fontWeight: 600, color: 'var(--tn-green)', marginBottom: 8 }}>Create New Tenant</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 100px auto', gap: 8, alignItems: 'end' }}>
             <div>
               <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginBottom: 3 }}>Name *</div>
@@ -206,7 +206,7 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
                 {plans.map(p => <option key={p} value={p}>{p}</option>)}
               </select>
             </div>
-            <button onClick={handleCreate} disabled={creating || !newName.trim()} style={{
+            <button data-ai-id="wr-tenants-create-submit" onClick={handleCreate} disabled={creating || !newName.trim()} style={{
               padding: '5px 14px', borderRadius: 3, fontSize: 10, fontWeight: 600, cursor: creating ? 'not-allowed' : 'pointer',
               background: 'var(--tn-green)', border: 'none', color: '#fff', opacity: creating ? 0.5 : 1,
             }}>
@@ -216,7 +216,7 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
         </div>
       )}
 
-      {loading && <div style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>Loading...</div>}
+      {loading && <div data-ai-id="wr-tenants-loading" style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>Loading...</div>}
 
       {/* Pagination Controls - Top */}
       {!loading && total > 0 && (
@@ -230,17 +230,17 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
       )}
 
       {!loading && tenants.length === 0 && (
-        <div style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 11 }}>No tenants found</div>
+        <div data-ai-id="wr-tenants-empty" style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 11 }}>No tenants found</div>
       )}
 
       {!loading && tenants.length > 0 && (
         <>
-          <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6, marginTop: 6 }}>
+          <div data-ai-id="wr-tenants-count" style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6, marginTop: 6 }}>
             {tenants.length} tenant(s) shown
             {search && ` matching "${search}"`}
             {planFilter && ` | plan: ${planFilter}`}
           </div>
-          <div style={{
+          <div data-ai-id="wr-tenants-table-header" style={{
             display: 'grid', gridTemplateColumns: '1fr 100px 80px 80px 70px 100px',
             gap: 8, padding: '6px 10px', background: 'var(--tn-bg-dark)', borderRadius: 4,
             fontSize: 10, fontWeight: 600, color: 'var(--tn-text-muted)', marginBottom: 4,
@@ -251,7 +251,7 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
           {tenants.map(t => {
             const isProcessing = processingId === t.id;
             return (
-              <div key={t.id} style={{
+              <div key={t.id} data-ai-id={`wr-tenants-row-${t.id}`} style={{
                 display: 'grid', gridTemplateColumns: '1fr 100px 80px 80px 70px 100px',
                 gap: 8, padding: '8px 10px', borderBottom: '1px solid var(--tn-border)',
                 fontSize: 11, alignItems: 'center', opacity: isProcessing ? 0.5 : 1,
