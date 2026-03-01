@@ -109,11 +109,14 @@ export function StatCard({ label, value, sub, color }: { label: string; value: s
 }
 
 export function Meter({ value, max, color }: { value: number; max: number; color: string }) {
-  const pct = max > 0 ? Math.min(100, Math.round((value / max) * 100)) : 0;
+  // Defensive: handle undefined/null values
+  const safeValue = value ?? 0;
+  const safeMax = max ?? 0;
+  const pct = safeMax > 0 ? Math.min(100, Math.round((safeValue / safeMax) * 100)) : 0;
   return (
     <div style={{ marginTop: 4 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-        <span style={{ fontSize: 9, color: 'var(--tn-text-muted)' }}>{value.toFixed(1)} / {max.toFixed(1)}</span>
+        <span style={{ fontSize: 9, color: 'var(--tn-text-muted)' }}>{safeValue.toFixed(1)} / {safeMax.toFixed(1)}</span>
         <span style={{ fontSize: 9, color, fontWeight: 700 }}>{pct}%</span>
       </div>
       <div style={{ height: 5, background: 'var(--tn-border)', borderRadius: 3, overflow: 'hidden' }}>

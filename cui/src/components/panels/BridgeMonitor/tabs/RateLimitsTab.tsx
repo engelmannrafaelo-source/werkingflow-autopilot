@@ -53,9 +53,11 @@ export default function RateLimitsTab() {
     return () => clearInterval(interval);
   }, [fetchData]);
 
-  const getTimeToReset = (resetAt: string) => {
+  const getTimeToReset = (resetAt: string | undefined | null) => {
+    if (!resetAt) return 'Unknown';
     const now = Date.now();
     const reset = new Date(resetAt).getTime();
+    if (isNaN(reset)) return 'Invalid date';
     const diff = reset - now;
     if (diff < 0) return 'Reset available';
     const minutes = Math.floor(diff / 60000);
@@ -135,10 +137,10 @@ export default function RateLimitsTab() {
                   </div>
                   <div style={{ width: 100, height: 100 }}>
                     <CircularProgressbar
-                      value={provider.percent}
-                      text={`${provider.percent.toFixed(0)}%`}
+                      value={provider.percent ?? 0}
+                      text={`${(provider.percent ?? 0).toFixed(0)}%`}
                       styles={buildStyles({
-                        pathColor: STATUS_COLORS[provider.status],
+                        pathColor: STATUS_COLORS[provider.status] ?? 'var(--tn-border)',
                         textColor: 'var(--tn-text)',
                         trailColor: 'var(--tn-border)',
                         textSize: '20px',
@@ -146,7 +148,7 @@ export default function RateLimitsTab() {
                     />
                   </div>
                   <div style={{ textAlign: 'center', fontSize: 9, color: 'var(--tn-text-muted)' }}>
-                    <div>{provider.current.toLocaleString()} / {provider.limit.toLocaleString()}</div>
+                    <div>{(provider.current ?? 0).toLocaleString()} / {(provider.limit ?? 0).toLocaleString()}</div>
                     <div style={{ marginTop: 4, color: STATUS_COLORS[provider.status], fontWeight: 600 }}>
                       Reset in: {getTimeToReset(provider.resetAt)}
                     </div>
