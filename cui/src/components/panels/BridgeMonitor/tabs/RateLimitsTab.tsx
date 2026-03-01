@@ -223,7 +223,7 @@ export default function RateLimitsTab() {
                     }}
                   >
                     <div style={{ color: 'var(--tn-text-muted)' }}>
-                      {new Date(event.timestamp).toLocaleString()}
+                      {event.timestamp ? new Date(event.timestamp).toLocaleString() : 'N/A'}
                     </div>
                     <div style={{ color: 'var(--tn-text)' }}>{event.provider}</div>
                     <div style={{ color: 'var(--tn-text-muted)' }}>{event.model}</div>
@@ -249,7 +249,7 @@ export default function RateLimitsTab() {
 
           {/* Last Updated */}
           <div style={{ marginTop: 16, fontSize: 9, color: 'var(--tn-text-muted)', textAlign: 'right' }}>
-            Last updated: {new Date(data.lastUpdated).toLocaleString()}
+            Last updated: {data.lastUpdated ? new Date(data.lastUpdated).toLocaleString() : 'N/A'}
           </div>
         </>
       )}

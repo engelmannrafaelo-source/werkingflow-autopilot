@@ -175,7 +175,7 @@ export default function OverviewTab() {
 
           {/* Timestamp */}
           <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', textAlign: 'right' }}>
-            Last updated: {new Date(data.timestamp).toLocaleString()}
+            Last updated: {data.timestamp ? new Date(data.timestamp).toLocaleString() : 'N/A'}
           </div>
         </>
       )}
