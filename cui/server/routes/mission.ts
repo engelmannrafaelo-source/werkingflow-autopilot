@@ -1,38 +1,27 @@
 import { Router } from 'express';
-import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, unlinkSync, rmSync, appendFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, unlinkSync, rmSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { execSync } from 'child_process';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 
+import type { AttentionReason, ConvAttentionState, SessionState, PanelVisibility, CuiProxy } from './shared/types.js';
+import { logUserInput as sharedLogUserInput, getProxyPort as sharedGetProxyPort } from './shared/utils.js';
+
 const execAsync = promisify(exec);
 
-// --- Types ---
-type AttentionReason = 'plan' | 'question' | 'permission' | 'error' | 'done' | 'rate_limit' | 'send_failed';
-type ConvAttentionState = 'working' | 'needs_attention' | 'idle';
-interface SessionState {
-  state: ConvAttentionState;
-  reason?: AttentionReason;
-  since: number;
-  accountId: string;
-  sessionId?: string;
-}
-
-interface PanelVisibility {
-  panelId: string;
-  projectId: string;
-  accountId: string;
-  sessionId: string;
-  route: string;
-  updatedAt: number;
-}
-
-interface CuiProxy {
-  id: string;
-  localPort: number;
-  target: string;
-}
+// --- Constants ---
+const CUIFETCH_DEFAULT_TIMEOUT_MS = 8000;
+const CONV_CACHE_TTL_MS = 15_000;
+const CONV_CACHE_STALE_TTL_MS = 60_000;
+const DEFAULT_CONV_LIMIT = 500;
+const SEND_TIMEOUT_MS = 60_000;
+const MAX_SEND_RETRIES = 2;
+const FLUSH_WAIT_MS = 2000;
+const MAX_TITLE_LENGTH = 60;
+const MAX_TAIL_MESSAGES = 500;
+const COMMANDER_CACHE_TTL_MS = 60_000;
 
 // --- Dependencies (injected via init) ---
 let CUI_PROXIES: CuiProxy[];
@@ -83,13 +72,70 @@ export function initMissionRouter(deps: MissionDeps) {
   FINISHED_FILE = join(DATA_DIR, 'conv-finished.json');
   LAST_PROMPT_FILE = join(DATA_DIR, 'conv-last-prompt.json');
   INPUT_LOG_FILE = join(DATA_DIR, 'input-log.jsonl');
+  buildSessionProjectMap();
+}
+
+// --- Session -> Project mapping (built from JSONL directory structure) ---
+let _sessionProjectMap: Record<string, { projectName: string; projectPath: string }> = {};
+let _sessionMapBuiltAt = 0;
+
+function buildSessionProjectMap(): void {
+  const map: typeof _sessionProjectMap = {};
+  const projectConfigs: Array<{ id: string; name: string; workDir: string; encoded: string }> = [];
+  try {
+    for (const f of readdirSync(PROJECTS_DIR).filter(f => f.endsWith('.json'))) {
+      const p = JSON.parse(readFileSync(join(PROJECTS_DIR, f), 'utf8'));
+      if (p.workDir) projectConfigs.push({ id: p.id, name: p.name, workDir: p.workDir, encoded: p.workDir.replace(/\//g, '-') });
+    }
+  } catch {}
+  const extraPaths: Record<string, { name: string; path: string }> = {
+    '-root-projekte-orchestrator': { name: 'orchestrator', path: '/root/projekte/orchestrator' },
+    '-root-projekte-werkingflow': { name: 'werkingflow', path: '/root/projekte/werkingflow' },
+    '-root': { name: 'root', path: '/root' },
+    '-tmp': { name: 'tmp', path: '/tmp' },
+    '-home-claude-user': { name: 'claude-user', path: '/home/claude-user' },
+  };
+  const acctDirs = [
+    '/home/claude-user/.cui-account1/.claude/projects',
+    '/home/claude-user/.cui-account2/.claude/projects',
+    '/home/claude-user/.cui-account3/.claude/projects',
+  ];
+  for (const base of acctDirs) {
+    try { if (!statSync(base).isDirectory()) continue; } catch { continue; }
+    for (const dirname of readdirSync(base)) {
+      const dirpath = join(base, dirname);
+      try { if (!statSync(dirpath).isDirectory()) continue; } catch { continue; }
+      let projName: string | null = null;
+      let projPath: string | null = null;
+      for (const pc of projectConfigs) {
+        if (dirname === pc.encoded) { projName = pc.name; projPath = pc.workDir; break; }
+      }
+      if (!projName && extraPaths[dirname]) { projName = extraPaths[dirname].name; projPath = extraPaths[dirname].path; }
+      if (!projName) { projName = dirname.replace(/^-/, '').split('-').pop() || dirname; projPath = dirname; }
+      try {
+        for (const f of readdirSync(dirpath)) {
+          if (f.endsWith('.jsonl')) {
+            map[f.slice(0, -6)] = { projectName: projName, projectPath: projPath || dirname };
+          }
+        }
+      } catch {}
+    }
+  }
+  _sessionProjectMap = map;
+  _sessionMapBuiltAt = Date.now();
+  console.log('[Mission] Session-project map: ' + Object.keys(map).length + ' sessions mapped');
+}
+
+function getSessionProject(sessionId: string): { projectName: string; projectPath: string } | null {
+  if (Date.now() - _sessionMapBuiltAt > 60000) buildSessionProjectMap();
+  return _sessionProjectMap[sessionId] || null;
 }
 
 // --- Local conversation titles (CUI API doesn't support custom_name) ---
 let TITLES_FILE: string;
 function loadTitles(): Record<string, string> {
   if (!existsSync(TITLES_FILE)) return {};
-  try { return JSON.parse(readFileSync(TITLES_FILE, 'utf8')); } catch { return {}; }
+  try { return JSON.parse(readFileSync(TITLES_FILE, 'utf8')); } catch (err) { console.warn('[Mission] Failed to load TITLES_FILE:', err instanceof Error ? err.message : err); return {}; }
 }
 function saveTitle(sessionId: string, title: string) {
   const titles = loadTitles();
@@ -112,7 +158,7 @@ function autoTitleFromSummary(summary: string): string {
   // Skip if too short or too generic
   if (title.length < 3) return '';
   // Truncate
-  if (title.length > 60) title = title.slice(0, 57) + '...';
+  if (title.length > MAX_TITLE_LENGTH) title = title.slice(0, MAX_TITLE_LENGTH - 3) + '...';
   return title;
 }
 
@@ -141,7 +187,7 @@ function autoTitleUntitled(results: Array<{ sessionId: string; summary: string; 
 let ASSIGNMENTS_FILE: string;
 function loadAssignments(): Record<string, string> {
   if (!existsSync(ASSIGNMENTS_FILE)) return {};
-  try { return JSON.parse(readFileSync(ASSIGNMENTS_FILE, 'utf8')); } catch { return {}; }
+  try { return JSON.parse(readFileSync(ASSIGNMENTS_FILE, 'utf8')); } catch (err) { console.warn('[Mission] Failed to load ASSIGNMENTS_FILE:', err instanceof Error ? err.message : err); return {}; }
 }
 function saveAssignment(sessionId: string, accountId: string) {
   const assignments = loadAssignments();
@@ -158,7 +204,7 @@ function getAssignment(sessionId: string): string {
 let FINISHED_FILE: string;
 function loadFinished(): Record<string, boolean> {
   if (!existsSync(FINISHED_FILE)) return {};
-  try { return JSON.parse(readFileSync(FINISHED_FILE, 'utf8')); } catch { return {}; }
+  try { return JSON.parse(readFileSync(FINISHED_FILE, 'utf8')); } catch (err) { console.warn('[Mission] Failed to load FINISHED_FILE:', err instanceof Error ? err.message : err); return {}; }
 }
 function setFinished(sessionId: string, finished: boolean) {
   const data = loadFinished();
@@ -176,7 +222,7 @@ let _lastPromptCache: Record<string, string> | null = null;
 function loadLastPrompt(): Record<string, string> {
   if (_lastPromptCache) return _lastPromptCache;
   if (!existsSync(LAST_PROMPT_FILE)) { _lastPromptCache = {}; return _lastPromptCache; }
-  try { _lastPromptCache = JSON.parse(readFileSync(LAST_PROMPT_FILE, 'utf8')); return _lastPromptCache!; } catch { _lastPromptCache = {}; return _lastPromptCache; }
+  try { _lastPromptCache = JSON.parse(readFileSync(LAST_PROMPT_FILE, 'utf8')); return _lastPromptCache!; } catch (err) { console.warn('[Mission] Failed to load LAST_PROMPT_FILE:', err instanceof Error ? err.message : err); _lastPromptCache = {}; return _lastPromptCache; }
 }
 function setLastPrompt(sessionId: string) {
   const data = loadLastPrompt();
@@ -189,8 +235,7 @@ function setLastPrompt(sessionId: string) {
 // Persistent log of all user inputs (subject + message) from Queue/Commander
 let INPUT_LOG_FILE: string;
 function logUserInput(entry: { type: string; accountId: string; workDir?: string; subject?: string; message: string; sessionId?: string; result: 'ok' | 'error'; error?: string }) {
-  const line = JSON.stringify({ ts: new Date().toISOString(), ...entry });
-  try { appendFileSync(INPUT_LOG_FILE, line + '\n'); } catch { /* ignore write errors */ }
+  sharedLogUserInput(INPUT_LOG_FILE, entry);
 }
 
 // Deduplicate conversations by sessionId (remote accounts share sessions)
@@ -247,7 +292,7 @@ function deduplicateConversations(results: any[]): any[] {
 async function cuiFetch(proxyPort: number, path: string, options?: { method?: string; body?: string; timeoutMs?: number }): Promise<{ data: any; ok: boolean; status: number; error?: string }> {
   const url = `http://localhost:${proxyPort}${path}`;
   const controller = new AbortController();
-  const ms = options?.timeoutMs ?? 8000;
+  const ms = options?.timeoutMs ?? CUIFETCH_DEFAULT_TIMEOUT_MS;
   const timeout = setTimeout(() => controller.abort(), ms);
   try {
     const res = await fetch(url, {
@@ -277,7 +322,7 @@ function resolveProjectName(projectPath: string): string {
     try {
       const p = JSON.parse(readFileSync(join(PROJECTS_DIR, f), 'utf8'));
       if (p.workDir && projectPath.includes(p.id)) return p.name;
-    } catch { /* skip */ }
+    } catch (err) { console.warn('[Mission] Failed to parse project file:', f, err instanceof Error ? err.message : err); }
   }
   // Fallback: extract last segment
   return projectPath.split('/').filter(Boolean).pop() || projectPath;
@@ -285,14 +330,11 @@ function resolveProjectName(projectPath: string): string {
 
 // Helper: get proxy port for account
 function getProxyPort(accountId: string): number | null {
-  const proxy = CUI_PROXIES.find(p => p.id === accountId);
-  return proxy?.localPort ?? null;
+  return sharedGetProxyPort(CUI_PROXIES, accountId);
 }
 
 // --- Conversation List Cache (stale-while-revalidate) ---
 let _convCache: { data: any; timestamp: number; refreshing: boolean } = { data: null, timestamp: 0, refreshing: false };
-const CONV_CACHE_TTL = 15_000; // 15s fresh
-const CONV_CACHE_STALE_TTL = 60_000; // 60s max stale
 
 function invalidateConvCache() {
   _convCache.timestamp = 0;
@@ -303,7 +345,7 @@ async function fetchConvList(filterProject?: string) {
   const results: any[] = [];
 
   await Promise.allSettled(CUI_PROXIES.map(async (proxy) => {
-    const resp = await cuiFetch(proxy.localPort, '/api/conversations?limit=50&sortBy=updated&order=desc');
+    const resp = await cuiFetch(proxy.localPort, `/api/conversations?limit=${DEFAULT_CONV_LIMIT}&sortBy=updated&order=desc`);
     if (!resp.ok || !resp.data?.conversations) return;
     for (const c of resp.data.conversations) {
       if (filterProject && !c.projectPath?.includes(filterProject)) continue;
@@ -313,8 +355,8 @@ async function fetchConvList(filterProject?: string) {
         accountLabel: ({ rafael: 'Engelmann', engelmann: 'Gmail', office: 'Office', local: 'Lokal' } as Record<string, string>)[proxy.id] || proxy.id,
         accountColor: { rafael: '#7aa2f7', engelmann: '#bb9af7', office: '#9ece6a', local: '#e0af68' }[proxy.id] || '#666',
         proxyPort: proxy.localPort,
-        projectPath: c.projectPath || '',
-        projectName: resolveProjectName(c.projectPath || ''),
+        projectPath: getSessionProject(c.sessionId)?.projectPath || c.projectPath || '',
+        projectName: getSessionProject(c.sessionId)?.projectName || resolveProjectName(c.projectPath || ''),
         summary: c.summary || '',
         customName: getTitle(c.sessionId) || c.sessionInfo?.custom_name || '',
         status: c.status || 'completed',
@@ -614,19 +656,19 @@ router.get('/conversations', async (req, res) => {
   const age = now - _convCache.timestamp;
 
   // Serve from cache if fresh
-  if (_convCache.data && age < CONV_CACHE_TTL) {
+  if (_convCache.data && age < CONV_CACHE_TTL_MS) {
     return res.json(_convCache.data);
   }
 
   // Serve stale cache while refreshing in background
-  if (_convCache.data && age < CONV_CACHE_STALE_TTL && !_convCache.refreshing) {
+  if (_convCache.data && age < CONV_CACHE_STALE_TTL_MS && !_convCache.refreshing) {
     _convCache.refreshing = true;
     // Background refresh (fire-and-forget)
     (async () => {
       try {
         const fresh = await fetchConvList(filterProject);
         _convCache = { data: fresh, timestamp: Date.now(), refreshing: false };
-      } catch { _convCache.refreshing = false; }
+      } catch (err) { console.warn('[Mission] Background conv cache refresh failed:', err instanceof Error ? err.message : err); _convCache.refreshing = false; }
     })();
     return res.json(_convCache.data);
   }
@@ -649,7 +691,7 @@ router.get('/conversation/:accountId/:sessionId', async (req, res) => {
   const port = getProxyPort(req.params.accountId);
   if (!port) { res.status(400).json({ error: 'unknown account' }); return; }
 
-  const tail = parseInt(req.query.tail as string) || 10;
+  const tail = Math.min(Math.max(parseInt(req.query.tail as string) || 10, 1), MAX_TAIL_MESSAGES);
   let [convResult, permResult] = await Promise.allSettled([
     cuiFetch(port, `/api/conversations/${req.params.sessionId}`),
     cuiFetch(port, `/api/permissions?streamingId=&status=pending`),
@@ -823,7 +865,7 @@ router.get('/conversation/:accountId/:sessionId', async (req, res) => {
 router.post('/send', async (req, res) => {
   try {
   const { accountId, sessionId, message, workDir, useLocal } = req.body;
-  if (!accountId || !sessionId || !message) {
+  if (!accountId || !sessionId || !message || (typeof message === 'string' && !message.trim())) {
     res.status(400).json({ error: 'accountId, sessionId, message required' });
     return;
   }
@@ -833,6 +875,10 @@ router.post('/send', async (req, res) => {
   if (!port) { res.status(400).json({ error: 'unknown account' }); return; }
 
   const resolvedWorkDir = workDir || '/root';
+  if (!resolvedWorkDir.startsWith('/root/projekte') && !resolvedWorkDir.startsWith('/home/claude-user')) {
+    res.status(400).json({ error: 'workDir must be under /root/projekte or /home/claude-user' });
+    return;
+  }
 
   // Sanitize JSONL before resuming — removes queue-ops, progress, corrupted entries
   const cleaned = unstickConversation(sessionId);
@@ -840,7 +886,7 @@ router.post('/send', async (req, res) => {
 
   let resp = await cuiFetch(port, '/api/conversations/start', {
     method: 'POST',
-    timeoutMs: 60000,
+    timeoutMs: SEND_TIMEOUT_MS,
     body: JSON.stringify({
       workingDirectory: resolvedWorkDir,
       initialPrompt: message,
@@ -858,7 +904,7 @@ router.post('/send', async (req, res) => {
       console.log(`[Send] Deep repair removed ${deepCleaned} more entries — retrying resume...`);
       resp = await cuiFetch(port, '/api/conversations/start', {
         method: 'POST',
-        timeoutMs: 60000,
+        timeoutMs: SEND_TIMEOUT_MS,
         body: JSON.stringify({
           workingDirectory: resolvedWorkDir,
           initialPrompt: message,
@@ -871,7 +917,7 @@ router.post('/send', async (req, res) => {
       console.log(`[Send] Resume still failed after repair — starting fresh session`);
       resp = await cuiFetch(port, '/api/conversations/start', {
         method: 'POST',
-        timeoutMs: 60000,
+        timeoutMs: SEND_TIMEOUT_MS,
         body: JSON.stringify({
           workingDirectory: resolvedWorkDir,
           initialPrompt: message,
@@ -904,7 +950,6 @@ router.post('/send', async (req, res) => {
   res.json({ ok: true, streamingId: sendResult.streamingId, sessionId: finalSessionId, resumeFailed });
 
   // Fire-and-forget: monitor with retry on silent failure
-  const MAX_SEND_RETRIES = 2;
   let currentStreamingId = sendResult.streamingId;
   (async () => {
     for (let attempt = 0; attempt <= MAX_SEND_RETRIES; attempt++) {
@@ -913,7 +958,7 @@ router.post('/send', async (req, res) => {
         await monitorStream(`http://localhost:${port}`, currentStreamingId, accountId, {});
       }
       // 2. Let JSONL flush
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, FLUSH_WAIT_MS));
       // 3. Verify actual response in JSONL
       const result = verifySendSuccess(finalSessionId);
       if (result === 'success') return;
@@ -928,7 +973,7 @@ router.post('/send', async (req, res) => {
       unstickConversation(finalSessionId);
       await new Promise(r => setTimeout(r, 3000 * (attempt + 1)));
       const retryResp = await cuiFetch(port, '/api/conversations/start', {
-        method: 'POST', timeoutMs: 60000,
+        method: 'POST', timeoutMs: SEND_TIMEOUT_MS,
         body: JSON.stringify({ workingDirectory: resolvedWorkDir, initialPrompt: message, resumedSessionId: finalSessionId }),
       });
       if (!retryResp.ok || !retryResp.data?.streamingId) {
@@ -1136,11 +1181,15 @@ router.post('/start', async (req, res) => {
   if (!port) { res.status(400).json({ error: 'unknown account' }); return; }
 
   const resolvedWorkDir = workDir || '/root';
+  if (!resolvedWorkDir.startsWith('/root/projekte') && !resolvedWorkDir.startsWith('/home/claude-user')) {
+    res.status(400).json({ error: 'workDir must be under /root/projekte or /home/claude-user' });
+    return;
+  }
 
   // Start conversation (60s timeout — Claude v1.0.128 spawn takes ~34s)
   const startResp = await cuiFetch(port, '/api/conversations/start', {
     method: 'POST',
-    timeoutMs: 60000,
+    timeoutMs: SEND_TIMEOUT_MS,
     body: JSON.stringify({
       workingDirectory: resolvedWorkDir,
       initialPrompt: message,
@@ -1172,14 +1221,13 @@ router.post('/start', async (req, res) => {
   res.json({ ok: true, sessionId: startData.sessionId, streamingId: startData.streamingId });
 
   // Fire-and-forget: monitor with retry on silent failure
-  const MAX_START_RETRIES = 2;
   let currentStreamingId = startData.streamingId;
   (async () => {
-    for (let attempt = 0; attempt <= MAX_START_RETRIES; attempt++) {
+    for (let attempt = 0; attempt <= MAX_SEND_RETRIES; attempt++) {
       if (currentStreamingId) {
         await monitorStream(`http://localhost:${port}`, currentStreamingId, accountId, {});
       }
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, FLUSH_WAIT_MS));
       const result = verifySendSuccess(startData.sessionId);
       if (result === 'success') return;
       if (result === 'rate_limit') {
@@ -1187,12 +1235,12 @@ router.post('/start', async (req, res) => {
         setSessionState(accountId, accountId, 'idle', 'rate_limit', startData.sessionId);
         return;
       }
-      if (attempt >= MAX_START_RETRIES) break;
+      if (attempt >= MAX_SEND_RETRIES) break;
       console.log(`[Start] Attempt ${attempt + 1} got no response for ${startData.sessionId.slice(0, 8)} — retrying...`);
       unstickConversation(startData.sessionId);
       await new Promise(r => setTimeout(r, 3000 * (attempt + 1)));
       const retryResp = await cuiFetch(port, '/api/conversations/start', {
-        method: 'POST', timeoutMs: 60000,
+        method: 'POST', timeoutMs: SEND_TIMEOUT_MS,
         body: JSON.stringify({ workingDirectory: resolvedWorkDir, initialPrompt: message }),
       });
       if (!retryResp.ok || !retryResp.data?.streamingId) {
@@ -1203,7 +1251,7 @@ router.post('/start', async (req, res) => {
       broadcast({ type: 'cui-state', cuiId: accountId, state: 'processing' });
       setSessionState(accountId, accountId, 'working', undefined, startData.sessionId);
     }
-    console.error(`[Start] All ${MAX_START_RETRIES + 1} attempts failed for ${startData.sessionId.slice(0, 8)}`);
+    console.error(`[Start] All ${MAX_SEND_RETRIES + 1} attempts failed for ${startData.sessionId.slice(0, 8)}`);
     broadcast({ type: 'cui-state', cuiId: accountId, state: 'error', message: 'Konversation konnte nicht gestartet werden. Bitte erneut versuchen.' });
     setSessionState(accountId, accountId, 'needs_attention', 'send_failed', startData.sessionId);
   })();
@@ -1220,7 +1268,7 @@ router.get('/input-log', (_req, res) => {
     const lines = readFileSync(INPUT_LOG_FILE, 'utf8').trim().split('\n').filter(Boolean);
     const entries = lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
     res.json({ entries, total: entries.length });
-  } catch { res.json({ entries: [], total: 0 }); }
+  } catch (err) { console.warn('[Mission] Failed to read input log:', err instanceof Error ? err.message : err); res.status(500).json({ error: 'Failed to read input log' }); }
 });
 
 // 7. Stop conversation (with nuclear child-process kill)
@@ -1235,7 +1283,7 @@ router.post('/conversation/:accountId/:sessionId/stop', async (req, res) => {
   // 1. Resolve streamingId: cache first, then query binary as fallback
   let streamingId = activeStreams.get(sessionId);
   if (!streamingId) {
-    const listResp = await cuiFetch(port, '/api/conversations?limit=50');
+    const listResp = await cuiFetch(port, `/api/conversations?limit=${DEFAULT_CONV_LIMIT}`);
     if (listResp.ok && listResp.data?.conversations) {
       const match = listResp.data.conversations.find(
         (c: any) => c.sessionId === sessionId && c.streamingId
@@ -1307,7 +1355,7 @@ router.post('/auto-titles', async (_req, res) => {
   // Get all conversations
   const allConvs: Array<{ sessionId: string; accountId: string; port: number; summary: string; customName: string }> = [];
   await Promise.all(CUI_PROXIES.map(async (proxy) => {
-    const resp = await cuiFetch(proxy.localPort, '/api/conversations?limit=50&sortBy=updated&order=desc');
+    const resp = await cuiFetch(proxy.localPort, `/api/conversations?limit=${DEFAULT_CONV_LIMIT}&sortBy=updated&order=desc`);
     if (!resp.ok || !resp.data?.conversations) return;
     for (const c of resp.data.conversations) {
       if (c.sessionInfo?.custom_name || getTitle(c.sessionId)) continue; // Already has a title
@@ -1338,9 +1386,9 @@ router.post('/auto-titles', async (_req, res) => {
       const text = typeof content === 'string' ? content : (Array.isArray(content) ? content.filter((b: any) => b.type === 'text').map((b: any) => b.text).join(' ') : '');
       if (!text) continue;
 
-      // Truncate to 50 chars, clean up
+      // Truncate to MAX_TITLE_LENGTH chars, clean up
       let title = text.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
-      if (title.length > 50) title = title.slice(0, 47) + '...';
+      if (title.length > MAX_TITLE_LENGTH) title = title.slice(0, MAX_TITLE_LENGTH - 3) + '...';
 
       // Save title locally (CUI API ignores custom_name)
       saveTitle(conv.sessionId, title);
@@ -1363,7 +1411,7 @@ router.get('/context', async (_req, res) => {
     // Get all conversations with last 3 messages each
     const conversations: any[] = [];
     await Promise.all(CUI_PROXIES.map(async (proxy) => {
-      const listResp = await cuiFetch(proxy.localPort, '/api/conversations?limit=20&sortBy=updated&order=desc');
+      const listResp = await cuiFetch(proxy.localPort, '/api/conversations?limit=500&sortBy=updated&order=desc');
       if (!listResp.ok || !listResp.data?.conversations) return;
       for (const c of listResp.data.conversations) {
         const detailResp = await cuiFetch(proxy.localPort, `/api/conversations/${c.sessionId}`);
@@ -1419,10 +1467,9 @@ router.get('/context', async (_req, res) => {
 
 // 10. Commander context cache (60s TTL)
 let _ctxCache: { data: any; ts: number } | null = null;
-const CTX_CACHE_TTL = 60_000;
 
 async function getCommanderContext(): Promise<any> {
-  if (_ctxCache && Date.now() - _ctxCache.ts < CTX_CACHE_TTL) return _ctxCache.data;
+  if (_ctxCache && Date.now() - _ctxCache.ts < COMMANDER_CACHE_TTL_MS) return _ctxCache.data;
   const resp = await fetch(`http://localhost:${PORT}/api/mission/context`, { signal: AbortSignal.timeout(15000) });
   const data = await resp.json();
   _ctxCache = { data, ts: Date.now() };

@@ -1,19 +1,11 @@
 import { Router, Request, Response } from 'express';
-import { readFileSync, existsSync, writeFileSync, appendFileSync } from 'fs';
+import { readFileSync, existsSync, writeFileSync } from 'fs';
 import { join } from 'path';
 
-// --- Type Definitions ---
-type AttentionReason = 'plan' | 'question' | 'permission' | 'error' | 'done' | 'rate_limit' | 'send_failed';
-type ConvAttentionState = 'working' | 'needs_attention' | 'idle';
+import type { AttentionReason, ConvAttentionState, SessionState, CuiProxy } from './shared/types.js';
+import { logUserInput as sharedLogUserInput, getProxyPort as sharedGetProxyPort } from './shared/utils.js';
 
-interface SessionState {
-  state: ConvAttentionState;
-  reason?: AttentionReason;
-  since: number;
-  accountId: string;
-  sessionId?: string;
-}
-
+// --- Type Definitions (module-specific) ---
 interface AutoInjectConfig {
   accountId: string;
   sessionId: string;
@@ -29,12 +21,6 @@ interface AutoInjectState {
   lastInject: Record<string, string>;
 }
 
-interface CuiProxy {
-  id: string;
-  localPort: number;
-  target: string;
-}
-
 // Dependencies injected via factory
 interface AutoInjectDeps {
   cuiFetch: (proxyPort: number, path: string, options?: { method?: string; body?: string; timeoutMs?: number }) => Promise<{ data: any; ok: boolean; status: number; error?: string }>;
@@ -48,6 +34,10 @@ interface AutoInjectDeps {
   unstickConversation: (sessionId: string) => number;
 }
 
+// --- Constants ---
+const AUTOINJECT_TICK_MS = 30_000;
+const MIN_INJECT_INTERVAL_MS = 30_000;
+
 // Module-level state (initialized by init())
 let AUTOINJECT_FILE: string;
 let INPUT_LOG_FILE: string;
@@ -55,13 +45,12 @@ let autoInjectTimer: ReturnType<typeof setInterval> | null = null;
 let deps: AutoInjectDeps;
 
 function getProxyPort(accountId: string): number | null {
-  const proxy = deps.CUI_PROXIES.find(p => p.id === accountId);
-  return proxy?.localPort ?? null;
+  return sharedGetProxyPort(deps.CUI_PROXIES, accountId);
 }
 
 function loadAutoInject(): AutoInjectState {
   if (!existsSync(AUTOINJECT_FILE)) return { configs: {}, lastInject: {} };
-  try { return JSON.parse(readFileSync(AUTOINJECT_FILE, "utf8")); } catch { return { configs: {}, lastInject: {} }; }
+  try { return JSON.parse(readFileSync(AUTOINJECT_FILE, "utf8")); } catch (err) { console.warn('[AutoInject] Failed to load config:', err instanceof Error ? err.message : err); return { configs: {}, lastInject: {} }; }
 }
 
 function saveAutoInject(state: AutoInjectState) {
@@ -162,15 +151,18 @@ async function autoInjectTick() {
 
 function startAutoInjectTimer() {
   if (autoInjectTimer) clearInterval(autoInjectTimer);
-  autoInjectTimer = setInterval(autoInjectTick, 30_000);
-  console.log("[AutoInject] Timer started (30s check interval)");
+  autoInjectTimer = setInterval(autoInjectTick, AUTOINJECT_TICK_MS);
+  console.log(`[AutoInject] Timer started (${AUTOINJECT_TICK_MS / 1000}s check interval)`);
+}
+
+function stopAutoInjectTimer() {
+  if (autoInjectTimer) { clearInterval(autoInjectTimer); autoInjectTimer = null; }
 }
 
 // --- User Input Log ---
 // Persistent log of all user inputs (subject + message) from Queue/Commander
 function logUserInput(entry: { type: string; accountId: string; workDir?: string; subject?: string; message: string; sessionId?: string; result: 'ok' | 'error'; error?: string }) {
-  const line = JSON.stringify({ ts: new Date().toISOString(), ...entry });
-  try { appendFileSync(INPUT_LOG_FILE, line + '\n'); } catch { /* ignore write errors */ }
+  sharedLogUserInput(INPUT_LOG_FILE, entry);
 }
 
 export default function createAutoInjectRouter(injectedDeps: AutoInjectDeps): Router {
@@ -196,7 +188,7 @@ export default function createAutoInjectRouter(injectedDeps: AutoInjectDeps): Ro
       sessionId: sessionId || existing?.sessionId || "",
       workDir: workDir || existing?.workDir || "",
       message: message || existing?.message || "Schau dir die aktuellen Test-Logs an und entscheide selbst: Wenn Probleme sichtbar sind, behebe sie (defensive coding, fail fast) und committe. Wenn Tests noch laufen oder alles passt, sage kurz Bescheid und warte.",
-      intervalMs: typeof intervalMs === "number" ? intervalMs : (existing?.intervalMs || 300000),
+      intervalMs: Math.max(typeof intervalMs === 'number' ? intervalMs : (existing?.intervalMs || 300000), MIN_INJECT_INTERVAL_MS),
       enabled: typeof enabled === "boolean" ? enabled : (existing?.enabled ?? true),
       idleSinceMs: typeof idleSinceMs === "number" ? idleSinceMs : (existing?.idleSinceMs || undefined),
     };
@@ -218,5 +210,5 @@ export default function createAutoInjectRouter(injectedDeps: AutoInjectDeps): Ro
   return router;
 }
 
-export { startAutoInjectTimer, logUserInput };
+export { startAutoInjectTimer, stopAutoInjectTimer, logUserInput };
 export type { AutoInjectConfig, AutoInjectState };

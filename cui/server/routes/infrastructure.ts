@@ -59,7 +59,7 @@ function triggerWatchdogCheck() {
     });
     postReq.on('error', () => { console.log('[Rebuild] Watchdog not available (skipped)'); });
     postReq.end();
-  } catch { /* watchdog not running, skip */ }
+  } catch (err) { console.warn('[Infrastructure] Watchdog check failed:', err); }
 }
 
 // Panel configuration with start commands
@@ -138,7 +138,8 @@ export default function createInfrastructureRouter(deps: InfrastructureDeps): Ro
 
         const isRunning = await checkPort();
         return { ...panel, running: isRunning };
-      } catch {
+      } catch (err) {
+        console.warn(`[Infrastructure] Port check failed for ${panel.name}:`, err);
         return { ...panel, running: false };
       }
     }));
@@ -157,11 +158,27 @@ export default function createInfrastructureRouter(deps: InfrastructureDeps): Ro
   });
 
   // GET /api/health-check-proxy — Proxy for external backend health checks (CORS bypass)
+  const ALLOWED_HEALTH_CHECK_HOSTS = ['localhost', '127.0.0.1', '100.121.161.109', '49.12.72.66'];
+
   router.get('/api/health-check-proxy', async (req: Request, res: Response) => {
     const targetUrl = req.query.url as string;
 
     if (!targetUrl) {
       return res.status(400).json({ error: 'Missing url parameter' });
+    }
+
+    // SSRF protection: validate target hostname against allowlist
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(targetUrl);
+    } catch (err) {
+      console.warn('[Infrastructure] Invalid health-check-proxy URL:', targetUrl, err);
+      return res.status(400).json({ error: 'Invalid URL' });
+    }
+
+    if (!ALLOWED_HEALTH_CHECK_HOSTS.includes(parsedUrl.hostname)) {
+      console.warn(`[Infrastructure] SSRF blocked: health-check-proxy to disallowed host ${parsedUrl.hostname}`);
+      return res.status(403).json({ error: `Host '${parsedUrl.hostname}' is not in the allowed health-check hosts list` });
     }
 
     try {

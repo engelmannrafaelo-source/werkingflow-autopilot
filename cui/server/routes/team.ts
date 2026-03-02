@@ -1,6 +1,8 @@
 import { Router, Request, Response } from 'express';
 import { readdir, readFile } from 'fs/promises';
-import { join, basename } from 'path';
+import { join } from 'path';
+
+import { parsePersonaMd } from './shared/utils.js';
 
 // --- Task Management ---
 interface Task {
@@ -17,38 +19,6 @@ interface Task {
 
 let tasks: Task[] = [];  // In-Memory for MVP - later DB
 
-function parsePersona(filename: string, content: string): any {
-  // Extract ID from filename: 'max-weber.md' -> 'max'
-  const id = basename(filename, '.md').split('-')[0];
-
-  // Parse markdown for Name, Rolle, MBTI
-  const nameMatch = content.match(/# (.+?) - (.+)/);
-  const mbtiMatch = content.match(/\*\*MBTI\*\*:\s*(\w+)/i) || content.match(/MBTI:\s*(\w+)/i);
-
-  // Parse Virtual Office Metadaten
-  const teamMatch = content.match(/- \*\*Team\*\*:\s*(.+)/);
-  const deptMatch = content.match(/- \*\*Department\*\*:\s*(.+)/);
-  const tableMatch = content.match(/- \*\*Table\*\*:\s*(.+)/);
-  const governanceMatch = content.match(/- \*\*Governance\*\*:\s*(.+)/);
-  const reportsToMatch = content.match(/- \*\*ReportsTo\*\*:\s*(.+)/);
-
-  return {
-    id,
-    name: nameMatch?.[1] || id,
-    role: nameMatch?.[2] || 'Team Member',
-    mbti: mbtiMatch?.[1] || 'XXXX',
-    status: 'idle', // Default - later parse from worklist
-    worklistPath: `/root/projekte/orchestrator/team/worklists/${id}.md`,
-    lastUpdated: new Date().toISOString(),
-    // Virtual Office Metadaten
-    team: teamMatch?.[1]?.trim() || 'unassigned',
-    department: deptMatch?.[1]?.trim() || 'General',
-    table: tableMatch?.[1]?.trim() || 'general',
-    governance: governanceMatch?.[1]?.trim() as 'auto-commit' | 'review-required' | undefined,
-    reportsTo: reportsToMatch?.[1]?.trim() || null,
-  };
-}
-
 export default function createTeamRouter(): Router {
   const router = Router();
 
@@ -63,7 +33,7 @@ export default function createTeamRouter(): Router {
       const personas = await Promise.all(
         personaFiles.map(async (file) => {
           const content = await readFile(join(personasPath, file), 'utf-8');
-          return parsePersona(file, content);
+          return parsePersonaMd(file, content);
         })
       );
 
@@ -117,7 +87,12 @@ export default function createTeamRouter(): Router {
     const task = tasks.find(t => t.id === req.params.id);
     if (!task) return res.status(404).send('Task not found');
 
-    Object.assign(task, req.body);
+    const { title, description, status, priority, assignee } = req.body;
+    if (title !== undefined) task.title = title;
+    if (description !== undefined) task.description = description;
+    if (status !== undefined) task.status = status;
+    if (priority !== undefined) task.priority = priority;
+    if (assignee !== undefined) task.assignee = assignee;
     task.updatedAt = new Date().toISOString();
     res.json(task);
   });

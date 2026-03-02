@@ -10,6 +10,11 @@ interface LayoutsDeps {
   DATA_DIR: string;
 }
 
+/** Validates that an ID param contains only safe characters (no path traversal) */
+function isValidId(id: string): boolean {
+  return /^[a-zA-Z0-9_.-]+$/.test(id);
+}
+
 export default function createLayoutsRouter(deps: LayoutsDeps): Router {
   const router = Router();
   const { LAYOUTS_DIR, PROJECTS_DIR, NOTES_DIR, UPLOADS_DIR, DATA_DIR } = deps;
@@ -34,6 +39,10 @@ export default function createLayoutsRouter(deps: LayoutsDeps): Router {
       res.status(400).json({ error: 'project id required' });
       return;
     }
+    if (!isValidId(project.id)) {
+      res.status(400).json({ error: 'invalid project id: only alphanumeric, dash, underscore, dot allowed' });
+      return;
+    }
 
     // Only auto-create remote workspace for NEW projects (no existing file)
     const projectFile = join(PROJECTS_DIR, `${project.id}.json`);
@@ -56,6 +65,10 @@ export default function createLayoutsRouter(deps: LayoutsDeps): Router {
   });
 
   router.delete('/projects/:id', (req: Request, res: Response) => {
+    if (!isValidId(req.params.id)) {
+      res.status(400).json({ error: 'invalid project id' });
+      return;
+    }
     const filePath = join(PROJECTS_DIR, `${req.params.id}.json`);
     if (existsSync(filePath)) unlinkSync(filePath);
     // Also remove associated notes and layout
@@ -82,12 +95,20 @@ export default function createLayoutsRouter(deps: LayoutsDeps): Router {
   });
 
   router.get('/notes/:projectId', (req: Request, res: Response) => {
+    if (!isValidId(req.params.projectId)) {
+      res.status(400).json({ error: 'invalid projectId' });
+      return;
+    }
     const notePath = join(NOTES_DIR, `${req.params.projectId}.md`);
     if (!existsSync(notePath)) { res.json({ content: '' }); return; }
     res.json({ content: readFileSync(notePath, 'utf8') });
   });
 
   router.post('/notes/:projectId', (req: Request, res: Response) => {
+    if (!isValidId(req.params.projectId)) {
+      res.status(400).json({ error: 'invalid projectId' });
+      return;
+    }
     writeFileSync(join(NOTES_DIR, `${req.params.projectId}.md`), req.body.content ?? '');
     res.json({ ok: true });
   });
@@ -149,6 +170,10 @@ export default function createLayoutsRouter(deps: LayoutsDeps): Router {
   // Layout API
   // ============================================================================
   router.get('/layouts/:projectId', (req: Request, res: Response) => {
+    if (!isValidId(req.params.projectId)) {
+      res.status(400).json({ error: 'invalid projectId' });
+      return;
+    }
     const layoutPath = join(LAYOUTS_DIR, `${req.params.projectId}.json`);
     if (!existsSync(layoutPath)) { res.json(null); return; }
     try {
@@ -159,12 +184,20 @@ export default function createLayoutsRouter(deps: LayoutsDeps): Router {
   });
 
   router.post('/layouts/:projectId', (req: Request, res: Response) => {
+    if (!isValidId(req.params.projectId)) {
+      res.status(400).json({ error: 'invalid projectId' });
+      return;
+    }
     writeFileSync(join(LAYOUTS_DIR, `${req.params.projectId}.json`), JSON.stringify(req.body, null, 2));
     res.json({ ok: true });
   });
 
   // Layout template (the "blueprint" from Layout Builder, used for restore)
   router.get('/layouts/:projectId/template', (req: Request, res: Response) => {
+    if (!isValidId(req.params.projectId)) {
+      res.status(400).json({ error: 'invalid projectId' });
+      return;
+    }
     const tplPath = join(LAYOUTS_DIR, `${req.params.projectId}_template.json`);
     if (!existsSync(tplPath)) { res.json(null); return; }
     try {
@@ -175,6 +208,10 @@ export default function createLayoutsRouter(deps: LayoutsDeps): Router {
   });
 
   router.post('/layouts/:projectId/template', (req: Request, res: Response) => {
+    if (!isValidId(req.params.projectId)) {
+      res.status(400).json({ error: 'invalid projectId' });
+      return;
+    }
     writeFileSync(join(LAYOUTS_DIR, `${req.params.projectId}_template.json`), JSON.stringify(req.body, null, 2));
     res.json({ ok: true });
   });
@@ -214,6 +251,10 @@ export default function createLayoutsRouter(deps: LayoutsDeps): Router {
       res.status(400).json({ error: 'images array required' });
       return;
     }
+    if (images.length > 20) {
+      res.status(400).json({ error: 'too many images: maximum 20 per request' });
+      return;
+    }
 
     const results: { localPath: string; name: string }[] = [];
 
@@ -247,6 +288,10 @@ export default function createLayoutsRouter(deps: LayoutsDeps): Router {
 
   // Serve uploaded images
   router.get('/uploads/:filename', (req: Request, res: Response) => {
+    if (!isValidId(req.params.filename)) {
+      res.status(400).json({ error: 'invalid filename' });
+      return;
+    }
     const filePath = join(UPLOADS_DIR, req.params.filename);
     if (!existsSync(filePath)) {
       res.status(404).json({ error: 'not found' });

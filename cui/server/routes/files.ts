@@ -18,7 +18,21 @@ function resolvePath(p: string): string {
 
 export default function createFilesRouter(deps: FilesDeps): Router {
   const router = Router();
-  const { ACTIVE_DIR, PORT } = deps;
+  const { ACTIVE_DIR, PORT, DATA_DIR } = deps;
+
+  // Allowed filesystem bases — all path access must resolve within one of these
+  const ALLOWED_PATH_BASES = [
+    '/root/projekte',
+    '/home/claude-user',
+    '/tmp',
+    DATA_DIR,
+    ACTIVE_DIR,
+  ];
+
+  /** Returns true if resolved path is within an allowed base directory */
+  function validatePath(resolved: string): boolean {
+    return ALLOWED_PATH_BASES.some(base => resolved === base || resolved.startsWith(base + '/'));
+  }
 
   // ============================================================================
   // Health & Version Endpoints (for Watchdog integration)
@@ -73,6 +87,10 @@ export default function createFilesRouter(deps: FilesDeps): Router {
 
     // All paths are local (server runs on dev server)
     const resolved = resolvePath(dirPath);
+    if (!validatePath(resolved)) {
+      res.status(403).json({ error: 'path outside allowed directories' });
+      return;
+    }
     if (!existsSync(resolved)) {
       res.status(404).json({ error: 'not found' });
       return;
@@ -116,6 +134,10 @@ export default function createFilesRouter(deps: FilesDeps): Router {
     }
 
     const resolved = resolvePath(dirPath);
+    if (!validatePath(resolved)) {
+      res.status(403).json({ error: 'path outside allowed directories' });
+      return;
+    }
     if (!existsSync(resolved)) {
       res.status(404).json({ error: 'not found' });
       return;
@@ -202,6 +224,10 @@ export default function createFilesRouter(deps: FilesDeps): Router {
 
     // All files are local (server runs on dev server)
     const resolved = resolvePath(filePath);
+    if (!validatePath(resolved)) {
+      res.status(403).json({ error: 'path outside allowed directories' });
+      return;
+    }
     if (!existsSync(resolved)) {
       res.status(404).json({ error: 'not found' });
       return;
@@ -273,16 +299,22 @@ export default function createFilesRouter(deps: FilesDeps): Router {
   // --- Plan File Reader (for CUI Lite ExitPlanMode) ---
   router.get("/api/file-read", (req: Request, res: Response) => {
     const filePath = req.query.path as string;
-    if (!filePath || !filePath.startsWith("/root/")) {
+    if (!filePath) {
       res.status(400).send("Invalid path");
       return;
     }
-    if (!filePath.includes(".claude/") || !filePath.endsWith(".md")) {
+    // Resolve first to neutralize ../ traversal, then validate
+    const resolved = resolve(filePath);
+    if (!resolved.startsWith("/root/")) {
+      res.status(403).send("Forbidden: path must be under /root/");
+      return;
+    }
+    if (!resolved.includes(".claude/") || !resolved.endsWith(".md")) {
       res.status(403).send("Forbidden: only .claude/*.md files");
       return;
     }
     try {
-      const text = readFileSync(filePath, "utf8");
+      const text = readFileSync(resolved, "utf8");
       res.type("text/plain").send(text);
     } catch {
       res.status(404).send("File not found");
@@ -292,7 +324,12 @@ export default function createFilesRouter(deps: FilesDeps): Router {
   // --- ACTIVE Folder API ---
   // Returns the ACTIVE folder path for a project (auto-creates it)
   router.get('/api/active-dir/:projectId', (req: Request, res: Response) => {
-    const dir = join(ACTIVE_DIR, req.params.projectId);
+    const projectId = req.params.projectId;
+    if (!/^[a-zA-Z0-9_-]+$/.test(projectId)) {
+      res.status(400).json({ error: 'invalid projectId: only alphanumeric, dash, underscore allowed' });
+      return;
+    }
+    const dir = join(ACTIVE_DIR, projectId);
     mkdirSync(dir, { recursive: true });
     res.json({ path: dir });
   });
@@ -308,6 +345,14 @@ export default function createFilesRouter(deps: FilesDeps): Router {
       const resolvedSource = resolvePath(sourcePath);
       const resolvedTarget = resolvePath(targetPath);
       const resolvedTargetDir = resolvePath(targetDir);
+      if (!validatePath(resolvedSource)) {
+        res.status(403).json({ error: 'source path outside allowed directories' });
+        return;
+      }
+      if (!validatePath(resolvedTarget)) {
+        res.status(403).json({ error: 'target path outside allowed directories' });
+        return;
+      }
       if (!existsSync(resolvedSource)) { res.status(404).json({ error: 'source file not found' }); return; }
       mkdirSync(resolvedTargetDir, { recursive: true });
       if (op === 'move') { renameSync(resolvedSource, resolvedTarget); }

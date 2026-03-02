@@ -1,12 +1,66 @@
 import { Router } from 'express';
-import { spawn } from 'child_process';
+import { spawn, execFile } from 'child_process';
 import { promises as fsAgentPromises } from 'fs';
 import { existsSync, readFileSync, statSync } from 'fs';
-import { exec } from 'child_process';
 import { promisify } from 'util';
 import { join, resolve } from 'path';
 
-const execAsync = promisify(exec);
+import { parsePersonaMd } from './shared/utils.js';
+
+const execFileAsync = promisify(execFile);
+
+// --- Shared Helpers ---
+
+/** Safe file read with fallback — used by multiple handlers */
+async function readSafe(p: string, fb = ''): Promise<string> {
+  try { return await fsAgentPromises.readFile(p, 'utf-8'); } catch { return fb; }
+}
+
+// Allowlist of safe command prefixes for agent approval execution.
+// Only commands starting with these prefixes are permitted.
+const SAFE_APPROVAL_CMD_PREFIXES = [
+  'git ',
+  'python3 ',
+  'node ',
+  'npm ',
+  'cp ',
+  'mv ',
+  'mkdir ',
+];
+
+/** Validate and split a shell command string into [binary, ...args] for execFile.
+ *  Throws if the command does not match the allowlist. */
+function validateAndSplitCommand(command: string): { file: string; args: string[] } {
+  const trimmed = command.trim();
+  const isAllowed = SAFE_APPROVAL_CMD_PREFIXES.some(prefix => trimmed.startsWith(prefix));
+  if (!isAllowed) {
+    throw new Error(`Command not in allowlist: ${trimmed.slice(0, 80)}`);
+  }
+  // Simple split on whitespace — does not handle quoted args, which is intentional
+  // for security (prevents shell metacharacter abuse).
+  const parts = trimmed.split(/\s+/);
+  return { file: parts[0], args: parts.slice(1) };
+}
+
+// --- Events file cache for SSE stream (shared across all clients) ---
+let _eventsCache: { data: any; timestamp: number } | null = null;
+const EVENTS_CACHE_TTL = 3000; // 3 seconds — matches SSE interval
+
+async function readEventsCached(eventsFile: string): Promise<any[]> {
+  const now = Date.now();
+  if (_eventsCache && now - _eventsCache.timestamp < EVENTS_CACHE_TTL) {
+    return _eventsCache.data;
+  }
+  try {
+    const raw = await fsAgentPromises.readFile(eventsFile, 'utf-8');
+    const eventsData = JSON.parse(raw);
+    const events = Array.isArray(eventsData) ? eventsData : (eventsData.events || []);
+    _eventsCache = { data: events, timestamp: now };
+    return events;
+  } catch {
+    return [];
+  }
+}
 
 const router = Router();
 
@@ -142,10 +196,22 @@ router.post('/api/agents/approve', async (req, res) => {
     const entry = JSON.parse(lines[index]);
     lines.splice(index, 1);
     await fsAgentPromises.writeFile(`${AGENTS_DIR}/approvals/pending.jsonl`, lines.join('\n') + (lines.length ? '\n' : ''));
-    if (execute && entry.type === 'bash') execAsync(entry.payload, { cwd: AGENTS_DIR, timeout: 30000 }).then(({stdout, stderr}) => console.log('[Approval] OK:', stdout || stderr)).catch(e => console.error('[Approval]', e.message));
+    if (execute && entry.type === 'bash') {
+      try {
+        const { file, args } = validateAndSplitCommand(entry.payload);
+        execFileAsync(file, args, { cwd: AGENTS_DIR, timeout: 30000 })
+          .then(({ stdout, stderr }) => console.log('[Approval] OK:', stdout || stderr))
+          .catch(e => console.error('[Approval]', e.message));
+      } catch (validationErr: any) {
+        console.error('[Approval] Blocked unsafe command:', validationErr.message);
+        return res.status(400).json({ error: validationErr.message });
+      }
+    }
     res.json({ ok: true, executed: execute && entry.type === 'bash' });
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
+
+const AGENT_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
 router.post('/api/agents/trigger/:id', (req, res) => {
   const { id } = req.params;
@@ -154,10 +220,16 @@ router.post('/api/agents/trigger/:id', (req, res) => {
   runningAgents.add(id);
   console.log(`[AgentTrigger] Starting: ${id}`);
   const proc = spawn('python3', ['scheduler.py', '--once', id], { cwd: AGENTS_DIR, detached: false, stdio: ['ignore', 'pipe', 'pipe'] });
-  proc.on('error', (err) => { runningAgents.delete(id); console.warn(`[Server] agent trigger spawn error for ${id}:`, err); });
+  // Timeout guard: kill the process if it hangs beyond AGENT_TIMEOUT_MS
+  const timeout = setTimeout(() => {
+    console.error(`[Agent:${id}] TIMEOUT after ${AGENT_TIMEOUT_MS / 60000}min — killing process`);
+    proc.kill('SIGKILL');
+    runningAgents.delete(id);
+  }, AGENT_TIMEOUT_MS);
+  proc.on('error', (err) => { clearTimeout(timeout); runningAgents.delete(id); console.warn(`[Server] agent trigger spawn error for ${id}:`, err); });
   proc.stdout?.on('data', (d: Buffer) => console.log(`[Agent:${id}]`, d.toString().trim()));
   proc.stderr?.on('data', (d: Buffer) => console.error(`[Agent:${id}]`, d.toString().trim()));
-  proc.on('close', (code) => { runningAgents.delete(id); console.log(`[Agent:${id}] done (exit ${code})`); });
+  proc.on('close', (code) => { clearTimeout(timeout); runningAgents.delete(id); console.log(`[Agent:${id}] done (exit ${code})`); });
   res.json({ ok: true, agent_id: id, started_at: new Date().toISOString() });
 });
 
@@ -203,10 +275,9 @@ const CLAUDE_AGENT_REGISTRY: Record<string, { name: string; schedule: string; ta
   'klaus-schmidt':   { name: 'Klaus Schmidt',    schedule: 'Mi 09:00',       task_type: 'REVIEW' },
 };
 
-router.get('/api/agents/claude/status', async (_req, res) => {
-  try {
-  const readSafe = async (p: string, fb = '') => { try { return await fsAgentPromises.readFile(p, 'utf-8'); } catch { return fb; } };
-  const agents = await Promise.all(Object.entries(CLAUDE_AGENT_REGISTRY).map(async ([id, info]) => {
+/** Helper: gather Claude agent status data (used by both the status endpoint and recommendations) */
+async function getClaudeAgentStatuses(): Promise<any[]> {
+  return Promise.all(Object.entries(CLAUDE_AGENT_REGISTRY).map(async ([id, info]) => {
     let last_run: string | null = null; let last_outcome = '';
     try {
       const lines = (await fsAgentPromises.readFile(`${AGENTS_DIR}/memory/${id}.jsonl`, 'utf-8')).trim().split('\n').filter(Boolean);
@@ -239,6 +310,11 @@ router.get('/api/agents/claude/status', async (_req, res) => {
       inbox_count,
     };
   }));
+}
+
+router.get('/api/agents/claude/status', async (_req, res) => {
+  try {
+  const agents = await getClaudeAgentStatuses();
   res.json({ agents });
   } catch (err: any) {
     console.warn('[Server] GET /api/agents/claude/status error:', err);
@@ -256,7 +332,6 @@ router.post('/api/agents/claude/run', async (req, res) => {
   const taskId = `${persona_id}-${Date.now()}`;
   const logFile = `${CLAUDE_LOGS_DIR}/${taskId}.log`;
   await fsAgentPromises.mkdir(CLAUDE_LOGS_DIR, { recursive: true });
-  const readSafe = async (p: string, fb = '') => { try { return await fsAgentPromises.readFile(p, 'utf-8'); } catch { return fb; } };
   const basePrompt    = await readSafe(`${PROMPTS_DIR}/_base_system.md`);
   const personaPrompt = await readSafe(`${PROMPTS_DIR}/${persona_id}.md`, `Du bist ${info.name} bei Werkingflow.`);
   const memory        = await readSafe(`${AGENTS_DIR}/memory/${persona_id}.summary.md`, 'Erster Durchlauf — kein vorheriges Memory.');
@@ -317,7 +392,13 @@ router.post('/api/agents/claude/run', async (req, res) => {
     ? ['-u', 'claude-user', 'claude', '--dangerously-skip-permissions', '--print']
     : ['--dangerously-skip-permissions', '--print'];
   const proc = spawn(cmd, args, { cwd: '/root/projekte/werkingflow', stdio: ['pipe', 'pipe', 'pipe'], env: spawnEnv });
-  proc.on('error', (err) => { runningClaudes.delete(persona_id); console.warn(`[Server] claude agent spawn error for ${persona_id}:`, err); });
+  // Timeout guard: kill the process if it hangs beyond 30 minutes
+  const claudeTimeout = setTimeout(() => {
+    console.error(`[ClaudeAgent:${persona_id}] TIMEOUT after 30min — killing process`);
+    proc.kill('SIGKILL');
+    runningClaudes.delete(persona_id);
+  }, AGENT_TIMEOUT_MS);
+  proc.on('error', (err) => { clearTimeout(claudeTimeout); runningClaudes.delete(persona_id); console.warn(`[Server] claude agent spawn error for ${persona_id}:`, err); });
   if (!proc.stdin) throw new Error(`Failed to open stdin for ${persona_id}`);
   proc.stdin.write(fullPrompt);
   proc.stdin.end();
@@ -325,7 +406,7 @@ router.post('/api/agents/claude/run', async (req, res) => {
   writeLog(`[${now}] ${info.name} gestartet — ${taskDesc}\n${'─'.repeat(60)}\n\n`);
   proc.stdout?.on('data', (d: Buffer) => writeLog(d.toString()));
   proc.stderr?.on('data', (d: Buffer) => writeLog(`[ERR] ${d.toString()}`));
-  proc.on('close', (code) => { runningClaudes.delete(persona_id); writeLog(`\n${'─'.repeat(60)}\n[DONE] Exit: ${code}\n`); console.log(`[ClaudeAgent:${persona_id}] done (${code})`); });
+  proc.on('close', (code) => { clearTimeout(claudeTimeout); runningClaudes.delete(persona_id); writeLog(`\n${'─'.repeat(60)}\n[DONE] Exit: ${code}\n`); console.log(`[ClaudeAgent:${persona_id}] done (${code})`); });
   runningClaudes.set(persona_id, proc);
   console.log(`[ClaudeAgent] Starting ${persona_id} (${runMode}) → ${logFile}`);
   const planFile = runMode === 'plan' ? `${persona_id}-${Date.now()}.md` : (plan_id ?? null);
@@ -405,11 +486,9 @@ router.post('/api/agents/business/approve', async (req, res) => {
 
     // Auto-commit (approved option from questions)
     const message = commit_message ?? `Approved by Rafael: ${finalPath.replace(`${BUSINESS_DIR}/`, '')}`;
-    const { execAsync } = await import('child_process');
-    const { promisify } = await import('util');
-    const exec = promisify(execAsync);
     try {
-      await exec(`cd ${BUSINESS_DIR} && git add "${finalPath}" && git commit -m "${message}"`, { timeout: 10000 });
+      await execFileAsync('git', ['add', finalPath], { cwd: BUSINESS_DIR, timeout: 10000 });
+      await execFileAsync('git', ['commit', '-m', message], { cwd: BUSINESS_DIR, timeout: 10000 });
     } catch (gitErr) {
       console.warn('[BusinessApprove] Git commit failed:', gitErr);
       // Non-fatal — file is still moved
@@ -582,15 +661,13 @@ router.get('/api/agents/activity-stream', (_req, res) => {
     message: 'Activity stream connected'
   })}\n\n`);
 
-  // Load events.json and stream latest events
+  // Load events.json and stream latest events (async + cached across all SSE clients)
   const eventsFile = join(ACTIVE_DIR, 'team', 'events.json');
 
   let eventIndex = 0;
-  const interval = setInterval(() => {
+  const interval = setInterval(async () => {
     try {
-      // Re-read events.json every cycle (allows live updates)
-      const eventsData = JSON.parse(readFileSync(eventsFile, 'utf8'));
-      const events = Array.isArray(eventsData) ? eventsData : (eventsData.events || []);
+      const events = await readEventsCached(eventsFile);
 
       if (events.length === 0) {
         // No events available - send placeholder
@@ -663,48 +740,40 @@ router.get('/api/agents/recommendations', async (_req, res) => {
     } catch (err) { console.warn('[Server] recommendations business-approvals check error:', err); }
 
     // 2. Check for agents with scheduled runs that are overdue
+    // 3. Count idle vs working agents for tips
+    // (Direct call — no self-fetch via HTTP)
+    let idleCount = 0;
+    let workingCount = 0;
     try {
-      const agentStatusRes = await fetch('http://localhost:4005/api/agents/claude/status');
-      if (agentStatusRes.ok) {
-        const { agents } = await agentStatusRes.json();
+      const agents = await getClaudeAgentStatuses();
 
-        agents.forEach((agent: any) => {
-          // Check if agent has schedule and last run was >7 days ago
-          if (agent.last_run) {
-            const daysSinceRun = Math.floor((Date.now() - new Date(agent.last_run).getTime()) / 86400000);
+      agents.forEach((agent: any) => {
+        // Check if agent has schedule and last run was >7 days ago
+        if (agent.last_run) {
+          const daysSinceRun = Math.floor((Date.now() - new Date(agent.last_run).getTime()) / 86400000);
 
-            if (daysSinceRun > 7 && agent.schedule && agent.schedule !== 'on-demand') {
-              recommended.push({
-                title: `Run ${agent.persona_name}`,
-                description: `Last run was ${daysSinceRun} days ago (scheduled: ${agent.schedule})`,
-                personaId: agent.persona_id,
-                personaName: agent.persona_name
-              });
-            }
-          } else if (agent.schedule && agent.schedule !== 'on-demand') {
-            // Never run but has schedule
+          if (daysSinceRun > 7 && agent.schedule && agent.schedule !== 'on-demand') {
             recommended.push({
-              title: `First run: ${agent.persona_name}`,
-              description: `Never run yet (scheduled: ${agent.schedule})`,
+              title: `Run ${agent.persona_name}`,
+              description: `Last run was ${daysSinceRun} days ago (scheduled: ${agent.schedule})`,
               personaId: agent.persona_id,
               personaName: agent.persona_name
             });
           }
-        });
-      }
-    } catch (err) { console.warn('[Server] recommendations overdue-agents check error:', err); }
+        } else if (agent.schedule && agent.schedule !== 'on-demand') {
+          // Never run but has schedule
+          recommended.push({
+            title: `First run: ${agent.persona_name}`,
+            description: `Never run yet (scheduled: ${agent.schedule})`,
+            personaId: agent.persona_id,
+            personaName: agent.persona_name
+          });
+        }
+      });
 
-    // 3. Count idle vs working agents for tips
-    let idleCount = 0;
-    let workingCount = 0;
-    try {
-      const agentStatusRes = await fetch('http://localhost:4005/api/agents/claude/status', { signal: AbortSignal.timeout(5000) });
-      if (agentStatusRes.ok) {
-        const { agents } = await agentStatusRes.json();
-        idleCount = agents.filter((a: any) => a.status === 'idle').length;
-        workingCount = agents.filter((a: any) => a.status === 'working').length;
-      }
-    } catch (err) { console.warn('[Server] recommendations agent-count check error:', err); }
+      idleCount = agents.filter((a: any) => a.status === 'idle').length;
+      workingCount = agents.filter((a: any) => a.status === 'working').length;
+    } catch (err) { console.warn('[Server] recommendations agent-status check error:', err); }
 
     res.json({
       urgent,
@@ -728,44 +797,33 @@ router.get('/api/agents/persona/:id', async (req, res) => {
   try {
     const content = await fsAgentPromises.readFile(personaPath, 'utf-8');
 
-    // Simple inline parser (matches personaParser.ts logic)
+    // Base fields from shared parser
+    const base = parsePersonaMd(`${id}.md`, content);
+
+    // Extended fields specific to this endpoint
     const persona: Record<string, any> = {
-      id,
-      name: '',
-      role: '',
-      mbti: '',
+      ...base,
       strengths: [],
       weaknesses: [],
       responsibilities: [],
       collaboration: [],
-      scenarios: []
+      scenarios: [],
     };
 
-    // Extract name and role from header
-    const headerMatch = content.match(/^#\s+(.+?)\s+-\s+(.+?)$/m);
-    if (headerMatch) {
-      persona.name = headerMatch[1].trim();
-      persona.role = headerMatch[2].trim();
-    }
-
-    // Extract MBTI
-    const mbtiMatch = content.match(/\*\*MBTI\*\*:\s+(.+?)$/m);
-    if (mbtiMatch) persona.mbti = mbtiMatch[1].trim();
-
-    // Extract Specialty
+    // Extract Specialty (not in shared parser)
     const specialtyMatch = content.match(/\*\*Spezialgebiet\*\*:\s+(.+?)$/m);
     if (specialtyMatch) persona.specialty = specialtyMatch[1].trim();
 
-    // Extract Reports To
-    const reportsToMatch = content.match(/\*\*Berichtet an\*\*:\s+(.+?)$/m);
-    if (reportsToMatch) persona.reportsTo = reportsToMatch[1].trim();
+    // Extract Reports To (alternate format without leading dash)
+    const reportsToAlt = content.match(/\*\*Berichtet an\*\*:\s+(.+?)$/m);
+    if (reportsToAlt) persona.reportsTo = reportsToAlt[1].trim();
 
-    // Extract metadata
-    const teamMatch = content.match(/\*\*Team\*\*:\s+(.+?)$/m);
-    if (teamMatch) persona.team = teamMatch[1].trim();
+    // Extract metadata (alternate format without leading dash)
+    const teamAlt = content.match(/\*\*Team\*\*:\s+(.+?)$/m);
+    if (teamAlt) persona.team = teamAlt[1].trim();
 
-    const deptMatch = content.match(/\*\*Department\*\*:\s+(.+?)$/m);
-    if (deptMatch) persona.department = deptMatch[1].trim();
+    const deptAlt = content.match(/\*\*Department\*\*:\s+(.+?)$/m);
+    if (deptAlt) persona.department = deptAlt[1].trim();
 
     // Extract motto
     const mottoMatch = content.match(/>\s+"(.+?)"/);
@@ -862,26 +920,21 @@ router.get('/api/agents/team/structure', async (_req, res) => {
     const personas: Array<any> = [];
 
     for (const file of mdFiles) {
-      const id = file.replace('.md', '');
       const content = await fsAgentPromises.readFile(`${personasDir}/${file}`, 'utf-8');
 
-      const persona: Record<string, any> = { id, responsibilities: [], collaboration: [] };
+      // Base fields from shared parser
+      const base = parsePersonaMd(file, content);
+      const persona: Record<string, any> = { ...base, responsibilities: [], collaboration: [] };
 
-      // Extract name, role, reportsTo
-      const headerMatch = content.match(/^#\s+(.+?)\s+-\s+(.+?)$/m);
-      if (headerMatch) {
-        persona.name = headerMatch[1].trim();
-        persona.role = headerMatch[2].trim();
-      }
+      // Override metadata with alternate format (without leading dash)
+      const reportsToAlt = content.match(/\*\*Berichtet an\*\*:\s+(.+?)$/m);
+      if (reportsToAlt) persona.reportsTo = reportsToAlt[1].trim();
 
-      const reportsToMatch = content.match(/\*\*Berichtet an\*\*:\s+(.+?)$/m);
-      if (reportsToMatch) persona.reportsTo = reportsToMatch[1].trim();
+      const teamAlt = content.match(/\*\*Team\*\*:\s+(.+?)$/m);
+      if (teamAlt) persona.team = teamAlt[1].trim();
 
-      const teamMatch = content.match(/\*\*Team\*\*:\s+(.+?)$/m);
-      if (teamMatch) persona.team = teamMatch[1].trim();
-
-      const deptMatch = content.match(/\*\*Department\*\*:\s+(.+?)$/m);
-      if (deptMatch) persona.department = deptMatch[1].trim();
+      const deptAlt = content.match(/\*\*Department\*\*:\s+(.+?)$/m);
+      if (deptAlt) persona.department = deptAlt[1].trim();
 
       // Extract responsibilities
       const responsSection = content.match(/##\s+Verantwortlichkeiten\s*([\s\S]*?)(?=##|$)/);

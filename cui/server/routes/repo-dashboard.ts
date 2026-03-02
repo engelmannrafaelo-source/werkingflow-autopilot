@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { readdirSync, statSync, existsSync } from 'fs';
 import { join } from 'path';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 
 // Simple cache (60 seconds TTL)
 let repoCache: { data: any; timestamp: number } | null = null;
@@ -11,6 +11,15 @@ let hierarchyCache: { data: any; timestamp: number } | null = null;
 const CACHE_TTL = 60000; // 60 seconds
 
 const router = Router();
+
+/** Safe wrapper around execFileSync that returns empty string on error */
+function execFileSafe(file: string, args: string[], opts: { cwd?: string; timeout?: number } = {}): string {
+  try {
+    return execFileSync(file, args, { encoding: 'utf8', timeout: opts.timeout ?? 10000, cwd: opts.cwd }).trim();
+  } catch {
+    return '';
+  }
+}
 
 // GET /repositories — Scan all git repos + disk usage
 router.get('/repositories', async (_req, res) => {
@@ -23,42 +32,42 @@ router.get('/repositories', async (_req, res) => {
     const projectsRoot = '/root/projekte';
     const repos: any[] = [];
 
-    // Find all .git directories
-    const gitDirs = execSync(`find ${projectsRoot} -type d -name .git 2>/dev/null`, { encoding: 'utf8' })
-      .trim()
-      .split('\n')
-      .filter(Boolean);
+    // Find all .git directories — using execFileSync with argument array (no shell)
+    const findResult = execFileSafe('find', [projectsRoot, '-type', 'd', '-name', '.git']);
+    const gitDirs = findResult.split('\n').filter(Boolean);
 
     for (const gitDir of gitDirs) {
       const repoPath = gitDir.replace('/.git', '');
       const repoName = repoPath.split('/').pop() || 'unknown';
 
       try {
-        // Git status
-        const branch = execSync(`cd ${repoPath} && git branch --show-current 2>/dev/null || echo "detached"`, { encoding: 'utf8' }).trim();
-        const uncommitted = execSync(`cd ${repoPath} && git status --porcelain 2>/dev/null | wc -l`, { encoding: 'utf8' }).trim();
-        const lastCommitRaw = execSync(`cd ${repoPath} && git log -1 --format="%H|%an|%s|%ci" 2>/dev/null || echo "|||"`, { encoding: 'utf8' }).trim();
+        // Git status — all using execFileSync with cwd (no shell interpolation)
+        const branch = execFileSafe('git', ['branch', '--show-current'], { cwd: repoPath }) || 'detached';
+
+        const statusOutput = execFileSafe('git', ['status', '--porcelain'], { cwd: repoPath });
+        const uncommitted = statusOutput ? statusOutput.split('\n').filter(Boolean).length : 0;
+
+        const lastCommitRaw = execFileSafe('git', ['log', '-1', '--format=%H|%an|%s|%ci'], { cwd: repoPath }) || '|||';
         const [hash, author, message, date] = lastCommitRaw.split('|');
 
-        // Disk size
-        const sizeBytes = parseInt(execSync(`du -sb ${repoPath} 2>/dev/null | cut -f1`, { encoding: 'utf8' }).trim() || '0');
-        const sizeHuman = execSync(`du -sh ${repoPath} 2>/dev/null | cut -f1`, { encoding: 'utf8' }).trim();
+        // Disk size — using execFileSync with argument array
+        const duBytesOutput = execFileSafe('du', ['-sb', repoPath]);
+        const sizeBytes = parseInt(duBytesOutput.split(/\s/)[0] || '0');
+        const duHumanOutput = execFileSafe('du', ['-sh', repoPath]);
+        const sizeHuman = duHumanOutput.split(/\s/)[0] || '0';
 
         // Last modified
         const stat = statSync(repoPath);
         const lastModified = stat.mtime.toISOString();
 
         // Remote URL
-        let remoteUrl = '';
-        try {
-          remoteUrl = execSync(`cd ${repoPath} && git config --get remote.origin.url 2>/dev/null || echo ""`, { encoding: 'utf8' }).trim();
-        } catch (err) { /* no remote configured, skip */ }
+        const remoteUrl = execFileSafe('git', ['config', '--get', 'remote.origin.url'], { cwd: repoPath });
 
         repos.push({
           name: repoName,
           path: repoPath,
           branch,
-          uncommitted: parseInt(uncommitted),
+          uncommitted,
           lastCommit: {
             hash: hash?.slice(0, 7) || '',
             author: author || '',
@@ -71,7 +80,7 @@ router.get('/repositories', async (_req, res) => {
           },
           lastModified,
           remoteUrl,
-          status: parseInt(uncommitted) > 0 ? 'dirty' : 'clean',
+          status: uncommitted > 0 ? 'dirty' : 'clean',
         });
       } catch (err: any) {
         console.error(`[Repo Dashboard] Error scanning ${repoPath}:`, err.message);
@@ -99,11 +108,11 @@ router.get('/pipeline', async (_req, res) => {
     }
 
     const pipelineScript = '/root/projekte/orchestrator/bin/pipeline-check';
-    const output = execSync(`${pipelineScript} --json 2>/dev/null || echo '{}'`, { encoding: 'utf8' }).trim();
+    const output = execFileSafe(pipelineScript, ['--json'], { timeout: 30000 });
 
     let pipelineData = {};
     try {
-      pipelineData = JSON.parse(output);
+      pipelineData = JSON.parse(output || '{}');
     } catch {
       pipelineData = { error: 'Failed to parse pipeline-check output' };
     }
@@ -137,8 +146,12 @@ router.get('/structure', async (_req, res) => {
         if (!stat.isDirectory()) continue;
 
         const isGit = existsSync(join(itemPath, '.git'));
-        const sizeHuman = execSync(`du -sh "${itemPath}" 2>/dev/null | cut -f1`, { encoding: 'utf8' }).trim();
-        const sizeBytes = parseInt(execSync(`du -sb "${itemPath}" 2>/dev/null | cut -f1`, { encoding: 'utf8' }).trim() || '0');
+
+        // Disk size — using execFileSync with argument array (no shell)
+        const duHumanOutput = execFileSafe('du', ['-sh', itemPath]);
+        const sizeHuman = duHumanOutput.split(/\s/)[0] || '0';
+        const duBytesOutput = execFileSafe('du', ['-sb', itemPath]);
+        const sizeBytes = parseInt(duBytesOutput.split(/\s/)[0] || '0');
 
         structure.push({
           name: item,

@@ -42,6 +42,7 @@ import {
   broadcast,
   clients,
   initWebSocket,
+  cleanupState,
   visibilityRegistry,
   workspaceState,
   DATA_DIR,
@@ -66,7 +67,7 @@ import createFilesRouter from './routes/files.js';
 import createLayoutsRouter from './routes/layouts.js';
 import createScreenshotRoutes from './routes/screenshots.js';
 import templatesRouter, { initTemplatesRouter } from './routes/templates.js';
-import createAutoInjectRouter, { startAutoInjectTimer } from './routes/autoinject.js';
+import createAutoInjectRouter, { startAutoInjectTimer, stopAutoInjectTimer } from './routes/autoinject.js';
 import agentsRouter from './routes/agents.js';
 import bridgeRouter from './routes/bridge.js';
 import repoDashboardRouter from './routes/repo-dashboard.js';
@@ -134,9 +135,9 @@ function findJsonlPath(sessionId: string): string | null {
           const files = readdirSync(wsPath);
           const match = files.find(f => f.startsWith(sessionId));
           if (match) return join(wsPath, match);
-        } catch { /* skip unreadable dirs */ }
+        } catch (err) { console.warn('[Index] Unreadable dir in findJsonlPath:', err instanceof Error ? err.message : err); }
       }
-    } catch { /* account dir not found */ }
+    } catch (err) { console.warn('[Index] Account dir not found:', err instanceof Error ? err.message : err); }
   }
   return null;
 }
@@ -147,11 +148,11 @@ function setLastPrompt(sessionId: string) {
   try {
     let data: Record<string, string> = {};
     if (existsSync(LAST_PROMPT_FILE)) {
-      try { data = JSON.parse(readFileSync(LAST_PROMPT_FILE, 'utf8')); } catch { /* ignore */ }
+      try { data = JSON.parse(readFileSync(LAST_PROMPT_FILE, 'utf8')); } catch (err) { console.warn('[Index] Failed to parse last-prompt file:', err instanceof Error ? err.message : err); }
     }
     data[sessionId] = new Date().toISOString();
     writeFileSync(LAST_PROMPT_FILE, JSON.stringify(data, null, 2));
-  } catch { /* ignore write errors */ }
+  } catch (err) { console.warn('[Index] Failed to write last-prompt:', err instanceof Error ? err.message : err); }
 }
 
 setupCuiProxies({
@@ -244,7 +245,7 @@ initTemplatesRouter(DATA_DIR);
 
 const filesRouter = createFilesRouter({ DATA_DIR, ACTIVE_DIR, PORT });
 const layoutsRouter = createLayoutsRouter({ LAYOUTS_DIR, PROJECTS_DIR, NOTES_DIR, UPLOADS_DIR, DATA_DIR });
-const screenshotsRouter = createScreenshotRoutes({ broadcast, clients });
+const screenshotsRouter = createScreenshotRoutes({ broadcast });
 const infrastructureRouter = createInfrastructureRouter({ metricsDb, broadcast, WORKSPACE_ROOT });
 const teamRouter = createTeamRouter();
 const adminRouter = createAdminRouter({ broadcast });
@@ -331,6 +332,8 @@ startAutoInjectTimer();
 process.on('SIGTERM', () => {
   console.log('[Process] SIGTERM received, shutting down gracefully');
   knowledgeWatcher.stop();
+  stopAutoInjectTimer();
+  cleanupState();
   process.exit(0);
 });
 

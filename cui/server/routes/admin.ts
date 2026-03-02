@@ -120,22 +120,22 @@ export default function createAdminRouter(deps: AdminDeps): Router {
 
   router.get('/admin/wr/users', async (_req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/users`); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
 
   router.post('/admin/wr/users/:id/approve', async (req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/users/${req.params.id}/approve`, { method: 'POST' }); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
 
   router.post('/admin/wr/users/:id/verify', async (req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/users/${req.params.id}/verify`, { method: 'POST' }); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
 
   router.get('/admin/wr/billing/overview', async (_req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/billing/overview`); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
 
   // Top-Up
@@ -166,32 +166,32 @@ export default function createAdminRouter(deps: AdminDeps): Router {
     try {
       const tenantId = req.query.tenantId;
       const url = tenantId
-        ? `${wrBase()}/api/admin/billing/invoices?tenantId=${tenantId}`
+        ? `${wrBase()}/api/admin/billing/invoices?tenantId=${encodeURIComponent(tenantId as string)}`
         : `${wrBase()}/api/admin/billing/invoices`;
       const r = await wrProxy(url);
       res.status(r.status).json(r.body);
     }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
 
   router.get('/admin/wr/billing/invoices/:id', async (req: Request, res: Response) => {
     try {
       const tenantId = req.query.tenantId;
       if (!tenantId) return res.status(400).json({ error: 'tenantId required' });
-      const r = await wrProxy(`${wrBase()}/api/admin/billing/invoices/${req.params.id}?tenantId=${tenantId}`);
+      const r = await wrProxy(`${wrBase()}/api/admin/billing/invoices/${encodeURIComponent(req.params.id)}?tenantId=${encodeURIComponent(tenantId as string)}`);
       res.status(r.status).json(r.body);
     }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
 
   router.post('/admin/wr/billing/invoices/:id/send', async (req: Request, res: Response) => {
     try {
       const tenantId = req.query.tenantId;
       if (!tenantId) return res.status(400).json({ error: 'tenantId required' });
-      const r = await wrProxy(`${wrBase()}/api/admin/billing/invoices/${req.params.id}/send?tenantId=${tenantId}`, { method: 'POST' });
+      const r = await wrProxy(`${wrBase()}/api/admin/billing/invoices/${encodeURIComponent(req.params.id)}/send?tenantId=${encodeURIComponent(tenantId as string)}`, { method: 'POST' });
       res.status(r.status).json(r.body);
     }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
 
   router.get('/admin/wr/billing/invoices/:id/pdf', async (req: Request, res: Response) => {
@@ -199,7 +199,7 @@ export default function createAdminRouter(deps: AdminDeps): Router {
       const tenantId = req.query.tenantId;
       if (!tenantId) return res.status(400).json({ error: 'tenantId required' });
       const response = await fetch(
-        `${wrBase()}/api/admin/billing/invoices/${req.params.id}/pdf?tenantId=${tenantId}`,
+        `${wrBase()}/api/admin/billing/invoices/${encodeURIComponent(req.params.id)}/pdf?tenantId=${encodeURIComponent(tenantId as string)}`,
         { headers: wrAdminHeaders(), signal: AbortSignal.timeout(30000) }
       );
       if (!response.ok) {
@@ -212,23 +212,23 @@ export default function createAdminRouter(deps: AdminDeps): Router {
       res.setHeader('Content-Disposition', `inline; filename="invoice-${req.params.id}.html"`);
       res.send(html);
     }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
 
   router.get('/admin/wr/usage/stats', async (req: Request, res: Response) => {
-    try { const r = await wrProxy(`${wrBase()}/api/admin/usage/stats?period=${req.query.period || 'month'}`); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    try { const r = await wrProxy(`${wrBase()}/api/admin/usage/stats?period=${encodeURIComponent((req.query.period as string) || 'month')}`); res.status(r.status).json(r.body); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
 
   router.get('/admin/wr/usage/activity', async (_req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/usage/activity`); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
 
   router.get('/admin/wr/usage/activity/users', async (req: Request, res: Response) => {
     try {
       const tenantId = req.query.tenantId;
-      const r = await wrProxy(`${wrBase()}/api/admin/usage/activity/users?tenantId=${tenantId}`);
+      const r = await wrProxy(`${wrBase()}/api/admin/usage/activity/users?tenantId=${encodeURIComponent(tenantId as string)}`);
       res.status(r.status).json(r.body);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -237,17 +237,17 @@ export default function createAdminRouter(deps: AdminDeps): Router {
 
   router.get('/admin/wr/feedback', async (_req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/feedback`); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
 
   router.get('/admin/wr/system-health', async (_req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/system-health`); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
 
   router.get('/admin/wr/usage/trend', async (_req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/usage/trend`); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
 
   // ============================================================
@@ -257,101 +257,101 @@ export default function createAdminRouter(deps: AdminDeps): Router {
   // Dashboard / Stats
   router.get('/admin/wr/stats', async (_req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/stats`); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
   router.get('/admin/wr/health', async (_req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/health`); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
   router.get('/admin/wr/infrastructure', async (_req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/infrastructure`); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
   router.get('/admin/wr/supabase-health', async (_req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/supabase-health`); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
 
   // Tenant CRUD
   router.get('/admin/wr/tenants', async (req: Request, res: Response) => {
     try { const qs = new URLSearchParams(req.query as Record<string, string>).toString(); const r = await wrProxy(`${wrBase()}/api/admin/tenants${qs ? '?' + qs : ''}`); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
   router.post('/admin/wr/tenants', async (req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/tenants`, { method: 'POST', body: JSON.stringify(req.body) }); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
   router.put('/admin/wr/tenants/:id', async (req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/tenants/${req.params.id}`, { method: 'PUT', body: JSON.stringify(req.body) }); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
   router.delete('/admin/wr/tenants/:id', async (req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/tenants/${req.params.id}`, { method: 'DELETE' }); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
 
   // Developer Tokens
   router.get('/admin/wr/developer-tokens', async (_req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/developer-tokens`); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
   router.post('/admin/wr/developer-tokens', async (req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/developer-tokens`, { method: 'POST', body: JSON.stringify(req.body) }); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
   router.delete('/admin/wr/developer-tokens/:id', async (req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/developer-tokens/${req.params.id}`, { method: 'DELETE' }); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
 
   // Audit Logs
   router.get('/admin/wr/audit', async (req: Request, res: Response) => {
     try { const qs = new URLSearchParams(req.query as Record<string, string>).toString(); const r = await wrProxy(`${wrBase()}/api/admin/audit${qs ? '?' + qs : ''}`); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
 
   // Platform Config
   router.get('/admin/wr/config', async (_req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/config`); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
   router.post('/admin/wr/config', async (req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/config`, { method: 'POST', body: JSON.stringify(req.body) }); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
 
   // Environments Config (for Pipeline URLs)
   router.get('/admin/wr/environments', async (_req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/environments`); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
   router.post('/admin/wr/environments', async (req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/environments`, { method: 'POST', body: JSON.stringify(req.body) }); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
 
   // AI Usage
   router.get('/admin/wr/ai-usage', async (_req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/ai-usage`); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
 
   // Billing (extended)
   router.get('/admin/wr/billing', async (_req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/billing`); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
 
   // Vercel Deploy Trigger
   router.post('/admin/wr/deploy', async (req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/services/vercel/deploy`, { method: 'POST', body: JSON.stringify(req.body) }); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
 
   // Hetzner Restart
   router.post('/admin/wr/hetzner/restart', async (req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/services/hetzner/restart`, { method: 'POST', body: JSON.stringify(req.body) }); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
 
   // User creation (via Supabase admin API directly from CUI server)
@@ -423,17 +423,17 @@ export default function createAdminRouter(deps: AdminDeps): Router {
   // Impersonation routes
   router.get('/admin/wr/impersonation', async (_req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/impersonation`); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
 
   router.post('/admin/wr/users/:id/impersonate', async (req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/users/${req.params.id}/impersonate`, { method: 'POST' }); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
 
   router.delete('/admin/wr/impersonation/:id/end', async (req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/impersonation/${req.params.id}/end`, { method: 'DELETE' }); res.status(r.status).json(r.body); }
-    catch (err: any) { res.status(500).json({ error: err.message }); }
+    catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
 
   // ============================================================

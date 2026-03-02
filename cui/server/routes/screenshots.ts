@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync, copyFileSync } from 'fs';
-import type { WebSocket } from 'ws';
+import { resolve } from 'path';
 
 const SCREENSHOT_DIR = '/tmp/cui-screenshots';
+const ALLOWED_SAVE_PREFIXES = ['/root/projekte', '/tmp', SCREENSHOT_DIR];
 if (!existsSync(SCREENSHOT_DIR)) mkdirSync(SCREENSHOT_DIR, { recursive: true });
 
 interface PanelScreenshot {
@@ -52,7 +53,7 @@ async function openCuiPanel(opts: { project?: string; tab?: string; nodeId?: str
   return { browser, page };
 }
 
-export default function createScreenshotRoutes(deps: { broadcast: Function, clients: Set<WebSocket> }) {
+export default function createScreenshotRoutes(deps: { broadcast: Function }) {
   const { broadcast } = deps;
   const router = Router();
 
@@ -114,6 +115,12 @@ export default function createScreenshotRoutes(deps: { broadcast: Function, clie
     const { panel } = req.params;
     const { error } = req.body as { error?: string };
     console.error(`[Screenshot] Frontend error for "${panel}": ${error}`);
+    // Cap screenshotErrors map to prevent unbounded growth
+    if (screenshotErrors.size > 50) {
+      // Remove oldest entries (first inserted)
+      const keysToDelete = Array.from(screenshotErrors.keys()).slice(0, screenshotErrors.size - 50);
+      for (const key of keysToDelete) screenshotErrors.delete(key);
+    }
     screenshotErrors.set(panel, { error: error || 'unknown', at: new Date().toISOString() });
     res.json({ ok: true });
   });
@@ -148,6 +155,18 @@ export default function createScreenshotRoutes(deps: { broadcast: Function, clie
   router.post('/control/screenshot/request', async (req, res) => {
     const { panel, wait, contentWait, saveTo } = req.body as { panel?: string; wait?: number; contentWait?: number; saveTo?: string };
     if (!panel) { res.status(400).json({ error: 'panel required' }); return; }
+
+    // Validate saveTo path to prevent arbitrary file overwrite
+    if (saveTo) {
+      const resolvedSaveTo = resolve(saveTo);
+      const isAllowed = ALLOWED_SAVE_PREFIXES.some(prefix => resolvedSaveTo.startsWith(prefix));
+      if (!isAllowed) {
+        console.warn(`[Screenshots] Blocked saveTo outside allowed directories: ${resolvedSaveTo}`);
+        res.status(403).json({ error: `saveTo path must be within allowed directories: ${ALLOWED_SAVE_PREFIXES.join(', ')}` });
+        return;
+      }
+    }
+
     const waitMs = Math.min(wait ?? 12000, 30000);
     screenshotErrors.delete(panel);
     // Step 1: Ensure panel exists and is visible (LayoutManager adds/activates it)

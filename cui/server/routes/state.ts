@@ -16,6 +16,12 @@ import { registerWebSocketClient } from '../document-manager.js';
 // (ws module exports WebSocket class with OPEN/CLOSED statics)
 import { WebSocket } from 'ws';
 
+// Track WS liveness without unsafe (ws as any) casts
+const wsAlive = new WeakMap<WsType, boolean>();
+
+// --- Interval tracking for cleanup ---
+const _intervals: ReturnType<typeof setInterval>[] = [];
+
 // --- Workspace Runtime State (for Control API) ---
 const startTime = Date.now();
 export const workspaceState = {
@@ -25,32 +31,24 @@ export const workspaceState = {
 };
 
 // --- Panel Visibility Registry ---
-export interface PanelVisibility {
-  panelId: string;
-  projectId: string;
-  accountId: string;
-  sessionId: string;
-  route: string;
-  updatedAt: number;
-}
+// Type imported from shared/types.ts — re-exported for backward compatibility
+import type { PanelVisibility as _PanelVisibility } from './shared/types.js';
+export type PanelVisibility = _PanelVisibility;
 
 export const visibilityRegistry = new Map<string, PanelVisibility>();
-
-// Forward-declared broadcast — set by initState()
-let _broadcast: (data: Record<string, unknown>) => void = () => {};
 
 export function updatePanelVisibility(data: { panelId: string; projectId: string; accountId: string; sessionId: string; route: string }): void {
   const key = `${data.projectId}:${data.panelId}`;
   const prev = visibilityRegistry.get(key);
   visibilityRegistry.set(key, { ...data, updatedAt: Date.now() });
   if (!prev || prev.sessionId !== data.sessionId) {
-    _broadcast({ type: 'visibility-update', visibleSessionIds: [...getVisibleSessionIds()] });
+    broadcast({ type: 'visibility-update', visibleSessionIds: [...getVisibleSessionIds()] });
   }
 }
 
 export function removePanelVisibility(projectId: string, panelId: string): void {
   visibilityRegistry.delete(`${projectId}:${panelId}`);
-  _broadcast({ type: 'visibility-update', visibleSessionIds: [...getVisibleSessionIds()] });
+  broadcast({ type: 'visibility-update', visibleSessionIds: [...getVisibleSessionIds()] });
 }
 
 export function getVisibleSessionIds(): Set<string> {
@@ -62,26 +60,27 @@ export function getVisibleSessionIds(): Set<string> {
 }
 
 // Cleanup stale entries every 60s (panels closed, browser refreshed)
-setInterval(() => {
+_intervals.push(setInterval(() => {
   const cutoff = Date.now() - 5 * 60 * 1000;
   for (const [key, entry] of visibilityRegistry) {
     if (entry.updatedAt < cutoff) visibilityRegistry.delete(key);
   }
-}, 60000);
+}, 60000));
 
 // --- Active Stream Tracking: sessionId -> streamingId ---
 export const activeStreams = new Map<string, string>();
 
 // --- Per-Session Attention State Tracker ---
-export type AttentionReason = 'plan' | 'question' | 'permission' | 'error' | 'done' | 'rate_limit' | 'send_failed';
-export type ConvAttentionState = 'working' | 'needs_attention' | 'idle';
-export interface SessionState {
-  state: ConvAttentionState;
-  reason?: AttentionReason;
-  since: number;
-  accountId: string;
-  sessionId?: string;
-}
+// Types imported from shared/types.ts — re-exported for backward compatibility.
+// Modules that previously imported these from state.ts will continue to work.
+import type {
+  AttentionReason as _AttentionReason,
+  ConvAttentionState as _ConvAttentionState,
+  SessionState as _SessionState,
+} from './shared/types.js';
+export type AttentionReason = _AttentionReason;
+export type ConvAttentionState = _ConvAttentionState;
+export type SessionState = _SessionState;
 
 // --- Persistent Storage Dirs ---
 export const DATA_DIR = resolve(import.meta.dirname ?? __dirname, '..', 'data');
@@ -104,7 +103,7 @@ export function persistSessionStates() {
     const out: Record<string, SessionState> = {};
     for (const [k, v] of sessionStates) out[k] = v;
     writeFileSync(SESSION_STATES_FILE, JSON.stringify(out, null, 2));
-  } catch { /* ignore write errors */ }
+  } catch (err) { console.warn('[State] Failed to persist session states:', err instanceof Error ? err.message : err); }
 }
 
 export function restoreSessionStates() {
@@ -137,7 +136,7 @@ export function setSessionState(key: string, accountId: string, state: ConvAtten
   const prev = sessionStates.get(key);
   if (prev?.state === state && prev?.reason === reason) return; // no change
   sessionStates.set(key, { state, reason, since: Date.now(), accountId, sessionId });
-  _broadcast({ type: 'conv-attention', key, accountId, sessionId, state, reason });
+  broadcast({ type: 'conv-attention', key, accountId, sessionId, state, reason });
   // Persist to disk for restart recovery
   persistSessionStates();
 }
@@ -168,7 +167,7 @@ export function detectAttentionMarkers(text: string): { state: ConvAttentionStat
 }
 
 // --- Periodic cleanup of stale state entries ---
-setInterval(() => {
+_intervals.push(setInterval(() => {
   const now = Date.now();
   let cleaned = 0;
   // sessionStates: remove entries older than 24h
@@ -184,8 +183,15 @@ setInterval(() => {
       activeStreams.delete(key); cleaned++;
     }
   }
+  // _lastBroadcast: evict entries older than 5 minutes when map grows beyond 100 keys
+  const lbKeys = Object.keys(_lastBroadcast);
+  if (lbKeys.length > 100) {
+    for (const k of lbKeys) {
+      if (now - _lastBroadcast[k].at > 300000) delete _lastBroadcast[k];
+    }
+  }
   if (cleaned > 0) console.log(`[Cleanup] Removed ${cleaned} stale state entries`);
-}, 300000); // Every 5 minutes
+}, 300000)); // Every 5 minutes
 
 // --- File Watcher ---
 const watchers = new Map<string, ReturnType<typeof watch>>();
@@ -248,7 +254,7 @@ let _broadcastT0 = Date.now();
 const _broadcastThrottled: Record<string, ReturnType<typeof setTimeout>> = {};
 
 // Log broadcast rate every 60s
-setInterval(() => {
+_intervals.push(setInterval(() => {
   if (_broadcastCount > 0 || _broadcastDropped > 0) {
     const s = ((Date.now() - _broadcastT0) / 1000).toFixed(0);
     console.log(`[Broadcast] ${s}s: ${_broadcastCount} sent, ${_broadcastDropped} dropped (${(_broadcastCount / (+s || 1)).toFixed(1)}/s)`);
@@ -256,7 +262,7 @@ setInterval(() => {
   _broadcastCount = 0;
   _broadcastDropped = 0;
   _broadcastT0 = Date.now();
-}, 60000);
+}, 60000));
 
 // Reference to _pendingChanges — set by caller via setPendingChangesRef()
 let _pendingChangesRef: { length: number } = { length: 0 };
@@ -266,11 +272,11 @@ export function setPendingChangesRef(ref: { length: number }) {
 }
 
 // Log memory + health every 5 minutes
-setInterval(() => {
+_intervals.push(setInterval(() => {
   const mem = process.memoryUsage();
   const uptimeMin = (process.uptime() / 60).toFixed(0);
   console.log(`[Health] uptime=${uptimeMin}m rss=${(mem.rss / 1024 / 1024).toFixed(0)}MB heap=${(mem.heapUsed / 1024 / 1024).toFixed(0)}/${(mem.heapTotal / 1024 / 1024).toFixed(0)}MB ws=${clients.size} pending=${_pendingChangesRef.length}`);
-}, 300000);
+}, 300000));
 
 export function broadcast(data: Record<string, unknown>) {
   const type = data.type as string;
@@ -313,7 +319,7 @@ export function broadcast(data: Record<string, unknown>) {
       const json = JSON.stringify(data);
       for (const client of clients) {
         if (client.readyState === WebSocket.OPEN) {
-          try { client.send(json); } catch { clients.delete(client); }
+          try { client.send(json); } catch (err) { console.warn('[WS] Client send failed, removing:', err instanceof Error ? err.message : err); clients.delete(client); }
         }
       }
     }, throttleMs);
@@ -325,10 +331,13 @@ export function broadcast(data: Record<string, unknown>) {
   const json = JSON.stringify(data);
   for (const client of clients) {
     if (client.readyState === WebSocket.OPEN) {
-      try { client.send(json); } catch { clients.delete(client); }
+      try { client.send(json); } catch (err) { console.warn('[WS] Client send failed, removing:', err instanceof Error ? err.message : err); clients.delete(client); }
     }
   }
 }
+
+// Guard against double-invocation of initWebSocket
+let _wsInitialized = false;
 
 /**
  * Initialize WebSocket connection handler on the given wss instance.
@@ -339,11 +348,13 @@ export function initWebSocket(
   wss: WssType,
   getPendingProfileResolve: () => ((result: unknown) => void) | null,
 ) {
+  if (_wsInitialized) { console.warn('[WS] initWebSocket called twice, ignoring'); return; }
+  _wsInitialized = true;
   wss.on('connection', (ws: WsType) => {
     clients.add(ws);
-    (ws as any)._alive = true;
+    wsAlive.set(ws, true);
     console.log(`[WS] Client connected (${clients.size} total)`);
-    ws.on('pong', () => { (ws as any)._alive = true; });
+    ws.on('pong', () => { wsAlive.set(ws, true); });
     ws.on('close', () => { clients.delete(ws); console.log(`[WS] Client disconnected (${clients.size} remaining)`); });
     ws.on('error', (err: Error) => { console.warn('[WS] Client error:', err.message); clients.delete(ws); });
 
@@ -351,8 +362,14 @@ export function initWebSocket(
     registerWebSocketClient(ws);
 
     ws.on('message', (raw: Buffer) => {
+      let msg: any;
       try {
-        const msg = JSON.parse(raw.toString());
+        msg = JSON.parse(raw.toString());
+      } catch {
+        // ignore malformed JSON messages
+        return;
+      }
+      try {
         if (msg.type === 'watch') {
           startWatching(msg.path);
         }
@@ -388,25 +405,25 @@ export function initWebSocket(
         if (msg.type === 'cpu-profile-result' && pendingProfileResolve) {
           pendingProfileResolve(msg.data);
         }
-      } catch {
-        // ignore malformed messages
+      } catch (err) {
+        console.warn('[WS] Message handler error:', err);
       }
     });
   });
 
   // WebSocket ping/pong heartbeat -- detect dead connections every 30s
-  setInterval(() => {
+  _intervals.push(setInterval(() => {
     for (const ws of clients) {
-      if (!(ws as any)._alive) { ws.terminate(); clients.delete(ws); continue; }
-      (ws as any)._alive = false;
-      try { ws.ping(); } catch { clients.delete(ws); }
+      if (!wsAlive.get(ws)) { ws.terminate(); clients.delete(ws); continue; }
+      wsAlive.set(ws, false);
+      try { ws.ping(); } catch (err) { console.warn('[WS] Ping failed, removing:', err instanceof Error ? err.message : err); clients.delete(ws); }
     }
-  }, 30000);
+  }, 30000));
 
-  // Wire up the module-internal broadcast reference
-  _broadcast = broadcast;
 }
 
-// Also set _broadcast immediately for code that runs at import time
-// (visibility cleanup interval etc. need broadcast before initWebSocket is called)
-_broadcast = broadcast;
+/** Clear all module-level intervals (for graceful shutdown / tests). */
+export function cleanupState() {
+  _intervals.forEach(clearInterval);
+  _intervals.length = 0;
+}

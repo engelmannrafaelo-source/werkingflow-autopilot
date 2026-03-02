@@ -11,7 +11,7 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import { readFileSync } from 'fs';
 import httpProxy from 'http-proxy';
 
-import type { ConvAttentionState, AttentionReason, SessionState } from './state.js';
+import type { ConvAttentionState, AttentionReason, SessionState } from './shared/types.js';
 
 // --- CUI Reverse Proxies ---
 // Each CUI account gets a local proxy port so iframes load same-origin (no cookie issues)
@@ -22,16 +22,14 @@ export const CUI_PROXIES = [
   { id: 'local',     localPort: 5004, target: 'http://127.0.0.1:4004' },
 ];
 
-// Track proxy health to avoid error spam for unconfigured proxies (e.g. local:4004)
-export const proxyHealthy = new Map<string, boolean>();
-
 // --- Dependencies injected via setupCuiProxies() ---
-let _broadcast: (data: Record<string, unknown>) => void;
-let _setSessionState: (key: string, accountId: string, state: ConvAttentionState, reason?: AttentionReason, sessionId?: string) => void;
-let _sessionStates: Map<string, SessionState>;
-let _detectAttentionMarkers: (text: string) => { state: ConvAttentionState; reason?: AttentionReason } | null;
-let _findJsonlPath: (sessionId: string) => string | null;
-let _setLastPrompt: (sessionId: string) => void;
+const NOT_INITIALIZED = () => { throw new Error('[Proxy] Module not initialized — call setupCuiProxies() first'); };
+let _broadcast: (data: Record<string, unknown>) => void = NOT_INITIALIZED as any;
+let _setSessionState: (key: string, accountId: string, state: ConvAttentionState, reason?: AttentionReason, sessionId?: string) => void = NOT_INITIALIZED as any;
+let _sessionStates: Map<string, SessionState> = new Map();
+let _detectAttentionMarkers: (text: string) => { state: ConvAttentionState; reason?: AttentionReason } | null = NOT_INITIALIZED as any;
+let _findJsonlPath: (sessionId: string) => string | null = NOT_INITIALIZED as any;
+let _setLastPrompt: (sessionId: string) => void = NOT_INITIALIZED as any;
 
 // SSE proxy: monitors upstream for attention markers (plan/question/done).
 // CRITICAL: Only sends SSE headers to browser if upstream has an active stream (200 OK).
@@ -230,7 +228,7 @@ export function checkSessionForRateLimit(sessionId: string, cuiId: string, delay
             _setSessionState(cuiId, cuiId, "idle", "rate_limit");
             return;
           }
-        } catch { /* skip */ }
+        } catch (err) { console.warn('[Proxy] JSONL parse error in rate limit check:', err instanceof Error ? err.message : err); }
       }
     } catch (err) {
       console.error("[RateLimit] Check failed:", (err as Error).message);
@@ -255,7 +253,7 @@ export function verifySendSuccess(sessionId: string): 'success' | 'no_response' 
       if (entry.message?.role === 'assistant' && entry.message?.model !== '<synthetic>') return 'success';
       // User message without assistant after it = no response yet
       if (entry.message?.role === 'user') return 'no_response';
-    } catch { continue; }
+    } catch (err) { console.warn('[Proxy] JSONL parse error in send verification:', err instanceof Error ? err.message : err); continue; }
   }
   return 'no_response';
 }
@@ -302,8 +300,8 @@ export function messagePostProxy(targetBase: string, cuiId: string, req: Incomin
               _setSessionState(cuiId, cuiId, 'idle', 'done');
             }, 10000);
           }
-        } catch {
-          console.log(`[${cuiId}] Non-JSON POST response, fallback broadcast`);
+        } catch (err) {
+          console.warn(`[${cuiId}] Non-JSON POST response:`, err instanceof Error ? err.message : err);
           setTimeout(() => {
             _broadcast({ type: 'cui-state', cuiId, state: 'done' });
             _broadcast({ type: 'cui-response-ready', cuiId });
@@ -620,7 +618,12 @@ export function logRequest(cuiId: string, req: IncomingMessage) {
 }
 
 // Rate-limit proxy error logging (1x/min per proxy) but always broadcast error state
-export const proxyErrorLog: Record<string, number> = {};
+const proxyErrorLog: Record<string, number> = {};
+
+/** Read-only accessor for proxy error timestamps (for diagnostics). */
+export function getProxyErrorLog(): Readonly<Record<string, number>> {
+  return proxyErrorLog;
+}
 
 /**
  * Create and start all CUI reverse proxy servers.
@@ -704,6 +707,10 @@ export function setupCuiProxies(deps: {
 
     proxyServer.listen(cui.localPort, () => {
       console.log(`[Proxy] ${cui.id}: localhost:${cui.localPort} → ${cui.target}`);
+    });
+
+    proxyServer.on('error', (err: any) => {
+      console.error(`[Proxy] ${cui.id}: Failed to listen on port ${cui.localPort}:`, err.message);
     });
   }
 }

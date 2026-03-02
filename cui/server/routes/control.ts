@@ -29,9 +29,12 @@ interface ControlDeps {
 
 // --- Syncthing Control ---
 const SYNCTHING_URL = 'http://127.0.0.1:8384';
-const SYNCTHING_API_KEY = process.env.SYNCTHING_API_KEY || 'ZHieF7vzTmgXQ7gcUZysPo5KM7fhCKdk';
+const SYNCTHING_API_KEY = process.env.SYNCTHING_API_KEY || '';
 
 async function syncthingFetch(path: string, method = 'GET'): Promise<any> {
+  if (!SYNCTHING_API_KEY) {
+    throw new Error('[Control] SYNCTHING_API_KEY not configured');
+  }
   const res = await fetch(`${SYNCTHING_URL}${path}`, {
     method,
     headers: { 'X-API-Key': SYNCTHING_API_KEY },
@@ -72,7 +75,7 @@ export default function createControlRouter(deps: ControlDeps): Router {
   const FINISHED_FILE = join(DATA_DIR, 'conv-finished.json');
   function loadFinished(): Record<string, boolean> {
     if (!existsSync(FINISHED_FILE)) return {};
-    try { return JSON.parse(readFileSync(FINISHED_FILE, 'utf8')); } catch { return {}; }
+    try { return JSON.parse(readFileSync(FINISHED_FILE, 'utf8')); } catch (err) { console.warn('[Control] Failed to load finished file:', err); return {}; }
   }
   function isFinished(sessionId: string): boolean {
     return loadFinished()[sessionId] === true;
@@ -80,7 +83,8 @@ export default function createControlRouter(deps: ControlDeps): Router {
 
   // --- Change Detection: Watch src/ and server/, notify frontend (no auto-build) ---
   const WORKSPACE_ROOT = resolve(import.meta.dirname ?? __dirname, '..');
-  let _pendingChanges: string[] = [];
+  let _pendingChanges = new Set<string>();
+  const MAX_PENDING_CHANGES = 1000;
   let _changeDebounce: ReturnType<typeof setTimeout> | null = null;
   let _syncInProgress = false;
 
@@ -103,13 +107,19 @@ export default function createControlRouter(deps: ControlDeps): Router {
     if (filePath.includes('/dist/') || filePath.includes('/node_modules/')) return;
     const rel = relative(WORKSPACE_ROOT, filePath);
     // No per-file console.log -- only log summary when broadcasting
-    if (!_pendingChanges.includes(rel)) _pendingChanges.push(rel);
+    if (_pendingChanges.size >= MAX_PENDING_CHANGES) {
+      console.warn(`[ChangeWatch] Pending changes cap reached (${MAX_PENDING_CHANGES}), dropping oldest`);
+      const first = _pendingChanges.values().next().value;
+      if (first !== undefined) _pendingChanges.delete(first);
+    }
+    _pendingChanges.add(rel);
 
     // Debounce: notify frontend after 5s quiet period (was 2s -- too aggressive during Syncthing bursts)
     if (_changeDebounce) clearTimeout(_changeDebounce);
     _changeDebounce = setTimeout(() => {
-      console.log(`[ChangeWatch] Update available: ${_pendingChanges.length} files: ${_pendingChanges.slice(0, 5).join(', ')}${_pendingChanges.length > 5 ? '...' : ''}`);
-      broadcast({ type: 'cui-update-available', files: _pendingChanges.slice(0, 20), count: _pendingChanges.length });
+      const pending = Array.from(_pendingChanges);
+      console.log(`[ChangeWatch] Update available: ${_pendingChanges.size} files: ${pending.slice(0, 5).join(', ')}${_pendingChanges.size > 5 ? '...' : ''}`);
+      broadcast({ type: 'cui-update-available', files: pending.slice(0, 20), count: _pendingChanges.size });
     }, 5000);
   });
 
@@ -132,7 +142,7 @@ export default function createControlRouter(deps: ControlDeps): Router {
   router.get('/control/state', (_req: Request, res: Response) => {
     const projects = readdirSync(PROJECTS_DIR)
       .filter(f => f.endsWith('.json'))
-      .map(f => { try { return JSON.parse(readFileSync(join(PROJECTS_DIR, f), 'utf8')); } catch { return null; } })
+      .map(f => { try { return JSON.parse(readFileSync(join(PROJECTS_DIR, f), 'utf8')); } catch (err) { console.warn('[Control] Failed to parse project file:', f, err); return null; } })
       .filter(Boolean);
     res.json({
       activeProjectId: workspaceState.activeProjectId,
@@ -183,7 +193,8 @@ export default function createControlRouter(deps: ControlDeps): Router {
       return;
     }
     _syncInProgress = true;
-    console.log(`[Sync] Triggered with ${_pendingChanges.length} pending changes: ${_pendingChanges.slice(0, 5).join(', ')}${_pendingChanges.length > 5 ? '...' : ''}`);
+    const pendingArr = Array.from(_pendingChanges);
+    console.log(`[Sync] Triggered with ${_pendingChanges.size} pending changes: ${pendingArr.slice(0, 5).join(', ')}${_pendingChanges.size > 5 ? '...' : ''}`);
     broadcast({ type: 'cui-sync', status: 'started' });
 
     const PATH_PREFIX = '/usr/local/bin:' + (process.env.PATH || '');
@@ -196,7 +207,8 @@ export default function createControlRouter(deps: ControlDeps): Router {
       try {
         const { stdout } = await execAsync('git pull 2>&1', execOpts);
         gitResult = stdout.trim();
-      } catch {
+      } catch (err) {
+        console.warn('[Control] Git pull failed:', err);
         gitResult = 'skipped (uncommitted changes)';
       }
       broadcast({ type: 'cui-sync', status: 'pulled', detail: gitResult });
@@ -211,12 +223,12 @@ export default function createControlRouter(deps: ControlDeps): Router {
       broadcast({ type: 'cui-sync', status: 'built', detail: builtMatch?.[1] || 'ok' });
 
       // Check if server code changed (requires process restart) vs frontend-only (just reload)
-      const serverChanged = _pendingChanges.some(f => f.startsWith('server/'));
+      const serverChanged = pendingArr.some(f => f.startsWith('server/'));
       const gitChangedServer = /server\//.test(gitResult);
       const needsRestart = serverChanged || gitChangedServer;
 
       _syncInProgress = false;
-      _pendingChanges = [];
+      _pendingChanges.clear();
       res.json({ ok: true, git: gitResult, build: builtMatch?.[1] || 'ok', serverRestart: needsRestart });
 
       if (needsRestart) {
@@ -240,7 +252,8 @@ export default function createControlRouter(deps: ControlDeps): Router {
 
   // API: get pending changes
   router.get('/cui-sync/pending', (_req: Request, res: Response) => {
-    res.json({ pending: _pendingChanges.length > 0, files: _pendingChanges.slice(0, 20), count: _pendingChanges.length, syncing: _syncInProgress });
+    const pendingList = Array.from(_pendingChanges);
+    res.json({ pending: _pendingChanges.size > 0, files: pendingList.slice(0, 20), count: _pendingChanges.size, syncing: _syncInProgress });
   });
 
   // ============================================================
@@ -372,7 +385,7 @@ export default function createControlRouter(deps: ControlDeps): Router {
     // Scan layout files for all configured CUI panels
     const projects = readdirSync(PROJECTS_DIR)
       .filter(f => f.endsWith('.json'))
-      .map(f => { try { return JSON.parse(readFileSync(join(PROJECTS_DIR, f), 'utf8')); } catch { return null; } })
+      .map(f => { try { return JSON.parse(readFileSync(join(PROJECTS_DIR, f), 'utf8')); } catch (err) { console.warn('[Control] Failed to parse project file:', f, err); return null; } })
       .filter(Boolean);
 
     function findCuiPanels(node: any, projectId: string, projectName: string, workDir: string): void {
@@ -405,7 +418,7 @@ export default function createControlRouter(deps: ControlDeps): Router {
       try {
         const layout = JSON.parse(readFileSync(layoutPath, 'utf8'));
         findCuiPanels(layout.layout || layout, project.id, project.name, project.workDir || '');
-      } catch { /* skip corrupted layouts */ }
+      } catch (err) { console.warn('[Control] Failed to parse layout for project:', project.id, err); }
     }
 
     // Enrich with attention states
