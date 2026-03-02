@@ -4558,6 +4558,10 @@ app.use('/api/team/knowledge', knowledgeRegistryRouter);
 import qaRoutes from './routes/qa-routes.js';
 app.use('/api/qa', qaRoutes);
 
+// --- Repo Dashboard ---
+import repoDashboardRoutes from './routes/repo-dashboard-routes.js';
+app.use('/api/repo-dashboard', repoDashboardRoutes);
+
 // --- Agent Monitoring & Control ---
 import { spawn } from 'child_process';
 import { promises as fsAgentPromises } from 'fs';
