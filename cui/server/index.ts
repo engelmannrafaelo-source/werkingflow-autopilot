@@ -146,6 +146,18 @@ function sseProxy(targetBase: string, req: IncomingMessage, res: ServerResponse,
   proxyReq.end();
 }
 
+// Helper: set idle/done only if not in rate_limit state (prevents overwriting rate limit)
+function setIdleIfNotRateLimited(cuiId: string) {
+  const current = sessionStates.get(cuiId);
+  if (current?.reason === 'rate_limit') {
+    console.log(`[Monitor] ${cuiId}: keeping rate_limit state (not overwriting with done)`);
+    return;
+  }
+  broadcast({ type: 'cui-state', cuiId, state: 'done' });
+  broadcast({ type: 'cui-response-ready', cuiId });
+  setSessionState(cuiId, cuiId, 'idle', 'done');
+}
+
 // --- Auto-Refresh: Monitor CUI streams for response completion ---
 const activeMonitors = new Set<string>();
 
@@ -171,9 +183,7 @@ function monitorStream(targetBase: string, streamingId: string, cuiId: string, a
       // Stream not available — set idle after delay
       setTimeout(() => {
         cleanup();
-        broadcast({ type: 'cui-state', cuiId, state: 'done' });
-        broadcast({ type: 'cui-response-ready', cuiId });
-        setSessionState(cuiId, cuiId, 'idle', 'done');
+        setIdleIfNotRateLimited(cuiId);
       }, 8000);
       return;
     }
@@ -182,9 +192,7 @@ function monitorStream(targetBase: string, streamingId: string, cuiId: string, a
       if (attention) {
         if (attention.state === 'idle') {
           cleanup();
-          broadcast({ type: 'cui-response-ready', cuiId });
-          broadcast({ type: 'cui-state', cuiId, state: 'done' });
-          setSessionState(cuiId, cuiId, 'idle', 'done');
+          setIdleIfNotRateLimited(cuiId);
           monitorReq.destroy();
         } else {
           console.log(`[Monitor] ${cuiId}: ${attention.reason}`);
@@ -194,18 +202,14 @@ function monitorStream(targetBase: string, streamingId: string, cuiId: string, a
     });
     monitorRes.on('end', () => {
       cleanup();
-      broadcast({ type: 'cui-response-ready', cuiId });
-      broadcast({ type: 'cui-state', cuiId, state: 'done' });
-      setSessionState(cuiId, cuiId, 'idle', 'done');
+      setIdleIfNotRateLimited(cuiId);
     });
   });
   monitorReq.on('error', () => {
     // Connection error — set idle after delay
     setTimeout(() => {
       cleanup();
-      broadcast({ type: 'cui-state', cuiId, state: 'done' });
-      broadcast({ type: 'cui-response-ready', cuiId });
-      setSessionState(cuiId, cuiId, 'idle', 'done');
+      setIdleIfNotRateLimited(cuiId);
     }, 8000);
   });
   monitorReq.end();
@@ -215,9 +219,7 @@ function monitorStream(targetBase: string, streamingId: string, cuiId: string, a
     if (current?.state === 'working') {
       console.log(`[Monitor] ${cuiId}: 45s timeout, setting idle`);
       cleanup();
-      broadcast({ type: 'cui-state', cuiId, state: 'done' });
-      broadcast({ type: 'cui-response-ready', cuiId });
-      setSessionState(cuiId, cuiId, 'idle', 'done');
+      setIdleIfNotRateLimited(cuiId);
     }
     monitorReq.destroy();
   }, 45000);
@@ -6068,7 +6070,18 @@ app.get('/api/repo-dashboard/hierarchy', async (_req, res) => {
 
             const isGit = existsSync(join(itemPath, '.git'));
             const sizeHuman = execSync(`du -sh "${itemPath}" 2>/dev/null | cut -f1`, { encoding: 'utf8' }).trim();
-            const sizeBytes = parseInt(execSync(`du -sb "${itemPath}" 2>/dev/null | cut -f1`, { encoding: 'utf8' }).trim() || '0');
+            let sizeBytes = parseInt(execSync(`du -sb "${itemPath}" 2>/dev/null | cut -f1`, { encoding: 'utf8' }).trim()) || 0;
+
+            // If du -sb failed but we have a human size, estimate bytes from it
+            if (sizeBytes === 0 && sizeHuman) {
+              const match = sizeHuman.match(/^([\d.]+)([KMGT]?)$/);
+              if (match) {
+                const num = parseFloat(match[1]);
+                const unit = match[2];
+                const multipliers: Record<string, number> = { K: 1024, M: 1024**2, G: 1024**3, T: 1024**4 };
+                sizeBytes = Math.floor(num * (multipliers[unit] || 1));
+              }
+            }
 
             const node: HierarchyNode = {
               name: item,
