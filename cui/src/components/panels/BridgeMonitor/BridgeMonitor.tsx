@@ -80,12 +80,15 @@ export default function BridgeMonitor() {
   }, []);
 
   return (
-    <div style={{
-      display: 'flex',
-      flexDirection: 'column',
-      height: '100%',
-      background: 'var(--tn-surface)',
-    }}>
+    <div
+      data-ai-id="bridge-monitor-panel"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        background: 'var(--tn-surface)',
+      }}
+    >
       {/* Header */}
       <div style={{
         background: 'var(--tn-bg-dark)',
@@ -143,15 +146,19 @@ export default function BridgeMonitor() {
         </div>
 
         {/* Sub-Tabs */}
-        <div style={{
-          display: 'flex',
-          gap: 4,
-          padding: '0 12px 8px',
-          overflowX: 'auto',
-        }}>
+        <div
+          data-ai-id="bridge-monitor-tabs"
+          style={{
+            display: 'flex',
+            gap: 4,
+            padding: '0 12px 8px',
+            overflowX: 'auto',
+          }}
+        >
           {tabs.map((tab) => (
             <button
               key={tab.key}
+              data-ai-id={`bridge-monitor-tab-${tab.key}`}
               onClick={() => setActiveTab(tab.key)}
               style={{
                 background: activeTab === tab.key ? 'var(--tn-blue)' : 'transparent',
@@ -174,7 +181,10 @@ export default function BridgeMonitor() {
       </div>
 
       {/* Tab Content */}
-      <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
+      <div
+        data-ai-id={`bridge-monitor-content-${activeTab}`}
+        style={{ flex: 1, overflow: 'auto', minHeight: 0 }}
+      >
         {tabs.find((t) => t.key === activeTab)?.component}
       </div>
     </div>

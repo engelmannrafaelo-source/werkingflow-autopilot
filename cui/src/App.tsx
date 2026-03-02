@@ -223,11 +223,33 @@ export default function App() {
   const [showAllChats, setShowAllChats] = useState(false);
   const [pendingActivation, setPendingActivation] = useState<Array<{ projectId: string; conversations: Array<{ sessionId: string; accountId: string }> }> | null>(null);
 
+  // Auto-reload when bundle changes (detects Syncthing-triggered rebuilds)
+  const currentBundleRef = useRef(
+    document.querySelector('script[src*="/assets/index-"]')?.getAttribute('src') || ''
+  );
+  const checkForUpdate = useCallback(async () => {
+    try {
+      const resp = await fetch('/?_v=' + Date.now(), { headers: { 'Accept': 'text/html' } });
+      if (!resp.ok) return;
+      const html = await resp.text();
+      const match = html.match(/src="(\/assets\/index-[^"]+)"/);
+      if (match && match[1] && match[1] !== currentBundleRef.current) {
+        console.log(`[AutoReload] Bundle changed: ${currentBundleRef.current} → ${match[1]}`);
+        window.location.reload();
+      }
+    } catch {}
+  }, []);
+
   // Global WebSocket for CUI state tracking + Control API
   const wsRef = useRef<WebSocket | null>(null);
   useEffect(() => {
+    // Global health signal — components check this before making requests
+    (window as any).__cuiServerAlive = undefined; // unknown until WS connects
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${protocol}://${window.location.host}/ws`);
+    ws.onerror = () => {}; // Suppress console noise during server restarts
+    ws.onopen = () => { (window as any).__cuiServerAlive = true; };
+    ws.onclose = () => { (window as any).__cuiServerAlive = false; };
     wsRef.current = ws;
     ws.onmessage = (e) => {
       try {
@@ -251,6 +273,10 @@ export default function App() {
         // Forward sync-related messages to ProjectTabs via window.postMessage
         if (msg.type === 'cui-update-available' || (msg.type === 'cui-sync' && msg.auto)) {
           window.postMessage(e.data, '*');
+          // Check if a new bundle was built (auto-reload if hash changed)
+          if (msg.type === 'cui-update-available') {
+            setTimeout(checkForUpdate, 8000); // Wait for vite build to complete
+          }
         }
         // Snapshot request: fetch panel data and POST back to server
         if (msg.type === 'control:snapshot-request' && msg.panel) {
@@ -429,7 +455,7 @@ export default function App() {
       if (validId !== activeId) setActiveId(validId);
       setLoaded(true);
       for (const p of loadedProjects) saveProject(p);
-    });
+    }).catch(() => { setLoaded(true); }); // Server may be restarting
   }, []);
 
   // Report active project to server (for Control API state queries)

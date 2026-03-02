@@ -205,8 +205,9 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
   // Fetch conversations
   const lastCountRef = useRef(-1);
   const fetchConversations = useCallback(() => {
+    if ((window as any).__cuiServerAlive === false) return;
     fetch(`${API}/mission/conversations`)
-      .then(r => r.json())
+      .then(r => { if (!r.ok) throw new Error('fetch failed'); return r.json(); })
       .then(data => {
         const convs: Conversation[] = data.conversations || [];
         const REMOTE_IDS = new Set(['rafael', 'engelmann', 'office']);
@@ -275,9 +276,11 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
 
   // --- Fetch Start Templates ---
   useEffect(() => {
+    if ((window as any).__cuiServerAlive === false) return;
     fetch('/api/prompt-templates')
-      .then(r => r.json())
+      .then(r => r.ok ? r.json() : null)
       .then(data => {
+        if (!data) return;
         const start = (data.templates || []).filter((t: PromptTemplate) => t.category === 'start');
         start.sort((a: PromptTemplate, b: PromptTemplate) => a.order - b.order);
         setStartTemplates(start);

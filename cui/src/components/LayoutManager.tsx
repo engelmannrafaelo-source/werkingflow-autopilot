@@ -533,6 +533,7 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
   useEffect(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${protocol}://${window.location.host}/ws`);
+    ws.onerror = () => {}; // Suppress console noise during server restarts
     controlWsRef.current = ws;
 
     function reportPanels() {

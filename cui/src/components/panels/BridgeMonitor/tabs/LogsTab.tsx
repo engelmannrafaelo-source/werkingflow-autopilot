@@ -103,7 +103,7 @@ export default function LogsTab() {
   if (error) return <ErrorBanner message={error} onRetry={fetchAll} />;
 
   return (
-    <div style={{ padding: '16px 12px', overflowY: 'auto', height: '100%' }}>
+    <div data-ai-id="logs-tab-content" style={{ padding: '16px 12px', overflowY: 'auto', height: '100%' }}>
       <Toolbar onRefresh={fetchAll} lastRefresh={lastRefresh} />
 
       {/* Stats Cards */}

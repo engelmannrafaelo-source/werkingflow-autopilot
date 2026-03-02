@@ -389,20 +389,22 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const userScrolledUpRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollFailCountRef = useRef(0);
+  const circuitOpenRef = useRef(false); // Circuit breaker: stops polling after persistent failures
 
   const account = ACCOUNTS.find(a => a.id === selectedId) || ACCOUNTS[0];
   const pollInterval = liveMode ? 2000 : 15000;
 
-  // --- Polling ---
+  // --- Polling (conversation only — states come via WebSocket) ---
   const pollNow = useCallback(async () => {
     if (!sessionId) return;
+    // Skip if server is known to be down (WS disconnected)
+    if ((window as any).__cuiServerAlive === false) return;
+    // Skip if circuit breaker is open (persistent 502s for this conversation)
+    if (circuitOpenRef.current) return;
     try {
-      const [convResp, statesResp] = await Promise.all([
-        fetch(`/api/mission/conversation/${selectedId}/${sessionId}?tail=50`),
-        fetch('/api/mission/states'),
-      ]);
+      const convResp = await fetch(`/api/mission/conversation/${selectedId}/${sessionId}?tail=50`);
       if (convResp.ok) {
         const data = await convResp.json();
         setMessages(data.messages || []);
@@ -410,57 +412,74 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         setPermissions(data.permissions || []);
         setConvName(data.summary || '');
         setIsAgentDone(!!data.isAgentDone);
-        // If server reports rateLimited, always show rate limit state
         if (data.rateLimited) {
           setAttention('needs_attention');
           setAttentionReason('rate_limit');
         }
-      }
-      if (statesResp.ok) {
-        const states = await statesResp.json();
-        const myState = states[selectedId];
-        if (myState) {
-          // Don't override rate_limit state from poll with stale states
-          if (!(attentionReason === 'rate_limit' && myState.state === 'idle')) {
-            setAttention(myState.state || 'idle');
-            setAttentionReason(myState.reason);
-          }
-        } else {
-          setAttention('idle');
-          setAttentionReason(undefined);
-            setRateLimitMessage(null);
+        pollFailCountRef.current = 0;
+        circuitOpenRef.current = false;
+      } else {
+        // HTTP errors (502, 503, etc.) — count as failures
+        pollFailCountRef.current++;
+        if (pollFailCountRef.current === 1) {
+          console.warn(`[CuiLite] Poll ${convResp.status} for ${selectedId}`);
+        }
+        // Circuit breaker: after 3 consecutive proxy errors, stop polling
+        if (pollFailCountRef.current >= 3) {
+          circuitOpenRef.current = true;
+          console.warn(`[CuiLite] Circuit open for ${selectedId} after ${pollFailCountRef.current} failures — waiting for WS`);
         }
       }
-      pollFailCountRef.current = 0;
-    } catch (err) {
+    } catch {
+      // Network error (server down, connection refused)
       pollFailCountRef.current++;
-      if (pollFailCountRef.current <= 3) {
-        console.error('[CuiLite] Poll error:', err);
-      } else if (pollFailCountRef.current === 4) {
-        console.error(`[CuiLite] Poll failing repeatedly (${pollFailCountRef.current}x) — backing off`);
-      }
     }
   }, [sessionId, selectedId]);
 
-  // Polling interval (2s live, 15s normal) — auto-off live when tab hidden
-  // Backoff: after 3 consecutive failures, slow down to 30s; after 10, stop polling
+  // Fetch states once on mount/account change (WS handles updates after that)
+  useEffect(() => {
+    if ((window as any).__cuiServerAlive === false) return;
+    fetch('/api/mission/states')
+      .then(r => r.ok ? r.json() : null)
+      .then(states => {
+        if (!states) return;
+        const myState = states[selectedId];
+        if (myState) {
+          setAttention(myState.state || 'idle');
+          setAttentionReason(myState.reason);
+        }
+      })
+      .catch(() => {}); // Server may be restarting
+  }, [selectedId]);
+
+  // Adaptive polling with recursive setTimeout (interval adjusts to failure count)
   useEffect(() => {
     if (!sessionId || !isTabVisible) {
       if (!isTabVisible && liveMode) setLiveMode(false);
       return;
     }
-    pollNow();
-    const effectiveInterval = pollFailCountRef.current >= 10
-      ? 60000  // 1 minute after 10 failures
-      : pollFailCountRef.current >= 3
-        ? 30000  // 30s after 3 failures
-        : pollInterval;
-    pollTimerRef.current = setInterval(() => {
-      // Re-check fail count each tick (it may have recovered)
-      if (pollFailCountRef.current >= 10) return; // stop polling after 10 consecutive fails
-      pollNow();
-    }, effectiveInterval);
-    return () => { if (pollTimerRef.current) clearInterval(pollTimerRef.current); };
+    let cancelled = false;
+    const schedulePoll = () => {
+      if (cancelled) return;
+      // Adaptive delay: backs off on failures, pauses when circuit is open
+      const fails = pollFailCountRef.current;
+      const delay = circuitOpenRef.current ? 0 // stop scheduling (WS will re-trigger)
+        : fails >= 5 ? 60000 // 1 min after 5+ fails
+        : fails >= 3 ? 30000 // 30s after 3 fails
+        : pollInterval; // normal: 2s (live) or 15s
+      if (delay === 0) return; // circuit open — stop polling
+      pollTimerRef.current = setTimeout(async () => {
+        if (cancelled) return;
+        await pollNow();
+        schedulePoll();
+      }, delay);
+    };
+    // Initial poll then start schedule
+    pollNow().then(() => { if (!cancelled) schedulePoll(); });
+    return () => {
+      cancelled = true;
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    };
   }, [sessionId, selectedId, isTabVisible, pollNow, pollInterval]);
 
   // --- WS for realtime attention events ---
@@ -468,6 +487,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     if (!isTabVisible) return;
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${protocol}://${window.location.host}/ws`);
+    ws.onerror = () => {}; // Suppress console noise during server restarts
 
     ws.onmessage = (e) => {
       try {
@@ -478,11 +498,16 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
           setAttention(msg.state);
           setAttentionReason(msg.reason);
           if (msg.state === 'needs_attention' && sessionId) {
-            // Immediate poll on attention change
+            // Reset circuit breaker + poll immediately on attention change
+            circuitOpenRef.current = false;
+            pollFailCountRef.current = 0;
             setTimeout(pollNow, 500);
           }
         }
         if (msg.type === 'cui-state' && msg.cuiId === selectedId) {
+          // Any state change from WS means binary is alive — reset circuit breaker
+          circuitOpenRef.current = false;
+          pollFailCountRef.current = 0;
           if (msg.state === 'processing') {
             setAttention('working');
             setAttentionReason(undefined);
@@ -535,18 +560,21 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
 
   // --- Fetch Prompt Templates ---
   useEffect(() => {
+    if ((window as any).__cuiServerAlive === false) return;
     fetch('/api/prompt-templates')
-      .then(r => r.json())
+      .then(r => r.ok ? r.json() : null)
       .then(data => {
+        if (!data) return;
         const reply = (data.templates || []).filter((t: PromptTemplate) => t.category === 'reply');
         reply.sort((a: PromptTemplate, b: PromptTemplate) => a.order - b.order);
         setReplyTemplates(reply);
       })
-      .catch((err) => console.warn('[CuiLite] Template fetch error:', err.message));
+      .catch(() => {});
   }, []);
 
   // --- Auto-Inject (Loop) Sync ---
   const syncLoopState = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
       const r = await fetch("/api/auto-inject");
       const state = await r.json();

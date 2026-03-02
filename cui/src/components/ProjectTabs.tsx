@@ -138,6 +138,7 @@ function UsageBars() {
   const pollRef = useRef<ReturnType<typeof setInterval>>(null);
 
   const fetchUsage = useCallback(() => {
+    if ((window as any).__cuiServerAlive === false) return;
     fetch('/api/claude-code/stats-v2')
       .then(r => r.ok ? r.json() : null)
       .then(data => {
@@ -170,6 +171,7 @@ function SyncthingToggle() {
   const pollRef = useRef<ReturnType<typeof setInterval>>(null);
 
   const fetchStatus = useCallback(() => {
+    if ((window as any).__cuiServerAlive === false) return;
     fetch('/api/syncthing/status')
       .then(r => r.ok ? r.json() : null)
       .then(data => {
@@ -177,7 +179,7 @@ function SyncthingToggle() {
         setPaused(data.paused);
         if (data.lastSyncAt) setLastSync(data.lastSyncAt);
       })
-      .catch(() => setPaused(null));
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -260,10 +262,13 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
       } catch { /* ignore */ }
     }
     window.addEventListener('message', handleMessage);
-    // Also check on mount
-    fetch('/api/cui-sync/pending').then(r => r.json()).then(d => {
-      if (d.count > 0) setPendingCount(d.count);
-    }).catch(() => {});
+    // Also check on mount (delayed to allow WS to connect first)
+    setTimeout(() => {
+      if ((window as any).__cuiServerAlive === false) return;
+      fetch('/api/cui-sync/pending').then(r => r.ok ? r.json() : null).then(d => {
+        if (d?.count > 0) setPendingCount(d.count);
+      }).catch(() => {});
+    }, 2000);
     return () => window.removeEventListener('message', handleMessage);
   }, []);
 
@@ -287,8 +292,10 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
   }, [syncState]);
 
   const checkPanelHealth = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
       const resp = await fetch('/api/panel-health');
+      if (!resp.ok) return;
       const data = await resp.json();
       setPanelHealth({
         running: data.running,
@@ -296,7 +303,7 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
         missing: data.panels.filter((p: any) => !p.running).map((p: any) => p.name)
       });
     } catch {
-      setPanelHealth(null);
+      // Server down — don't reset state, just skip
     }
   }, []);
 

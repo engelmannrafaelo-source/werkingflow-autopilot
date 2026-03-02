@@ -83,7 +83,7 @@ export default function SessionsTab() {
   }, [fetchAll]);
 
   return (
-    <div style={{ padding: 12 }}>
+    <div data-ai-id="sessions-tab-content" style={{ padding: 12 }}>
       <Toolbar lastRefresh={lastRefresh} loading={loading} onRefresh={fetchAll} autoRefresh={15} />
       {error && <ErrorBanner message={error} />}
 

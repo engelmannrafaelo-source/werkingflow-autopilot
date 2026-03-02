@@ -17,12 +17,12 @@ export default function NotesPanel({ projectId }: NotesPanelProps) {
 
   // Load notes on mount / project change
   useEffect(() => {
-    fetch(`${API}/common-notes`).then((r) => r.json()).then((d) => setCommonNotes(d.content ?? ''));
-    fetch(`${API}/shared-notes`).then((r) => r.json()).then((d) => setSharedNotes(d.content ?? ''));
+    fetch(`${API}/common-notes`).then(r => r.ok ? r.json() : null).then(d => { if (d) setCommonNotes(d.content ?? ''); }).catch(() => {});
+    fetch(`${API}/shared-notes`).then(r => r.ok ? r.json() : null).then(d => { if (d) setSharedNotes(d.content ?? ''); }).catch(() => {});
   }, []);
 
   useEffect(() => {
-    fetch(`${API}/notes/${projectId}`).then((r) => r.json()).then((d) => setProjectNotes(d.content ?? ''));
+    fetch(`${API}/notes/${projectId}`).then(r => r.ok ? r.json() : null).then(d => { if (d) setProjectNotes(d.content ?? ''); }).catch(() => {});
   }, [projectId]);
 
   const saveCommon = useCallback((text: string) => {
