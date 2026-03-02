@@ -1,0 +1,20 @@
+{
+  "engelmann": {
+    "state": "idle",
+    "reason": "done",
+    "since": 1772453809977,
+    "accountId": "engelmann"
+  },
+  "rafael": {
+    "state": "working",
+    "since": 1772453897588,
+    "accountId": "rafael",
+    "sessionId": "80db866a-0104-42de-9783-1d04cd9a9806"
+  },
+  "office": {
+    "state": "idle",
+    "reason": "done",
+    "since": 1772453829269,
+    "accountId": "office"
+  }
+}

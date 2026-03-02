@@ -37,6 +37,7 @@ interface CuiLitePanelProps {
   isTabVisible?: boolean;
   onRouteChange?: (route: string) => void;
   initialSessionId?: string;
+  onLoadFailed?: (sessionId: string) => void;
 }
 
 // --- Markdown Components (Tokyo Night) ---
@@ -338,12 +339,19 @@ function MessageRow({ msg, onRespond, isLast, workDir }: { msg: Message; onRespo
 }
 
 // --- Loading state with timeout + retry ---
-function LoadingConversation({ sessionId, onBack, onRetry }: { sessionId: string | null; onBack: () => void; onRetry: () => void }) {
+function LoadingConversation({ sessionId, onBack, onRetry, onLoadFailed }: { sessionId: string | null; onBack: () => void; onRetry: () => void; onLoadFailed?: (sessionId: string) => void }) {
   const [elapsed, setElapsed] = useState(0);
+  const failedRef = useRef(false);
   useEffect(() => {
     const t = setInterval(() => setElapsed(s => s + 1), 1000);
     return () => clearInterval(t);
   }, []);
+  useEffect(() => {
+    if (elapsed >= 8 && !failedRef.current && onLoadFailed && sessionId) {
+      failedRef.current = true;
+      onLoadFailed(sessionId);
+    }
+  }, [elapsed, onLoadFailed, sessionId]);
   return (
     <div style={{ textAlign: 'center', color: 'var(--tn-text-muted)', marginTop: 40, fontSize: 13 }}>
       {elapsed < 6 ? (
@@ -369,7 +377,7 @@ function LoadingConversation({ sessionId, onBack, onRetry }: { sessionId: string
 }
 
 // --- Main Component ---
-export default function CuiLitePanel({ accountId, projectId, workDir, panelId, isTabVisible = true, onRouteChange, initialSessionId }: CuiLitePanelProps) {
+export default function CuiLitePanel({ accountId, projectId, workDir, panelId, isTabVisible = true, onRouteChange, initialSessionId, onLoadFailed }: CuiLitePanelProps) {
   const storageKey = `cui-lite-account-${panelId || projectId || 'default'}`;
   const persistSession = !initialSessionId; // Don't persist to localStorage for AllChats panels
 
@@ -1132,7 +1140,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
             style={{ flex: 1, overflow: 'auto', minHeight: 0 }}
           >
             {messages.length === 0 && (
-              <LoadingConversation sessionId={sessionId} onBack={() => { setSessionId(null); setShowQueue(true); }} onRetry={pollNow} />
+              <LoadingConversation sessionId={sessionId} onBack={() => { setSessionId(null); setShowQueue(true); }} onRetry={pollNow} onLoadFailed={onLoadFailed} />
             )}
             {messages.map((msg, i) => (
               <MessageRow key={i} msg={msg} onRespond={handleRespond} isLast={i === messages.length - 1} workDir={workDir} />

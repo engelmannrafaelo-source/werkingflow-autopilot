@@ -776,13 +776,64 @@ interface SessionState {
   accountId: string;
   sessionId?: string;
 }
+// --- Persistent Storage Dirs ---
+const DATA_DIR = resolve(import.meta.dirname ?? __dirname, '..', 'data');
+const PROJECTS_DIR = join(DATA_DIR, 'projects');
+const NOTES_DIR = join(DATA_DIR, 'notes');
+const LAYOUTS_DIR = join(DATA_DIR, 'layouts');
+const UPLOADS_DIR = join(DATA_DIR, 'uploads');
+const ACTIVE_DIR = join(DATA_DIR, 'active');
+const SESSION_STATES_FILE = join(DATA_DIR, "session-states.json");
+
+// Ensure dirs exist
+for (const dir of [PROJECTS_DIR, NOTES_DIR, LAYOUTS_DIR, UPLOADS_DIR, ACTIVE_DIR]) {
+  mkdirSync(dir, { recursive: true });
+}
+
 const sessionStates = new Map<string, SessionState>();
+
+function persistSessionStates() {
+  try {
+    const out: Record<string, SessionState> = {};
+    for (const [k, v] of sessionStates) out[k] = v;
+    writeFileSync(SESSION_STATES_FILE, JSON.stringify(out, null, 2));
+  } catch { /* ignore write errors */ }
+}
+
+function restoreSessionStates() {
+  if (!existsSync(SESSION_STATES_FILE)) return;
+  try {
+    const data = JSON.parse(readFileSync(SESSION_STATES_FILE, "utf8")) as Record<string, SessionState>;
+    const now = Date.now();
+    for (const [key, val] of Object.entries(data)) {
+      // Only restore states less than 1 hour old
+      if (now - val.since > 60 * 60 * 1000) continue;
+      // After restart, assume previously "working" sessions are now idle
+      // (the CUI binary process was likely killed or finished during restart)
+      if (val.state === "working") {
+        sessionStates.set(key, { ...val, state: "idle", reason: "done", since: now });
+      } else {
+        sessionStates.set(key, val);
+      }
+    }
+    const restored = sessionStates.size;
+    if (restored > 0) console.log(`[SessionState] Restored ${restored} states from disk (working->idle)`);
+  } catch (err) {
+    console.log(`[SessionState] Failed to restore states: ${err}`);
+  }
+}
+
+// Restore session states on startup
+restoreSessionStates();
+
 
 function setSessionState(key: string, accountId: string, state: ConvAttentionState, reason?: AttentionReason, sessionId?: string) {
   const prev = sessionStates.get(key);
   if (prev?.state === state && prev?.reason === reason) return; // no change
   sessionStates.set(key, { state, reason, since: Date.now(), accountId, sessionId });
   broadcast({ type: 'conv-attention', key, accountId, sessionId, state, reason });
+  // Persist to disk for restart recovery
+  persistSessionStates();
 }
 
 function getSessionStates(): Record<string, SessionState> {
@@ -817,8 +868,9 @@ const clients = new Set<WebSocket>();
 wss.on('connection', (ws) => {
   clients.add(ws);
   (ws as any)._alive = true;
+  console.log(`[WS] Client connected (${clients.size} total)`);
   ws.on('pong', () => { (ws as any)._alive = true; });
-  ws.on('close', () => clients.delete(ws));
+  ws.on('close', () => { clients.delete(ws); console.log(`[WS] Client disconnected (${clients.size} remaining)`); });
   ws.on('error', (err) => { console.warn('[WS] Client error:', (err as Error).message); clients.delete(ws); });
 
   // Register for Document Manager broadcasts
@@ -896,6 +948,13 @@ setInterval(() => {
   _broadcastDropped = 0;
   _broadcastT0 = Date.now();
 }, 60000);
+
+// Log memory + health every 5 minutes
+setInterval(() => {
+  const mem = process.memoryUsage();
+  const uptimeMin = (process.uptime() / 60).toFixed(0);
+  console.log(`[Health] uptime=${uptimeMin}m rss=${(mem.rss / 1024 / 1024).toFixed(0)}MB heap=${(mem.heapUsed / 1024 / 1024).toFixed(0)}/${(mem.heapTotal / 1024 / 1024).toFixed(0)}MB ws=${clients.size} pending=${_pendingChanges.length}`);
+}, 300000);
 
 function broadcast(data: Record<string, unknown>) {
   const type = data.type as string;
@@ -1176,18 +1235,6 @@ app.get('/api/file', async (req, res) => {
   }
 });
 
-// --- Persistent Storage Dirs ---
-const DATA_DIR = resolve(import.meta.dirname ?? __dirname, '..', 'data');
-const PROJECTS_DIR = join(DATA_DIR, 'projects');
-const NOTES_DIR = join(DATA_DIR, 'notes');
-const LAYOUTS_DIR = join(DATA_DIR, 'layouts');
-const UPLOADS_DIR = join(DATA_DIR, 'uploads');
-const ACTIVE_DIR = join(DATA_DIR, 'active');
-
-// Ensure dirs exist
-for (const dir of [PROJECTS_DIR, NOTES_DIR, LAYOUTS_DIR, UPLOADS_DIR, ACTIVE_DIR]) {
-  mkdirSync(dir, { recursive: true });
-}
 
 // --- Local conversation titles (CUI API doesn't support custom_name) ---
 const TITLES_FILE = join(DATA_DIR, 'titles.json');
@@ -1310,20 +1357,56 @@ async function autoInjectTick() {
   const state = loadAutoInject();
   for (const [accountId, cfg] of Object.entries(state.configs)) {
     if (!cfg.enabled) continue;
+    const port = getProxyPort(accountId);
+    if (!port) { console.log(`[AutoInject] No port for ${accountId}`); continue; }
+
     const ss = sessionStates.get(accountId);
-    if (!ss || ss.state !== "idle") continue;
-    if (ss.reason === "rate_limit") continue;
+
+    // Skip if explicitly busy or needs attention
+    if (ss?.state === "working" || ss?.state === "needs_attention") continue;
+    // Skip if idle due to rate limit
+    if (ss?.state === "idle" && ss?.reason === "rate_limit") continue;
+
+    // If no session state (e.g. after server restart), probe the CUI binary
+    if (!ss) {
+      try {
+        const probe = await cuiFetch(port, "/api/conversations?limit=1", { timeoutMs: 5000 });
+        if (!probe.ok) {
+          console.log(`[AutoInject] ${accountId}: binary not responsive (${probe.status}), skipping`);
+          continue;
+        }
+        // Check if there is an active streaming conversation
+        const convs = probe.data?.conversations || [];
+        const hasActive = convs.some((c: any) => c.streamingId && !c.isCompleted);
+        if (hasActive) {
+          console.log(`[AutoInject] ${accountId}: binary has active stream, initializing as working`);
+          setSessionState(accountId, accountId, "working", undefined, cfg.sessionId);
+          continue;
+        }
+        // Binary is responsive and idle — initialize state
+        setSessionState(accountId, accountId, "idle", "done", cfg.sessionId);
+        console.log(`[AutoInject] ${accountId}: no state (post-restart), binary idle -> initialized`);
+        // Will be picked up on next tick (now ss exists)
+        continue;
+      } catch (err) {
+        console.log(`[AutoInject] ${accountId}: probe error: ${err}`);
+        continue;
+      }
+    }
+
+    // Calculate effective idle time
     const idleMs = Date.now() - ss.since;
     const minIdle = cfg.idleSinceMs || cfg.intervalMs;
     if (idleMs < minIdle) continue;
+
+    // Check interval since last inject
     const lastInject = state.lastInject[accountId];
     if (lastInject) {
       const sinceLast = Date.now() - new Date(lastInject).getTime();
       if (sinceLast < cfg.intervalMs) continue;
     }
+
     console.log(`[AutoInject] Injecting into ${accountId} (idle for ${Math.round(idleMs/1000)}s): "${cfg.message.slice(0, 50)}..."`);
-    const port = getProxyPort(accountId);
-    if (!port) { console.log(`[AutoInject] No port for ${accountId}`); continue; }
     try {
       unstickConversation(cfg.sessionId);
       const resp = await cuiFetch(port, "/api/conversations/start", {
@@ -1342,6 +1425,8 @@ async function autoInjectTick() {
         broadcast({ type: "cui-state", cuiId: accountId, state: "processing" });
         const sendResult = resp.data;
         if (sendResult?.streamingId) {
+          // Track session->stream mapping for stop handler
+          activeStreams.set(cfg.sessionId, sendResult.streamingId);
           monitorStream(`http://localhost:${port}`, sendResult.streamingId, accountId, {});
         }
         logUserInput({ type: "auto-inject", accountId, workDir: cfg.workDir, message: cfg.message, sessionId: cfg.sessionId, result: "ok" });
@@ -1349,9 +1434,13 @@ async function autoInjectTick() {
       } else {
         console.log(`[AutoInject] Failed for ${accountId}: ${resp.error}`);
         logUserInput({ type: "auto-inject", accountId, workDir: cfg.workDir, message: cfg.message, sessionId: cfg.sessionId, result: "error", error: resp.error });
+        // If start failed, set idle so we can retry next tick
+        setSessionState(accountId, accountId, "idle", "done", cfg.sessionId);
       }
     } catch (err) {
       console.log(`[AutoInject] Error for ${accountId}: ${err}`);
+      // On error, set idle so we can retry
+      setSessionState(accountId, accountId, "idle", "done", cfg.sessionId);
     }
   }
 }
@@ -2137,7 +2226,7 @@ app.post('/api/mission/conversation/:accountId/:sessionId/stop', async (req, res
   let killed = 0;
   if (!apiStopOk && pmName) {
     try {
-      const { execSync } = require('child_process');
+      // execSync already imported at top of file (ESM — require() not available)
       const pm2Json = execSync(`su - claude-user -c 'pm2 jlist' 2>/dev/null`, { encoding: 'utf8', timeout: 5000 });
       const pm2Apps = JSON.parse(pm2Json);
       const pmApp = pm2Apps.find((a: any) => a.name === pmName);
@@ -2571,13 +2660,8 @@ app.post('/api/layouts/:projectId/template', (req, res) => {
   res.json({ ok: true });
 });
 
-// --- All Active Chats API (scans layout files for CUI panels with active sessions) ---
+// --- All Active Chats API (hybrid: layout scan + visibility registry + finished filter) ---
 app.get('/api/all-active-chats', (_req, res) => {
-  const projects = readdirSync(PROJECTS_DIR)
-    .filter(f => f.endsWith('.json'))
-    .map(f => { try { return JSON.parse(readFileSync(join(PROJECTS_DIR, f), 'utf8')); } catch { return null; } })
-    .filter(Boolean);
-
   interface ActiveChat {
     projectId: string;
     projectName: string;
@@ -2587,22 +2671,44 @@ app.get('/api/all-active-chats', (_req, res) => {
     sessionId: string;
     attentionState?: string;
     attentionReason?: string;
+    isVisible?: boolean;
   }
 
   const chats: ActiveChat[] = [];
+  const seenSessions = new Set<string>();
+
+  // Collect visible session IDs from registry (panels actually open in browser)
+  const visibleSessionIds = new Set<string>();
+  for (const entry of visibilityRegistry.values()) {
+    if (entry.sessionId && !entry.panelId.startsWith('allchats-')) {
+      visibleSessionIds.add(entry.sessionId);
+    }
+  }
+
+  // Scan layout files for all configured CUI panels
+  const projects = readdirSync(PROJECTS_DIR)
+    .filter(f => f.endsWith('.json'))
+    .map(f => { try { return JSON.parse(readFileSync(join(PROJECTS_DIR, f), 'utf8')); } catch { return null; } })
+    .filter(Boolean);
 
   function findCuiPanels(node: any, projectId: string, projectName: string, workDir: string): void {
     if (node.type === 'tab' && (node.component === 'cui' || node.component === 'cui-lite')) {
       const route: string = node.config?._route || '';
       const match = route.match(/\/c\/(.+)/);
       if (match) {
+        const sessionId = match[1];
+        // Skip finished and duplicate sessions
+        if (isFinished(sessionId)) return;
+        if (seenSessions.has(sessionId)) return;
+        seenSessions.add(sessionId);
         chats.push({
           projectId,
           projectName,
           workDir,
           panelId: node.id || '',
           accountId: node.config?.accountId || 'rafael',
-          sessionId: match[1],
+          sessionId,
+          isVisible: visibleSessionIds.has(sessionId),
         });
       }
     }
@@ -2629,9 +2735,13 @@ app.get('/api/all-active-chats', (_req, res) => {
     }
   }
 
-  // Sort: needs_attention first, then working, then idle
+  // Sort: visible first, then needs_attention > working > idle
   chats.sort((a, b) => {
-    const score = (c: ActiveChat) => c.attentionState === 'needs_attention' ? 3 : c.attentionState === 'working' ? 2 : 1;
+    const score = (c: ActiveChat) => {
+      let s = c.attentionState === 'needs_attention' ? 30 : c.attentionState === 'working' ? 20 : 10;
+      if (c.isVisible) s += 100;
+      return s;
+    };
     return score(b) - score(a);
   });
 
@@ -3156,6 +3266,7 @@ app.post('/api/cui-sync', async (_req, res) => {
     return;
   }
   _syncInProgress = true;
+  console.log(`[Sync] Triggered with ${_pendingChanges.length} pending changes: ${_pendingChanges.slice(0, 5).join(', ')}${_pendingChanges.length > 5 ? '...' : ''}`);
   broadcast({ type: 'cui-sync', status: 'started' });
 
   const PATH_PREFIX = '/usr/local/bin:' + (process.env.PATH || '');
@@ -3182,15 +3293,26 @@ app.post('/api/cui-sync', async (_req, res) => {
     const builtMatch = buildOut.match(/built in ([\d.]+s)/);
     broadcast({ type: 'cui-sync', status: 'built', detail: builtMatch?.[1] || 'ok' });
 
-    _syncInProgress = false;
-    _pendingChanges = []; // Clear pending changes after successful build
-    res.json({ ok: true, git: gitResult, build: builtMatch?.[1] || 'ok' });
+    // Check if server code changed (requires process restart) vs frontend-only (just reload)
+    const serverChanged = _pendingChanges.some(f => f.startsWith('server/'));
+    const gitChangedServer = /server\//.test(gitResult);
+    const needsRestart = serverChanged || gitChangedServer;
 
-    // 4. Schedule restart (after response is sent) — systemd will restart the process
-    setTimeout(() => {
-      console.log('[Sync] Build complete, exiting for systemd restart');
-      process.exit(0);
-    }, 500);
+    _syncInProgress = false;
+    _pendingChanges = [];
+    res.json({ ok: true, git: gitResult, build: builtMatch?.[1] || 'ok', serverRestart: needsRestart });
+
+    if (needsRestart) {
+      // Server code changed - must restart to pick up new TypeScript
+      setTimeout(() => {
+        console.log('[Sync] Server code changed, exiting for systemd restart');
+        process.exit(0);
+      }, 500);
+    } else {
+      // Frontend-only - new bundle is already in dist/, just notify clients to reload
+      console.log('[Sync] Frontend-only build complete (no server restart needed)');
+      broadcast({ type: 'cui-update-available', files: [], count: 0, rebuilt: true });
+    }
 
   } catch (err: any) {
     _syncInProgress = false;
@@ -3207,7 +3329,7 @@ const changeWatcher = watch([
   join(WORKSPACE_ROOT, 'src'),
   join(WORKSPACE_ROOT, 'server'),
 ], {
-  ignored: /(node_modules|dist|\.git|__pycache__)/,
+  ignored: /(node_modules|dist|\.git|__pycache__|sync-conflict)/,
   persistent: true,
   ignoreInitial: true,
   depth: 10,
@@ -3227,7 +3349,7 @@ changeWatcher.on('all', (event, filePath) => {
   // Debounce: notify frontend after 5s quiet period (was 2s — too aggressive during Syncthing bursts)
   if (_changeDebounce) clearTimeout(_changeDebounce);
   _changeDebounce = setTimeout(() => {
-    console.log(`[ChangeWatch] Update available: ${_pendingChanges.length} files changed`);
+    console.log(`[ChangeWatch] Update available: ${_pendingChanges.length} files: ${_pendingChanges.slice(0, 5).join(', ')}${_pendingChanges.length > 5 ? '...' : ''}`);
     broadcast({ type: 'cui-update-available', files: _pendingChanges.slice(0, 20), count: _pendingChanges.length });
   }, 5000);
 });
@@ -3430,7 +3552,7 @@ function loadWrEnvMode(): WrEnvMode {
   if (process.env.NODE_ENV === 'development') {
     // In dev mode, default to local if WR is running on port 3008
     try {
-      const { execSync } = require('child_process');
+      // execSync already imported at top of file (ESM — require() not available)
       const portCheck = execSync('ss -tlnp 2>/dev/null | grep ":3008" || true', { encoding: 'utf8' });
       if (portCheck.includes('3008')) {
         console.log('[WR Env] Auto-detected local WR server on port 3008');
@@ -4262,7 +4384,7 @@ function restartCuiServer() {
   console.log('[Restart] Triggering external restart script...');
 
   // Use external restart script for clean restart (kill old, start new)
-  const { spawn } = require('child_process');
+  // spawn already imported at top of file (ESM — require() not available)
   const restartScript = join(WORKSPACE_ROOT, 'restart-server.sh');
 
   spawn('bash', [restartScript], {
@@ -5924,7 +6046,7 @@ app.get('/api/repo-dashboard/hierarchy', async (_req, res) => {
       parent?: string;
     }
 
-    const buildHierarchy = (basePath: string, level: number, maxDepth: number = 3): HierarchyNode[] => {
+    const buildHierarchy = (basePath: string, level: number, maxDepth: number = 3, maxPerLevel: number = 15): HierarchyNode[] => {
       if (level > maxDepth) return [];
 
       const nodes: HierarchyNode[] = [];
@@ -5934,7 +6056,7 @@ app.get('/api/repo-dashboard/hierarchy', async (_req, res) => {
 
         for (const item of items) {
           // Skip hidden and common excludes
-          if (item.startsWith('.') || item === 'node_modules' || item === 'dist' || item === '.next') {
+          if (item.startsWith('.') || item === 'node_modules' || item === 'dist' || item === '.next' || item === '__pycache__') {
             continue;
           }
 
@@ -5964,7 +6086,7 @@ app.get('/api/repo-dashboard/hierarchy', async (_req, res) => {
 
             // Recursively get children (only if not a git repo or if level < 2)
             if (level < maxDepth && (!isGit || level < 1)) {
-              const children = buildHierarchy(itemPath, level + 1, maxDepth);
+              const children = buildHierarchy(itemPath, level + 1, maxDepth, maxPerLevel);
               if (children.length > 0) {
                 node.children = children;
               }
@@ -5980,13 +6102,14 @@ app.get('/api/repo-dashboard/hierarchy', async (_req, res) => {
         console.error(`[Hierarchy] Error reading ${basePath}:`, err.message);
       }
 
-      // Sort by size (largest first)
+      // Sort by size (largest first) and limit to top N
       nodes.sort((a, b) => b.diskSize.bytes - a.diskSize.bytes);
 
-      return nodes;
+      // Only return top N nodes per level to keep visualization manageable
+      return nodes.slice(0, maxPerLevel);
     };
 
-    const hierarchy = buildHierarchy(projectsRoot, 0, 3);
+    const hierarchy = buildHierarchy(projectsRoot, 0, 2, 10);
 
     // Flatten for Sankey diagram (nodes + links)
     interface SankeyNode {
@@ -6330,8 +6453,17 @@ const knowledgeWatcher = new KnowledgeWatcher({
 knowledgeWatcher.start();
 
 process.on('SIGTERM', () => {
+  console.log('[Process] SIGTERM received, shutting down gracefully');
   knowledgeWatcher.stop();
   process.exit(0);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] Uncaught exception:', err.message, err.stack?.split('\n').slice(0, 3).join(' | '));
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[FATAL] Unhandled rejection:', reason instanceof Error ? reason.message : String(reason));
 });
 
 

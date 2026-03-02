@@ -668,6 +668,7 @@ export default function App() {
                 setShowAllChats(false);
                 setActiveId(projectId);
               }}
+              isVisible={showAllChats}
             />
           </div>
         )}

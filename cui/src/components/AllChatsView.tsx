@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import CuiLitePanel from './panels/CuiLitePanel';
 import { ACCOUNTS } from '../types';
 
@@ -15,6 +15,7 @@ interface ActiveChat {
 
 interface AllChatsViewProps {
   onNavigateToProject: (projectId: string) => void;
+  isVisible?: boolean;
 }
 
 function computeGrid(n: number): { cols: number; rows: number } {
@@ -22,14 +23,17 @@ function computeGrid(n: number): { cols: number; rows: number } {
   if (n === 1) return { cols: 1, rows: 1 };
   if (n === 2) return { cols: 2, rows: 1 };
   if (n === 3) return { cols: 3, rows: 1 };
+  if (n === 4) return { cols: 2, rows: 2 };
   const cols = Math.ceil(Math.sqrt(n));
   const rows = Math.ceil(n / cols);
   return { cols, rows };
 }
 
-export default function AllChatsView({ onNavigateToProject }: AllChatsViewProps) {
+export default function AllChatsView({ onNavigateToProject, isVisible = true }: AllChatsViewProps) {
   const [chats, setChats] = useState<ActiveChat[]>([]);
+  const [failedSessions, setFailedSessions] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
+  const prevVisibleRef = useRef(isVisible);
 
   const fetchChats = useCallback(async () => {
     try {
@@ -37,19 +41,40 @@ export default function AllChatsView({ onNavigateToProject }: AllChatsViewProps)
       if (!resp.ok) throw new Error('fetch failed');
       const data = await resp.json();
       setChats(data.chats || []);
+      // Reset failed sessions on fresh fetch — give panels a new chance
+      setFailedSessions(new Set());
     } catch (err) {
       console.error('[AllChats] Fetch error:', err);
     }
     setLoading(false);
   }, []);
 
+  // Refresh on mount + every 30s
   useEffect(() => {
     fetchChats();
     const timer = setInterval(fetchChats, 30000);
     return () => clearInterval(timer);
   }, [fetchChats]);
 
-  const { cols, rows } = useMemo(() => computeGrid(chats.length), [chats.length]);
+  // Refresh when AC tab becomes visible (user clicks AC)
+  useEffect(() => {
+    if (isVisible && !prevVisibleRef.current) {
+      fetchChats();
+    }
+    prevVisibleRef.current = isVisible;
+  }, [isVisible, fetchChats]);
+
+  const handleLoadFailed = useCallback((sessionId: string) => {
+    setFailedSessions(prev => new Set(prev).add(sessionId));
+  }, []);
+
+  // Filter out failed panels
+  const visibleChats = useMemo(
+    () => chats.filter(c => !failedSessions.has(c.sessionId)),
+    [chats, failedSessions]
+  );
+
+  const { cols, rows } = useMemo(() => computeGrid(visibleChats.length), [visibleChats.length]);
 
   if (loading) {
     return (
@@ -59,12 +84,27 @@ export default function AllChatsView({ onNavigateToProject }: AllChatsViewProps)
     );
   }
 
-  if (chats.length === 0) {
+  if (visibleChats.length === 0) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--tn-text-muted)', flexDirection: 'column', gap: 8 }}>
         <span style={{ fontSize: 32, opacity: 0.3 }}>&#x1f4ac;</span>
-        <span style={{ fontSize: 14 }}>Keine offenen Chats</span>
-        <span style={{ fontSize: 11, opacity: 0.5 }}>Chats werden automatisch erkannt, wenn sie in Workspaces geöffnet sind</span>
+        <span style={{ fontSize: 14 }}>Keine aktiven Chats</span>
+        <span style={{ fontSize: 11, opacity: 0.5 }}>
+          {chats.length > 0
+            ? `${chats.length} Panel(s) konnten nicht geladen werden`
+            : 'Chats werden automatisch erkannt, wenn sie in Workspaces geöffnet sind'}
+        </span>
+        {chats.length > 0 && (
+          <button
+            onClick={fetchChats}
+            style={{
+              marginTop: 8, padding: '6px 16px', fontSize: 12, border: '1px solid var(--tn-border)',
+              borderRadius: 4, background: 'var(--tn-surface)', color: 'var(--tn-text)', cursor: 'pointer',
+            }}
+          >
+            Retry
+          </button>
+        )}
       </div>
     );
   }
@@ -79,7 +119,7 @@ export default function AllChatsView({ onNavigateToProject }: AllChatsViewProps)
       padding: 3,
       background: 'var(--tn-bg)',
     }}>
-      {chats.map(chat => {
+      {visibleChats.map(chat => {
         const account = ACCOUNTS.find(a => a.id === chat.accountId);
         const color = account?.color || 'var(--tn-text-muted)';
         const shortName = (chat.accountId || 'UNK').slice(0, 3).toUpperCase();
@@ -152,6 +192,7 @@ export default function AllChatsView({ onNavigateToProject }: AllChatsViewProps)
                 panelId={`allchats-${chat.panelId}`}
                 isTabVisible={true}
                 initialSessionId={chat.sessionId}
+                onLoadFailed={handleLoadFailed}
               />
             </div>
           </div>

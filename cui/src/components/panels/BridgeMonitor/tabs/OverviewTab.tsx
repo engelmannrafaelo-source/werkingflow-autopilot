@@ -121,10 +121,10 @@ export default function OverviewTab() {
         </div>
       )}
 
-      {/* Quick Stats */}
-      {data && (
-        <>
-          <div data-ai-id="overview-stats-cards" style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 20 }}>
+      {/* Quick Stats - data-ai-id always present */}
+      <div data-ai-id="overview-stats-cards" style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 20 }}>
+        {data ? (
+          <>
             {statCard(
               'Health',
               data.health,
@@ -155,29 +155,30 @@ export default function OverviewTab() {
               'var(--tn-orange)',
               '⚡'
             )}
+          </>
+        ) : (
+          <div style={{ gridColumn: '1 / -1', padding: 20, textAlign: 'center', color: 'var(--tn-text-dim)', fontSize: 12 }}>
+            No overview data available
           </div>
+        )}
+      </div>
 
-          {/* Performance Stats */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 20 }}>
-            {statCard(
-              'Avg Response Time',
-              `${(data.avg_response_time ?? 0).toFixed(2)}s`,
-              'var(--tn-text)',
-              '⏱️'
-            )}
-            {statCard(
-              'Success Rate',
-              `${(data.success_rate ?? 0).toFixed(1)}%`,
-              (data.success_rate ?? 0) >= 99 ? 'var(--tn-green)' : (data.success_rate ?? 0) >= 95 ? 'var(--tn-orange)' : 'var(--tn-red)',
-              (data.success_rate ?? 0) >= 99 ? '✅' : (data.success_rate ?? 0) >= 95 ? '⚠️' : '❌'
-            )}
-          </div>
-
-          {/* Timestamp */}
-          <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', textAlign: 'right' }}>
-            Last updated: {data.timestamp ? new Date(data.timestamp).toLocaleString() : 'N/A'}
-          </div>
-        </>
+      {/* Performance Stats */}
+      {data && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 20 }}>
+          {statCard(
+            'Avg Response Time',
+            `${(data.avg_response_time ?? 0).toFixed(2)}s`,
+            'var(--tn-text)',
+            '⏱️'
+          )}
+          {statCard(
+            'Success Rate',
+            `${(data.success_rate ?? 0).toFixed(1)}%`,
+            (data.success_rate ?? 0) >= 99 ? 'var(--tn-green)' : (data.success_rate ?? 0) >= 95 ? 'var(--tn-orange)' : 'var(--tn-red)',
+            (data.success_rate ?? 0) >= 99 ? '✅' : (data.success_rate ?? 0) >= 95 ? '⚠️' : '❌'
+          )}
+        </div>
       )}
     </div>
   );

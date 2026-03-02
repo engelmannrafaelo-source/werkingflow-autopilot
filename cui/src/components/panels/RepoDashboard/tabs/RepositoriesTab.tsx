@@ -29,14 +29,14 @@ export default function RepositoriesTab() {
     fetchRepos();
   }, []);
 
-  // Age-based color heatmap
+  // Age-based color heatmap (lighter for better readability)
   const getAgeColor = (lastModified: string): string => {
     const daysSince = (Date.now() - new Date(lastModified).getTime()) / (1000 * 60 * 60 * 24);
-    if (daysSince < 7) return 'rgba(158, 206, 106, 0.12)';   // Fresh (< 1 week) - Green
-    if (daysSince < 30) return 'rgba(224, 175, 104, 0.12)';  // Recent (< 1 month) - Yellow
-    if (daysSince < 90) return 'rgba(255, 158, 100, 0.12)';  // Aging (< 3 months) - Orange
-    if (daysSince < 180) return 'rgba(247, 118, 142, 0.12)'; // Stale (< 6 months) - Red
-    return 'rgba(86, 95, 137, 0.12)';                         // Dead (> 6 months) - Gray
+    if (daysSince < 7) return 'rgba(158, 206, 106, 0.25)';   // Fresh (< 1 week) - Green
+    if (daysSince < 30) return 'rgba(224, 175, 104, 0.25)';  // Recent (< 1 month) - Yellow
+    if (daysSince < 90) return 'rgba(255, 158, 100, 0.25)';  // Aging (< 3 months) - Orange
+    if (daysSince < 180) return 'rgba(247, 118, 142, 0.25)'; // Stale (< 6 months) - Red
+    return 'rgba(86, 95, 137, 0.25)';                         // Dead (> 6 months) - Gray
   };
 
   const getAgeLabel = (lastModified: string): string => {

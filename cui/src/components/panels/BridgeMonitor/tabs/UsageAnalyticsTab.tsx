@@ -139,10 +139,10 @@ export default function UsageAnalyticsTab() {
         </div>
       )}
 
-      {/* Overview Stats */}
-      {data && (
-        <>
-          <div data-ai-id="stats-summary-cards" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 20 }}>
+      {/* Overview Stats - data-ai-id always present */}
+      <div data-ai-id="stats-summary-cards" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 20 }}>
+        {data ? (
+          <>
             {statCard(
               'Total Requests',
               formatNumber(data.total_requests),
@@ -155,12 +155,18 @@ export default function UsageAnalyticsTab() {
               'var(--tn-purple, #bb9af7)',
               '🔗'
             )}
+          </>
+        ) : (
+          <div style={{ gridColumn: '1 / -1', padding: 20, textAlign: 'center', color: 'var(--tn-text-dim)', fontSize: 12 }}>
+            No stats available
           </div>
+        )}
+      </div>
 
-          {/* Endpoint Usage Chart */}
-          {data.endpoints.length > 0 ? (
-            <>
-              <div data-ai-id="stats-chart-container" style={{ marginBottom: 20 }}>
+      {/* Endpoint Usage Chart - data-ai-id always present */}
+      <div data-ai-id="stats-chart-container" style={{ marginBottom: 20 }}>
+        {data && data.endpoints.length > 0 ? (
+          <>
                 <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--tn-text)', marginBottom: 8 }}>
                   REQUESTS BY ENDPOINT
                 </div>
@@ -192,10 +198,9 @@ export default function UsageAnalyticsTab() {
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
-              </div>
 
               {/* Detailed Table */}
-              <div>
+              <div style={{ marginTop: 20 }}>
                 <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--tn-text)', marginBottom: 8 }}>
                   DETAILED BREAKDOWN
                 </div>
@@ -256,16 +261,10 @@ export default function UsageAnalyticsTab() {
                 fontSize: 11,
               }}
             >
-              No usage data available yet (no requests tracked)
+              No usage data available yet
             </div>
           )}
-
-          {/* Timestamp */}
-          <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', textAlign: 'right', marginTop: 20 }}>
-            Last updated: {data.timestamp ? new Date(data.timestamp).toLocaleString() : 'N/A'}
-          </div>
-        </>
-      )}
+        </div>
     </div>
   );
 }

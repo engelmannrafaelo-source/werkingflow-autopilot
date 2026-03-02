@@ -87,12 +87,13 @@ export default function SettingsTab() {
     return () => clearInterval(interval);
   }, [fetchAll]);
 
-  if (loading) return <LoadingSpinner />;
-  if (error) return <ErrorBanner message={error} onRetry={fetchAll} />;
-  if (!config) return <ErrorBanner message="No configuration data available" onRetry={fetchAll} />;
-
   return (
     <div data-ai-id="settings-tab-content" style={{ padding: '16px 12px', overflowY: 'auto', height: '100%' }}>
+      {loading && <LoadingSpinner />}
+      {error && !loading && <ErrorBanner message={error} onRetry={fetchAll} />}
+      {!loading && !error && !config && <ErrorBanner message="No configuration data available" onRetry={fetchAll} />}
+      {!loading && !error && config && (
+        <>
       <Toolbar onRefresh={fetchAll} lastRefresh={lastRefresh} />
 
       <div data-ai-id="settings-bridge-config">
@@ -169,6 +170,8 @@ export default function SettingsTab() {
       <div style={{ marginTop: 12, padding: 12, background: 'var(--tn-bg-dark)', borderRadius: 4, fontSize: 11, color: 'var(--tn-text-dim)' }}>
         <strong>Note:</strong> Settings are read-only. Configuration changes must be made on the Bridge server.
       </div>
+        </>
+      )}
     </div>
   );
 }

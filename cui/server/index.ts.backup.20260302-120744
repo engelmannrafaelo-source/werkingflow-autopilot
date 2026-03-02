@@ -44,6 +44,9 @@ const CUI_PROXIES = [
   { id: 'local',     localPort: 5004, target: 'http://localhost:4004' },
 ];
 
+// Track proxy health to avoid error spam for unconfigured proxies (e.g. local:4004)
+const proxyHealthy = new Map<string, boolean>();
+
 // SSE proxy: monitors upstream for attention markers (plan/question/done).
 // CRITICAL: Only sends SSE headers to browser if upstream has an active stream (200 OK).
 // For dead streams (non-200), forwards the error response so the CUI app knows there's no stream.
@@ -144,13 +147,24 @@ function sseProxy(targetBase: string, req: IncomingMessage, res: ServerResponse,
 }
 
 // --- Auto-Refresh: Monitor CUI streams for response completion ---
+const activeMonitors = new Set<string>();
+
 function monitorStream(targetBase: string, streamingId: string, cuiId: string, authHeaders: Record<string, string>, sessionId?: string) {
+  // Prevent duplicate monitors for the same stream
+  if (activeMonitors.has(streamingId)) {
+    console.log(`[Monitor] Skip duplicate for ${streamingId.slice(0, 8)} (${cuiId})`);
+    return;
+  }
+  activeMonitors.add(streamingId);
   const url = new URL(`/api/stream/${streamingId}`, targetBase);
   const headers: Record<string, string> = { 'Accept': 'text/event-stream' };
   if (authHeaders.authorization) headers['Authorization'] = authHeaders.authorization;
   if (authHeaders.cookie) headers['Cookie'] = authHeaders.cookie;
 
-  const cleanup = () => { if (sessionId) activeStreams.delete(sessionId); };
+  const cleanup = () => {
+    activeMonitors.delete(streamingId);
+    if (sessionId) activeStreams.delete(sessionId);
+  };
 
   const monitorReq = httpRequest(url, { method: 'GET', headers }, (monitorRes) => {
     if (monitorRes.statusCode !== 200) {
@@ -727,6 +741,30 @@ setInterval(() => {
 // Maps Claude sessionIds to CUI binary streamingIds for correct stop calls
 const activeStreams = new Map<string, string>();
 
+// --- Periodic cleanup of stale state entries ---
+setInterval(() => {
+  const now = Date.now();
+  let cleaned = 0;
+  // sessionStates: remove entries older than 24h
+  for (const [k, v] of sessionStates) {
+    if (now - v.since > 24 * 60 * 60 * 1000) { sessionStates.delete(k); cleaned++; }
+  }
+  // activeStreams: cap at 50 entries (remove oldest by order)
+  if (activeStreams.size > 50) {
+    const excess = activeStreams.size - 50;
+    let i = 0;
+    for (const key of activeStreams.keys()) {
+      if (i++ >= excess) break;
+      activeStreams.delete(key); cleaned++;
+    }
+  }
+  // activeMonitors: cap at 50
+  if (activeMonitors.size > 50) {
+    activeMonitors.clear(); cleaned += 50;
+  }
+  if (cleaned > 0) console.log(`[Cleanup] Removed ${cleaned} stale state entries`);
+}, 300000); // Every 5 minutes
+
 // --- Per-Session Attention State Tracker ---
 // Tracks whether each conversation needs user attention (plan, question, permission, done)
 type AttentionReason = 'plan' | 'question' | 'permission' | 'error' | 'done';
@@ -778,7 +816,10 @@ const clients = new Set<WebSocket>();
 
 wss.on('connection', (ws) => {
   clients.add(ws);
+  (ws as any)._alive = true;
+  ws.on('pong', () => { (ws as any)._alive = true; });
   ws.on('close', () => clients.delete(ws));
+  ws.on('error', (err) => { console.warn('[WS] Client error:', (err as Error).message); clients.delete(ws); });
 
   // Register for Document Manager broadcasts
   registerWebSocketClient(ws);
@@ -825,6 +866,15 @@ wss.on('connection', (ws) => {
     }
   });
 });
+
+// WebSocket ping/pong heartbeat — detect dead connections every 30s
+setInterval(() => {
+  for (const ws of clients) {
+    if (!(ws as any)._alive) { ws.terminate(); clients.delete(ws); continue; }
+    (ws as any)._alive = false;
+    try { ws.ping(); } catch { clients.delete(ws); }
+  }
+}, 30000);
 
 // --- Broadcast dedup + throttling ---
 // Tracks last broadcast per type+key to suppress duplicates
@@ -887,7 +937,9 @@ function broadcast(data: Record<string, unknown>) {
       _broadcastCount++;
       const json = JSON.stringify(data);
       for (const client of clients) {
-        if (client.readyState === WebSocket.OPEN) client.send(json);
+        if (client.readyState === WebSocket.OPEN) {
+          try { client.send(json); } catch { clients.delete(client); }
+        }
       }
     }, throttleMs);
     return;
@@ -898,7 +950,7 @@ function broadcast(data: Record<string, unknown>) {
   const json = JSON.stringify(data);
   for (const client of clients) {
     if (client.readyState === WebSocket.OPEN) {
-      client.send(json);
+      try { client.send(json); } catch { clients.delete(client); }
     }
   }
 }
@@ -1224,6 +1276,94 @@ function saveTemplates(templates: PromptTemplate[]) {
   writeFileSync(TEMPLATES_FILE, JSON.stringify(templates, null, 2));
 }
 
+// --- Auto-Inject System ---
+// Periodically injects a message into idle conversations (autonomous test-fix loop)
+const AUTOINJECT_FILE = join(DATA_DIR, "auto-inject.json");
+
+interface AutoInjectConfig {
+  accountId: string;
+  sessionId: string;
+  workDir: string;
+  message: string;
+  intervalMs: number;
+  enabled: boolean;
+  idleSinceMs?: number;
+}
+
+interface AutoInjectState {
+  configs: Record<string, AutoInjectConfig>;
+  lastInject: Record<string, string>;
+}
+
+function loadAutoInject(): AutoInjectState {
+  if (!existsSync(AUTOINJECT_FILE)) return { configs: {}, lastInject: {} };
+  try { return JSON.parse(readFileSync(AUTOINJECT_FILE, "utf8")); } catch { return { configs: {}, lastInject: {} }; }
+}
+
+function saveAutoInject(state: AutoInjectState) {
+  writeFileSync(AUTOINJECT_FILE, JSON.stringify(state, null, 2));
+}
+
+let autoInjectTimer: ReturnType<typeof setInterval> | null = null;
+
+async function autoInjectTick() {
+  const state = loadAutoInject();
+  for (const [accountId, cfg] of Object.entries(state.configs)) {
+    if (!cfg.enabled) continue;
+    const ss = sessionStates.get(accountId);
+    if (!ss || ss.state !== "idle") continue;
+    if (ss.reason === "rate_limit") continue;
+    const idleMs = Date.now() - ss.since;
+    const minIdle = cfg.idleSinceMs || cfg.intervalMs;
+    if (idleMs < minIdle) continue;
+    const lastInject = state.lastInject[accountId];
+    if (lastInject) {
+      const sinceLast = Date.now() - new Date(lastInject).getTime();
+      if (sinceLast < cfg.intervalMs) continue;
+    }
+    console.log(`[AutoInject] Injecting into ${accountId} (idle for ${Math.round(idleMs/1000)}s): "${cfg.message.slice(0, 50)}..."`);
+    const port = getProxyPort(accountId);
+    if (!port) { console.log(`[AutoInject] No port for ${accountId}`); continue; }
+    try {
+      unstickConversation(cfg.sessionId);
+      const resp = await cuiFetch(port, "/api/conversations/start", {
+        method: "POST",
+        timeoutMs: 60000,
+        body: JSON.stringify({
+          workingDirectory: cfg.workDir,
+          initialPrompt: cfg.message,
+          resumedSessionId: cfg.sessionId,
+        }),
+      });
+      if (resp.ok) {
+        state.lastInject[accountId] = new Date().toISOString();
+        saveAutoInject(state);
+        setSessionState(accountId, accountId, "working", undefined, cfg.sessionId);
+        broadcast({ type: "cui-state", cuiId: accountId, state: "processing" });
+        const sendResult = resp.data;
+        if (sendResult?.streamingId) {
+          monitorStream(`http://localhost:${port}`, sendResult.streamingId, accountId, {});
+        }
+        logUserInput({ type: "auto-inject", accountId, workDir: cfg.workDir, message: cfg.message, sessionId: cfg.sessionId, result: "ok" });
+        console.log(`[AutoInject] Successfully injected into ${accountId}`);
+      } else {
+        console.log(`[AutoInject] Failed for ${accountId}: ${resp.error}`);
+        logUserInput({ type: "auto-inject", accountId, workDir: cfg.workDir, message: cfg.message, sessionId: cfg.sessionId, result: "error", error: resp.error });
+      }
+    } catch (err) {
+      console.log(`[AutoInject] Error for ${accountId}: ${err}`);
+    }
+  }
+}
+
+function startAutoInjectTimer() {
+  if (autoInjectTimer) clearInterval(autoInjectTimer);
+  autoInjectTimer = setInterval(autoInjectTick, 30_000);
+  console.log("[AutoInject] Timer started (30s check interval)");
+}
+
+startAutoInjectTimer();
+
 // --- User Input Log ---
 // Persistent log of all user inputs (subject + message) from Queue/Commander
 const INPUT_LOG_FILE = join(DATA_DIR, 'input-log.jsonl');
@@ -1475,11 +1615,19 @@ app.get('/api/mission/conversation/:accountId/:sessionId', async (req, res) => {
   if (!port) { res.status(400).json({ error: 'unknown account' }); return; }
 
   const tail = parseInt(req.query.tail as string) || 10;
-  const [convResp, permResp] = await Promise.all([
+  let [convResp, permResp] = await Promise.all([
     cuiFetch(port, `/api/conversations/${req.params.sessionId}`),
     cuiFetch(port, `/api/permissions?streamingId=&status=pending`),
   ]);
 
+  // Auto-fix corrupted JSONL on load failure (queue-operation as first line, etc.)
+  if (!convResp.ok) {
+    const cleaned = unstickConversation(req.params.sessionId);
+    if (cleaned > 0) {
+      console.log(`[Load] Auto-cleaned ${cleaned} entries from ${req.params.sessionId}, retrying...`);
+      convResp = await cuiFetch(port, `/api/conversations/${req.params.sessionId}`);
+    }
+  }
   if (!convResp.ok) { res.status(502).json({ error: convResp.error || 'CUI unreachable' }); return; }
 
   // Transform CUI message format, detect rate limits, filter noise
@@ -1769,6 +1917,20 @@ function unstickConversation(sessionId: string): number {
     try {
       const lines = readFileSync(filePath, 'utf-8').split('\n');
       const removeIndices = new Set<number>();
+      // Phase 0: Remove leading queue-operation entries (before system init)
+      // CUI binary writes queue-operation as first line when message was queued - corrupts JSONL
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        try {
+          const obj = JSON.parse(line);
+          if (obj.type === 'queue-operation') {
+            removeIndices.add(i);
+          } else {
+            break; // Stop at first non-queue-operation line (system init or user message)
+          }
+        } catch { break; }
+      }
       // Phase 1: Remove ALL synthetic error messages anywhere in the conversation
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
@@ -1919,6 +2081,12 @@ app.post('/api/mission/start', async (req, res) => {
     monitorStream(`http://localhost:${port}`, startData.streamingId, accountId, {});
   }
     checkSessionForRateLimit(startData.sessionId, accountId);
+
+  // Auto-clean JSONL after start (queue-operation corruption from concurrent spawns)
+  setTimeout(() => {
+    const cleaned = unstickConversation(startData.sessionId);
+    if (cleaned > 0) console.log(`[Start] Auto-cleaned ${cleaned} entries from new session ${startData.sessionId}`);
+  }, 3000);
 
   res.json({ ok: true, sessionId: startData.sessionId, streamingId: startData.streamingId });
 });
@@ -2403,13 +2571,8 @@ app.post('/api/layouts/:projectId/template', (req, res) => {
   res.json({ ok: true });
 });
 
-// --- All Active Chats API (scans layout files for CUI panels with active sessions) ---
+// --- All Active Chats API (uses visibilityRegistry as primary source for actually-open panels) ---
 app.get('/api/all-active-chats', (_req, res) => {
-  const projects = readdirSync(PROJECTS_DIR)
-    .filter(f => f.endsWith('.json'))
-    .map(f => { try { return JSON.parse(readFileSync(join(PROJECTS_DIR, f), 'utf8')); } catch { return null; } })
-    .filter(Boolean);
-
   interface ActiveChat {
     projectId: string;
     projectName: string;
@@ -2422,32 +2585,35 @@ app.get('/api/all-active-chats', (_req, res) => {
   }
 
   const chats: ActiveChat[] = [];
+  const seenSessions = new Set<string>();
 
-  function findCuiPanels(node: any, projectId: string, projectName: string, workDir: string): void {
-    if (node.type === 'tab' && (node.component === 'cui' || node.component === 'cui-lite')) {
-      const route: string = node.config?._route || '';
-      const match = route.match(/\/c\/(.+)/);
-      if (match) {
-        chats.push({
-          projectId,
-          projectName,
-          workDir,
-          panelId: node.id || '',
-          accountId: node.config?.accountId || 'rafael',
-          sessionId: match[1],
-        });
-      }
-    }
-    if (node.children) for (const child of node.children) findCuiPanels(child, projectId, projectName, workDir);
+  // Load project metadata for name/workDir lookup
+  const projectMap = new Map<string, { name: string; workDir: string }>();
+  const projectFiles = readdirSync(PROJECTS_DIR).filter(f => f.endsWith('.json'));
+  for (const f of projectFiles) {
+    try {
+      const p = JSON.parse(readFileSync(join(PROJECTS_DIR, f), 'utf8'));
+      if (p?.id) projectMap.set(p.id, { name: p.name || p.id, workDir: p.workDir || '' });
+    } catch { /* skip */ }
   }
 
-  for (const project of projects) {
-    const layoutPath = join(LAYOUTS_DIR, `${project.id}.json`);
-    if (!existsSync(layoutPath)) continue;
-    try {
-      const layout = JSON.parse(readFileSync(layoutPath, 'utf8'));
-      findCuiPanels(layout.layout || layout, project.id, project.name, project.workDir || '');
-    } catch { /* skip corrupted layouts */ }
+  // Primary source: visibilityRegistry (panels that are actually open and sending heartbeats)
+  for (const entry of visibilityRegistry.values()) {
+    if (!entry.sessionId) continue;
+    // Skip AllChats' own panels (they register with 'allchats-' prefix)
+    if (entry.panelId.startsWith('allchats-')) continue;
+    if (isFinished(entry.sessionId)) continue;
+    if (seenSessions.has(entry.sessionId)) continue;
+    seenSessions.add(entry.sessionId);
+    const proj = projectMap.get(entry.projectId);
+    chats.push({
+      projectId: entry.projectId,
+      projectName: proj?.name || entry.projectId,
+      workDir: proj?.workDir || '',
+      panelId: entry.panelId,
+      accountId: entry.accountId,
+      sessionId: entry.sessionId,
+    });
   }
 
   // Enrich with attention states
@@ -2516,6 +2682,41 @@ app.delete("/api/prompt-templates/:id", (req, res) => {
   const filtered = templates.filter(t => t.id !== req.params.id);
   if (filtered.length === templates.length) return res.status(404).json({ error: "Template not found" });
   saveTemplates(filtered);
+  res.json({ ok: true });
+});
+
+// --- Auto-Inject API ---
+app.get("/api/auto-inject", (_req, res) => {
+  const state = loadAutoInject();
+  res.json(state);
+});
+
+app.post("/api/auto-inject", (req, res) => {
+  const { accountId, sessionId, workDir, message, intervalMs, enabled, idleSinceMs } = req.body;
+  if (!accountId) return res.status(400).json({ error: "accountId is required" });
+  const state = loadAutoInject();
+  const existing = state.configs[accountId];
+  state.configs[accountId] = {
+    accountId,
+    sessionId: sessionId || existing?.sessionId || "",
+    workDir: workDir || existing?.workDir || "",
+    message: message || existing?.message || "Schau dir die aktuellen Test-Logs an und entscheide selbst: Wenn Probleme sichtbar sind, behebe sie (defensive coding, fail fast) und committe. Wenn Tests noch laufen oder alles passt, sage kurz Bescheid und warte.",
+    intervalMs: typeof intervalMs === "number" ? intervalMs : (existing?.intervalMs || 300000),
+    enabled: typeof enabled === "boolean" ? enabled : (existing?.enabled ?? true),
+    idleSinceMs: typeof idleSinceMs === "number" ? idleSinceMs : (existing?.idleSinceMs || undefined),
+  };
+  saveAutoInject(state);
+  console.log(`[AutoInject] Config updated for ${accountId}: enabled=${state.configs[accountId].enabled}, interval=${state.configs[accountId].intervalMs}ms`);
+  res.json({ config: state.configs[accountId] });
+});
+
+app.delete("/api/auto-inject/:accountId", (req, res) => {
+  const state = loadAutoInject();
+  if (!state.configs[req.params.accountId]) return res.status(404).json({ error: "No config for this account" });
+  delete state.configs[req.params.accountId];
+  delete state.lastInject[req.params.accountId];
+  saveAutoInject(state);
+  console.log(`[AutoInject] Config removed for ${req.params.accountId}`);
   res.json({ ok: true });
 });
 
@@ -4227,6 +4428,10 @@ app.post('/api/rebuild-frontend', async (_req, res) => {
 import knowledgeRegistryRouter from './knowledge-registry.js';
 app.use('/api/team/knowledge', knowledgeRegistryRouter);
 
+// --- QA Dashboard ---
+import qaRoutes from './routes/qa-routes.js';
+app.use('/api/qa', qaRoutes);
+
 // --- Agent Monitoring & Control ---
 import { spawn } from 'child_process';
 import { promises as fsAgentPromises } from 'fs';
@@ -5440,14 +5645,32 @@ app.post("/api/claude-code/scrape-now", async (req, res) => {
 const BRIDGE_URL = 'http://49.12.72.66:8000';
 const BRIDGE_API_KEY = process.env.AI_BRIDGE_API_KEY || '';
 
+let _bridgeFailCount = 0;
+let _bridgeCircuitOpenUntil = 0;
+
 async function bridgeFetch(path: string, options: any = {}) {
+  // Circuit breaker: skip requests when bridge is known-down
+  if (_bridgeCircuitOpenUntil > Date.now()) {
+    throw new Error('Bridge circuit breaker open — skipping request');
+  }
   const headers = {
     'Authorization': `Bearer ${BRIDGE_API_KEY}`,
     ...options.headers,
   };
-  const response = await fetch(`${BRIDGE_URL}${path}`, { ...options, headers, signal: AbortSignal.timeout(10000) });
-  if (!response.ok) throw new Error(`Bridge API error: ${response.status}`);
-  return response.json();
+  try {
+    const response = await fetch(`${BRIDGE_URL}${path}`, { ...options, headers, signal: AbortSignal.timeout(5000) });
+    if (!response.ok) throw new Error(`Bridge API error: ${response.status}`);
+    _bridgeFailCount = 0; // Reset on success
+    return response.json();
+  } catch (err) {
+    _bridgeFailCount++;
+    if (_bridgeFailCount >= 3) {
+      _bridgeCircuitOpenUntil = Date.now() + 60000; // Open circuit for 60s
+      console.warn(`[Bridge] Circuit breaker OPEN after ${_bridgeFailCount} failures — pausing 60s`);
+      _bridgeFailCount = 0;
+    }
+    throw err;
+  }
 }
 
 // Overview: Quick stats + Sankey data
@@ -5519,6 +5742,7 @@ app.get('/api/bridge/metrics/activity', async (req, res) => {
 let repoCache: { data: any; timestamp: number } | null = null;
 let pipelineCache: { data: any; timestamp: number } | null = null;
 let structureCache: { data: any; timestamp: number } | null = null;
+let hierarchyCache: { data: any; timestamp: number } | null = null;
 const CACHE_TTL = 60000; // 60 seconds
 
 // GET /api/repo-dashboard/repositories — Scan all git repos + disk usage
@@ -5676,12 +5900,203 @@ app.get('/api/repo-dashboard/structure', async (_req, res) => {
   }
 });
 
+// GET /api/repo-dashboard/hierarchy — Full hierarchical tree for Sankey diagram
+app.get('/api/repo-dashboard/hierarchy', async (_req, res) => {
+  try {
+    // Check cache
+    if (hierarchyCache && Date.now() - hierarchyCache.timestamp < CACHE_TTL) {
+      return res.json(hierarchyCache.data);
+    }
+
+    const projectsRoot = '/root/projekte';
+
+    interface HierarchyNode {
+      name: string;
+      path: string;
+      fullPath: string;
+      level: number;
+      isGit: boolean;
+      diskSize: { bytes: number; human: string };
+      lastModified: string;
+      children?: HierarchyNode[];
+      parent?: string;
+    }
+
+    const buildHierarchy = (basePath: string, level: number, maxDepth: number = 3, maxPerLevel: number = 15): HierarchyNode[] => {
+      if (level > maxDepth) return [];
+
+      const nodes: HierarchyNode[] = [];
+
+      try {
+        const items = readdirSync(basePath);
+
+        for (const item of items) {
+          // Skip hidden and common excludes
+          if (item.startsWith('.') || item === 'node_modules' || item === 'dist' || item === '.next' || item === '__pycache__') {
+            continue;
+          }
+
+          const itemPath = join(basePath, item);
+
+          try {
+            const stat = statSync(itemPath);
+            if (!stat.isDirectory()) continue;
+
+            const isGit = existsSync(join(itemPath, '.git'));
+            const sizeHuman = execSync(`du -sh "${itemPath}" 2>/dev/null | cut -f1`, { encoding: 'utf8' }).trim();
+            const sizeBytes = parseInt(execSync(`du -sb "${itemPath}" 2>/dev/null | cut -f1`, { encoding: 'utf8' }).trim() || '0');
+
+            const node: HierarchyNode = {
+              name: item,
+              path: itemPath.replace('/root/projekte/', ''),
+              fullPath: itemPath,
+              level,
+              isGit,
+              diskSize: {
+                bytes: sizeBytes,
+                human: sizeHuman,
+              },
+              lastModified: stat.mtime.toISOString(),
+              parent: level > 0 ? basePath.replace('/root/projekte/', '') : undefined,
+            };
+
+            // Recursively get children (only if not a git repo or if level < 2)
+            if (level < maxDepth && (!isGit || level < 1)) {
+              const children = buildHierarchy(itemPath, level + 1, maxDepth, maxPerLevel);
+              if (children.length > 0) {
+                node.children = children;
+              }
+            }
+
+            nodes.push(node);
+          } catch (err: any) {
+            // Skip inaccessible directories
+            console.error(`[Hierarchy] Error scanning ${itemPath}:`, err.message);
+          }
+        }
+      } catch (err: any) {
+        console.error(`[Hierarchy] Error reading ${basePath}:`, err.message);
+      }
+
+      // Sort by size (largest first) and limit to top N
+      nodes.sort((a, b) => b.diskSize.bytes - a.diskSize.bytes);
+
+      // Only return top N nodes per level to keep visualization manageable
+      return nodes.slice(0, maxPerLevel);
+    };
+
+    const hierarchy = buildHierarchy(projectsRoot, 0, 2, 10);
+
+    // Flatten for Sankey diagram (nodes + links)
+    interface SankeyNode {
+      id: string;
+      name: string;
+      level: number;
+      isGit: boolean;
+      diskSize: { bytes: number; human: string };
+      lastModified: string;
+      ageColor: string;
+    }
+
+    interface SankeyLink {
+      source: string;
+      target: string;
+      value: number; // disk size in bytes
+    }
+
+    const nodes: SankeyNode[] = [];
+    const links: SankeyLink[] = [];
+    const nodeMap = new Map<string, boolean>();
+
+    // Age-based color function (same as heatmap)
+    const getAgeColor = (lastModified: string): string => {
+      const now = Date.now();
+      const modified = new Date(lastModified).getTime();
+      const ageMs = now - modified;
+      const ageWeeks = ageMs / (1000 * 60 * 60 * 24 * 7);
+
+      if (ageWeeks < 1) return '#9ece6a'; // < 1 week: green
+      if (ageWeeks < 4) return '#e0af68'; // < 1 month: yellow
+      if (ageWeeks < 13) return '#ff9e64'; // < 3 months: orange
+      if (ageWeeks < 26) return '#f7768e'; // < 6 months: red
+      return '#565f89'; // > 6 months: gray
+    };
+
+    const flattenToSankey = (items: HierarchyNode[], parentId?: string) => {
+      for (const item of items) {
+        const nodeId = item.path || item.name;
+
+        // Add node if not already added
+        if (!nodeMap.has(nodeId)) {
+          nodes.push({
+            id: nodeId,
+            name: item.name,
+            level: item.level,
+            isGit: item.isGit,
+            diskSize: item.diskSize,
+            lastModified: item.lastModified,
+            ageColor: getAgeColor(item.lastModified),
+          });
+          nodeMap.set(nodeId, true);
+        }
+
+        // Add link from parent
+        if (parentId) {
+          links.push({
+            source: parentId,
+            target: nodeId,
+            value: item.diskSize.bytes,
+          });
+        }
+
+        // Recurse into children
+        if (item.children && item.children.length > 0) {
+          flattenToSankey(item.children, nodeId);
+        }
+      }
+    };
+
+    // Add root node
+    const rootNode: SankeyNode = {
+      id: '',
+      name: '/root/projekte',
+      level: 0,
+      isGit: false,
+      diskSize: {
+        bytes: hierarchy.reduce((sum, n) => sum + n.diskSize.bytes, 0),
+        human: execSync(`du -sh /root/projekte 2>/dev/null | cut -f1`, { encoding: 'utf8' }).trim(),
+      },
+      lastModified: new Date().toISOString(),
+      ageColor: '#9ece6a',
+    };
+    nodes.push(rootNode);
+    nodeMap.set('', true);
+
+    flattenToSankey(hierarchy, '');
+
+    const result = {
+      hierarchy, // Tree structure
+      sankey: { nodes, links }, // Flattened for Sankey
+      totalSize: rootNode.diskSize,
+      nodeCount: nodes.length,
+      scannedAt: new Date().toISOString(),
+    };
+
+    hierarchyCache = { data: result, timestamp: Date.now() };
+    res.json(result);
+  } catch (err: any) {
+    console.error('[Repo Dashboard] Hierarchy error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/repo-dashboard/refresh — Force refresh (re-scan)
 app.post('/api/repo-dashboard/refresh', async (_req, res) => {
   // Clear all caches
   repoCache = null;
   pipelineCache = null;
   structureCache = null;
+  hierarchyCache = null;
   res.json({ message: 'Cache cleared — next requests will re-scan' });
 });
 
