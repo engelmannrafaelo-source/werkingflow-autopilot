@@ -78,7 +78,6 @@ import createControlRouter, { getCpuProfileResolver } from './routes/control.js'
 
 // External route modules (pre-existing, not part of the extraction)
 import knowledgeRegistryRouter from './knowledge-registry.js';
-import qaRoutes from './routes/qa-routes.js';
 import infisicalRoutes from './routes/infisical-routes.js';
 
 // ─── Section 4: Constants ───────────────────────────────────────────────────
@@ -291,7 +290,6 @@ app.use('/api', controlRouter);                      // /api/control/*, /api/cui
 
 // --- External route modules (pre-existing, not extracted) ---
 app.use('/api/team/knowledge', knowledgeRegistryRouter);
-app.use('/api/qa', qaRoutes);
 app.use('/api/infisical', infisicalRoutes);
 
 // --- Document Manager (Phase 3) ---

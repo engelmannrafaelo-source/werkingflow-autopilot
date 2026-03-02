@@ -69,6 +69,7 @@ export function initMissionRouter(deps: MissionDeps) {
   // Initialize file paths
   TITLES_FILE = join(DATA_DIR, 'titles.json');
   ASSIGNMENTS_FILE = join(DATA_DIR, 'conv-accounts.json');
+  WORKDIRS_FILE = join(DATA_DIR, 'conv-workdirs.json');
   FINISHED_FILE = join(DATA_DIR, 'conv-finished.json');
   LAST_PROMPT_FILE = join(DATA_DIR, 'conv-last-prompt.json');
   INPUT_LOG_FILE = join(DATA_DIR, 'input-log.jsonl');
@@ -197,6 +198,24 @@ function saveAssignment(sessionId: string, accountId: string) {
 }
 function getAssignment(sessionId: string): string {
   return loadAssignments()[sessionId] || '';
+}
+
+// --- Conversation WorkDir Persistence ---
+// Tracks the workDir for each conversation (survives account switches)
+let WORKDIRS_FILE: string;
+function loadWorkDirs(): Record<string, string> {
+  if (!WORKDIRS_FILE || !existsSync(WORKDIRS_FILE)) return {};
+  try { return JSON.parse(readFileSync(WORKDIRS_FILE, 'utf8')); } catch { return {}; }
+}
+function saveWorkDir(sessionId: string, workDir: string) {
+  if (!workDir || workDir === '/root/projekte') return;
+  const workDirs = loadWorkDirs();
+  if (workDirs[sessionId] === workDir) return;
+  workDirs[sessionId] = workDir;
+  writeFileSync(WORKDIRS_FILE, JSON.stringify(workDirs, null, 2));
+}
+function getWorkDir(sessionId: string): string {
+  return loadWorkDirs()[sessionId] || '';
 }
 
 // --- Manual Finished Status ---
@@ -885,11 +904,15 @@ router.post('/send', async (req, res) => {
   const port = getProxyPort(effectiveAccountId);
   if (!port) { res.status(400).json({ error: 'unknown account' }); return; }
 
-  const resolvedWorkDir = workDir || '/root';
+  // Resolve workDir: explicit > persisted > default
+  const resolvedWorkDir = workDir || getWorkDir(sessionId) || '/root/projekte';
   if (!resolvedWorkDir.startsWith('/root/projekte') && !resolvedWorkDir.startsWith('/home/claude-user')) {
     res.status(400).json({ error: 'workDir must be under /root/projekte or /home/claude-user' });
     return;
   }
+
+  // Persist workDir for future account switches
+  if (workDir) saveWorkDir(sessionId, workDir);
 
   // Sanitize JSONL before resuming — removes queue-ops, progress, corrupted entries
   const cleaned = unstickConversation(sessionId);
@@ -950,6 +973,7 @@ router.post('/send', async (req, res) => {
   }
   logUserInput({ type: 'send', accountId, workDir, message, sessionId: sendResult.sessionId || sessionId, result: 'ok' });
   saveAssignment(sendResult.sessionId || sessionId, accountId);
+  saveWorkDir(sendResult.sessionId || sessionId, resolvedWorkDir);
   setLastPrompt(sendResult.sessionId || sessionId);
 
   const finalSessionId = sendResult.sessionId || sessionId;
@@ -1191,7 +1215,7 @@ router.post('/start', async (req, res) => {
   const port = getProxyPort(effectiveAccountId);
   if (!port) { res.status(400).json({ error: 'unknown account' }); return; }
 
-  const resolvedWorkDir = workDir || '/root';
+  const resolvedWorkDir = workDir || '/root/projekte';
   if (!resolvedWorkDir.startsWith('/root/projekte') && !resolvedWorkDir.startsWith('/home/claude-user')) {
     res.status(400).json({ error: 'workDir must be under /root/projekte or /home/claude-user' });
     return;
@@ -1221,8 +1245,9 @@ router.post('/start', async (req, res) => {
   if (subject) {
     saveTitle(startData.sessionId, subject);
   }
-  // Track account assignment + prompt time
+  // Track account assignment + prompt time + workDir
   saveAssignment(startData.sessionId, accountId);
+  saveWorkDir(startData.sessionId, resolvedWorkDir);
   setLastPrompt(startData.sessionId);
 
   // Track state + respond immediately
