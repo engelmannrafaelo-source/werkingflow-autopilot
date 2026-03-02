@@ -83,7 +83,7 @@ function ToolUseBlock({ block, onRespond, workDir }: { block: ContentBlock; onRe
   useEffect(() => {
     if (block.name !== 'ExitPlanMode' || !workDir || planText !== null) return;
     setPlanLoading(true);
-    fetch(`/api/file-read?path=${encodeURIComponent(workDir + '/.claude/plan.md')}`, { signal: AbortSignal.timeout(5000) })
+    fetch(`/api/file-read?path=${encodeURIComponent(workDir + '/.claude/plan.md')}`)
       .then(r => r.ok ? r.text() : Promise.reject('not found'))
       .then(text => setPlanText(text))
       .catch(() => setPlanText(''))
@@ -337,37 +337,6 @@ function MessageRow({ msg, onRespond, isLast, workDir }: { msg: Message; onRespo
   );
 }
 
-// --- Loading state with timeout + retry ---
-function LoadingConversation({ sessionId, onBack, onRetry }: { sessionId: string | null; onBack: () => void; onRetry: () => void }) {
-  const [elapsed, setElapsed] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => setElapsed(s => s + 1), 1000);
-    return () => clearInterval(t);
-  }, []);
-  return (
-    <div style={{ textAlign: 'center', color: 'var(--tn-text-muted)', marginTop: 40, fontSize: 13 }}>
-      {elapsed < 6 ? (
-        'Lade Konversation...'
-      ) : (
-        <>
-          <div>Konversation konnte nicht geladen werden.</div>
-          <div style={{ marginTop: 12, display: 'flex', gap: 8, justifyContent: 'center' }}>
-            <button onClick={onRetry} style={{
-              padding: '6px 16px', fontSize: 12, border: '1px solid var(--tn-border)',
-              borderRadius: 4, background: 'var(--tn-surface)', color: 'var(--tn-text)', cursor: 'pointer',
-            }}>Retry</button>
-            <button onClick={onBack} style={{
-              padding: '6px 16px', fontSize: 12, border: 'none',
-              borderRadius: 4, background: 'var(--tn-blue, #3B82F6)', color: '#fff', cursor: 'pointer',
-            }}>Zurueck</button>
-          </div>
-          {sessionId && <div style={{ marginTop: 8, fontSize: 10, opacity: 0.5, fontFamily: 'monospace' }}>{sessionId.slice(0, 12)}...</div>}
-        </>
-      )}
-    </div>
-  );
-}
-
 // --- Main Component ---
 export default function CuiLitePanel({ accountId, projectId, workDir, panelId, isTabVisible = true, onRouteChange, initialSessionId }: CuiLitePanelProps) {
   const storageKey = `cui-lite-account-${panelId || projectId || 'default'}`;
@@ -435,7 +404,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     // Skip if circuit breaker is open (persistent 502s for this conversation)
     if (circuitOpenRef.current) return;
     try {
-      const convResp = await fetch(`/api/mission/conversation/${selectedId}/${sessionId}?tail=50`, { signal: AbortSignal.timeout(8000) });
+      const convResp = await fetch(`/api/mission/conversation/${selectedId}/${sessionId}?tail=50`);
       if (convResp.ok) {
         const data = await convResp.json();
         setMessages(data.messages || []);
@@ -470,7 +439,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   // Fetch states once on mount/account change (WS handles updates after that)
   useEffect(() => {
     if ((window as any).__cuiServerAlive === false) return;
-    fetch('/api/mission/states', { signal: AbortSignal.timeout(5000) })
+    fetch('/api/mission/states')
       .then(r => r.ok ? r.json() : null)
       .then(states => {
         if (!states) return;
@@ -621,7 +590,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   // --- Fetch Prompt Templates ---
   useEffect(() => {
     if ((window as any).__cuiServerAlive === false) return;
-    fetch('/api/prompt-templates', { signal: AbortSignal.timeout(5000) })
+    fetch('/api/prompt-templates')
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (!data) return;
@@ -636,7 +605,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   const syncLoopState = useCallback(async () => {
     if ((window as any).__cuiServerAlive === false) return;
     try {
-      const r = await fetch("/api/auto-inject", { signal: AbortSignal.timeout(5000) });
+      const r = await fetch("/api/auto-inject");
       const state = await r.json();
       const cfg = state.configs?.[selectedId || ""];
       if (cfg) {
@@ -659,7 +628,6 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       await fetch("/api/auto-inject", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(8000),
         body: JSON.stringify({
           accountId: selectedId,
           sessionId,
@@ -673,7 +641,6 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       await fetch("/api/auto-inject", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(8000),
         body: JSON.stringify({ accountId: selectedId, enabled: false }),
       });
     }
@@ -706,7 +673,6 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ label: newTplLabel, message: newTplMessage }),
-        signal: AbortSignal.timeout(8000),
       });
       if (resp.ok) {
         const data = await resp.json();
@@ -717,7 +683,6 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ label: newTplLabel, message: newTplMessage, category: 'reply' }),
-        signal: AbortSignal.timeout(8000),
       });
       if (resp.ok) {
         const data = await resp.json();
@@ -731,7 +696,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   }, [newTplLabel, newTplMessage, editingTemplate]);
 
   const handleDeleteTemplate = useCallback(async (id: string) => {
-    const resp = await fetch(`/api/prompt-templates/${id}`, { method: 'DELETE', signal: AbortSignal.timeout(8000) });
+    const resp = await fetch(`/api/prompt-templates/${id}`, { method: 'DELETE' });
     if (resp.ok) setReplyTemplates(prev => prev.filter(t => t.id !== id));
   }, []);
 
@@ -751,7 +716,6 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ accountId: selectedId, sessionId, message: msg, workDir }),
-        signal: AbortSignal.timeout(15000),
       });
       if (!resp.ok) {
         const errData = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
@@ -769,8 +733,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       }
     } catch (err) {
       console.error('[CuiLite] Send error:', err);
-      const errMsg = err instanceof DOMException && err.name === 'TimeoutError' ? 'Timeout — Server antwortet nicht' : String(err);
-      setMessages(prev => [...prev, { role: 'system', content: `Netzwerkfehler: ${errMsg}`, timestamp: new Date().toISOString() }]);
+      setMessages(prev => [...prev, { role: 'system', content: `Netzwerkfehler: ${err}`, timestamp: new Date().toISOString() }]);
     }
     setIsLoading(false);
     // Single delayed poll — WS will handle the rest via cui-state/done events
@@ -787,7 +750,6 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ accountId: selectedId, sessionId, message: text, workDir }),
-        signal: AbortSignal.timeout(15000),
       });
       if (resp.ok) {
         const data = await resp.json().catch(() => ({}));
@@ -811,7 +773,6 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action }),
-        signal: AbortSignal.timeout(10000),
       });
       setTimeout(pollNow, 500);
     } catch (err) {
@@ -822,7 +783,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   const handleStop = useCallback(async () => {
     if (!sessionId) return;
     try {
-      const resp = await fetch(`/api/mission/conversation/${selectedId}/${sessionId}/stop`, { method: 'POST', signal: AbortSignal.timeout(10000) });
+      const resp = await fetch(`/api/mission/conversation/${selectedId}/${sessionId}/stop`, { method: 'POST' });
       const data = await resp.json().catch(() => ({}));
       setAttention('idle');
       setAttentionReason('done');
@@ -855,7 +816,6 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ accountId: selectedId, message, workDir, subject }),
-        signal: AbortSignal.timeout(15000),
       });
       if (!resp.ok) return false;
       const data = await resp.json();
@@ -1127,7 +1087,9 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
             style={{ flex: 1, overflow: 'auto', minHeight: 0 }}
           >
             {messages.length === 0 && (
-              <LoadingConversation sessionId={sessionId} onBack={() => { setSessionId(null); setShowQueue(true); }} onRetry={pollNow} />
+              <div style={{ textAlign: 'center', color: 'var(--tn-text-muted)', marginTop: 40, fontSize: 13 }}>
+                Lade Konversation...
+              </div>
             )}
             {messages.map((msg, i) => (
               <MessageRow key={i} msg={msg} onRespond={handleRespond} isLast={i === messages.length - 1} workDir={workDir} />

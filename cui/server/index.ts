@@ -4399,6 +4399,10 @@ app.post('/api/rebuild-frontend', async (_req, res) => {
 import knowledgeRegistryRouter from './knowledge-registry.js';
 app.use('/api/team/knowledge', knowledgeRegistryRouter);
 
+// --- QA Dashboard ---
+import qaRoutes from './routes/qa-routes.js';
+app.use('/api/qa', qaRoutes);
+
 // --- Agent Monitoring & Control ---
 import { spawn } from 'child_process';
 import { promises as fsAgentPromises } from 'fs';

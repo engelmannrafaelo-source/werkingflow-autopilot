@@ -7,7 +7,7 @@ import 'flexlayout-react/style/dark.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <ErrorBoundary>
+    <ErrorBoundary componentName="App">
       <App />
     </ErrorBoundary>
   </StrictMode>

@@ -55,15 +55,15 @@ export default function LogsTab() {
 
         setLogs(mockLogs);
 
-        // Calculate stats
+        // Calculate stats (defensive: handle empty array)
         const successCount = mockLogs.filter(l => l.status < 400).length;
-        const avgDuration = mockLogs.reduce((sum, l) => sum + l.duration_ms, 0) / mockLogs.length;
         const errorCount = mockLogs.filter(l => l.status >= 400).length;
+        const totalDuration = mockLogs.reduce((sum, l) => sum + l.duration_ms, 0);
 
         setStats({
           total_requests: mockLogs.length,
-          success_rate: (successCount / mockLogs.length) * 100,
-          avg_duration_ms: avgDuration,
+          success_rate: mockLogs.length > 0 ? (successCount / mockLogs.length) * 100 : 0,
+          avg_duration_ms: mockLogs.length > 0 ? totalDuration / mockLogs.length : 0,
           errors_24h: errorCount,
         });
       } else {
@@ -133,8 +133,9 @@ export default function LogsTab() {
       )}
 
       {/* Filters */}
-      <div style={{ marginBottom: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+      <div data-ai-id="logs-filters" style={{ marginBottom: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
         <input
+          data-ai-id="logs-search-input"
           type="text"
           placeholder="Search endpoint..."
           value={searchTerm}
@@ -150,6 +151,7 @@ export default function LogsTab() {
           }}
         />
         <select
+          data-ai-id="logs-status-filter"
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value as any)}
           style={{
@@ -170,11 +172,11 @@ export default function LogsTab() {
       {/* Logs Table */}
       <SectionFlat title={`Request Logs (${filteredLogs.length})`}>
         {filteredLogs.length === 0 ? (
-          <div style={{ padding: 24, textAlign: 'center', color: 'var(--tn-text-dim)', fontSize: 13 }}>
+          <div data-ai-id="logs-empty-state" style={{ padding: 24, textAlign: 'center', color: 'var(--tn-text-dim)', fontSize: 13 }}>
             No log entries found
           </div>
         ) : (
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+          <table data-ai-id="logs-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
             <thead>
               <tr style={{ background: 'var(--tn-bg-dark)', textAlign: 'left' }}>
                 <th style={{ padding: '8px 12px', fontWeight: 600, color: 'var(--tn-text-dim)' }}>Time</th>

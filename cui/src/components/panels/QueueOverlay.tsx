@@ -179,8 +179,16 @@ function ConvRow({ conv, onNavigate, onStop, onSetName }: {
 
 // --- Main Component ---
 export default function QueueOverlay({ accountId, projectId, workDir, useLocal, onNavigate, onStartNew, refreshSignal }: QueueOverlayProps) {
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Load cached conversations for instant display
+  const [conversations, setConversations] = useState<Conversation[]>(() => {
+    try {
+      const cached = localStorage.getItem(`cui-convs-${accountId}`);
+      return cached ? JSON.parse(cached) : [];
+    } catch { return []; }
+  });
+  const [loading, setLoading] = useState(() => {
+    try { return !localStorage.getItem(`cui-convs-${accountId}`); } catch { return true; }
+  });
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
   const [showCompleted, setShowCompleted] = useState(false);
@@ -205,8 +213,8 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
   // Fetch conversations
   const lastCountRef = useRef(-1);
   const fetchConversations = useCallback(() => {
-    if ((window as any).__cuiServerAlive === false) return;
-    fetch(`${API}/mission/conversations`)
+    if ((window as any).__cuiServerAlive === false) { setLoading(false); return; }
+    fetch(`${API}/mission/conversations`, { signal: AbortSignal.timeout(8000) })
       .then(r => { if (!r.ok) throw new Error('fetch failed'); return r.json(); })
       .then(data => {
         const convs: Conversation[] = data.conversations || [];
@@ -240,6 +248,8 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
         }
         setConversations(filtered);
         setLoading(false);
+        // Cache for instant load next time
+        try { localStorage.setItem(`cui-convs-${accountId}`, JSON.stringify(filtered.slice(0, 20))); } catch {}
       })
       .catch(() => setLoading(false));
   }, [accountId, workDir, useLocal]);
@@ -277,7 +287,7 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
   // --- Fetch Start Templates ---
   useEffect(() => {
     if ((window as any).__cuiServerAlive === false) return;
-    fetch('/api/prompt-templates')
+    fetch('/api/prompt-templates', { signal: AbortSignal.timeout(5000) })
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (!data) return;
@@ -295,6 +305,7 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ label: newStartTplLabel, message: newStartTplMessage, subject: newStartTplSubject, category: 'start' }),
+        signal: AbortSignal.timeout(8000),
       });
       if (resp.ok) {
         const data = await resp.json();
@@ -305,6 +316,7 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ label: newStartTplLabel, message: newStartTplMessage, subject: newStartTplSubject, category: 'start' }),
+        signal: AbortSignal.timeout(8000),
       });
       if (resp.ok) {
         const data = await resp.json();
@@ -319,7 +331,7 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
   }, [newStartTplLabel, newStartTplSubject, newStartTplMessage, editingStartTpl]);
 
   const handleDeleteStartTemplate = useCallback(async (id: string) => {
-    const resp = await fetch(`/api/prompt-templates/${id}`, { method: 'DELETE' });
+    const resp = await fetch(`/api/prompt-templates/${id}`, { method: 'DELETE', signal: AbortSignal.timeout(8000) });
     if (resp.ok) setStartTemplates(prev => prev.filter(t => t.id !== id));
   }, []);
 
@@ -339,7 +351,7 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
 
   // Stop conversation
   const handleStop = useCallback((conv: Conversation) => {
-    fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}/stop`, { method: 'POST' })
+    fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}/stop`, { method: 'POST', signal: AbortSignal.timeout(10000) })
       .then(() => setTimeout(fetchConversations, 1000))
       .catch((err) => console.error('[QueueOverlay] Stop failed:', err.message));
   }, [fetchConversations]);
@@ -349,6 +361,7 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
     fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}/name`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ custom_name: name }),
+      signal: AbortSignal.timeout(8000),
     }).then(() => setTimeout(fetchConversations, 500))
       .catch((err) => console.error('[QueueOverlay] SetName failed:', err.message));
   }, [fetchConversations]);

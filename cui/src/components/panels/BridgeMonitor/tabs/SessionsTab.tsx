@@ -98,10 +98,11 @@ export default function SessionsTab() {
           </div>
 
           {/* Filter */}
-          <div style={{ display: 'flex', gap: 4, marginBottom: 10 }}>
+          <div data-ai-id="sessions-filters" style={{ display: 'flex', gap: 4, marginBottom: 10 }}>
             {(['all', 'running', 'completed', 'failed'] as const).map(f => (
               <button
                 key={f}
+                data-ai-id={`sessions-filter-${f}`}
                 onClick={() => setFilter(f)}
                 style={{
                   padding: '3px 10px', borderRadius: 3, fontSize: 10, fontWeight: 600,
@@ -117,7 +118,7 @@ export default function SessionsTab() {
 
           {/* CLI Session List */}
           {cliSessions.length > 0 ? (
-            <div style={{ background: 'var(--tn-bg-dark)', borderRadius: 5, overflow: 'hidden' }}>
+            <div data-ai-id="sessions-cli-table" style={{ background: 'var(--tn-bg-dark)', borderRadius: 5, overflow: 'hidden' }}>
               {/* Header */}
               <div style={{
                 display: 'grid', gridTemplateColumns: '80px 1fr 90px 70px 70px',
@@ -190,7 +191,7 @@ export default function SessionsTab() {
           </div>
 
           {convSessions.length > 0 && (
-            <div style={{ background: 'var(--tn-bg-dark)', borderRadius: 5, overflow: 'hidden' }}>
+            <div data-ai-id="sessions-conversation-table" style={{ background: 'var(--tn-bg-dark)', borderRadius: 5, overflow: 'hidden' }}>
               <div style={{
                 display: 'grid', gridTemplateColumns: '120px 1fr 90px',
                 gap: 8, padding: '5px 10px', fontSize: 9, fontWeight: 700,

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Treemap, ResponsiveContainer, Tooltip } from 'recharts';
 
 interface FolderItem {
   name: string;
@@ -11,13 +12,44 @@ interface FolderItem {
   lastModified: string;
 }
 
+interface TreemapNode {
+  name: string;
+  size: number;
+  path: string;
+  isGit: boolean;
+  ageColor: string;
+  ageLabel: string;
+  sizeHuman: string;
+}
+
 export default function DiskUsageTab() {
   const [structure, setStructure] = useState<FolderItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [viewMode, setViewMode] = useState<'treemap' | 'bars'>('treemap');
 
   useEffect(() => {
     fetchStructure();
   }, []);
+
+  // Age-based color heatmap (same as RepositoriesTab)
+  const getAgeColor = (lastModified: string): string => {
+    const daysSince = (Date.now() - new Date(lastModified).getTime()) / (1000 * 60 * 60 * 24);
+    if (daysSince < 7) return '#9ece6a';   // Fresh (< 1 week) - Green
+    if (daysSince < 30) return '#e0af68';  // Recent (< 1 month) - Yellow
+    if (daysSince < 90) return '#ff9e64';  // Aging (< 3 months) - Orange
+    if (daysSince < 180) return '#f7768e'; // Stale (< 6 months) - Red
+    return '#565f89';                       // Dead (> 6 months) - Gray
+  };
+
+  const getAgeLabel = (lastModified: string): string => {
+    const daysSince = (Date.now() - new Date(lastModified).getTime()) / (1000 * 60 * 60 * 24);
+    if (daysSince < 1) return 'today';
+    if (daysSince < 2) return 'yesterday';
+    if (daysSince < 7) return `${Math.floor(daysSince)}d ago`;
+    if (daysSince < 30) return `${Math.floor(daysSince / 7)}w ago`;
+    if (daysSince < 365) return `${Math.floor(daysSince / 30)}mo ago`;
+    return `${Math.floor(daysSince / 365)}y ago`;
+  };
 
   const fetchStructure = async () => {
     setLoading(true);
@@ -42,6 +74,82 @@ export default function DiskUsageTab() {
 
   const totalBytes = structure.reduce((sum, item) => sum + item.diskSize.bytes, 0);
   const totalGB = (totalBytes / 1024 / 1024 / 1024).toFixed(2);
+
+  // Transform data for Treemap
+  const treemapData: TreemapNode[] = structure.map(item => ({
+    name: item.name,
+    size: item.diskSize.bytes,
+    path: item.path,
+    isGit: item.isGit,
+    ageColor: getAgeColor(item.lastModified),
+    ageLabel: getAgeLabel(item.lastModified),
+    sizeHuman: item.diskSize.human,
+  }));
+
+  // Custom Treemap Cell Content
+  const CustomTreemapContent = (props: any) => {
+    const { x, y, width, height, name, size, ageColor, ageLabel, sizeHuman, isGit } = props;
+
+    // Only show label if box is big enough
+    const showLabel = width > 60 && height > 40;
+    const showDetails = width > 100 && height > 60;
+
+    return (
+      <g>
+        <rect
+          x={x}
+          y={y}
+          width={width}
+          height={height}
+          style={{
+            fill: ageColor,
+            stroke: 'var(--tn-border)',
+            strokeWidth: 2,
+            cursor: 'pointer',
+          }}
+        />
+        {showLabel && (
+          <>
+            <text
+              x={x + width / 2}
+              y={y + height / 2 - (showDetails ? 15 : 5)}
+              textAnchor="middle"
+              fill="var(--tn-text)"
+              fontSize={width > 150 ? 14 : 11}
+              fontWeight="600"
+              fontFamily="monospace"
+            >
+              {name.length > 15 ? name.slice(0, 12) + '...' : name}
+            </text>
+            {showDetails && (
+              <>
+                <text
+                  x={x + width / 2}
+                  y={y + height / 2 + 5}
+                  textAnchor="middle"
+                  fill="var(--tn-text-muted)"
+                  fontSize={10}
+                  fontFamily="monospace"
+                >
+                  {sizeHuman}
+                </text>
+                <text
+                  x={x + width / 2}
+                  y={y + height / 2 + 20}
+                  textAnchor="middle"
+                  fill="var(--tn-text-muted)"
+                  fontSize={9}
+                  fontFamily="monospace"
+                >
+                  {ageLabel} {isGit ? '📦' : ''}
+                </text>
+              </>
+            )}
+          </>
+        )}
+      </g>
+    );
+  };
 
   return (
     <div style={{ padding: 12 }}>

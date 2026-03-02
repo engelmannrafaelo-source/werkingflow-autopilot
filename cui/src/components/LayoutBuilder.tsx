@@ -21,6 +21,7 @@ const PANEL_OPTIONS = [
   { value: 'admin-wr', label: 'Werking Report Admin' },
   { value: 'linkedin', label: 'LinkedIn Marketing 🔗' },
   { value: 'bridge-monitor', label: 'Bridge Monitor (Old)' },
+  { value: 'qa-dashboard', label: 'QA Dashboard 📊' },
 ];
 
 const CELL_DEFAULTS = [

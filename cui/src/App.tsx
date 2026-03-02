@@ -23,7 +23,7 @@ const DEFAULT_PROJECTS: Project[] = [
 ];
 
 async function fetchProjects(): Promise<Project[]> {
-  const res = await fetch(`${API}/projects`);
+  const res = await fetch(`${API}/projects`, { signal: AbortSignal.timeout(5000) });
   if (!res.ok) throw new Error('Failed to load projects');
   const projects = await res.json();
   return projects.length > 0 ? projects : DEFAULT_PROJECTS;
@@ -240,189 +240,216 @@ export default function App() {
     } catch {}
   }, []);
 
-  // Global WebSocket for CUI state tracking + Control API
+  // Global WebSocket for CUI state tracking + Control API (auto-reconnect)
   const wsRef = useRef<WebSocket | null>(null);
   useEffect(() => {
     // Global health signal — components check this before making requests
     (window as any).__cuiServerAlive = undefined; // unknown until WS connects
-    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const ws = new WebSocket(`${protocol}://${window.location.host}/ws`);
-    ws.onerror = () => {}; // Suppress console noise during server restarts
-    ws.onopen = () => { (window as any).__cuiServerAlive = true; };
-    ws.onclose = () => { (window as any).__cuiServerAlive = false; };
-    wsRef.current = ws;
-    ws.onmessage = (e) => {
-      try {
-        const msg = JSON.parse(e.data);
-        if (msg.type === 'cui-state' && msg.cuiId && msg.state) {
-          setCuiStates(prev => prev[msg.cuiId] === msg.state ? prev : { ...prev, [msg.cuiId]: msg.state });
+    let disposed = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let backoff = 1000; // start at 1s, doubles up to 30s max
+
+    const connect = () => {
+      if (disposed) return;
+      const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+      const ws = new WebSocket(`${protocol}://${window.location.host}/ws`);
+      ws.onerror = () => {}; // Suppress console noise during server restarts
+      ws.onopen = () => {
+        (window as any).__cuiServerAlive = true;
+        backoff = 1000; // reset backoff on successful connection
+        console.log('[App WS] Connected');
+      };
+      ws.onclose = () => {
+        (window as any).__cuiServerAlive = false;
+        wsRef.current = null;
+        if (!disposed) {
+          console.log(`[App WS] Disconnected, reconnecting in ${backoff}ms`);
+          reconnectTimer = setTimeout(() => {
+            backoff = Math.min(backoff * 2, 30000);
+            connect();
+          }, backoff);
         }
-        // Control API: switch project
-        if (msg.type === 'control:project-switch' && msg.projectId) {
-          setActiveId(msg.projectId);
-        }
-        // Activation: switch to target project, hide MC, pass plan as prop
-        if (msg.type === 'control:activate-conversations' && msg.plan?.length > 0) {
-          const firstProjectId = msg.plan[0].projectId;
-          if (firstProjectId) {
-            setPendingActivation(msg.plan);
-            setActiveId(firstProjectId);
-            setShowMission(false);
+      };
+      wsRef.current = ws;
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg.type === 'cui-state' && msg.cuiId && msg.state) {
+            setCuiStates(prev => prev[msg.cuiId] === msg.state ? prev : { ...prev, [msg.cuiId]: msg.state });
           }
-        }
-        // Forward sync-related messages to ProjectTabs via window.postMessage
-        if (msg.type === 'cui-update-available' || (msg.type === 'cui-sync' && msg.auto)) {
-          window.postMessage(e.data, '*');
-          // Check if a new bundle was built (auto-reload if hash changed)
-          if (msg.type === 'cui-update-available') {
-            setTimeout(checkForUpdate, 8000); // Wait for vite build to complete
+          // Control API: switch project
+          if (msg.type === 'control:project-switch' && msg.projectId) {
+            setActiveId(msg.projectId);
           }
-        }
-        // Snapshot request: fetch panel data and POST back to server
-        if (msg.type === 'control:snapshot-request' && msg.panel) {
-          (async () => {
-            try {
-              const panelRes = await fetch(`/api/admin/wr/${msg.panel}`);
-              const panelData = await panelRes.json();
-              await fetch(`/api/snapshot/${msg.panel}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(panelData),
-              });
-            } catch (err) {
-              console.warn('[Snapshot] Failed to capture panel:', msg.panel, err);
+          // Activation: switch to target project, hide MC, pass plan as prop
+          if (msg.type === 'control:activate-conversations' && msg.plan?.length > 0) {
+            const firstProjectId = msg.plan[0].projectId;
+            if (firstProjectId) {
+              setPendingActivation(msg.plan);
+              setActiveId(firstProjectId);
+              setShowMission(false);
             }
-          })();
-        }
-        // Screenshot request: capture DOM of matching panel via html2canvas
-        // Supports: data-panel="x", data-node-id="x" (full or partial), component name (e.g. "admin-wr"), or "full" for entire app
-        // Auto-activates hidden tabs and auto-adds missing panels before capturing
-        if (msg.type === 'control:screenshot-request' && msg.panel) {
-          (async () => {
-            try {
-              const panelId: string = msg.panel;
-              let target: HTMLElement | null = null;
-              let matchedVia = '';
+          }
+          // Forward sync-related messages to ProjectTabs via window.postMessage
+          if (msg.type === 'cui-update-available' || (msg.type === 'cui-sync' && msg.auto)) {
+            window.postMessage(e.data, '*');
+            // Check if a new bundle was built (auto-reload if hash changed)
+            if (msg.type === 'cui-update-available') {
+              setTimeout(checkForUpdate, 8000); // Wait for vite build to complete
+            }
+          }
+          // Snapshot request: fetch panel data and POST back to server
+          if (msg.type === 'control:snapshot-request' && msg.panel) {
+            (async () => {
+              try {
+                const panelRes = await fetch(`/api/admin/wr/${msg.panel}`);
+                const panelData = await panelRes.json();
+                await fetch(`/api/snapshot/${msg.panel}`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(panelData),
+                });
+              } catch (err) {
+                console.warn('[Snapshot] Failed to capture panel:', msg.panel, err);
+              }
+            })();
+          }
+          // Screenshot request: capture DOM of matching panel via html2canvas
+          // Supports: data-panel="x", data-node-id="x" (full or partial), component name (e.g. "admin-wr"), or "full" for entire app
+          // Auto-activates hidden tabs and auto-adds missing panels before capturing
+          if (msg.type === 'control:screenshot-request' && msg.panel) {
+            (async () => {
+              try {
+                const panelId: string = msg.panel;
+                let target: HTMLElement | null = null;
+                let matchedVia = '';
 
-              const findTarget = (): { el: HTMLElement | null; via: string } => {
-                if (panelId === 'full') return { el: document.getElementById('root'), via: 'root' };
-                // 1. Exact data-node-id match
-                let el = document.querySelector<HTMLElement>(`[data-node-id="${panelId}"]`);
-                if (el) return { el, via: 'data-node-id-exact' };
-                // 2. Partial data-node-id match (short IDs)
-                const allNodes = document.querySelectorAll<HTMLElement>('[data-node-id]');
-                for (const node of allNodes) {
-                  const nid = node.getAttribute('data-node-id') || '';
-                  if (nid.startsWith(panelId)) return { el: node, via: `data-node-id-partial:${nid}` };
-                }
-                // 3. Exact data-panel attribute
-                el = document.querySelector<HTMLElement>(`[data-panel="${panelId}"]`);
-                if (el) return { el, via: 'data-panel' };
-                // 4. data-panel inside flexlayout tab
-                const candidates = document.querySelectorAll<HTMLElement>('.flexlayout__tab');
-                for (const tab of candidates) {
-                  if (tab.querySelector(`[data-panel="${panelId}"]`)) return { el: tab, via: 'flexlayout-tab-child' };
-                }
-                return { el: null, via: '' };
-              };
+                const findTarget = (): { el: HTMLElement | null; via: string } => {
+                  if (panelId === 'full') return { el: document.getElementById('root'), via: 'root' };
+                  // 1. Exact data-node-id match
+                  let el = document.querySelector<HTMLElement>(`[data-node-id="${panelId}"]`);
+                  if (el) return { el, via: 'data-node-id-exact' };
+                  // 2. Partial data-node-id match (short IDs)
+                  const allNodes = document.querySelectorAll<HTMLElement>('[data-node-id]');
+                  for (const node of allNodes) {
+                    const nid = node.getAttribute('data-node-id') || '';
+                    if (nid.startsWith(panelId)) return { el: node, via: `data-node-id-partial:${nid}` };
+                  }
+                  // 3. Exact data-panel attribute
+                  el = document.querySelector<HTMLElement>(`[data-panel="${panelId}"]`);
+                  if (el) return { el, via: 'data-panel' };
+                  // 4. data-panel inside flexlayout tab
+                  const candidates = document.querySelectorAll<HTMLElement>('.flexlayout__tab');
+                  for (const tab of candidates) {
+                    if (tab.querySelector(`[data-panel="${panelId}"]`)) return { el: tab, via: 'flexlayout-tab-child' };
+                  }
+                  return { el: null, via: '' };
+                };
 
-              let found = findTarget();
-              target = found.el;
-              matchedVia = found.via;
-
-              // If not found or hidden, try to ensure the panel via LayoutManager
-              const isHidden = target && (target.getBoundingClientRect().width === 0 || target.getBoundingClientRect().height === 0);
-              if (!target || isHidden) {
-                // Send ensure-panel (adds if missing, selects if hidden) via WS
-                const ensureTarget = panelId; // could be component name like "admin-wr" or a nodeId
-                wsRef.current?.send(JSON.stringify({ type: 'control:ensure-panel', component: ensureTarget }));
-                // Also try select-tab in case it's a nodeId
-                wsRef.current?.send(JSON.stringify({ type: 'control:select-tab', target: ensureTarget }));
-                // Wait for DOM to update
-                await new Promise(r => setTimeout(r, 1500));
-                // Re-find target
-                found = findTarget();
+                let found = findTarget();
                 target = found.el;
-                matchedVia = found.via ? `auto-activated:${found.via}` : '';
-              }
+                matchedVia = found.via;
 
-              if (!target) {
-                const existingIds = Array.from(document.querySelectorAll<HTMLElement>('[data-node-id]'))
-                  .map(el => el.getAttribute('data-node-id'));
-                throw new Error(`Panel "${panelId}" not found in DOM. Available node IDs: [${existingIds.join(', ')}]`);
-              }
-              const rect = target.getBoundingClientRect();
-              if (rect.width === 0 || rect.height === 0) {
-                throw new Error(`Panel "${panelId}" exists but is hidden (${rect.width}x${rect.height}) even after activation attempt.`);
-              }
+                // If not found or hidden, try to ensure the panel via LayoutManager
+                const isHidden = target && (target.getBoundingClientRect().width === 0 || target.getBoundingClientRect().height === 0);
+                if (!target || isHidden) {
+                  // Send ensure-panel (adds if missing, selects if hidden) via WS
+                  const ensureTarget = panelId; // could be component name like "admin-wr" or a nodeId
+                  wsRef.current?.send(JSON.stringify({ type: 'control:ensure-panel', component: ensureTarget }));
+                  // Also try select-tab in case it's a nodeId
+                  wsRef.current?.send(JSON.stringify({ type: 'control:select-tab', target: ensureTarget }));
+                  // Wait for DOM to update
+                  await new Promise(r => setTimeout(r, 1500));
+                  // Re-find target
+                  found = findTarget();
+                  target = found.el;
+                  matchedVia = found.via ? `auto-activated:${found.via}` : '';
+                }
 
-              // Wait for panel content to render (data loading etc.)
-              const contentWait = msg.contentWait ?? 2000;
-              if (contentWait > 0) await new Promise(r => setTimeout(r, contentWait));
+                if (!target) {
+                  const existingIds = Array.from(document.querySelectorAll<HTMLElement>('[data-node-id]'))
+                    .map(el => el.getAttribute('data-node-id'));
+                  throw new Error(`Panel "${panelId}" not found in DOM. Available node IDs: [${existingIds.join(', ')}]`);
+                }
+                const rect = target.getBoundingClientRect();
+                if (rect.width === 0 || rect.height === 0) {
+                  throw new Error(`Panel "${panelId}" exists but is hidden (${rect.width}x${rect.height}) even after activation attempt.`);
+                }
 
-              const html2canvas = (await import('html2canvas')).default;
-              const canvas = await html2canvas(target, {
-                backgroundColor: '#1a1b26',
-                scale: 1,
-                useCORS: true,
-                logging: false,
-                allowTaint: true,
-              });
-              const dataUrl = canvas.toDataURL('image/png');
-              await fetch(`/api/screenshot/${panelId}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ dataUrl, width: canvas.width, height: canvas.height }),
-              });
-              console.log(`[Screenshot] Captured ${panelId} via ${matchedVia} (${canvas.width}x${canvas.height})`);
-            } catch (err) {
-              const errMsg = err instanceof Error ? err.message : String(err);
-              console.error('[Screenshot] Failed:', msg.panel, errMsg);
-              fetch(`/api/screenshot/${msg.panel}/error`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ error: errMsg }),
-              }).catch(() => {});
-            }
-          })();
-        }
-        // DOM introspection: list all panel node IDs for debugging
-        if (msg.type === 'control:list-panels') {
-          const panels = Array.from(document.querySelectorAll<HTMLElement>('[data-node-id]')).map(el => {
-            const rect = el.getBoundingClientRect();
-            return {
-              nodeId: el.getAttribute('data-node-id'),
-              visible: rect.width > 0 && rect.height > 0,
-              size: `${Math.round(rect.width)}x${Math.round(rect.height)}`,
-            };
-          });
-          fetch('/api/screenshot/panels', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ panels, timestamp: new Date().toISOString() }),
-          }).catch(() => {});
-        }
-        // CPU Profile: capture V8 profile and send result back to server
-        if (msg.type === 'control:cpu-profile' && window.electronAPI?.cpuProfile) {
-          (async () => {
-            try {
-              console.log('[CPU Profile] Capturing 5s V8 profile...');
-              const result = await window.electronAPI!.cpuProfile();
-              console.log('[CPU Profile] Result:', result);
-              if (ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'cpu-profile-result', data: result }));
+                // Wait for panel content to render (data loading etc.)
+                const contentWait = msg.contentWait ?? 2000;
+                if (contentWait > 0) await new Promise(r => setTimeout(r, contentWait));
+
+                const html2canvas = (await import('html2canvas')).default;
+                const canvas = await html2canvas(target, {
+                  backgroundColor: '#1a1b26',
+                  scale: 1,
+                  useCORS: true,
+                  logging: false,
+                  allowTaint: true,
+                });
+                const dataUrl = canvas.toDataURL('image/png');
+                await fetch(`/api/screenshot/${panelId}`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ dataUrl, width: canvas.width, height: canvas.height }),
+                });
+                console.log(`[Screenshot] Captured ${panelId} via ${matchedVia} (${canvas.width}x${canvas.height})`);
+              } catch (err) {
+                const errMsg = err instanceof Error ? err.message : String(err);
+                console.error('[Screenshot] Failed:', msg.panel, errMsg);
+                fetch(`/api/screenshot/${msg.panel}/error`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ error: errMsg }),
+                }).catch(() => {});
               }
-            } catch (err) {
-              console.warn('[CPU Profile] Failed:', err);
-              if (ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'cpu-profile-result', data: { error: String(err) } }));
+            })();
+          }
+          // DOM introspection: list all panel node IDs for debugging
+          if (msg.type === 'control:list-panels') {
+            const panels = Array.from(document.querySelectorAll<HTMLElement>('[data-node-id]')).map(el => {
+              const rect = el.getBoundingClientRect();
+              return {
+                nodeId: el.getAttribute('data-node-id'),
+                visible: rect.width > 0 && rect.height > 0,
+                size: `${Math.round(rect.width)}x${Math.round(rect.height)}`,
+              };
+            });
+            fetch('/api/screenshot/panels', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ panels, timestamp: new Date().toISOString() }),
+            }).catch(() => {});
+          }
+          // CPU Profile: capture V8 profile and send result back to server
+          if (msg.type === 'control:cpu-profile' && window.electronAPI?.cpuProfile) {
+            (async () => {
+              try {
+                console.log('[CPU Profile] Capturing 5s V8 profile...');
+                const result = await window.electronAPI!.cpuProfile();
+                console.log('[CPU Profile] Result:', result);
+                if (ws.readyState === WebSocket.OPEN) {
+                  ws.send(JSON.stringify({ type: 'cpu-profile-result', data: result }));
+                }
+              } catch (err) {
+                console.warn('[CPU Profile] Failed:', err);
+                if (ws.readyState === WebSocket.OPEN) {
+                  ws.send(JSON.stringify({ type: 'cpu-profile-result', data: { error: String(err) } }));
+                }
               }
-            }
-          })();
-        }
-      } catch { /* ignore */ }
+            })();
+          }
+        } catch { /* ignore */ }
+      };
     };
-    return () => ws.close();
+
+    connect();
+    return () => {
+      disposed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      wsRef.current?.close();
+    };
   }, []);
 
   const handleAttentionChange = useCallback((projectId: string, needsAttention: boolean) => {
@@ -445,17 +472,43 @@ export default function App() {
     setPendingActivation(null);
   }, []);
 
-  // Load projects from server on mount
+  // Load projects: localStorage cache → instant, server → background update
   useEffect(() => {
-    fetchProjects().then((loadedProjects) => {
-      setProjects(loadedProjects);
-      // Restore last active project from localStorage, fall back to first
+    const CACHE_KEY = 'cui-projects-cache';
+
+    // 1. Load from cache immediately (no "Loading workspace..." wait)
+    try {
+      const cached = localStorage.getItem(CACHE_KEY);
+      if (cached) {
+        const cachedProjects = JSON.parse(cached) as Project[];
+        if (cachedProjects.length > 0) {
+          setProjects(cachedProjects);
+          const savedId = activeId || '';
+          const validId = cachedProjects.find(p => p.id === savedId) ? savedId : (cachedProjects[0]?.id ?? '');
+          if (validId !== activeId) setActiveId(validId);
+          setLoaded(true);
+        }
+      }
+    } catch {}
+
+    // 2. Fetch from server in background (updates cache)
+    fetchProjects().then((serverProjects) => {
+      try { localStorage.setItem(CACHE_KEY, JSON.stringify(serverProjects)); } catch {}
+      setProjects(serverProjects);
       const savedId = activeId || '';
-      const validId = loadedProjects.find(p => p.id === savedId) ? savedId : (loadedProjects[0]?.id ?? '');
+      const validId = serverProjects.find(p => p.id === savedId) ? savedId : (serverProjects[0]?.id ?? '');
       if (validId !== activeId) setActiveId(validId);
       setLoaded(true);
-      for (const p of loadedProjects) saveProject(p);
-    }).catch(() => { setLoaded(true); }); // Server may be restarting
+      for (const p of serverProjects) saveProject(p);
+    }).catch(() => {
+      // Server down — if cache was empty, use defaults
+      setLoaded(prev => {
+        if (prev) return prev; // Already loaded from cache
+        setProjects(DEFAULT_PROJECTS);
+        if (!activeId && DEFAULT_PROJECTS.length > 0) setActiveId(DEFAULT_PROJECTS[0].id);
+        return true;
+      });
+    });
   }, []);
 
   // Report active project to server (for Control API state queries)
