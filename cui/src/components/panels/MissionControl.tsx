@@ -644,7 +644,7 @@ export default function MissionControl({ projectId }: MissionControlProps) {
   const [snippets, setSnippets] = useState<Map<string, string>>(new Map());
 
   useEffect(() => { ensureStyles(); }, []);
-  useEffect(() => { fetch(`${API}/projects`).then(r => r.json()).then(setProjects).catch(() => {}); }, []);
+  useEffect(() => { if ((window as any).__cuiServerAlive !== false) fetch(`${API}/projects`, { signal: AbortSignal.timeout(5000) }).then(r => r.json()).then(setProjects).catch(() => {}); }, []);
   const toggleProjectVisibility = useCallback((projectName: string) => {
     setHiddenProjects(prev => {
       const next = new Set(prev);
@@ -655,10 +655,11 @@ export default function MissionControl({ projectId }: MissionControlProps) {
   }, []);
 
   const fetchConversations = useCallback(() => {
+    if ((window as any).__cuiServerAlive === false) { setLoading(false); return; }
     const qs = projectId ? `?project=${encodeURIComponent(projectId)}` : '';
     Promise.all([
-      fetch(`${API}/mission/conversations${qs}`).then(r => r.json()),
-      fetch(`${API}/mission/visibility`).then(r => r.json()).catch(() => ({ panels: [], visibleSessionIds: [] })),
+      fetch(`${API}/mission/conversations${qs}`, { signal: AbortSignal.timeout(10000) }).then(r => r.json()),
+      fetch(`${API}/mission/visibility`, { signal: AbortSignal.timeout(5000) }).then(r => r.json()).catch(() => ({ panels: [], visibleSessionIds: [] })),
     ]).then(([convData, visData]) => {
       setConversations(convData.conversations || []);
       setVisibleSessionIds(new Set(visData.visibleSessionIds || []));

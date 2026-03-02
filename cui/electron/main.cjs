@@ -91,22 +91,32 @@ function createWindow() {
     },
   });
 
-  // CUI Workspace runs on the remote dev server (single instance).
-  // Mac Electron is a thin client — just loads the remote URL.
+  // CUI Workspace — three modes:
+  //   (default)  → Remote server (100.121.161.109:4005)
+  //   --local    → Local production server (localhost:4005)
+  //   --dev      → Vite dev server (localhost:5173)
   const REMOTE_URL = 'http://100.121.161.109:4005';
+  const LOCAL_URL = 'http://localhost:4005';
+  const DEV_URL = 'http://localhost:5173';
+
   const isDev = process.argv.includes('--dev');
+  const isLocal = process.argv.includes('--local');
+  const targetURL = isDev ? DEV_URL : isLocal ? LOCAL_URL : REMOTE_URL;
+  const modeLabel = isDev ? 'Dev' : isLocal ? 'Local' : 'Remote';
+
+  mainWindow.setTitle(`CUI Workspace [${modeLabel}]`);
+  console.log(`[Electron] Mode: ${modeLabel} → ${targetURL}`);
+
   if (isDev) {
-    mainWindow.loadURL('http://localhost:5173');
     mainWindow.webContents.openDevTools({ mode: 'detach' });
-  } else {
-    mainWindow.loadURL(REMOTE_URL);
   }
+  mainWindow.loadURL(targetURL);
 
   mainWindow.webContents.on('did-fail-load', (_event, code, desc) => {
     console.error(`Failed to load: ${code} ${desc}`);
-    // Retry after 2s if remote server isn't reachable yet (Tailscale not ready, etc.)
+    // Retry after 2s if server isn't reachable yet
     if (code === -102 || code === -6) {
-      setTimeout(() => mainWindow.loadURL(REMOTE_URL), 2000);
+      setTimeout(() => mainWindow.loadURL(targetURL), 2000);
     }
   });
 }

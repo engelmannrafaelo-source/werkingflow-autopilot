@@ -36,15 +36,22 @@ export default function AllChatsView({ onNavigateToProject, isVisible = true }: 
   const prevVisibleRef = useRef(isVisible);
 
   const fetchChats = useCallback(async () => {
+    // Don't fetch when server is known to be down
+    if ((window as any).__cuiServerAlive === false) {
+      setLoading(false);
+      return;
+    }
     try {
-      const resp = await fetch('/api/all-active-chats');
+      const resp = await fetch('/api/all-active-chats', { signal: AbortSignal.timeout(8000) });
       if (!resp.ok) throw new Error('fetch failed');
       const data = await resp.json();
       setChats(data.chats || []);
       // Reset failed sessions on fresh fetch — give panels a new chance
       setFailedSessions(new Set());
     } catch (err) {
-      console.error('[AllChats] Fetch error:', err);
+      if ((window as any).__cuiServerAlive !== false) {
+        console.warn('[AllChats] Fetch error:', (err as Error).message);
+      }
     }
     setLoading(false);
   }, []);
