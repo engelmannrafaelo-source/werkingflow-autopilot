@@ -34,13 +34,17 @@ export default function WerkingReportAdmin() {
   // Load current env mode from server on mount + listen for real-time changes via WebSocket
   useEffect(() => {
     const loadEnv = () => {
-      fetch('/api/admin/wr/env')
-        .then(r => r.json())
+      if ((window as any).__cuiServerAlive === false) return;
+      fetch('/api/admin/wr/env', { signal: AbortSignal.timeout(8000) })
+        .then(r => {
+          if (!r.ok) throw new Error(`[WRAdmin] loadEnv failed: HTTP ${r.status}`);
+          return r.json();
+        })
         .then(d => {
           if (d.mode) setEnvMode(d.mode);
           if (d.urls) setEnvUrl(d.mode === 'staging' ? d.urls.staging : d.urls.production);
         })
-        .catch(() => {});
+        .catch((err) => { console.warn('[WRAdmin] loadEnv:', err); });
     };
 
     // Initial load
@@ -82,12 +86,16 @@ export default function WerkingReportAdmin() {
   // Poll system health for badge count every 30s
   useEffect(() => {
     const checkHealth = () => {
-      fetch('/api/admin/wr/system-health')
-        .then(r => r.json())
+      if ((window as any).__cuiServerAlive === false) return;
+      fetch('/api/admin/wr/system-health', { signal: AbortSignal.timeout(8000) })
+        .then(r => {
+          if (!r.ok) throw new Error(`[WRAdmin] checkHealth failed: HTTP ${r.status}`);
+          return r.json();
+        })
         .then(d => {
           setHealthErrorCount(d.errorCount || 0);
         })
-        .catch(() => {});
+        .catch((err) => { console.warn('[WRAdmin] checkHealth:', err); });
     };
     checkHealth();
     const interval = setInterval(checkHealth, 30000);
@@ -95,17 +103,20 @@ export default function WerkingReportAdmin() {
   }, []);
 
   const switchEnv = useCallback(async (mode: EnvMode) => {
+    if ((window as any).__cuiServerAlive === false) return;
     setEnvLoading(true);
     try {
       const res = await fetch('/api/admin/wr/env', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode }),
+        signal: AbortSignal.timeout(15000),
       });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (data.mode) setEnvMode(data.mode);
       if (data.url) setEnvUrl(data.url);
-    } catch { /* ignore */ }
+    } catch (err) { console.warn('[WRAdmin] switchEnv:', err); }
     setEnvLoading(false);
   }, []);
 

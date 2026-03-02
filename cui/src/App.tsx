@@ -30,15 +30,26 @@ async function fetchProjects(): Promise<Project[]> {
 }
 
 async function saveProject(project: Project): Promise<void> {
-  await fetch(`${API}/projects`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(project),
-  });
+  if ((window as any).__cuiServerAlive === false) return;
+  try {
+    await fetch(`${API}/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(project),
+      signal: AbortSignal.timeout(8000),
+    });
+  } catch (err) {
+    console.warn('[App] saveProject failed:', err);
+  }
 }
 
 async function deleteProject(id: string): Promise<void> {
-  await fetch(`${API}/projects/${id}`, { method: 'DELETE' });
+  if ((window as any).__cuiServerAlive === false) return;
+  try {
+    await fetch(`${API}/projects/${id}`, { method: 'DELETE', signal: AbortSignal.timeout(8000) });
+  } catch (err) {
+    console.warn('[App] deleteProject failed:', err);
+  }
 }
 
 // --- Project Dialog (create + edit) ---
@@ -206,11 +217,11 @@ function DeleteDialog({ projectName, onConfirm, onClose }: { projectName: string
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeId, _setActiveId] = useState(() => {
-    try { return localStorage.getItem('cui-active-project') || ''; } catch { return ''; }
+    try { return localStorage.getItem('cui-active-project') || ''; } catch (err) { console.warn('[App] localStorage activeId read failed:', err); return ''; }
   });
   const setActiveId = useCallback((id: string) => {
     _setActiveId(id);
-    try { localStorage.setItem('cui-active-project', id); } catch {}
+    try { localStorage.setItem('cui-active-project', id); } catch (err) { console.warn('[App] localStorage setActiveId write failed:', err); }
   }, []);
   const [loaded, setLoaded] = useState(false);
   const [mounted, setMounted] = useState<Set<string>>(new Set());
@@ -229,7 +240,7 @@ export default function App() {
   );
   const checkForUpdate = useCallback(async () => {
     try {
-      const resp = await fetch('/?_v=' + Date.now(), { headers: { 'Accept': 'text/html' } });
+      const resp = await fetch('/?_v=' + Date.now(), { headers: { 'Accept': 'text/html' }, signal: AbortSignal.timeout(8000) });
       if (!resp.ok) return;
       const html = await resp.text();
       const match = html.match(/src="(\/assets\/index-[^"]+)"/);
@@ -237,7 +248,9 @@ export default function App() {
         console.log(`[AutoReload] Bundle changed: ${currentBundleRef.current} → ${match[1]}`);
         window.location.reload();
       }
-    } catch {}
+    } catch (err) {
+      console.warn('[App] checkForUpdate failed:', err);
+    }
   }, []);
 
   // Global WebSocket for CUI state tracking + Control API (auto-reconnect)
@@ -302,12 +315,14 @@ export default function App() {
           if (msg.type === 'control:snapshot-request' && msg.panel) {
             (async () => {
               try {
-                const panelRes = await fetch(`/api/admin/wr/${msg.panel}`);
+                const panelRes = await fetch(`/api/admin/wr/${msg.panel}`, { signal: AbortSignal.timeout(8000) });
+                if (!panelRes.ok) throw new Error(`Panel fetch failed: ${panelRes.status}`);
                 const panelData = await panelRes.json();
                 await fetch(`/api/snapshot/${msg.panel}`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify(panelData),
+                  signal: AbortSignal.timeout(8000),
                 });
               } catch (err) {
                 console.warn('[Snapshot] Failed to capture panel:', msg.panel, err);
@@ -393,6 +408,7 @@ export default function App() {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ dataUrl, width: canvas.width, height: canvas.height }),
+                  signal: AbortSignal.timeout(8000),
                 });
                 console.log(`[Screenshot] Captured ${panelId} via ${matchedVia} (${canvas.width}x${canvas.height})`);
               } catch (err) {
@@ -402,7 +418,8 @@ export default function App() {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ error: errMsg }),
-                }).catch(() => {});
+                  signal: AbortSignal.timeout(8000),
+                }).catch((postErr) => { console.warn('[App] Screenshot error report failed:', postErr); });
               }
             })();
           }
@@ -420,7 +437,8 @@ export default function App() {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ panels, timestamp: new Date().toISOString() }),
-            }).catch(() => {});
+              signal: AbortSignal.timeout(8000),
+            }).catch((err) => { console.warn('[App] list-panels POST failed:', err); });
           }
           // CPU Profile: capture V8 profile and send result back to server
           if (msg.type === 'control:cpu-profile' && window.electronAPI?.cpuProfile) {
@@ -440,7 +458,7 @@ export default function App() {
               }
             })();
           }
-        } catch { /* ignore */ }
+        } catch (err) { console.warn('[App] WS message parse/handle error:', err); }
       };
     };
 
@@ -489,18 +507,21 @@ export default function App() {
           setLoaded(true);
         }
       }
-    } catch {}
+    } catch (err) {
+      console.warn('[App] localStorage project cache read failed:', err);
+    }
 
     // 2. Fetch from server in background (updates cache)
     fetchProjects().then((serverProjects) => {
-      try { localStorage.setItem(CACHE_KEY, JSON.stringify(serverProjects)); } catch {}
+      try { localStorage.setItem(CACHE_KEY, JSON.stringify(serverProjects)); } catch (err) { console.warn('[App] localStorage project cache write failed:', err); }
       setProjects(serverProjects);
       const savedId = activeId || '';
       const validId = serverProjects.find(p => p.id === savedId) ? savedId : (serverProjects[0]?.id ?? '');
       if (validId !== activeId) setActiveId(validId);
       setLoaded(true);
       for (const p of serverProjects) saveProject(p);
-    }).catch(() => {
+    }).catch((err) => {
+      console.warn('[App] fetchProjects failed, using fallback:', err);
       // Server down — if cache was empty, use defaults
       setLoaded(prev => {
         if (prev) return prev; // Already loaded from cache
@@ -587,19 +608,23 @@ export default function App() {
   }, [projects]);
 
   const handleDialogSubmit = useCallback(async (name: string, workDir: string) => {
-    if (dialogMode === 'create') {
-      const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-      const newProject: Project = { id, name, workDir, lastOpened: new Date().toISOString() };
-      setProjects(prev => [...prev, newProject]);
-      setActiveId(id);
-      // Save to server (auto-generates workDir for remote workspace), then re-fetch to get it
-      await saveProject(newProject);
-      const updated = await fetchProjects();
-      setProjects(updated);
-    } else if (dialogMode === 'edit' && editTarget) {
-      const updated: Project = { ...editTarget, name, workDir, lastOpened: new Date().toISOString() };
-      setProjects(prev => prev.map(p => p.id === editTarget.id ? updated : p));
-      saveProject(updated);
+    try {
+      if (dialogMode === 'create') {
+        const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+        const newProject: Project = { id, name, workDir, lastOpened: new Date().toISOString() };
+        setProjects(prev => [...prev, newProject]);
+        setActiveId(id);
+        // Save to server (auto-generates workDir for remote workspace), then re-fetch to get it
+        await saveProject(newProject);
+        const updated = await fetchProjects();
+        setProjects(updated);
+      } else if (dialogMode === 'edit' && editTarget) {
+        const updated: Project = { ...editTarget, name, workDir, lastOpened: new Date().toISOString() };
+        setProjects(prev => prev.map(p => p.id === editTarget.id ? updated : p));
+        saveProject(updated);
+      }
+    } catch (err) {
+      console.warn('[App] handleDialogSubmit failed:', err);
     }
     setDialogMode(null);
     setEditTarget(null);

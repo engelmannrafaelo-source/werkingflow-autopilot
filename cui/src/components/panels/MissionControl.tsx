@@ -325,20 +325,24 @@ function PreviewPanel({ conv, onSend, onStop, onNameChange, onPermission }: {
   const nameInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    if ((window as any).__cuiServerAlive === false) { setLoading(false); return; }
     setLoading(true);
     setDetail(null);
-    fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}?tail=100`)
-      .then(r => r.json())
+    fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}?tail=100`, { signal: AbortSignal.timeout(8000) })
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then(data => { setDetail(data); setLoading(false); })
-      .catch(() => setLoading(false));
+      .catch((err) => { console.warn('[MissionControl] PreviewPanel fetch detail failed:', err); setLoading(false); });
   }, [conv.sessionId, conv.accountId]);
 
   // Only refresh detail when attention state changes (not on a timer)
   useEffect(() => {
     if (conv.status !== 'ongoing') return;
+    if ((window as any).__cuiServerAlive === false) return;
     // Single refresh when attention state changes to show latest messages
-    fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}?tail=100`)
-      .then(r => r.json()).then(data => setDetail(data)).catch(() => {});
+    fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}?tail=100`, { signal: AbortSignal.timeout(8000) })
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(data => setDetail(data))
+      .catch((err) => { console.warn('[MissionControl] PreviewPanel attention-refresh failed:', err); });
   }, [conv.sessionId, conv.accountId, conv.status, conv.attentionState]);
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [detail?.messages]);
@@ -445,11 +449,11 @@ function loadCommanderMessages(): CommanderMessage[] {
     const stored = localStorage.getItem(CMD_STORAGE_KEY);
     if (!stored) return [];
     return (JSON.parse(stored) as CommanderMessage[]).slice(-50);
-  } catch { return []; }
+  } catch (err) { console.warn('[MissionControl] loadCommanderMessages localStorage read failed:', err); return []; }
 }
 
 function saveCommanderMessages(msgs: CommanderMessage[]) {
-  try { localStorage.setItem(CMD_STORAGE_KEY, JSON.stringify(msgs.slice(-50))); } catch {}
+  try { localStorage.setItem(CMD_STORAGE_KEY, JSON.stringify(msgs.slice(-50))); } catch (err) { console.warn('[MissionControl] saveCommanderMessages localStorage write failed:', err); }
 }
 
 function CommanderPanel({ onClose }: { onClose: () => void }) {
@@ -464,11 +468,16 @@ function CommanderPanel({ onClose }: { onClose: () => void }) {
     setMessages(prev => { const next = updater(prev); saveCommanderMessages(next); return next; });
   };
 
-  const clearHistory = () => { setMessages([]); try { localStorage.removeItem(CMD_STORAGE_KEY); } catch {} };
+  const clearHistory = () => { setMessages([]); try { localStorage.removeItem(CMD_STORAGE_KEY); } catch (err) { console.warn('[MissionControl] clearHistory localStorage remove failed:', err); } };
 
   const sendMessage = async () => {
     const text = input.trim();
     if (!text || loading) return;
+    if ((window as any).__cuiServerAlive === false) {
+      updateMessages(prev => [...prev, { role: 'user', content: text, timestamp: Date.now() }, { role: 'assistant', content: 'Fehler: Server nicht erreichbar', timestamp: Date.now() }]);
+      setInput('');
+      return;
+    }
     setInput('');
     const userMsg: CommanderMessage = { role: 'user', content: text, timestamp: Date.now() };
     updateMessages(prev => [...prev, userMsg]);
@@ -477,6 +486,7 @@ function CommanderPanel({ onClose }: { onClose: () => void }) {
       const resp = await fetch(`${API}/mission/commander`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages: [...messages, userMsg].map(m => ({ role: m.role, content: m.content })), context: messages.length === 0 }),
+        signal: AbortSignal.timeout(15000),
       });
       if (!resp.ok) { const err = await resp.json().catch(() => ({ error: 'Request failed' })); throw new Error(err.error || `HTTP ${resp.status}`); }
       const data = await resp.json();
@@ -627,29 +637,35 @@ export default function MissionControl({ projectId }: MissionControlProps) {
   const [bulkStatus, setBulkStatus] = useState<string | null>(null);
   const [autoTitleStatus, setAutoTitleStatus] = useState<string | null>(null);
   const [syncEnabled, setSyncEnabled] = useState(() => {
-    try { return localStorage.getItem('mc-sync') !== 'off'; } catch { return true; }
+    try { return localStorage.getItem('mc-sync') !== 'off'; } catch (err) { console.warn('[MissionControl] syncEnabled localStorage read failed:', err); return true; }
   });
   const [hiddenProjects, setHiddenProjects] = useState<Set<string>>(() => {
     try {
       const stored = localStorage.getItem('mc-hidden-projects');
       return stored ? new Set(JSON.parse(stored)) : new Set();
-    } catch { return new Set(); }
+    } catch (err) { console.warn('[MissionControl] hiddenProjects localStorage read failed:', err); return new Set(); }
   });
   const pollRef = useRef<ReturnType<typeof setInterval>>(null);
   const [visibleSessionIds, setVisibleSessionIds] = useState<Set<string>>(new Set());
   const [panelMap, setPanelMap] = useState<Map<string, string>>(new Map()); // sessionId → panel label
   const [showPreviews, setShowPreviews] = useState(() => {
-    try { return localStorage.getItem('mc-show-previews') === '1'; } catch { return false; }
+    try { return localStorage.getItem('mc-show-previews') === '1'; } catch (err) { console.warn('[MissionControl] showPreviews localStorage read failed:', err); return false; }
   });
   const [snippets, setSnippets] = useState<Map<string, string>>(new Map());
 
   useEffect(() => { ensureStyles(); }, []);
-  useEffect(() => { if ((window as any).__cuiServerAlive !== false) fetch(`${API}/projects`, { signal: AbortSignal.timeout(5000) }).then(r => r.json()).then(setProjects).catch(() => {}); }, []);
+  useEffect(() => {
+    if ((window as any).__cuiServerAlive === false) return;
+    fetch(`${API}/projects`, { signal: AbortSignal.timeout(5000) })
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(setProjects)
+      .catch((err) => { console.warn('[MissionControl] projects fetch failed:', err); });
+  }, []);
   const toggleProjectVisibility = useCallback((projectName: string) => {
     setHiddenProjects(prev => {
       const next = new Set(prev);
       if (next.has(projectName)) next.delete(projectName); else next.add(projectName);
-      try { localStorage.setItem('mc-hidden-projects', JSON.stringify([...next])); } catch {}
+      try { localStorage.setItem('mc-hidden-projects', JSON.stringify([...next])); } catch (err) { console.warn('[MissionControl] toggleProjectVisibility localStorage write failed:', err); }
       return next;
     });
   }, []);
@@ -658,8 +674,8 @@ export default function MissionControl({ projectId }: MissionControlProps) {
     if ((window as any).__cuiServerAlive === false) { setLoading(false); return; }
     const qs = projectId ? `?project=${encodeURIComponent(projectId)}` : '';
     Promise.all([
-      fetch(`${API}/mission/conversations${qs}`, { signal: AbortSignal.timeout(10000) }).then(r => r.json()),
-      fetch(`${API}/mission/visibility`, { signal: AbortSignal.timeout(5000) }).then(r => r.json()).catch(() => ({ panels: [], visibleSessionIds: [] })),
+      fetch(`${API}/mission/conversations${qs}`, { signal: AbortSignal.timeout(10000) }).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); }),
+      fetch(`${API}/mission/visibility`, { signal: AbortSignal.timeout(5000) }).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); }).catch((err) => { console.warn('[MissionControl] visibility fetch failed:', err); return { panels: [], visibleSessionIds: [] }; }),
     ]).then(([convData, visData]) => {
       setConversations(convData.conversations || []);
       setVisibleSessionIds(new Set(visData.visibleSessionIds || []));
@@ -674,7 +690,7 @@ export default function MissionControl({ projectId }: MissionControlProps) {
       }
       setPanelMap(pm);
       setLoading(false);
-    }).catch(() => setLoading(false));
+    }).catch((err) => { console.warn('[MissionControl] fetchConversations failed:', err); setLoading(false); });
   }, [projectId]);
 
   // Poll every 60s - no WebSocket streaming
@@ -741,14 +757,15 @@ export default function MissionControl({ projectId }: MissionControlProps) {
   useEffect(() => {
     if (!showPreviews) return;
     if (displayedConvs.length === 0) return;
+    if ((window as any).__cuiServerAlive === false) return;
 
     const toFetch = displayedConvs.slice(0, 30);
     let cancelled = false;
 
     Promise.allSettled(
       toFetch.map(conv =>
-        fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}?tail=3`)
-          .then(r => r.json())
+        fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}?tail=3`, { signal: AbortSignal.timeout(8000) })
+          .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
           .then((data: ConversationDetail) => {
             const msgs = data.messages || [];
             const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant');
@@ -759,7 +776,7 @@ export default function MissionControl({ projectId }: MissionControlProps) {
             const preview = lines.slice(-8).join('\n');
             return { sessionId: conv.sessionId, snippet: preview.length > 400 ? preview.slice(-400) : preview };
           })
-          .catch(() => ({ sessionId: conv.sessionId, snippet: '' }))
+          .catch((err) => { console.warn('[MissionControl] snippet fetch failed:', err); return { sessionId: conv.sessionId, snippet: '' }; })
       )
     ).then(results => {
       if (cancelled) return;
@@ -777,32 +794,46 @@ export default function MissionControl({ projectId }: MissionControlProps) {
 
   // Actions
   const handleSend = useCallback((conv: Conversation, message: string) => {
+    if ((window as any).__cuiServerAlive === false) { console.warn('[MissionControl] handleSend skipped: server not alive'); return; }
     fetch(`${API}/mission/send`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ accountId: conv.accountId, sessionId: conv.sessionId, message, workDir: conv.projectPath }),
-    }).then(() => { setTimeout(fetchConversations, 2000); }).catch(() => {});
+      signal: AbortSignal.timeout(15000),
+    }).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); setTimeout(fetchConversations, 2000); })
+      .catch((err) => { console.warn('[MissionControl] handleSend failed:', err); });
   }, [fetchConversations]);
 
   const handleStop = useCallback((conv: Conversation) => {
-    fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}/stop`, { method: 'POST' })
-      .then(() => { setTimeout(fetchConversations, 1000); }).catch(() => {});
+    if ((window as any).__cuiServerAlive === false) { console.warn('[MissionControl] handleStop skipped: server not alive'); return; }
+    fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}/stop`, { method: 'POST', signal: AbortSignal.timeout(15000) })
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); setTimeout(fetchConversations, 1000); })
+      .catch((err) => { console.warn('[MissionControl] handleStop failed:', err); });
   }, [fetchConversations]);
 
   const handleNameChange = useCallback((conv: Conversation, name: string) => {
+    if ((window as any).__cuiServerAlive === false) { console.warn('[MissionControl] handleNameChange skipped: server not alive'); return; }
     fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}/name`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ custom_name: name }),
-    }).then(() => { setTimeout(fetchConversations, 500); }).catch(() => {});
+      signal: AbortSignal.timeout(15000),
+    }).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); setTimeout(fetchConversations, 500); })
+      .catch((err) => { console.warn('[MissionControl] handleNameChange failed:', err); });
   }, [fetchConversations]);
 
   const handlePermission = useCallback((_conv: Conversation, permId: string, action: 'approve' | 'deny') => {
+    if ((window as any).__cuiServerAlive === false) { console.warn('[MissionControl] handlePermission skipped: server not alive'); return; }
     fetch(`${API}/mission/permissions/${_conv.accountId}/${permId}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }),
-    }).catch(() => {});
+      signal: AbortSignal.timeout(15000),
+    }).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); })
+      .catch((err) => { console.warn('[MissionControl] handlePermission failed:', err); });
   }, []);
 
   const handleNewConversation = useCallback((accountId: string, wd: string, subject: string, message: string) => {
+    if ((window as any).__cuiServerAlive === false) { console.warn('[MissionControl] handleNewConversation skipped: server not alive'); return; }
     fetch(`${API}/mission/start`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ accountId, workDir: wd, subject, message }),
-    }).then(() => { setShowNewDialog(false); setTimeout(fetchConversations, 2000); }).catch(() => {});
+      signal: AbortSignal.timeout(15000),
+    }).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); setShowNewDialog(false); setTimeout(fetchConversations, 2000); })
+      .catch((err) => { console.warn('[MissionControl] handleNewConversation failed:', err); });
   }, [fetchConversations]);
 
   const convKey = (conv: Conversation) => `${conv.accountId}-${conv.sessionId}`;
@@ -817,6 +848,7 @@ export default function MissionControl({ projectId }: MissionControlProps) {
   }, []);
 
   const handleBulkContinue = useCallback(() => {
+    if ((window as any).__cuiServerAlive === false) { console.warn('[MissionControl] handleBulkContinue skipped: server not alive'); return; }
     const targets = displayedConvs.filter(c => checkedConvs.has(convKey(c)));
     if (targets.length === 0) return;
     setBulkStatus(`Sende continue an ${targets.length}...`);
@@ -824,7 +856,9 @@ export default function MissionControl({ projectId }: MissionControlProps) {
       fetch(`${API}/mission/send`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ accountId: conv.accountId, sessionId: conv.sessionId, message: 'continue', workDir: conv.projectPath }),
-      }).catch(() => {})
+        signal: AbortSignal.timeout(15000),
+      }).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); })
+        .catch((err) => { console.warn('[MissionControl] handleBulkContinue send failed:', err); })
     );
     Promise.all(promises).then(() => {
       setBulkStatus(`${targets.length} gesendet`);
@@ -834,6 +868,7 @@ export default function MissionControl({ projectId }: MissionControlProps) {
   }, [displayedConvs, checkedConvs, fetchConversations]);
 
   const handleBulkAccountSwitch = useCallback((newAccountId: string) => {
+    if ((window as any).__cuiServerAlive === false) { console.warn('[MissionControl] handleBulkAccountSwitch skipped: server not alive'); return; }
     const targets = displayedConvs.filter(c => checkedConvs.has(convKey(c)));
     if (targets.length === 0) return;
     const label = ACCOUNTS.find(a => a.id === newAccountId)?.label || newAccountId;
@@ -842,7 +877,9 @@ export default function MissionControl({ projectId }: MissionControlProps) {
       fetch(`${API}/mission/conversation/${conv.sessionId}/assign`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ accountId: newAccountId }),
-      }).catch(() => {})
+        signal: AbortSignal.timeout(15000),
+      }).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); })
+        .catch((err) => { console.warn('[MissionControl] handleBulkAccountSwitch assign failed:', err); })
     );
     Promise.all(promises).then(() => {
       setBulkStatus(`${targets.length} → ${label}`);
@@ -859,17 +896,20 @@ export default function MissionControl({ projectId }: MissionControlProps) {
 
   // Activate: open selected conversations as panels in their project layouts
   const handleActivateSelected = useCallback(() => {
+    if ((window as any).__cuiServerAlive === false) { console.warn('[MissionControl] handleActivateSelected skipped: server not alive'); return; }
     const targets = displayedConvs.filter(c => checkedConvs.has(convKey(c)));
     if (targets.length === 0) return;
     setBulkStatus(`Aktiviere ${targets.length}...`);
     fetch(`${API}/mission/activate`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ conversations: targets.map(c => ({ sessionId: c.sessionId, accountId: c.accountId, projectName: c.projectName })) }),
-    }).then(r => r.json()).then(() => {
+      signal: AbortSignal.timeout(15000),
+    }).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); }).then(() => {
       setBulkStatus(`${targets.length} aktiviert`);
       setCheckedConvs(new Set());
       setTimeout(() => setBulkStatus(null), 3000);
-    }).catch(() => {
+    }).catch((err) => {
+      console.warn('[MissionControl] handleActivateSelected failed:', err);
       setBulkStatus('Aktivierung fehlgeschlagen');
       setTimeout(() => setBulkStatus(null), 3000);
     });
@@ -877,29 +917,34 @@ export default function MissionControl({ projectId }: MissionControlProps) {
 
   // Single conversation activate (from "Open" button on orphan cards)
   const handleActivateSingle = useCallback((conv: Conversation) => {
+    if ((window as any).__cuiServerAlive === false) { console.warn('[MissionControl] handleActivateSingle skipped: server not alive'); return; }
     setBulkStatus('Aktiviere...');
     fetch(`${API}/mission/activate`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ conversations: [{ sessionId: conv.sessionId, accountId: conv.accountId, projectName: conv.projectName }] }),
-    }).then(() => {
-      setBulkStatus('Aktiviert');
-      setTimeout(() => setBulkStatus(null), 2000);
-    }).catch(() => {
+      signal: AbortSignal.timeout(15000),
+    }).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); setBulkStatus('Aktiviert'); setTimeout(() => setBulkStatus(null), 2000); })
+      .catch((err) => {
+      console.warn('[MissionControl] handleActivateSingle failed:', err);
       setBulkStatus('Fehlgeschlagen');
       setTimeout(() => setBulkStatus(null), 2000);
     });
   }, []);
 
   const handleFinish = useCallback((conv: Conversation) => {
+    if ((window as any).__cuiServerAlive === false) { console.warn('[MissionControl] handleFinish skipped: server not alive'); return; }
     fetch(`${API}/mission/conversation/${conv.sessionId}/finish`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ finished: true }),
-    }).then(() => { setTimeout(fetchConversations, 500); }).catch(() => {});
+      signal: AbortSignal.timeout(15000),
+    }).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); setTimeout(fetchConversations, 500); })
+      .catch((err) => { console.warn('[MissionControl] handleFinish failed:', err); });
   }, [fetchConversations]);
 
   const handleDelete = useCallback((conv: Conversation) => {
+    if ((window as any).__cuiServerAlive === false) { console.warn('[MissionControl] handleDelete skipped: server not alive'); return; }
     if (!confirm(`"${conv.customName || conv.summary?.slice(0, 40) || conv.sessionId}" wirklich loeschen? Die .jsonl Datei wird unwiderruflich geloescht.`)) return;
-    fetch(`${API}/mission/conversation/${conv.sessionId}`, { method: 'DELETE' })
-      .then(r => r.json())
+    fetch(`${API}/mission/conversation/${conv.sessionId}`, { method: 'DELETE', signal: AbortSignal.timeout(15000) })
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then(data => {
         if (data.ok) {
           // Deselect if this was the selected conversation
@@ -907,17 +952,20 @@ export default function MissionControl({ projectId }: MissionControlProps) {
           setTimeout(fetchConversations, 500);
         }
       })
-      .catch(() => {});
+      .catch((err) => { console.warn('[MissionControl] handleDelete failed:', err); });
   }, [fetchConversations, selectedConv]);
 
   const handleBulkFinish = useCallback(() => {
+    if ((window as any).__cuiServerAlive === false) { console.warn('[MissionControl] handleBulkFinish skipped: server not alive'); return; }
     const targets = displayedConvs.filter(c => checkedConvs.has(convKey(c)));
     if (targets.length === 0) return;
     setBulkStatus(`Markiere ${targets.length} als fertig...`);
     Promise.all(targets.map(c =>
       fetch(`${API}/mission/conversation/${c.sessionId}/finish`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ finished: true }),
-      }).catch(() => {})
+        signal: AbortSignal.timeout(15000),
+      }).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); })
+        .catch((err) => { console.warn('[MissionControl] handleBulkFinish single failed:', err); })
     )).then(() => {
       setBulkStatus(`${targets.length} fertig`);
       setCheckedConvs(new Set());
@@ -926,27 +974,31 @@ export default function MissionControl({ projectId }: MissionControlProps) {
   }, [displayedConvs, checkedConvs, fetchConversations]);
 
   const handleAutoTitles = useCallback(() => {
+    if ((window as any).__cuiServerAlive === false) { console.warn('[MissionControl] handleAutoTitles skipped: server not alive'); return; }
     setAutoTitleStatus('...');
-    fetch(`${API}/mission/auto-titles`, { method: 'POST' }).then(r => r.json())
+    fetch(`${API}/mission/auto-titles`, { method: 'POST', signal: AbortSignal.timeout(15000) })
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then(data => { setAutoTitleStatus(`${data.updated} Titel`); setTimeout(() => { setAutoTitleStatus(null); fetchConversations(); }, 2000); })
-      .catch(() => setAutoTitleStatus('Fehler'));
+      .catch((err) => { console.warn('[MissionControl] handleAutoTitles failed:', err); setAutoTitleStatus('Fehler'); });
   }, [fetchConversations]);
 
   const handleRebuild = useCallback(() => {
+    if ((window as any).__cuiServerAlive === false) { console.warn('[MissionControl] handleRebuild skipped: server not alive'); return; }
     if (!confirm('Frontend neu bauen und Server neustarten? (App ist kurz offline)')) return;
     setBulkStatus('Rebuilding...');
-    fetch(`${API}/rebuild`, { method: 'POST' }).then(r => r.json())
+    fetch(`${API}/rebuild`, { method: 'POST', signal: AbortSignal.timeout(15000) })
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then(() => {
         setBulkStatus('Build laeuft, reload in 8s...');
         setTimeout(() => window.location.reload(), 8000);
       })
-      .catch(() => setBulkStatus('Rebuild fehlgeschlagen'));
+      .catch((err) => { console.warn('[MissionControl] handleRebuild failed:', err); setBulkStatus('Rebuild fehlgeschlagen'); });
   }, []);
 
   const toggleSync = useCallback(() => {
     setSyncEnabled(prev => {
       const next = !prev;
-      try { localStorage.setItem('mc-sync', next ? 'on' : 'off'); } catch {}
+      try { localStorage.setItem('mc-sync', next ? 'on' : 'off'); } catch (err) { console.warn('[MissionControl] toggleSync localStorage write failed:', err); }
       if (next) fetchConversations();
       return next;
     });
@@ -983,7 +1035,7 @@ export default function MissionControl({ projectId }: MissionControlProps) {
         </button>
 
         <button onClick={() => {
-          setShowPreviews(prev => { const next = !prev; try { localStorage.setItem('mc-show-previews', next ? '1' : '0'); } catch {} return next; });
+          setShowPreviews(prev => { const next = !prev; try { localStorage.setItem('mc-show-previews', next ? '1' : '0'); } catch (err) { console.warn('[MissionControl] showPreviews localStorage write failed:', err); } return next; });
         }} style={{
           padding: '2px 8px', borderRadius: 3, fontSize: 9, cursor: 'pointer',
           background: showPreviews ? 'rgba(122,162,247,0.15)' : 'var(--tn-bg)',

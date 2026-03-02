@@ -67,12 +67,14 @@ export default function AgentGrid({ agents, selectedAgent, onSelectAgent, onAgen
   const [detailModalAgent, setDetailModalAgent] = useState<AgentStatus | null>(null);
 
   async function runAgent(personaId: string) {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
       setRunningAgent(personaId);
       const res = await fetch(`${API}/agents/claude/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ persona_id: personaId, mode: 'plan' })
+        body: JSON.stringify({ persona_id: personaId, mode: 'plan' }),
+        signal: AbortSignal.timeout(15000),
       });
 
       if (!res.ok) throw new Error('Failed to run agent');
@@ -83,7 +85,7 @@ export default function AgentGrid({ agents, selectedAgent, onSelectAgent, onAgen
         setRunningAgent(null);
       }, 2000);
     } catch (err) {
-      console.error('Failed to run agent:', err);
+      console.warn('[AgentGrid] run agent:', err);
       setRunningAgent(null);
     }
   }

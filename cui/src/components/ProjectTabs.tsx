@@ -139,13 +139,13 @@ function UsageBars() {
 
   const fetchUsage = useCallback(() => {
     if ((window as any).__cuiServerAlive === false) return;
-    fetch('/api/claude-code/stats-v2')
-      .then(r => r.ok ? r.json() : null)
+    fetch('/api/claude-code/stats-v2', { signal: AbortSignal.timeout(8000) })
+      .then(r => { if (!r.ok) throw new Error(`stats-v2 ${r.status}`); return r.json(); })
       .then(data => {
         if (!data?.accounts) return;
         setAccounts(data.accounts.filter((a: UsageAccount) => a.accountId !== 'local'));
       })
-      .catch(() => {});
+      .catch((err) => { console.warn('[ProjectTabs] fetchUsage:', err); });
   }, []);
 
   useEffect(() => {
@@ -172,14 +172,14 @@ function SyncthingToggle() {
 
   const fetchStatus = useCallback(() => {
     if ((window as any).__cuiServerAlive === false) return;
-    fetch('/api/syncthing/status')
-      .then(r => r.ok ? r.json() : null)
+    fetch('/api/syncthing/status', { signal: AbortSignal.timeout(8000) })
+      .then(r => { if (!r.ok) throw new Error(`syncthing/status ${r.status}`); return r.json(); })
       .then(data => {
         if (!data) return;
         setPaused(data.paused);
         if (data.lastSyncAt) setLastSync(data.lastSyncAt);
       })
-      .catch(() => {});
+      .catch((err) => { console.warn('[ProjectTabs] fetchSyncthingStatus:', err); });
   }, []);
 
   useEffect(() => {
@@ -189,16 +189,18 @@ function SyncthingToggle() {
   }, [fetchStatus]);
 
   const toggle = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     if (toggling || paused === null) return;
     setToggling(true);
     try {
       const endpoint = paused ? '/api/syncthing/resume' : '/api/syncthing/pause';
-      const res = await fetch(endpoint, { method: 'POST' });
-      if (res.ok) {
-        const data = await res.json();
-        setPaused(data.paused);
-      }
-    } catch {}
+      const res = await fetch(endpoint, { method: 'POST', signal: AbortSignal.timeout(15000) });
+      if (!res.ok) throw new Error(`syncthing toggle ${res.status}`);
+      const data = await res.json();
+      setPaused(data.paused);
+    } catch (err) {
+      console.warn('[ProjectTabs] syncthingToggle:', err);
+    }
     setToggling(false);
   }, [paused, toggling]);
 
@@ -265,26 +267,29 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
     // Also check on mount (delayed to allow WS to connect first)
     setTimeout(() => {
       if ((window as any).__cuiServerAlive === false) return;
-      fetch('/api/cui-sync/pending').then(r => r.ok ? r.json() : null).then(d => {
-        if (d?.count > 0) setPendingCount(d.count);
-      }).catch(() => {});
+      fetch('/api/cui-sync/pending', { signal: AbortSignal.timeout(8000) })
+        .then(r => { if (!r.ok) throw new Error(`cui-sync/pending ${r.status}`); return r.json(); })
+        .then(d => { if (d?.count > 0) setPendingCount(d.count); })
+        .catch((err) => { console.warn('[ProjectTabs] fetchPending:', err); });
     }, 2000);
     return () => window.removeEventListener('message', handleMessage);
   }, []);
 
   const handleSync = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     if (syncState === 'syncing') return;
     setSyncState('syncing');
     setSyncDetail('Building...');
     try {
-      const resp = await fetch('/api/cui-sync', { method: 'POST' });
+      const resp = await fetch('/api/cui-sync', { method: 'POST', signal: AbortSignal.timeout(15000) });
       const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || 'Sync failed');
+      if (!resp.ok) throw new Error(data.error || `cui-sync ${resp.status}`);
       setSyncState('done');
       setSyncDetail(data.build || 'ok');
       setPendingCount(0);
       setTimeout(() => window.location.reload(), 3000);
     } catch (err: any) {
+      console.warn('[ProjectTabs] handleSync:', err);
       setSyncState('error');
       setSyncDetail(err.message.slice(0, 60));
       setTimeout(() => { setSyncState('idle'); setSyncDetail(''); }, 5000);
@@ -294,27 +299,28 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
   const checkPanelHealth = useCallback(async () => {
     if ((window as any).__cuiServerAlive === false) return;
     try {
-      const resp = await fetch('/api/panel-health');
-      if (!resp.ok) return;
+      const resp = await fetch('/api/panel-health', { signal: AbortSignal.timeout(8000) });
+      if (!resp.ok) throw new Error(`panel-health ${resp.status}`);
       const data = await resp.json();
       setPanelHealth({
         running: data.running,
         total: data.total,
         missing: data.panels.filter((p: any) => !p.running).map((p: any) => p.name)
       });
-    } catch {
-      // Server down — don't reset state, just skip
+    } catch (err) {
+      console.warn('[ProjectTabs] checkPanelHealth:', err);
     }
   }, []);
 
   const handleStartPanels = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     if (syncState === 'syncing') return;
     setSyncState('syncing');
     setSyncDetail('Starting panels...');
     try {
-      const resp = await fetch('/api/start-all-panels', { method: 'POST' });
+      const resp = await fetch('/api/start-all-panels', { method: 'POST', signal: AbortSignal.timeout(15000) });
       const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || 'Failed to start panels');
+      if (!resp.ok) throw new Error(data.error || `start-all-panels ${resp.status}`);
       setSyncState('done');
       setSyncDetail(data.message || 'Panels starting');
       // Re-check health after 10s
@@ -324,6 +330,7 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
         setSyncDetail('');
       }, 10000);
     } catch (err: any) {
+      console.warn('[ProjectTabs] handleStartPanels:', err);
       setSyncState('error');
       setSyncDetail(err.message.slice(0, 60));
       setTimeout(() => { setSyncState('idle'); setSyncDetail(''); }, 5000);
@@ -338,17 +345,19 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
   }, [checkPanelHealth]);
 
   const handleRebuild = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     if (syncState === 'syncing') return;
     setSyncState('syncing');
     setSyncDetail('Rebuilding frontend...');
     try {
-      const resp = await fetch('/api/rebuild-frontend', { method: 'POST' });
+      const resp = await fetch('/api/rebuild-frontend', { method: 'POST', signal: AbortSignal.timeout(15000) });
       const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || 'Rebuild failed');
+      if (!resp.ok) throw new Error(data.error || `rebuild-frontend ${resp.status}`);
       setSyncState('done');
       setSyncDetail(data.detail || 'ok');
       setTimeout(() => window.location.reload(), 2000);
     } catch (err: any) {
+      console.warn('[ProjectTabs] handleRebuild:', err);
       setSyncState('error');
       setSyncDetail(err.message.slice(0, 60));
       setTimeout(() => { setSyncState('idle'); setSyncDetail(''); }, 5000);

@@ -22,6 +22,7 @@ export default function PanelConnectivityGuard({
     let cancelled = false;
 
     const checkConnectivity = async () => {
+      if ((window as any).__cuiServerAlive === false) return;
       try {
         // Check if URL is external (not localhost/127.0.0.1)
         const isExternal = checkUrl.includes('://') && !checkUrl.includes('localhost') && !checkUrl.includes('127.0.0.1');
@@ -30,7 +31,8 @@ export default function PanelConnectivityGuard({
         if (isExternal) {
           // Use proxy for external URLs to bypass CORS
           const proxyUrl = `/api/health-check-proxy?url=${encodeURIComponent(checkUrl)}`;
-          const proxyResponse = await fetch(proxyUrl, { cache: 'no-store' });
+          const proxyResponse = await fetch(proxyUrl, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
+          if (!proxyResponse.ok) throw new Error(`Proxy HTTP ${proxyResponse.status}`);
           const data = await proxyResponse.json();
           response = { ok: data.ok };
         } else {
@@ -52,6 +54,7 @@ export default function PanelConnectivityGuard({
           setLastCheck(new Date());
         }
       } catch (err) {
+        console.warn('[ConnectivityGuard] health check failed:', err);
         if (!cancelled) {
           setIsOnline(false);
           setLastCheck(new Date());

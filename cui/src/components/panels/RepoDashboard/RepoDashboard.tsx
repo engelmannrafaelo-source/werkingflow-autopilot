@@ -32,8 +32,10 @@ export default function RepoDashboard() {
   // Quick stats poll
   useEffect(() => {
     async function fetchQuick() {
+      if ((window as any).__cuiServerAlive === false) return;
       try {
-        const res = await fetch('/api/repo-dashboard/repositories');
+        const res = await fetch('/api/repo-dashboard/repositories', { signal: AbortSignal.timeout(8000) });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
 
         const totalSize = data.repos.reduce((sum: number, r: any) => sum + r.diskSize.bytes, 0);
@@ -45,7 +47,7 @@ export default function RepoDashboard() {
           totalSize: `${sizeGB}GB`,
         });
       } catch (err) {
-        console.error('[RepoDashboard] Quick stats error:', err);
+        console.warn('[RepoDashboard] quick stats fetch failed:', err);
         setQuickStats({ totalRepos: 0, dirtyRepos: 0, totalSize: '0GB' });
       }
     }
@@ -55,11 +57,14 @@ export default function RepoDashboard() {
   }, []);
 
   const handleRefresh = async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setRefreshing(true);
     try {
-      await fetch('/api/repo-dashboard/refresh', { method: 'POST' });
+      const refreshRes = await fetch('/api/repo-dashboard/refresh', { method: 'POST', signal: AbortSignal.timeout(15000) });
+      if (!refreshRes.ok) throw new Error(`Refresh HTTP ${refreshRes.status}`);
       // Re-trigger stats fetch
-      const res = await fetch('/api/repo-dashboard/repositories');
+      const res = await fetch('/api/repo-dashboard/repositories', { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) throw new Error(`Repos HTTP ${res.status}`);
       const data = await res.json();
       const totalSize = data.repos.reduce((sum: number, r: any) => sum + r.diskSize.bytes, 0);
       const sizeGB = (totalSize / 1024 / 1024 / 1024).toFixed(1);
@@ -68,6 +73,8 @@ export default function RepoDashboard() {
         dirtyRepos: data.repos.filter((r: any) => r.status === 'dirty').length,
         totalSize: `${sizeGB}GB`,
       });
+    } catch (err) {
+      console.warn('[RepoDashboard] refresh failed:', err);
     } finally {
       setRefreshing(false);
     }

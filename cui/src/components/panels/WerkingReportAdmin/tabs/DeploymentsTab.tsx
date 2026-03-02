@@ -27,12 +27,13 @@ export default function DeploymentsTab({ envMode }: { envMode?: string }) {
   const [restarting, setRestarting] = useState(false);
 
   const fetchAll = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {
       const [depsRes, bridgeRes] = await Promise.all([
-        fetch('/api/ops/deployments').catch(() => null),
-        fetch('/api/admin/wr/health').catch(() => null),
+        fetch('/api/ops/deployments', { signal: AbortSignal.timeout(8000) }).catch(() => null),
+        fetch('/api/admin/wr/health', { signal: AbortSignal.timeout(8000) }).catch(() => null),
       ]);
       if (depsRes?.ok) {
         const data = await depsRes.json();
@@ -46,6 +47,7 @@ export default function DeploymentsTab({ envMode }: { envMode?: string }) {
         setBridgeHealth(await bridgeRes.json());
       }
     } catch (err: any) {
+      console.warn('[WRDeploy] fetchAll:', err);
       setError(err.message);
     } finally {
       setLoading(false);
@@ -56,18 +58,21 @@ export default function DeploymentsTab({ envMode }: { envMode?: string }) {
 
   const handleDeploy = async (projectName: string) => {
     if (!confirm(`Trigger production deployment for "${projectName}"?`)) return;
+    if ((window as any).__cuiServerAlive === false) return;
     setDeploying(projectName);
     try {
       const res = await fetch('/api/admin/wr/deploy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ project: projectName }),
+        signal: AbortSignal.timeout(15000),
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       alert(data.message || 'Deploy triggered!');
       setTimeout(fetchAll, 3000);
     } catch (err: any) {
+      console.warn('[WRDeploy] handleDeploy:', err);
       alert(`Deploy failed: ${err.message}`);
     } finally {
       setDeploying(null);
@@ -76,18 +81,21 @@ export default function DeploymentsTab({ envMode }: { envMode?: string }) {
 
   const handleHetznerRestart = async () => {
     if (!confirm('Restart AI-Bridge containers on Hetzner?')) return;
+    if ((window as any).__cuiServerAlive === false) return;
     setRestarting(true);
     try {
       const res = await fetch('/api/admin/wr/hetzner/restart', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
+        signal: AbortSignal.timeout(15000),
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       alert(data.message || 'Restart triggered!');
       setTimeout(fetchAll, 5000);
     } catch (err: any) {
+      console.warn('[WRDeploy] handleHetznerRestart:', err);
       alert(`Restart failed: ${err.message}`);
     } finally {
       setRestarting(false);

@@ -6,14 +6,14 @@ export default function TestRunsTab() {
   const [loading, setLoading] = useState(true);
 
   const fetchData = async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
-      const res = await fetch('/api/qa/runs');
-      if (res.ok) {
-        const json = await res.json();
-        setData(json);
-      }
+      const res = await fetch('/api/qa/runs', { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      setData(json);
     } catch (err) {
-      console.error('[QA] Failed to fetch runs:', err);
+      console.warn('[QATestRuns] fetch runs failed:', err);
     } finally {
       setLoading(false);
     }

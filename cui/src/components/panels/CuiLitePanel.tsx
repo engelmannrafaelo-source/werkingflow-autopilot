@@ -40,42 +40,6 @@ interface CuiLitePanelProps {
   onLoadFailed?: (sessionId: string) => void;
 }
 
-// --- Message Outbox (localStorage-backed) ---
-interface OutboxEntry {
-  id: string;
-  message: string;
-  timestamp: string;
-  status: 'pending' | 'sending' | 'failed';
-  accountId: string;
-  sessionId: string;
-  workDir: string;
-  retryCount: number;
-  lastError?: string;
-}
-
-function getOutboxKey(panelId: string, acctId: string, sessId: string): string {
-  return `cui-lite-outbox-${panelId}-${acctId}-${sessId}`;
-}
-
-function loadOutbox(panelId: string, acctId: string, sessId: string): OutboxEntry[] {
-  try {
-    const raw = localStorage.getItem(getOutboxKey(panelId, acctId, sessId));
-    if (!raw) return [];
-    const entries = JSON.parse(raw) as OutboxEntry[];
-    // Stale cleanup: remove entries older than 24h
-    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-    return entries.filter(e => new Date(e.timestamp).getTime() > cutoff).slice(-10);
-  } catch { return []; }
-}
-
-function saveOutbox(panelId: string, acctId: string, sessId: string, entries: OutboxEntry[]): void {
-  try {
-    const key = getOutboxKey(panelId, acctId, sessId);
-    if (entries.length === 0) { localStorage.removeItem(key); return; }
-    localStorage.setItem(key, JSON.stringify(entries.slice(-10)));
-  } catch { /* localStorage full or unavailable */ }
-}
-
 // --- Markdown Components (Tokyo Night) ---
 const markdownComponents = {
   h1: ({ ...props }) => <h1 style={{ fontSize: '20px', fontWeight: '700', color: 'var(--tn-text)', marginTop: '16px', marginBottom: '8px' }} {...props} />,
@@ -120,10 +84,11 @@ function ToolUseBlock({ block, onRespond, workDir }: { block: ContentBlock; onRe
   useEffect(() => {
     if (block.name !== 'ExitPlanMode' || !workDir || planText !== null) return;
     setPlanLoading(true);
+    if ((window as any).__cuiServerAlive === false) { setPlanLoading(false); return; }
     fetch(`/api/file-read?path=${encodeURIComponent(workDir + '/.claude/plan.md')}`, { signal: AbortSignal.timeout(5000) })
       .then(r => r.ok ? r.text() : Promise.reject('not found'))
       .then(text => setPlanText(text))
-      .catch(() => setPlanText(''))
+      .catch((err) => { if (err !== 'not found') console.warn('[CuiLite] Load plan error:', err); setPlanText(''); })
       .finally(() => setPlanLoading(false));
   }, [block.name, workDir, planText]);
 
@@ -428,53 +393,6 @@ function LoadingConversation({ sessionId, onBack, onRetry, onLoadFailed }: { ses
   );
 }
 
-// --- Outbox Message Row ---
-function OutboxMessageRow({ entry, onRetry, onDiscard }: { entry: OutboxEntry; onRetry: (id: string) => void; onDiscard: (id: string) => void }) {
-  const isFailed = entry.status === 'failed';
-  const isSending = entry.status === 'sending' || entry.status === 'pending';
-  const borderColor = isFailed ? '#EF4444' : '#F59E0B';
-  const time = new Date(entry.timestamp).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  return (
-    <div style={{
-      margin: '4px 8px', padding: '8px 10px', borderRadius: 6,
-      borderLeft: `3px solid ${borderColor}`,
-      background: 'var(--tn-bg-dark)', fontSize: 13,
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-        <span style={{ fontWeight: 600, color: 'var(--tn-text)' }}>User</span>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          <span style={{
-            fontSize: 10, padding: '1px 6px', borderRadius: 3,
-            background: isFailed ? 'rgba(239,68,68,0.2)' : 'rgba(245,158,11,0.2)',
-            color: isFailed ? '#EF4444' : '#F59E0B', fontWeight: 600,
-          }}>
-            {isSending ? 'Wird gesendet...' : 'FEHLGESCHLAGEN'}
-          </span>
-          <span style={{ fontSize: 10, color: 'var(--tn-text-muted)' }}>{time}</span>
-        </div>
-      </div>
-      <div style={{ color: 'var(--tn-text)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-        {entry.message.length > 200 ? entry.message.slice(0, 200) + '...' : entry.message}
-      </div>
-      {isFailed && entry.lastError && (
-        <div style={{ fontSize: 11, color: '#EF4444', marginTop: 4, opacity: 0.8 }}>{entry.lastError}</div>
-      )}
-      {isFailed && (
-        <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-          <button onClick={() => onRetry(entry.id)} style={{
-            padding: '3px 10px', fontSize: 11, border: '1px solid var(--tn-border)',
-            borderRadius: 4, background: 'var(--tn-surface)', color: 'var(--tn-text)', cursor: 'pointer',
-          }}>Retry</button>
-          <button onClick={() => onDiscard(entry.id)} style={{
-            padding: '3px 10px', fontSize: 11, border: '1px solid var(--tn-border)',
-            borderRadius: 4, background: 'transparent', color: 'var(--tn-text-muted)', cursor: 'pointer',
-          }}>Verwerfen</button>
-        </div>
-      )}
-    </div>
-  );
-}
-
 // --- Main Component ---
 export default function CuiLitePanel({ accountId, projectId, workDir, panelId, isTabVisible = true, onRouteChange, initialSessionId, onLoadFailed }: CuiLitePanelProps) {
   const storageKey = `cui-lite-account-${panelId || projectId || 'default'}`;
@@ -507,17 +425,6 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   const [planMode, setPlanMode] = useState(false);
   const [liveMode, setLiveMode] = useState(false);
   const [isAgentDone, setIsAgentDone] = useState(false);
-
-  // --- Message Outbox ---
-  const effectivePanelId = panelId || projectId || 'default';
-  const [outbox, setOutbox] = useState<OutboxEntry[]>(() => {
-    if (!sessionId) return [];
-    const entries = loadOutbox(effectivePanelId, initialAccount, sessionId);
-    // Recovery: reset any 'sending' entries to 'failed' (page was reloaded mid-send)
-    return entries.map(e => e.status === 'sending' ? { ...e, status: 'failed' as const, lastError: 'Seite neu geladen' } : e);
-  });
-  const outboxRef = useRef(outbox);
-  outboxRef.current = outbox;
 
   // --- Prompt Templates ---
   interface PromptTemplate { id: string; label: string; message: string; category: "reply" | "start"; subject?: string; order: number; createdAt: string; }
@@ -555,7 +462,8 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     try {
       const convResp = await fetch(`/api/mission/conversation/${selectedId}/${sessionId}?tail=50`, { signal: AbortSignal.timeout(8000) });
       if (convResp.ok) {
-        const data = await convResp.json();
+        const data = await convResp.json().catch(() => null);
+        if (!data) { console.warn('[CuiLite] Poll: invalid JSON response'); return; }
         setMessages(data.messages || []);
         setConvStatus(data.status === 'ongoing' ? 'ongoing' : 'completed');
         setPermissions(data.permissions || []);
@@ -579,9 +487,9 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
           console.warn(`[CuiLite] Circuit open for ${selectedId} after ${pollFailCountRef.current} failures — waiting for WS`);
         }
       }
-    } catch {
-      // Network error (server down, connection refused)
+    } catch (err) {
       pollFailCountRef.current++;
+      if (pollFailCountRef.current <= 2) console.warn('[CuiLite] Poll network error:', err);
     }
   }, [sessionId, selectedId]);
 
@@ -598,7 +506,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
           setAttentionReason(myState.reason);
         }
       })
-      .catch(() => {}); // Server may be restarting
+      .catch((err) => { console.warn('[CuiLite] Fetch states error:', err); });
   }, [selectedId]);
 
   // Adaptive polling with recursive setTimeout (interval adjusts to failure count)
@@ -624,7 +532,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       }, delay);
     };
     // Initial poll then start schedule
-    pollNow().then(() => { if (!cancelled) schedulePoll(); });
+    pollNow().then(() => { if (!cancelled) schedulePoll(); }).catch((err) => { console.warn('[CuiLite] Initial poll error:', err); });
     return () => {
       cancelled = true;
       if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
@@ -641,77 +549,12 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         reply.sort((a: PromptTemplate, b: PromptTemplate) => a.order - b.order);
         setReplyTemplates(reply);
       })
-      .catch(() => {});
+      .catch((err) => { console.warn('[CuiLite] Load templates error:', err); });
   }, []);
   useEffect(() => {
     if ((window as any).__cuiServerAlive === false) return;
     loadTemplates();
   }, [loadTemplates]);
-
-  // --- Outbox: updateOutbox syncs React state + localStorage ---
-  const updateOutbox = useCallback((updater: (prev: OutboxEntry[]) => OutboxEntry[]) => {
-    setOutbox(prev => {
-      const next = updater(prev);
-      if (sessionId) saveOutbox(effectivePanelId, selectedId, sessionId, next);
-      return next;
-    });
-  }, [effectivePanelId, selectedId, sessionId]);
-
-  // --- Outbox: attemptSend tries to deliver a single outbox entry ---
-  const attemptSend = useCallback(async (entry: OutboxEntry): Promise<boolean> => {
-    // Mark as sending
-    updateOutbox(prev => prev.map(e => e.id === entry.id ? { ...e, status: 'sending' as const } : e));
-    try {
-      const resp = await fetch('/api/mission/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accountId: entry.accountId, sessionId: entry.sessionId, message: entry.message, workDir: entry.workDir }),
-        signal: AbortSignal.timeout(65000),
-      });
-      if (!resp.ok) {
-        const errData = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
-        const errorMsg = errData.error || `HTTP ${resp.status}`;
-        updateOutbox(prev => prev.map(e => e.id === entry.id ? { ...e, status: 'failed' as const, lastError: errorMsg, retryCount: e.retryCount + 1 } : e));
-        return false;
-      }
-      const data = await resp.json().catch(() => ({}));
-      // Handle resumeFailed
-      if (data.resumeFailed && data.sessionId) {
-        console.log(`[CuiLite] Resume failed during outbox send, new session: ${data.sessionId}`);
-        setSessionId(data.sessionId);
-        if (persistSession) try { localStorage.setItem(getSessionKey(selectedId), data.sessionId); } catch {}
-        onRouteChange?.(`/c/${data.sessionId}`);
-        // Migrate remaining outbox entries to new session
-        updateOutbox(prev => prev.filter(e => e.id !== entry.id).map(e => ({ ...e, sessionId: data.sessionId })));
-        setMessages([
-          { role: 'system', content: 'Neue Session gestartet (alte Session konnte nicht fortgesetzt werden)', timestamp: new Date().toISOString() },
-          { role: 'user', content: entry.message, timestamp: new Date().toISOString() },
-        ]);
-        return true;
-      }
-      // Success — remove from outbox
-      updateOutbox(prev => prev.filter(e => e.id !== entry.id));
-      return true;
-    } catch (err) {
-      const errMsg = err instanceof DOMException && err.name === 'TimeoutError' ? 'Timeout — Server antwortet nicht' : String(err);
-      updateOutbox(prev => prev.map(e => e.id === entry.id ? { ...e, status: 'failed' as const, lastError: errMsg, retryCount: e.retryCount + 1 } : e));
-      return false;
-    }
-  }, [updateOutbox, selectedId, persistSession, onRouteChange]);
-
-  // --- Outbox: retryOutbox attempts to resend all failed entries ---
-  const retryOutbox = useCallback(async () => {
-    const current = outboxRef.current;
-    const retryable = current.filter(e => e.status === 'failed' && e.retryCount < 5);
-    if (retryable.length === 0) return;
-    console.log(`[CuiLite] Retrying ${retryable.length} outbox entries`);
-    for (const entry of retryable) {
-      const ok = await attemptSend(entry);
-      if (!ok) break; // Stop on first failure (server likely still down)
-      await new Promise(r => setTimeout(r, 500));
-    }
-  }, [attemptSend]);
-
 
   // --- WS for realtime attention events (auto-reconnect) ---
   useEffect(() => {
@@ -740,8 +583,6 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         if (sessionId) setTimeout(pollNow, 300);
         // Re-fetch templates (may have failed during server restart)
         loadTemplates();
-        // Auto-retry failed outbox entries now that server is back
-        setTimeout(retryOutbox, 2000);
       };
       ws.onclose = () => {
         if (!disposed) {
@@ -807,22 +648,14 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       disposed = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
     };
-  }, [selectedId, isTabVisible, sessionId, pollNow, loadTemplates, retryOutbox]);
+  }, [selectedId, isTabVisible, sessionId, pollNow, loadTemplates]);
 
   // Auto-scroll only when user is near bottom (not scrolled up reading)
   useEffect(() => {
     if (!userScrolledUpRef.current) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [messages, outbox]);
-
-  // Reload outbox from localStorage when session or account changes
-  useEffect(() => {
-    if (!sessionId) { setOutbox([]); return; }
-    const entries = loadOutbox(effectivePanelId, selectedId, sessionId);
-    const recovered = entries.map(e => e.status === 'sending' ? { ...e, status: 'failed' as const, lastError: 'Verbindung verloren' } : e);
-    setOutbox(recovered);
-  }, [sessionId, selectedId, effectivePanelId]);
+  }, [messages]);
 
   // Listen for "All Live" broadcast from workspace toolbar
   useEffect(() => {
@@ -841,7 +674,9 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     if ((window as any).__cuiServerAlive === false) return;
     try {
       const r = await fetch("/api/auto-inject", { signal: AbortSignal.timeout(5000) });
-      const state = await r.json();
+      if (!r.ok) { console.warn('[CuiLite] Sync loop state HTTP error:', r.status); return; }
+      const state = await r.json().catch(() => null);
+      if (!state) { console.warn('[CuiLite] Sync loop state: invalid JSON response'); return; }
       const cfg = state.configs?.[selectedId || ""];
       if (cfg) {
         setLoopEnabled(cfg.enabled);
@@ -852,13 +687,17 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       }
       const lastTs = state.lastInject?.[selectedId || ""];
       setLastInjectTime(lastTs || null);
-    } catch {}
+    } catch (err) { console.warn('[CuiLite] Sync loop state error:', err); }
   }, [selectedId]);
 
   useEffect(() => { syncLoopState(); }, [syncLoopState]);
 
   const toggleLoop = useCallback(async (enable: boolean) => {
     if (!selectedId || !sessionId) return;
+    if ((window as any).__cuiServerAlive === false) {
+      console.warn('[CuiLite] Toggle loop blocked: server not alive');
+      return;
+    }
     try {
       if (enable) {
         await fetch("/api/auto-inject", {
@@ -889,6 +728,10 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
 
   const saveLoopConfig = useCallback(async () => {
     if (!selectedId) return;
+    if ((window as any).__cuiServerAlive === false) {
+      console.warn('[CuiLite] Save loop config blocked: server not alive');
+      return;
+    }
     try {
       await fetch("/api/auto-inject", {
         method: "POST",
@@ -910,6 +753,10 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
 
   const handleSaveTemplate = useCallback(async () => {
     if (!newTplLabel.trim() || !newTplMessage.trim()) return;
+    if ((window as any).__cuiServerAlive === false) {
+      console.warn('[CuiLite] Save template blocked: server not alive');
+      return;
+    }
     try {
       if (editingTemplate) {
         const resp = await fetch(`/api/prompt-templates/${editingTemplate.id}`, {
@@ -919,8 +766,8 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
           signal: AbortSignal.timeout(8000),
         });
         if (resp.ok) {
-          const data = await resp.json();
-          setReplyTemplates(prev => prev.map(t => t.id === data.template.id ? data.template : t));
+          const data = await resp.json().catch(() => null);
+          if (data?.template) setReplyTemplates(prev => prev.map(t => t.id === data.template.id ? data.template : t));
         }
       } else {
         const resp = await fetch('/api/prompt-templates', {
@@ -930,8 +777,8 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
           signal: AbortSignal.timeout(8000),
         });
         if (resp.ok) {
-          const data = await resp.json();
-          setReplyTemplates(prev => [...prev, data.template]);
+          const data = await resp.json().catch(() => null);
+          if (data?.template) setReplyTemplates(prev => [...prev, data.template]);
         }
       }
     } catch (err) { console.warn('[CuiLite] Save template error:', (err as Error).message); }
@@ -942,50 +789,69 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   }, [newTplLabel, newTplMessage, editingTemplate]);
 
   const handleDeleteTemplate = useCallback(async (id: string) => {
+    if ((window as any).__cuiServerAlive === false) {
+      console.warn('[CuiLite] Delete template blocked: server not alive');
+      return;
+    }
     try {
       const resp = await fetch(`/api/prompt-templates/${id}`, { method: 'DELETE', signal: AbortSignal.timeout(8000) });
       if (resp.ok) setReplyTemplates(prev => prev.filter(t => t.id !== id));
     } catch (err) { console.warn('[CuiLite] Delete template error:', (err as Error).message); }
   }, []);
 
-
   const handleSend = useCallback(async (overrideMessage?: string) => {
     const rawMsg = overrideMessage || input.trim();
     if (!rawMsg || !sessionId) return;
+    if ((window as any).__cuiServerAlive === false) {
+      setMessages(prev => [...prev, { role: 'system', content: 'Server nicht erreichbar — bitte warten bis Verbindung wiederhergestellt ist.', timestamp: new Date().toISOString() }]);
+      return;
+    }
     setIsLoading(true);
     const msg = (!overrideMessage && planMode) ? `Bitte verwende Plan-Modus: ${rawMsg}` : rawMsg;
     if (!overrideMessage) setInput('');
     if (!overrideMessage && planMode) setPlanMode(false);
-    // Add optimistic user message
     setMessages(prev => [...prev, { role: 'user', content: msg, timestamp: new Date().toISOString() }]);
     setIsAgentDone(false);
     setAttentionReason(undefined);
-    setRateLimitMessage(null);
-
-    // Create outbox entry and persist BEFORE attempting send
-    const entry: OutboxEntry = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      message: msg,
-      timestamp: new Date().toISOString(),
-      status: 'pending',
-      accountId: selectedId,
-      sessionId,
-      workDir: workDir || '',
-      retryCount: 0,
-    };
-    updateOutbox(prev => [...prev, entry].slice(-10));
-
-    const ok = await attemptSend(entry);
-    setIsLoading(false);
-    if (ok) {
-      // Single delayed poll — WS will handle the rest via cui-state/done events
-      setTimeout(pollNow, 2000);
+            setRateLimitMessage(null);
+    try {
+      const resp = await fetch('/api/mission/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountId: selectedId, sessionId, message: msg, workDir }),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+        setMessages(prev => [...prev, { role: 'system', content: `Fehler: ${errData.error || 'Senden fehlgeschlagen'}`, timestamp: new Date().toISOString() }]);
+      } else {
+        const data = await resp.json().catch(() => ({}));
+        // Server auto-recovered from broken resume → switch to new session
+        if (data.resumeFailed && data.sessionId) {
+          console.log(`[CuiLite] Resume failed, switched to new session: ${data.sessionId}`);
+          setSessionId(data.sessionId);
+          if (persistSession) try { localStorage.setItem(getSessionKey(selectedId), data.sessionId); } catch {}
+          onRouteChange?.(`/c/${data.sessionId}`);
+          setMessages([{ role: 'system', content: 'Neue Session gestartet (alte Session konnte nicht fortgesetzt werden)', timestamp: new Date().toISOString() }, { role: 'user', content: msg, timestamp: new Date().toISOString() }]);
+        }
+      }
+    } catch (err) {
+      console.error('[CuiLite] Send error:', err);
+      const errMsg = err instanceof DOMException && err.name === 'TimeoutError' ? 'Timeout — Server antwortet nicht' : String(err);
+      setMessages(prev => [...prev, { role: 'system', content: `Netzwerkfehler: ${errMsg}`, timestamp: new Date().toISOString() }]);
     }
-  }, [input, sessionId, selectedId, workDir, planMode, pollNow, onRouteChange, updateOutbox, attemptSend]);
+    setIsLoading(false);
+    // Single delayed poll — WS will handle the rest via cui-state/done events
+    setTimeout(pollNow, 2000);
+  }, [input, sessionId, selectedId, workDir, planMode, pollNow, onRouteChange]);
 
   // Respond to tool_use blocks (AskUserQuestion, ExitPlanMode, EnterPlanMode)
   const handleRespond = useCallback(async (text: string) => {
     if (!sessionId) return;
+    if ((window as any).__cuiServerAlive === false) {
+      console.warn('[CuiLite] Respond blocked: server not alive');
+      return;
+    }
     setIsLoading(true);
     setMessages(prev => [...prev, { role: 'user', content: text, timestamp: new Date().toISOString() }]);
     try {
@@ -993,7 +859,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ accountId: selectedId, sessionId, message: text, workDir }),
-        signal: AbortSignal.timeout(65000),
+        signal: AbortSignal.timeout(15000),
       });
       if (resp.ok) {
         const data = await resp.json().catch(() => ({}));
@@ -1003,6 +869,8 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
           if (persistSession) try { localStorage.setItem(getSessionKey(selectedId), data.sessionId); } catch {}
           onRouteChange?.(`/c/${data.sessionId}`);
         }
+      } else {
+        console.warn('[CuiLite] Respond HTTP error:', resp.status);
       }
     } catch (err) {
       console.error('[CuiLite] Respond error:', err);
@@ -1012,6 +880,10 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   }, [sessionId, selectedId, workDir, pollNow, onRouteChange]);
 
   const handlePermission = useCallback(async (permId: string, action: 'approve' | 'deny') => {
+    if ((window as any).__cuiServerAlive === false) {
+      console.warn('[CuiLite] Permission blocked: server not alive');
+      return;
+    }
     try {
       await fetch(`/api/mission/permissions/${selectedId}/${permId}`, {
         method: 'POST',
@@ -1027,6 +899,10 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
 
   const handleStop = useCallback(async () => {
     if (!sessionId) return;
+    if ((window as any).__cuiServerAlive === false) {
+      console.warn('[CuiLite] Stop blocked: server not alive');
+      return;
+    }
     try {
       const resp = await fetch(`/api/mission/conversation/${selectedId}/${sessionId}/stop`, { method: 'POST', signal: AbortSignal.timeout(10000) });
       const data = await resp.json().catch(() => ({}));
@@ -1056,22 +932,34 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   }, [onRouteChange, selectedId, persistSession]);
 
   const handleStartNew = useCallback(async (subject: string, message: string) => {
+    if ((window as any).__cuiServerAlive === false) {
+      console.warn('[CuiLite] Start new blocked: server not alive');
+      return false;
+    }
     try {
       const resp = await fetch('/api/mission/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ accountId: selectedId, message, workDir, subject }),
-        signal: AbortSignal.timeout(65000),
+        signal: AbortSignal.timeout(15000),
       });
-      if (!resp.ok) return false;
-      const data = await resp.json();
+      if (!resp.ok) {
+        console.warn('[CuiLite] Start new HTTP error:', resp.status);
+        return false;
+      }
+      const data = await resp.json().catch(() => null);
+      if (!data || !data.sessionId) {
+        console.warn('[CuiLite] Start new: invalid response (missing sessionId)');
+        return false;
+      }
       setSessionId(data.sessionId);
       setShowQueue(false);
       setMessages([]);
       if (persistSession) try { localStorage.setItem(getSessionKey(selectedId), data.sessionId); } catch {}
       onRouteChange?.(`/c/${data.sessionId}`);
       return true;
-    } catch {
+    } catch (err) {
+      console.warn('[CuiLite] Start new error:', err);
       return false;
     }
   }, [selectedId, workDir, onRouteChange, persistSession]);
@@ -1117,27 +1005,20 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
 
             if (sessionId) {
               // Chat is open — reassign conversation to new account, stay in chat
-              fetch(`/api/mission/conversation/${sessionId}/assign`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ accountId: newAcct }),
-              }).catch(() => {});
+              if ((window as any).__cuiServerAlive !== false) {
+                fetch(`/api/mission/conversation/${sessionId}/assign`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ accountId: newAcct }),
+                  signal: AbortSignal.timeout(8000),
+                }).catch((err) => { console.warn('[CuiLite] Assign conversation error:', err); });
+              }
               // Save session for BOTH old and new account
               if (persistSession) {
                 try { localStorage.setItem(getSessionKey(selectedId), sessionId); } catch {}
                 try { localStorage.setItem(getSessionKey(newAcct), sessionId); } catch {}
               }
               setSelectedId(newAcct);
-              // Migrate outbox entries to new account
-              if (sessionId) {
-                const oldEntries = loadOutbox(effectivePanelId, selectedId, sessionId);
-                if (oldEntries.length > 0) {
-                  const migrated = oldEntries.map(e => ({ ...e, accountId: newAcct }));
-                  saveOutbox(effectivePanelId, newAcct, sessionId, migrated);
-                  saveOutbox(effectivePanelId, selectedId, sessionId, []);
-                  setOutbox(migrated);
-                }
-              }
               // Keep sessionId, messages, and chat view — just switch account
               setMessages(prev => [...prev, { role: 'system', content: `Account gewechselt → ${ACCOUNTS.find(a => a.id === newAcct)?.label || newAcct}`, timestamp: new Date().toISOString() }]);
               setAttention('idle');
@@ -1364,18 +1245,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
               <LoadingConversation sessionId={sessionId} onBack={() => { setSessionId(null); setShowQueue(true); }} onRetry={pollNow} onLoadFailed={onLoadFailed} />
             )}
             {messages.map((msg, i) => (
-              <MessageRow key={i} msg={msg} onRespond={handleRespond} isLast={i === messages.length - 1 && outbox.length === 0} workDir={workDir} />
-            ))}
-            {outbox.map(entry => (
-              <OutboxMessageRow
-                key={entry.id}
-                entry={entry}
-                onRetry={(id) => {
-                  const e = outbox.find(x => x.id === id);
-                  if (e) attemptSend(e).then(ok => { if (ok) setTimeout(pollNow, 2000); });
-                }}
-                onDiscard={(id) => updateOutbox(prev => prev.filter(e => e.id !== id))}
-              />
+              <MessageRow key={i} msg={msg} onRespond={handleRespond} isLast={i === messages.length - 1} workDir={workDir} />
             ))}
             <div ref={messagesEndRef} />
           </div>

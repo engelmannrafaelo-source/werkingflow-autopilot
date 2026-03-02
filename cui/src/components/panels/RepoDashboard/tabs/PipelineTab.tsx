@@ -19,13 +19,15 @@ export default function PipelineTab() {
   }, []);
 
   const fetchPipeline = async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     try {
-      const res = await fetch('/api/repo-dashboard/pipeline');
+      const res = await fetch('/api/repo-dashboard/pipeline', { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setPipeline(data.pipeline);
     } catch (err) {
-      console.error('[PipelineTab] Fetch error:', err);
+      console.warn('[RepoPipeline] fetch failed:', err);
     } finally {
       setLoading(false);
     }

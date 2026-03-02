@@ -20,14 +20,16 @@ export default function ImpersonationTab({ envMode }: { envMode?: string }) {
   const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
 
   const fetchSessions = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/admin/wr/impersonation');
+      const res = await fetch('/api/admin/wr/impersonation', { signal: AbortSignal.timeout(8000) });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setSessions(data.sessions || []);
     } catch (err: any) {
+      console.warn('[WRImpersonation] fetchSessions:', err);
       setError(err.message);
     } finally {
       setLoading(false);
@@ -43,16 +45,18 @@ export default function ImpersonationTab({ envMode }: { envMode?: string }) {
 
   const handleEndSession = async (session: ImpersonationSession) => {
     if (!confirm(`End impersonation session for ${session.adminEmail} → ${session.targetEmail}?`)) return;
+    if ((window as any).__cuiServerAlive === false) return;
     const sessionId = session.id;
     setProcessingIds(prev => new Set(prev).add(sessionId));
     try {
-      const res = await fetch(`/api/admin/wr/impersonation/${sessionId}/end`, { method: 'DELETE' });
+      const res = await fetch(`/api/admin/wr/impersonation/${sessionId}/end`, { method: 'DELETE', signal: AbortSignal.timeout(15000) });
       if (!res.ok) {
         const data = await res.json();
         throw new Error(data.error || `HTTP ${res.status}`);
       }
       await fetchSessions();
     } catch (err: any) {
+      console.warn('[WRImpersonation] handleEndSession:', err);
       alert(`Failed to end session: ${err.message}`);
     } finally {
       setProcessingIds(prev => { const next = new Set(prev); next.delete(sessionId); return next; });

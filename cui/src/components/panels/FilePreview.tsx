@@ -35,20 +35,22 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
   const [stageSuccess, setStageSuccess] = useState(false);
 
   const loadDir = useCallback(async (dirPath: string) => {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
-      const res = await fetch(`${API}/files?path=${encodeURIComponent(dirPath)}`);
+      const res = await fetch(`${API}/files?path=${encodeURIComponent(dirPath)}`, { signal: AbortSignal.timeout(8000) });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setEntries(data.entries);
       setCurrentDir(data.path);
       setError('');
-      // Watch path update is handled by the currentDir effect above
     } catch (err: any) {
+      console.warn('[FilePreview] loadDir:', err);
       setError(err.message);
     }
   }, []);
 
   const loadFile = useCallback(async (filePath: string) => {
+    if ((window as any).__cuiServerAlive === false) return;
     const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
     const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'ico'];
     const pdfExts = ['pdf'];
@@ -74,11 +76,12 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
     }
 
     try {
-      const res = await fetch(`${API}/file?path=${encodeURIComponent(filePath)}`);
+      const res = await fetch(`${API}/file?path=${encodeURIComponent(filePath)}`, { signal: AbortSignal.timeout(8000) });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setSelectedFile(data);
     } catch (err: any) {
+      console.warn('[FilePreview] loadFile:', err);
       setError(err.message);
     }
   }, []);
@@ -103,6 +106,7 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
   }
 
   async function stageFile() {
+    if ((window as any).__cuiServerAlive === false) return;
     if (!selectedFile || !stageDir) return;
     setStageLoading(true);
     setStageSuccess(false);
@@ -115,8 +119,9 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
         body: JSON.stringify({
           sourcePath: selectedFile.path,
           targetDir: stageDir,
-          operation: 'copy', // Copy by default (keep original)
+          operation: 'copy',
         }),
+        signal: AbortSignal.timeout(15000),
       });
 
       if (!res.ok) {
@@ -131,6 +136,7 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
       // Auto-hide success message after 3s
       setTimeout(() => setStageSuccess(false), 3000);
     } catch (err: any) {
+      console.warn('[FilePreview] stageFile:', err);
       setError(`Stage failed: ${err.message}`);
     } finally {
       setStageLoading(false);

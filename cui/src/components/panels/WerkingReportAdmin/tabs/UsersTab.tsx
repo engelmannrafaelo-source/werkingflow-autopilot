@@ -42,6 +42,7 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
   const [creating, setCreating] = useState(false);
 
   const fetchUsers = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {
@@ -49,12 +50,13 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
         offset: offset.toString(),
         limit: limit.toString(),
       });
-      const res = await fetch(`/api/admin/wr/users?${params}`);
+      const res = await fetch(`/api/admin/wr/users?${params}`, { signal: AbortSignal.timeout(8000) });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setUsers(data.users || []);
       setTotal(data.total || 0);
     } catch (err: any) {
+      console.warn('[WRUsers] fetchUsers:', err);
       setError(err.message);
     } finally {
       setLoading(false);
@@ -66,12 +68,14 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
   }, [fetchUsers, envMode]);
 
   const handleApprove = async (userId: string) => {
+    if ((window as any).__cuiServerAlive === false) return;
     setProcessingIds(prev => new Set(prev).add(userId));
     try {
-      const res = await fetch(`/api/admin/wr/users/${userId}/approve`, { method: 'POST' });
+      const res = await fetch(`/api/admin/wr/users/${userId}/approve`, { method: 'POST', signal: AbortSignal.timeout(15000) });
       if (!res.ok) throw new Error(await res.text());
       await fetchUsers();
     } catch (err: any) {
+      console.warn('[WRUsers] handleApprove:', err);
       alert(`Failed to approve: ${err.message}`);
     } finally {
       setProcessingIds(prev => { const next = new Set(prev); next.delete(userId); return next; });
@@ -79,12 +83,14 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
   };
 
   const handleVerify = async (userId: string) => {
+    if ((window as any).__cuiServerAlive === false) return;
     setProcessingIds(prev => new Set(prev).add(userId));
     try {
-      const res = await fetch(`/api/admin/wr/users/${userId}/verify`, { method: 'POST' });
+      const res = await fetch(`/api/admin/wr/users/${userId}/verify`, { method: 'POST', signal: AbortSignal.timeout(15000) });
       if (!res.ok) throw new Error(await res.text());
       await fetchUsers();
     } catch (err: any) {
+      console.warn('[WRUsers] handleVerify:', err);
       alert(`Failed to verify: ${err.message}`);
     } finally {
       setProcessingIds(prev => { const next = new Set(prev); next.delete(userId); return next; });
@@ -96,6 +102,7 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
       setError('Email and password are required');
       return;
     }
+    if ((window as any).__cuiServerAlive === false) return;
     setCreating(true);
     setError('');
     try {
@@ -108,6 +115,7 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
           name: newName,
           role: newRole,
         }),
+        signal: AbortSignal.timeout(15000),
       });
       if (!res.ok) {
         const data = await res.json();
@@ -120,6 +128,7 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
       setShowCreate(false);
       await fetchUsers();
     } catch (err: any) {
+      console.warn('[WRUsers] handleCreate:', err);
       setError(`Create failed: ${err.message}`);
     } finally {
       setCreating(false);
@@ -128,15 +137,17 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
 
   const handleDelete = async (userId: string, email: string) => {
     if (!confirm(`Delete user "${email}"? This cannot be undone.`)) return;
+    if ((window as any).__cuiServerAlive === false) return;
     setProcessingIds(prev => new Set(prev).add(userId));
     try {
-      const res = await fetch(`/api/admin/wr/users/${userId}`, { method: 'DELETE' });
+      const res = await fetch(`/api/admin/wr/users/${userId}`, { method: 'DELETE', signal: AbortSignal.timeout(15000) });
       if (!res.ok) {
         const data = await res.json();
         throw new Error(data.error || `HTTP ${res.status}`);
       }
       await fetchUsers();
     } catch (err: any) {
+      console.warn('[WRUsers] handleDelete:', err);
       alert(`Delete failed: ${err.message}`);
     } finally {
       setProcessingIds(prev => { const next = new Set(prev); next.delete(userId); return next; });
@@ -145,9 +156,10 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
 
   const handleImpersonate = async (userId: string, email: string) => {
     if (!confirm(`Start impersonation session as "${email}"?`)) return;
+    if ((window as any).__cuiServerAlive === false) return;
     setProcessingIds(prev => new Set(prev).add(userId));
     try {
-      const res = await fetch(`/api/admin/wr/users/${userId}/impersonate`, { method: 'POST' });
+      const res = await fetch(`/api/admin/wr/users/${userId}/impersonate`, { method: 'POST', signal: AbortSignal.timeout(15000) });
       if (!res.ok) {
         const data = await res.json();
         throw new Error(data.error || `HTTP ${res.status}`);
@@ -157,6 +169,7 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
       const expiresAt = data.session?.expiresAt ? new Date(data.session.expiresAt).toLocaleString('de-DE') : 'unknown';
       alert(`Impersonation session started!\n\nSession ID: ${sessionId}\nTarget: ${email}\nExpires: ${expiresAt}\n\nSession is now active.`);
     } catch (err: any) {
+      console.warn('[WRUsers] handleImpersonate:', err);
       alert(`Impersonation failed: ${err.message}`);
     } finally {
       setProcessingIds(prev => { const next = new Set(prev); next.delete(userId); return next; });

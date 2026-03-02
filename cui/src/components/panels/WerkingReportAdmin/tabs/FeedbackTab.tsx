@@ -18,15 +18,17 @@ export default function FeedbackTab({ envMode }: { envMode?: string }) {
   const [error, setError] = useState('');
 
   const fetchFeedback = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/admin/wr/feedback');
-      if (!res.ok) throw new Error(await res.text());
+      const res = await fetch('/api/admin/wr/feedback', { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setFeedbacks(data.feedbacks || []);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err) {
+      console.warn('[WRFeedback] fetch failed:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load feedback');
     } finally {
       setLoading(false);
     }

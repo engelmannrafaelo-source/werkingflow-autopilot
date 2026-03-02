@@ -20,10 +20,11 @@ export default function ConfigTab({ envMode }: { envMode?: string }) {
   const [newValue, setNewValue] = useState('');
 
   const fetchConfig = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/admin/wr/config');
+      const res = await fetch('/api/admin/wr/config', { signal: AbortSignal.timeout(8000) });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       // Normalize: could be { configs: [...] } or { key: value, ... } or [...]
@@ -39,6 +40,7 @@ export default function ConfigTab({ envMode }: { envMode?: string }) {
         })));
       }
     } catch (err: any) {
+      console.warn('[WRConfig] fetchConfig:', err);
       setError(err.message);
     } finally {
       setLoading(false);
@@ -48,6 +50,7 @@ export default function ConfigTab({ envMode }: { envMode?: string }) {
   useEffect(() => { fetchConfig(); }, [fetchConfig, envMode]);
 
   const handleSave = async (key: string, value: string) => {
+    if ((window as any).__cuiServerAlive === false) return;
     setSaving(true);
     setError('');
     try {
@@ -57,11 +60,13 @@ export default function ConfigTab({ envMode }: { envMode?: string }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ key, value: parsed }),
+        signal: AbortSignal.timeout(15000),
       });
       if (!res.ok) throw new Error(await res.text());
       setEditingKey(null);
       await fetchConfig();
     } catch (err: any) {
+      console.warn('[WRConfig] handleSave:', err);
       setError(err.message);
     } finally {
       setSaving(false);

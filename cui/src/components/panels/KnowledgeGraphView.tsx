@@ -39,14 +39,15 @@ export default function KnowledgeGraphView({
   }, []);
 
   async function loadKnowledgeData() {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
-      const response = await fetch('/api/team/knowledge/registry');
+      const response = await fetch('/api/team/knowledge/registry', { signal: AbortSignal.timeout(8000) });
       if (!response.ok) throw new Error('Failed to load registry');
 
       const registry = await response.json();
       setKnowledgeData(registry.personas);
     } catch (err: any) {
-      console.error('[KnowledgeGraph] Load error:', err);
+      console.warn('[KnowledgeGraph] load registry:', err);
       setError(err.message);
     } finally {
       setLoading(false);

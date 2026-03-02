@@ -11,10 +11,17 @@ export function BuildInfo() {
   const [buildInfo, setBuildInfo] = useState<BuildInfoData | null>(null);
 
   useEffect(() => {
-    fetch('/api/build-info')
-      .then(res => res.json())
-      .then(data => setBuildInfo(data))
-      .catch(err => console.error('[BuildInfo] Failed to fetch build info:', err));
+    if ((window as any).__cuiServerAlive === false) return;
+    (async () => {
+      try {
+        const res = await fetch('/api/build-info', { signal: AbortSignal.timeout(8000) });
+        if (!res.ok) throw new Error(`[BuildInfo] fetch failed: HTTP ${res.status}`);
+        const data = await res.json();
+        setBuildInfo(data);
+      } catch (err) {
+        console.warn('[BuildInfo] fetch build info error:', err);
+      }
+    })();
   }, []);
 
   // Use __BUILD_TIME__ from Vite define as fallback

@@ -84,6 +84,7 @@ export default function PlanChangeModal({
       return;
     }
 
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
 
@@ -92,6 +93,7 @@ export default function PlanChangeModal({
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ planId: selectedPlanId }),
+        signal: AbortSignal.timeout(15000),
       });
 
       if (!res.ok) {
@@ -102,6 +104,7 @@ export default function PlanChangeModal({
       onSuccess();
       onClose();
     } catch (err: any) {
+      console.warn('[WRPlanChange] handleConfirm:', err);
       setError(err.message);
     } finally {
       setLoading(false);

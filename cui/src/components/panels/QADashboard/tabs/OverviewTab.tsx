@@ -18,13 +18,15 @@ export default function OverviewTab() {
   const [error, setError] = useState<string | null>(null);
 
   const fetchData = async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
       setError(null);
-      const res = await fetch('/api/qa/overview');
+      const res = await fetch('/api/qa/overview', { signal: AbortSignal.timeout(8000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       setData(json);
     } catch (err) {
+      console.warn('[QAOverview] fetch failed:', err);
       setError(err instanceof Error ? err.message : 'Failed to load');
     } finally {
       setLoading(false);

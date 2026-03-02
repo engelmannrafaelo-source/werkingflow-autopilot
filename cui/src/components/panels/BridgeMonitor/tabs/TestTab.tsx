@@ -52,7 +52,8 @@ export default function TestTab() {
     setPingResult(null);
     const t0 = Date.now();
     try {
-      const res = await fetch(`${BRIDGE_URL}/health`);
+      const res = await fetch(`${BRIDGE_URL}/health`, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const latency = Date.now() - t0;
       setPingResult({
@@ -62,6 +63,7 @@ export default function TestTab() {
         worker: data.worker_instance,
       });
     } catch (err: any) {
+      console.warn('[BridgeTest] health ping failed:', err);
       setPingResult({ ok: false, latency: Date.now() - t0, error: err.message });
     } finally {
       setPingLoading(false);
@@ -85,6 +87,7 @@ export default function TestTab() {
           messages: [{ role: 'user', content: msgText }],
           max_tokens: 100,
         }),
+        signal: AbortSignal.timeout(30000),
       });
       const latency = Date.now() - t0;
       if (!res.ok) {
@@ -102,6 +105,7 @@ export default function TestTab() {
         tokens: data.usage ? { input: data.usage.prompt_tokens, output: data.usage.completion_tokens } : undefined,
       });
     } catch (err: any) {
+      console.warn('[BridgeTest] send message failed:', err);
       setMsgResult({ ok: false, latency: Date.now() - t0, error: err.message });
     } finally {
       setMsgLoading(false);
@@ -113,7 +117,8 @@ export default function TestTab() {
     setPingResult(null);
     const t0 = Date.now();
     try {
-      const res = await fetch(`${BRIDGE_URL}/v1/privacy/status`);
+      const res = await fetch(`${BRIDGE_URL}/v1/privacy/status`, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const latency = Date.now() - t0;
       const priv = data.privacy;
@@ -123,6 +128,7 @@ export default function TestTab() {
         status: priv ? `Presidio ${priv.enabled ? 'aktiv' : 'inaktiv'} (${priv.language}) · ${priv.supported_entities?.length ?? 0} Entities` : JSON.stringify(data).slice(0, 120),
       });
     } catch (err: any) {
+      console.warn('[BridgeTest] privacy check failed:', err);
       setPingResult({ ok: false, latency: Date.now() - t0, error: err.message });
     } finally {
       setPingLoading(false);
@@ -134,7 +140,8 @@ export default function TestTab() {
     setPingResult(null);
     const t0 = Date.now();
     try {
-      const res = await fetch(`${BRIDGE_URL}/lb-status`);
+      const res = await fetch(`${BRIDGE_URL}/lb-status`, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const latency = Date.now() - t0;
       setPingResult({
@@ -143,6 +150,7 @@ export default function TestTab() {
         status: `${data.workers} Workers · ${data.strategy} · Failover: ${data.failover} · Paused: ${data.paused?.length ?? 0}`,
       });
     } catch (err: any) {
+      console.warn('[BridgeTest] lb-status check failed:', err);
       setPingResult({ ok: false, latency: Date.now() - t0, error: err.message });
     } finally {
       setPingLoading(false);

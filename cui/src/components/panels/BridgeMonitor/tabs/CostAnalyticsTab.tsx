@@ -28,14 +28,16 @@ export default function CostAnalyticsTab() {
   const [error, setError] = useState('');
 
   const fetchData = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/bridge/metrics/cost');
+      const res = await fetch('/api/bridge/metrics/cost', { signal: AbortSignal.timeout(8000) });
       if (!res.ok) throw new Error(await res.text());
       const result = await res.json();
       setData(result);
     } catch (err: any) {
+      console.warn('[BridgeCost] fetch cost data failed:', err);
       setError(err.message);
     } finally {
       setLoading(false);

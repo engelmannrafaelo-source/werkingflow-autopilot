@@ -50,13 +50,15 @@ export default function RepositoriesTab() {
   };
 
   const fetchRepos = async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     try {
-      const res = await fetch('/api/repo-dashboard/repositories');
+      const res = await fetch('/api/repo-dashboard/repositories', { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setRepos(data.repos);
     } catch (err) {
-      console.error('[RepositoriesTab] Fetch error:', err);
+      console.warn('[RepoTab] fetch repositories failed:', err);
     } finally {
       setLoading(false);
     }

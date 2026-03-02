@@ -107,6 +107,7 @@ export default function NativeChat({ accountId, proxyPort }: NativeChatProps) {
         }
       }
 
+      if ((window as any).__cuiServerAlive === false) return;
       const host = window.location.hostname || 'localhost';
       const response = await fetch(`http://${host}:${proxyPort}/api/chat/completions`, {
         method: 'POST',
@@ -128,10 +129,11 @@ export default function NativeChat({ accountId, proxyPort }: NativeChatProps) {
             }
           ],
           max_tokens: 4096
-        })
+        }),
+        signal: AbortSignal.timeout(15000),
       });
 
-      if (!response.ok) throw new Error('Failed to send message');
+      if (!response.ok) throw new Error(`[NativeChat] send failed: HTTP ${response.status}`);
 
       const data = await response.json();
       const assistantMessage: Message = {
@@ -143,7 +145,7 @@ export default function NativeChat({ accountId, proxyPort }: NativeChatProps) {
 
       setMessages(prev => [...prev, assistantMessage]);
     } catch (error) {
-      console.error('Error sending message:', error);
+      console.warn('[NativeChat] send message error:', error);
       // Add error message
       setMessages(prev => [...prev, {
         id: (Date.now() + 1).toString(),

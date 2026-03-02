@@ -59,20 +59,23 @@ export default function InfrastructurePanel() {
   }, []);
 
   async function fetchStatus() {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
-      const res = await fetch(`${API}/infrastructure/status`);
+      const res = await fetch(`${API}/infrastructure/status`, { signal: AbortSignal.timeout(8000) });
       if (!res.ok) throw new Error(`Watchdog unavailable (${res.status})`);
       const data = await res.json();
       setStatus(data);
       setError(null);
       setLoading(false);
     } catch (err: any) {
+      console.warn('[Infrastructure] fetch status:', err);
       setError(err.message);
       setLoading(false);
     }
   }
 
   async function handleRestart(appId: string, portType: 'user' | 'test') {
+    if ((window as any).__cuiServerAlive === false) return;
     const key = `${appId}-${portType}`;
     setRestarting(prev => new Set(prev).add(key));
 
@@ -81,7 +84,7 @@ export default function InfrastructurePanel() {
         ? `${API}/infrastructure/app/${appId}/restart`
         : `${API}/infrastructure/app/${appId}/test/restart`;
 
-      const res = await fetch(endpoint, { method: 'POST' });
+      const res = await fetch(endpoint, { method: 'POST', signal: AbortSignal.timeout(15000) });
       if (!res.ok) throw new Error(`Restart failed (${res.status})`);
 
       // Keep restarting indicator for 3s
@@ -96,7 +99,7 @@ export default function InfrastructurePanel() {
       // Force immediate status refresh
       setTimeout(fetchStatus, 1000);
     } catch (err: any) {
-      console.error('Restart failed:', err);
+      console.warn('[Infrastructure] restart:', err);
       setRestarting(prev => {
         const next = new Set(prev);
         next.delete(key);

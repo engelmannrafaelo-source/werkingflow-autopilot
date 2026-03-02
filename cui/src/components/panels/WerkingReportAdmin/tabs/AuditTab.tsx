@@ -43,6 +43,7 @@ export default function AuditTab({ envMode }: { envMode?: string }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const fetchLogs = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {
@@ -54,12 +55,13 @@ export default function AuditTab({ envMode }: { envMode?: string }) {
       params.set('limit', String(limit));
       params.set('offset', String((page - 1) * limit));
 
-      const res = await fetch(`/api/admin/wr/audit?${params}`);
+      const res = await fetch(`/api/admin/wr/audit?${params}`, { signal: AbortSignal.timeout(8000) });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setLogs(data.logs || data.entries || data || []);
       setTotal(data.total || 0);
     } catch (err: any) {
+      console.warn('[WRAudit] fetchLogs:', err);
       setError(err.message);
       setLogs([]);
       setTotal(0);

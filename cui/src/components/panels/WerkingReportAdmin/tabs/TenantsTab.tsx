@@ -40,6 +40,7 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
   const [creating, setCreating] = useState(false);
 
   const fetchTenants = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {
@@ -48,12 +49,13 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
       if (planFilter) params.set('plan', planFilter);
       params.set('offset', offset.toString());
       params.set('limit', limit.toString());
-      const res = await fetch(`/api/admin/wr/tenants?${params}`);
+      const res = await fetch(`/api/admin/wr/tenants?${params}`, { signal: AbortSignal.timeout(8000) });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setTenants(data.tenants || data || []);
       setTotal(data.total || 0);
     } catch (err: any) {
+      console.warn('[WRTenants] fetchTenants:', err);
       setError(err.message);
     } finally {
       setLoading(false);
@@ -64,6 +66,7 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
 
   const handleCreate = async () => {
     if (!newName.trim()) return;
+    if ((window as any).__cuiServerAlive === false) return;
     setCreating(true);
     setError('');
     try {
@@ -71,6 +74,7 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: newName, slug: newSlug || newName.toLowerCase().replace(/[^a-z0-9]/g, '-'), planId: newPlan }),
+        signal: AbortSignal.timeout(15000),
       });
       if (!res.ok) throw new Error(await res.text());
       setNewName('');
@@ -79,6 +83,7 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
       setView('list');
       await fetchTenants();
     } catch (err: any) {
+      console.warn('[WRTenants] handleCreate:', err);
       setError(err.message);
     } finally {
       setCreating(false);
@@ -87,12 +92,14 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
 
   const handleDelete = async (id: string, name: string) => {
     if (!confirm(`Delete tenant "${name}"? This cannot be undone.`)) return;
+    if ((window as any).__cuiServerAlive === false) return;
     setProcessingId(id);
     try {
-      const res = await fetch(`/api/admin/wr/tenants/${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/admin/wr/tenants/${id}`, { method: 'DELETE', signal: AbortSignal.timeout(15000) });
       if (!res.ok) throw new Error(await res.text());
       await fetchTenants();
     } catch (err: any) {
+      console.warn('[WRTenants] handleDelete:', err);
       setError(err.message);
     } finally {
       setProcessingId(null);

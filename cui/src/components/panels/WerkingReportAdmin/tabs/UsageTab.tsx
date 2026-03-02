@@ -47,13 +47,14 @@ export default function UsageTab({ envMode }: { envMode?: string }) {
   const [view, setView] = useState<ViewMode>('current');
 
   const fetchAll = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {
       const [statsRes, trendRes, activityRes] = await Promise.all([
-        fetch('/api/admin/wr/usage/stats?period=month'),
-        fetch('/api/admin/wr/usage/trend'),
-        fetch('/api/admin/wr/usage/activity'),
+        fetch('/api/admin/wr/usage/stats?period=month', { signal: AbortSignal.timeout(8000) }),
+        fetch('/api/admin/wr/usage/trend', { signal: AbortSignal.timeout(8000) }),
+        fetch('/api/admin/wr/usage/activity', { signal: AbortSignal.timeout(8000) }),
       ]);
       if (!statsRes.ok) throw new Error(await statsRes.text());
       const [statsData, trendData, activityData] = await Promise.all([
@@ -65,6 +66,7 @@ export default function UsageTab({ envMode }: { envMode?: string }) {
       if (trendData) setTrend(trendData);
       if (activityData) setActivity(activityData);
     } catch (err: any) {
+      console.warn('[WRUsageTab] fetchAll:', err);
       setError(err.message);
     } finally {
       setLoading(false);
@@ -239,12 +241,16 @@ export default function UsageTab({ envMode }: { envMode?: string }) {
                     <div>
                       <button
                         onClick={async () => {
-                          const res = await fetch(`/api/admin/wr/usage/activity/users?tenantId=${t.tenantId}`);
-                          if (res.ok) {
+                          if ((window as any).__cuiServerAlive === false) return;
+                          try {
+                            const res = await fetch(`/api/admin/wr/usage/activity/users?tenantId=${t.tenantId}`, { signal: AbortSignal.timeout(8000) });
+                            if (!res.ok) throw new Error(`HTTP ${res.status}`);
                             const data = await res.json();
                             alert(`Users (${data.totalUsers}):\n\n` + data.users.map((u: any) =>
                               `${u.userEmail}: ${u.gutachtenCount} Gutachten`
                             ).join('\n'));
+                          } catch (err) {
+                            console.warn('[WRUsageTab] viewUsers:', err);
                           }
                         }}
                         style={{

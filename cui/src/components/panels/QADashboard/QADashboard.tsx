@@ -19,14 +19,14 @@ export default function QADashboard() {
   // Lightweight poll für Running Tests Badge
   useEffect(() => {
     async function fetchRunningCount() {
+      if ((window as any).__cuiServerAlive === false) return;
       try {
-        const res = await fetch('/api/qa/runs');
-        if (res.ok) {
-          const data = await res.json();
-          setRunningCount(data.running?.length ?? 0);
-        }
+        const res = await fetch('/api/qa/runs', { signal: AbortSignal.timeout(8000) });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        setRunningCount(data.running?.length ?? 0);
       } catch (err) {
-        console.error('[QA] Failed to fetch running count:', err);
+        console.warn('[QADashboard] fetch running count failed:', err);
       }
     }
     fetchRunningCount();

@@ -22,15 +22,11 @@ export default function PipelineTab({ envMode }: { envMode?: string }) {
   const [envConfigs, setEnvConfigs] = useState<EnvironmentConfig[]>([]);
 
   const checkEnvironment = async (name: string, url: string, branch?: string): Promise<EnvironmentHealth> => {
+    if ((window as any).__cuiServerAlive === false) return { name, url, status: 'down', branch };
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
-
       const res = await fetch(`${url}/api/version`, {
-        signal: controller.signal,
+        signal: AbortSignal.timeout(5000),
       }).catch(() => null);
-
-      clearTimeout(timeoutId);
 
       if (!res || !res.ok) {
         return { name, url, status: 'down', branch };
@@ -46,21 +42,23 @@ export default function PipelineTab({ envMode }: { envMode?: string }) {
         version: data.version,
       };
     } catch (err) {
+      console.warn('[WRPipeline] checkEnvironment:', name, err);
       return { name, url, status: 'down', branch };
     }
   };
 
   // Fetch environment configurations from backend
   const fetchEnvConfigs = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
-      const res = await fetch('/api/admin/wr/environments');
+      const res = await fetch('/api/admin/wr/environments', { signal: AbortSignal.timeout(8000) });
       if (!res.ok) {
         throw new Error('Failed to fetch environment configs');
       }
       const data = await res.json();
       setEnvConfigs(data.environments || []);
     } catch (err: any) {
-      console.error('Error fetching env configs:', err);
+      console.warn('[WRPipeline] fetchEnvConfigs:', err);
       // Fallback to hardcoded defaults
       setEnvConfigs([
         { name: 'Local', url: 'http://localhost:3008', branch: 'develop' },
@@ -71,6 +69,7 @@ export default function PipelineTab({ envMode }: { envMode?: string }) {
   }, []);
 
   const fetchAll = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
 
@@ -86,6 +85,7 @@ export default function PipelineTab({ envMode }: { envMode?: string }) {
 
       setEnvironments(checks);
     } catch (err: any) {
+      console.warn('[WRPipeline] fetchAll:', err);
       setError(err.message);
     } finally {
       setLoading(false);

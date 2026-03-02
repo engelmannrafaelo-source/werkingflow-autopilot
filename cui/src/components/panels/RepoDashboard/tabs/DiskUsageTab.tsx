@@ -52,13 +52,15 @@ export default function DiskUsageTab() {
   };
 
   const fetchStructure = async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     try {
-      const res = await fetch('/api/repo-dashboard/structure');
+      const res = await fetch('/api/repo-dashboard/structure', { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setStructure(data.structure);
     } catch (err) {
-      console.error('[DiskUsageTab] Fetch error:', err);
+      console.warn('[DiskUsageTab] fetch structure failed:', err);
     } finally {
       setLoading(false);
     }

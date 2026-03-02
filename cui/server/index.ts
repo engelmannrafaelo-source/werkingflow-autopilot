@@ -1620,6 +1620,7 @@ function getProxyPort(accountId: string): number | null {
 
 // 1. List all conversations across all accounts
 app.get('/api/mission/conversations', async (req, res) => {
+  try {
   const filterProject = req.query.project as string | undefined;
   const results: any[] = [];
 
@@ -1698,18 +1699,25 @@ app.get('/api/mission/conversations', async (req, res) => {
   }
 
   res.json({ conversations: deduped, total: deduped.length });
+  } catch (err: any) {
+    console.warn('[Server] GET /api/mission/conversations error:', err);
+    res.status(500).json({ error: 'Internal error' });
+  }
 });
 
 // 2. Get conversation detail (last N messages)
 app.get('/api/mission/conversation/:accountId/:sessionId', async (req, res) => {
+  try {
   const port = getProxyPort(req.params.accountId);
   if (!port) { res.status(400).json({ error: 'unknown account' }); return; }
 
   const tail = parseInt(req.query.tail as string) || 10;
-  let [convResp, permResp] = await Promise.all([
+  let [convResult, permResult] = await Promise.allSettled([
     cuiFetch(port, `/api/conversations/${req.params.sessionId}`),
     cuiFetch(port, `/api/permissions?streamingId=&status=pending`),
   ]);
+  let convResp = convResult.status === 'fulfilled' ? convResult.value : { data: null, ok: false, status: 0, error: 'conversation fetch failed' };
+  let permResp = permResult.status === 'fulfilled' ? permResult.value : { data: { permissions: [] }, ok: true, status: 200 };
 
   // Auto-fix corrupted JSONL on load failure (queue-operation as first line, etc.)
   if (!convResp.ok) {
@@ -1805,10 +1813,15 @@ app.get('/api/mission/conversation/:accountId/:sessionId', async (req, res) => {
     rateLimited,
     rateLimitText: rateLimited ? rateLimitText : undefined,
   });
+  } catch (err: any) {
+    console.warn('[Server] GET /api/mission/conversation detail error:', err);
+    res.status(500).json({ error: 'Internal error' });
+  }
 });
 
 // 3. Send message to existing conversation
 app.post('/api/mission/send', async (req, res) => {
+  try {
   const { accountId, sessionId, message, workDir, useLocal } = req.body;
   if (!accountId || !sessionId || !message) {
     res.status(400).json({ error: 'accountId, sessionId, message required' });
@@ -1882,20 +1895,29 @@ app.post('/api/mission/send', async (req, res) => {
   saveAssignment(sendResult.sessionId || sessionId, accountId);
 
   res.json({ ok: true, streamingId: sendResult.streamingId, sessionId: sendResult.sessionId || sessionId, resumeFailed });
+  } catch (err: any) {
+    console.warn('[Server] POST /api/mission/send error:', err);
+    res.status(500).json({ error: 'Internal error' });
+  }
 });
 
 // 4. Approve/deny permission
 app.post('/api/mission/permissions/:accountId/:permissionId', async (req, res) => {
-  const port = getProxyPort(req.params.accountId);
-  if (!port) { res.status(400).json({ error: 'unknown account' }); return; }
+  try {
+    const port = getProxyPort(req.params.accountId);
+    if (!port) { res.status(400).json({ error: 'unknown account' }); return; }
 
-  const resp = await cuiFetch(port, `/api/permissions/${req.params.permissionId}/decision`, {
-    method: 'POST',
-    body: JSON.stringify({ action: req.body.action || 'approve' }),
-  });
+    const resp = await cuiFetch(port, `/api/permissions/${req.params.permissionId}/decision`, {
+      method: 'POST',
+      body: JSON.stringify({ action: req.body.action || 'approve' }),
+    });
 
-  if (!resp.ok) { res.status(502).json({ error: resp.error || 'permission decision failed' }); return; }
-  res.json(resp.data);
+    if (!resp.ok) { res.status(502).json({ error: resp.error || 'permission decision failed' }); return; }
+    res.json(resp.data);
+  } catch (err: any) {
+    console.warn('[Server] POST /api/mission/permissions error:', err);
+    res.status(500).json({ error: 'Internal error' });
+  }
 });
 
 // 4b. Get all session attention states (for batch UI updates)
@@ -1905,9 +1927,14 @@ app.get('/api/mission/states', (_req, res) => {
 
 // 5. Set conversation name (Betreff) — saved locally (CUI API ignores custom_name)
 app.post('/api/mission/conversation/:accountId/:sessionId/name', async (req, res) => {
-  const name = req.body.custom_name || '';
-  saveTitle(req.params.sessionId, name);
-  res.json({ ok: true, sessionId: req.params.sessionId, custom_name: name });
+  try {
+    const name = req.body.custom_name || '';
+    saveTitle(req.params.sessionId, name);
+    res.json({ ok: true, sessionId: req.params.sessionId, custom_name: name });
+  } catch (err: any) {
+    console.warn('[Server] POST /api/mission/conversation/name error:', err);
+    res.status(500).json({ error: 'Internal error' });
+  }
 });
 
 // 5b. Assign conversation to account (called when chat is opened in a CUI panel)
@@ -2127,6 +2154,7 @@ app.post('/api/mission/activate', (req, res) => {
 
 // 6. Start new conversation with subject
 app.post('/api/mission/start', async (req, res) => {
+  try {
   const { accountId, workDir, subject, message, useLocal } = req.body;
   if (!accountId || !message) {
     res.status(400).json({ error: 'accountId, message required' });
@@ -2180,6 +2208,10 @@ app.post('/api/mission/start', async (req, res) => {
   }, 3000);
 
   res.json({ ok: true, sessionId: startData.sessionId, streamingId: startData.streamingId });
+  } catch (err: any) {
+    console.warn('[Server] POST /api/mission/start error:', err);
+    res.status(500).json({ error: 'Internal error' });
+  }
 });
 
 // 6b. Input log: retrieve all logged user inputs
@@ -2196,6 +2228,7 @@ app.get('/api/mission/input-log', (_req, res) => {
 const ACCOUNT_PM2_MAP: Record<string, string> = { rafael: 'cui-1', engelmann: 'cui-2', office: 'cui-3' };
 
 app.post('/api/mission/conversation/:accountId/:sessionId/stop', async (req, res) => {
+  try {
   const { accountId, sessionId } = req.params;
   const port = getProxyPort(accountId);
   if (!port) { res.status(400).json({ error: 'unknown account' }); return; }
@@ -2259,10 +2292,15 @@ app.post('/api/mission/conversation/:accountId/:sessionId/stop', async (req, res
   broadcast({ type: 'cui-state', cuiId: accountId, state: 'done' });
 
   res.json({ stopped: true, apiStopOk, streamingId: streamingId || null, childrenKilled: killed });
+  } catch (err: any) {
+    console.warn('[Server] POST /api/mission/stop error:', err);
+    res.status(500).json({ error: 'Internal error' });
+  }
 });
 
 // 8. Auto-title: set conversation name from first user message
 app.post('/api/mission/auto-titles', async (_req, res) => {
+  try {
   let updated = 0;
   const errors: string[] = [];
 
@@ -2313,6 +2351,10 @@ app.post('/api/mission/auto-titles', async (_req, res) => {
   }
 
   res.json({ ok: true, updated, total: allConvs.length, errors });
+  } catch (err: any) {
+    console.warn('[Server] POST /api/mission/auto-titles error:', err);
+    res.status(500).json({ error: 'Internal error' });
+  }
 });
 
 // 9. Commander context: gather cross-project state
@@ -2356,11 +2398,14 @@ app.get('/api/mission/context', async (_req, res) => {
     for (const p of projects) {
       if (!p.workDir) continue;
       try {
-        const [statusResult, logResult] = await Promise.all([
+        const [statusResult, logResult] = await Promise.allSettled([
           execAsync(`cd ${p.workDir} && git status --short 2>/dev/null || echo '(kein Git repo)'`),
           execAsync(`cd ${p.workDir} && git log --oneline -5 2>/dev/null || echo '(keine commits)'`),
         ]);
-        gitStatus[p.id] = { status: statusResult.stdout.trim(), log: logResult.stdout.trim() };
+        gitStatus[p.id] = {
+          status: statusResult.status === 'fulfilled' ? statusResult.value.stdout.trim() : '(error)',
+          log: logResult.status === 'fulfilled' ? logResult.value.stdout.trim() : '',
+        };
       } catch {
         gitStatus[p.id] = { status: '(error)', log: '' };
       }
@@ -2378,7 +2423,7 @@ const CTX_CACHE_TTL = 60_000;
 
 async function getCommanderContext(): Promise<any> {
   if (_ctxCache && Date.now() - _ctxCache.ts < CTX_CACHE_TTL) return _ctxCache.data;
-  const resp = await fetch(`http://localhost:${PORT}/api/mission/context`);
+  const resp = await fetch(`http://localhost:${PORT}/api/mission/context`, { signal: AbortSignal.timeout(15000) });
   const data = await resp.json();
   _ctxCache = { data, ts: Date.now() };
   return data;
@@ -2457,6 +2502,7 @@ Antworte auf Deutsch, präzise und kompakt.`;
         ],
         max_tokens: 4096,
       }),
+      signal: AbortSignal.timeout(60000),
     });
 
     if (!bridgeResp.ok) {
@@ -2474,6 +2520,7 @@ Antworte auf Deutsch, präzise und kompakt.`;
 
 // 11. Commander dispatch: start conversations in workspaces
 app.post('/api/mission/commander/dispatch', async (req, res) => {
+  try {
   const { actions } = req.body;
   if (!actions || !Array.isArray(actions)) {
     res.status(400).json({ error: 'actions array required' });
@@ -2492,6 +2539,7 @@ app.post('/api/mission/commander/dispatch', async (req, res) => {
           subject: action.subject || '',
           message: action.message,
         }),
+        signal: AbortSignal.timeout(65000),
       });
       const result = await startResp.json();
       results.push({ ...action, ok: true, sessionId: result.sessionId });
@@ -2501,6 +2549,10 @@ app.post('/api/mission/commander/dispatch', async (req, res) => {
   }
 
   res.json({ ok: true, results });
+  } catch (err: any) {
+    console.warn('[Server] POST /api/mission/commander/dispatch error:', err);
+    res.status(500).json({ error: 'Internal error' });
+  }
 });
 
 // --- Projects API ---
@@ -2606,7 +2658,7 @@ app.get('/api/shared-notes', (_req, res) => {
         md += `\n*Refresh: aggregate-credentials + generate-shared-notes*\n`;
         res.json({ content: md });
         return;
-      } catch {}
+      } catch (err) { console.warn('[Server] shared-notes generation error:', err); }
     }
     res.json({ content: '' });
     return;
@@ -3154,6 +3206,7 @@ Antworte im Stil dieser Persona. Beziehe dich auf deine Worklist und aktuelle Au
         temperature: 0.7,
         extra_body: { session_id: sessionId },
       }),
+      signal: AbortSignal.timeout(60000),
     });
 
     if (!bridgeResp.ok) {
@@ -3190,7 +3243,7 @@ app.get('/api/team/chat/:personaId/history', async (req, res) => {
 
     const response = await fetch(
       `${BRIDGE_URL}/v1/sessions/${sessionId}`,
-      { headers: { Authorization: `Bearer ${BRIDGE_KEY}` }}
+      { headers: { Authorization: `Bearer ${BRIDGE_KEY}` }, signal: AbortSignal.timeout(10000) }
     );
 
     if (!response.ok) {
@@ -3372,6 +3425,7 @@ async function syncthingFetch(path: string, method = 'GET'): Promise<any> {
   const res = await fetch(`${SYNCTHING_URL}${path}`, {
     method,
     headers: { 'X-API-Key': SYNCTHING_API_KEY },
+    signal: AbortSignal.timeout(8000),
   });
   if (!res.ok) throw new Error(`Syncthing API ${path}: ${res.status} ${res.statusText}`);
   const text = await res.text();
@@ -3381,12 +3435,17 @@ async function syncthingFetch(path: string, method = 'GET'): Promise<any> {
 // GET /api/syncthing/status — paused state, last sync time, connection info
 app.get('/api/syncthing/status', async (_req, res) => {
   try {
-    const [system, connections, folderStats, devices] = await Promise.all([
+    const [systemR, connectionsR, folderStatsR, devicesR] = await Promise.allSettled([
       syncthingFetch('/rest/system/status'),
       syncthingFetch('/rest/system/connections'),
       syncthingFetch('/rest/stats/folder'),
       syncthingFetch('/rest/config/devices'),
     ]);
+    if (systemR.status === 'rejected') throw systemR.reason;
+    const system = systemR.value;
+    const connections = connectionsR.status === 'fulfilled' ? connectionsR.value : { connections: {} };
+    const folderStats = folderStatsR.status === 'fulfilled' ? folderStatsR.value : {};
+    const devices = devicesR.status === 'fulfilled' ? devicesR.value : [];
 
     // Find last synced file across all folders
     let lastSyncAt = '';
@@ -3434,6 +3493,7 @@ app.post('/api/syncthing/pause', async (_req, res) => {
           method: 'PATCH',
           headers: { 'X-API-Key': SYNCTHING_API_KEY, 'Content-Type': 'application/json' },
           body: JSON.stringify({ paused: true }),
+          signal: AbortSignal.timeout(8000),
         });
       }
     }
@@ -3455,6 +3515,7 @@ app.post('/api/syncthing/resume', async (_req, res) => {
           method: 'PATCH',
           headers: { 'X-API-Key': SYNCTHING_API_KEY, 'Content-Type': 'application/json' },
           body: JSON.stringify({ paused: false }),
+          signal: AbortSignal.timeout(8000),
         });
       }
     }
@@ -3548,7 +3609,7 @@ function loadWrEnvMode(): WrEnvMode {
         return data.mode;
       }
     }
-  } catch {}
+  } catch (err) { console.warn('[Server] loadWrEnvMode read error:', err); }
 
   // 2. Auto-detect based on NODE_ENV
   if (process.env.NODE_ENV === 'development') {
@@ -3560,14 +3621,14 @@ function loadWrEnvMode(): WrEnvMode {
         console.log('[WR Env] Auto-detected local WR server on port 3008');
         return 'local';
       }
-    } catch {}
+    } catch (err) { console.warn('[Server] WR port detection error:', err); }
   }
 
   // 3. Default: production (Vercel)
   return 'production';
 }
 function saveWrEnvMode(mode: WrEnvMode) {
-  try { writeFileSync(WR_ENV_MODE_FILE, JSON.stringify({ mode })); } catch {}
+  try { writeFileSync(WR_ENV_MODE_FILE, JSON.stringify({ mode })); } catch (err) { console.warn('[Server] saveWrEnvMode write error:', err); }
 }
 let wrEnvMode: WrEnvMode = loadWrEnvMode();
 function wrBase(): string {
@@ -3587,7 +3648,7 @@ function wrAdminHeaders(): Record<string, string> {
  * Returns JSON always — never forwards raw HTML to the client.
  */
 async function wrProxy(url: string, init?: RequestInit): Promise<{ status: number; body: unknown }> {
-  const response = await fetch(url, { ...init, headers: { ...wrAdminHeaders(), ...init?.headers } });
+  const response = await fetch(url, { ...init, headers: { ...wrAdminHeaders(), ...init?.headers }, signal: init?.signal ?? AbortSignal.timeout(15000) });
   const contentType = response.headers.get('content-type') || '';
   if (contentType.includes('application/json')) {
     return { status: response.status, body: await response.json() };
@@ -3702,7 +3763,7 @@ app.get('/api/admin/wr/billing/invoices/:id/pdf', async (req, res) => {
     if (!tenantId) return res.status(400).json({ error: 'tenantId required' });
     const response = await fetch(
       `${wrBase()}/api/admin/billing/invoices/${req.params.id}/pdf?tenantId=${tenantId}`,
-      { headers: wrAdminHeaders() }
+      { headers: wrAdminHeaders(), signal: AbortSignal.timeout(30000) }
     );
     if (!response.ok) {
       const text = await response.text();
@@ -3883,6 +3944,7 @@ app.post('/api/admin/wr/users/create', async (req, res) => {
         email_confirm: true,
         user_metadata: { name: name || '', role: role || 'user' },
       }),
+      signal: AbortSignal.timeout(15000),
     });
     const data = await response.json();
     res.status(response.status).json(data);
@@ -3907,6 +3969,7 @@ app.delete('/api/admin/wr/users/:id', async (req, res) => {
         'apikey': SERVICE_ROLE_KEY,
         'Authorization': `Bearer ${SERVICE_ROLE_KEY}`,
       },
+      signal: AbortSignal.timeout(15000),
     });
     if (response.status === 204) {
       res.json({ ok: true });
@@ -3957,6 +4020,7 @@ app.get('/api/ops/deployments', async (_req, res) => {
         const url = `https://api.vercel.com/v6/deployments?projectId=${app.projectSlug}&limit=1&target=production`;
         const response = await fetch(url, {
           headers: { Authorization: `Bearer ${VERCEL_TOKEN}` },
+          signal: AbortSignal.timeout(10000),
         });
         if (!response.ok) {
           return { name: app.name, state: 'ERROR', error: `HTTP ${response.status}` };
@@ -4065,7 +4129,7 @@ app.post('/api/screenshot/:panel', (req, res) => {
   // Keep only latest per panel — delete old one
   const prev = panelScreenshots.get(panel);
   if (prev?.filePath && existsSync(prev.filePath)) {
-    try { unlinkSync(prev.filePath); } catch {}
+    try { unlinkSync(prev.filePath); } catch (err) { console.warn('[Server] screenshot cleanup error:', err); }
   }
   writeFileSync(filePath, Buffer.from(base64, 'base64'));
   const meta: PanelScreenshot = { panel, capturedAt: new Date().toISOString(), width: width ?? 0, height: height ?? 0, filePath };
@@ -4389,11 +4453,13 @@ function restartCuiServer() {
   // spawn already imported at top of file (ESM — require() not available)
   const restartScript = join(WORKSPACE_ROOT, 'restart-server.sh');
 
-  spawn('bash', [restartScript], {
+  const restartChild = spawn('bash', [restartScript], {
     detached: true,
     stdio: 'ignore',
     env: { ...process.env }
-  }).unref();
+  });
+  restartChild.on('error', (err) => console.warn('[Server] restart script spawn error:', err));
+  restartChild.unref();
 
   console.log('[Restart] Restart script launched, exiting in 500ms...');
 
@@ -4422,6 +4488,7 @@ app.post('/api/rebuild', (_req, res) => {
   res.json({ status: 'rebuilding', message: 'cui-rebuild gestartet (Server startet gleich neu)...' });
   setTimeout(() => {
     const child = spawn('systemd-run', ['--scope', '--', 'cui-rebuild'], { detached: true, stdio: ['ignore', 'ignore', 'ignore'] });
+    child.on('error', (err) => console.warn('[Server] cui-rebuild spawn error:', err));
     child.unref();
     console.log('[Rebuild] cui-rebuild spawned via systemd-run, PID', child.pid);
   }, 500);
@@ -4521,6 +4588,7 @@ app.post('/api/start-all-panels', (_req, res) => {
   try {
     const startScript = join(WORKSPACE_ROOT, 'start-all-panels.sh');
     const child = spawn('bash', [startScript], { detached: true, stdio: 'ignore', env: process.env });
+    child.on('error', (err) => console.warn('[Server] start-all-panels spawn error:', err));
     child.unref();
     console.log('[Start-Panels] Script launched');
     res.json({ ok: true, message: 'Starting all missing panels', note: 'Check status in 10-30s' });
@@ -4545,6 +4613,7 @@ app.post('/api/rebuild-frontend', async (_req, res) => {
       detached: true,
       stdio: ['ignore', 'ignore', 'ignore'],
     });
+    child.on('error', (err) => console.warn('[Server] rebuild-frontend spawn error:', err));
     child.unref();
     console.log('[Rebuild-Frontend] cui-rebuild spawned via systemd-run, PID', child.pid);
   }, 500);
@@ -4557,10 +4626,6 @@ app.use('/api/team/knowledge', knowledgeRegistryRouter);
 // --- QA Dashboard ---
 import qaRoutes from './routes/qa-routes.js';
 app.use('/api/qa', qaRoutes);
-
-// --- Repo Dashboard ---
-import repoDashboardRoutes from './routes/repo-dashboard-routes.js';
-app.use('/api/repo-dashboard', repoDashboardRoutes);
 
 // --- Agent Monitoring & Control ---
 import { spawn } from 'child_process';
@@ -4584,6 +4649,7 @@ async function agentReadJsonlLastN(filePath: string, n: number): Promise<any[]> 
 // Server runs on dev server — agents are local, no proxy needed.
 
 app.get('/api/agents/status', async (_req, res) => {
+  try {
   const agents = await Promise.all(Object.entries(AGENT_REGISTRY).map(async ([id, info]) => {
     const memory = await agentReadJsonlLastN(`${AGENTS_DIR}/memory/${info.persona_id}.jsonl`, 1);
     const last = memory[0] ?? null;
@@ -4600,13 +4666,22 @@ app.get('/api/agents/status', async (_req, res) => {
     return { id, persona_id: info.persona_id, persona_name: info.persona_name, schedule: info.schedule, status, last_run: last?.timestamp ?? null, last_actions: last?.actions ?? 0, last_action_types: last?.action_types ?? [], last_trigger: last?.trigger ?? null, next_run: nextRun.toISOString(), has_pending_approvals: approvalsCount > 0, approvals_count: approvalsCount, inbox_count: inboxCount };
   }));
   res.json({ agents });
+  } catch (err: any) {
+    console.warn('[Server] GET /api/agents/status error:', err);
+    res.status(500).json({ error: 'Internal error' });
+  }
 });
 
 app.get('/api/agents/memory/:personaId', async (req, res) => {
+  try {
   const safe = req.params.personaId.replace(/[^a-z0-9-]/g, '');
   const n = Math.min(parseInt(String(req.query.n ?? '10'), 10), 50);
   const entries = await agentReadJsonlLastN(`${AGENTS_DIR}/memory/${safe}.jsonl`, n);
   res.json({ persona_id: safe, entries: entries.reverse() });
+  } catch (err: any) {
+    console.warn('[Server] GET /api/agents/memory error:', err);
+    res.status(500).json({ error: 'Internal error' });
+  }
 });
 
 app.get('/api/agents/inbox/:personaId', async (req, res) => {
@@ -4698,6 +4773,7 @@ app.post('/api/agents/trigger/:id', (req, res) => {
   runningAgents.add(id);
   console.log(`[AgentTrigger] Starting: ${id}`);
   const proc = spawn('python3', ['scheduler.py', '--once', id], { cwd: AGENTS_DIR, detached: false, stdio: ['ignore', 'pipe', 'pipe'] });
+  proc.on('error', (err) => { runningAgents.delete(id); console.warn(`[Server] agent trigger spawn error for ${id}:`, err); });
   proc.stdout?.on('data', (d: Buffer) => console.log(`[Agent:${id}]`, d.toString().trim()));
   proc.stderr?.on('data', (d: Buffer) => console.error(`[Agent:${id}]`, d.toString().trim()));
   proc.on('close', (code) => { runningAgents.delete(id); console.log(`[Agent:${id}] done (exit ${code})`); });
@@ -4747,6 +4823,7 @@ const CLAUDE_AGENT_REGISTRY: Record<string, { name: string; schedule: string; ta
 };
 
 app.get('/api/agents/claude/status', async (_req, res) => {
+  try {
   const readSafe = async (p: string, fb = '') => { try { return await fsAgentPromises.readFile(p, 'utf-8'); } catch { return fb; } };
   const agents = await Promise.all(Object.entries(CLAUDE_AGENT_REGISTRY).map(async ([id, info]) => {
     let last_run: string | null = null; let last_outcome = '';
@@ -4782,9 +4859,14 @@ app.get('/api/agents/claude/status', async (_req, res) => {
     };
   }));
   res.json({ agents });
+  } catch (err: any) {
+    console.warn('[Server] GET /api/agents/claude/status error:', err);
+    res.status(500).json({ error: 'Internal error' });
+  }
 });
 
 app.post('/api/agents/claude/run', async (req, res) => {
+  try {
   const { persona_id, task, mode, plan_id } = req.body as { persona_id: string; task?: string; mode?: 'plan' | 'execute'; plan_id?: string };
   const runMode = mode ?? 'plan'; // Default: plan first
   if (!CLAUDE_AGENT_REGISTRY[persona_id]) return res.status(404).json({ error: `Unknown persona: ${persona_id}` });
@@ -4854,6 +4936,7 @@ app.post('/api/agents/claude/run', async (req, res) => {
     ? ['-u', 'claude-user', 'claude', '--dangerously-skip-permissions', '--print']
     : ['--dangerously-skip-permissions', '--print'];
   const proc = spawn(cmd, args, { cwd: '/root/projekte/werkingflow', stdio: ['pipe', 'pipe', 'pipe'], env: spawnEnv });
+  proc.on('error', (err) => { runningClaudes.delete(persona_id); console.warn(`[Server] claude agent spawn error for ${persona_id}:`, err); });
   if (!proc.stdin) throw new Error(`Failed to open stdin for ${persona_id}`);
   proc.stdin.write(fullPrompt);
   proc.stdin.end();
@@ -4866,6 +4949,10 @@ app.post('/api/agents/claude/run', async (req, res) => {
   console.log(`[ClaudeAgent] Starting ${persona_id} (${runMode}) → ${logFile}`);
   const planFile = runMode === 'plan' ? `${persona_id}-${Date.now()}.md` : (plan_id ?? null);
   res.json({ ok: true, task_id: taskId, persona_id, log_file: logFile, mode: runMode, plan_file: planFile });
+  } catch (err: any) {
+    console.warn('[Server] POST /api/agents/claude/run error:', err);
+    res.status(500).json({ error: 'Internal error' });
+  }
 });
 
 app.get('/api/agents/claude/log/:taskId', async (req, res) => {
@@ -4874,6 +4961,7 @@ app.get('/api/agents/claude/log/:taskId', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream'); res.setHeader('Cache-Control', 'no-cache'); res.setHeader('Connection', 'keep-alive');
   try { res.write(`data: ${JSON.stringify({ text: await fsAgentPromises.readFile(logFile, 'utf-8'), init: true })}\n\n`); } catch { /**/ }
   const tail = spawn('tail', ['-f', '-n', '0', logFile]);
+  tail.on('error', (err) => console.warn('[Server] tail spawn error:', err));
   tail.stdout?.on('data', (d: Buffer) => res.write(`data: ${JSON.stringify({ text: d.toString() })}\n\n`));
   req.on('close', () => tail.kill());
 });
@@ -5142,7 +5230,7 @@ app.get('/api/agents/recommendations', async (_req, res) => {
           });
         }
       });
-    } catch {}
+    } catch (err) { console.warn('[Server] recommendations business-approvals check error:', err); }
 
     // 2. Check for agents with scheduled runs that are overdue
     try {
@@ -5174,19 +5262,19 @@ app.get('/api/agents/recommendations', async (_req, res) => {
           }
         });
       }
-    } catch {}
+    } catch (err) { console.warn('[Server] recommendations overdue-agents check error:', err); }
 
     // 3. Count idle vs working agents for tips
     let idleCount = 0;
     let workingCount = 0;
     try {
-      const agentStatusRes = await fetch('http://localhost:4005/api/agents/claude/status');
+      const agentStatusRes = await fetch('http://localhost:4005/api/agents/claude/status', { signal: AbortSignal.timeout(5000) });
       if (agentStatusRes.ok) {
         const { agents } = await agentStatusRes.json();
         idleCount = agents.filter((a: any) => a.status === 'idle').length;
         workingCount = agents.filter((a: any) => a.status === 'working').length;
       }
-    } catch {}
+    } catch (err) { console.warn('[Server] recommendations agent-count check error:', err); }
 
     res.json({
       urgent,
@@ -5677,12 +5765,12 @@ app.get("/api/claude-code/stats-v2", async (_req, res) => {
             try {
               const files = readdirSync(join(projectsDir, d));
               for (const f of files) {
-                try { storageBytes += statSync(join(projectsDir, d, f)).size; } catch {}
+                try { storageBytes += statSync(join(projectsDir, d, f)).size; } catch (err) { /* stat error, skip */ }
               }
-            } catch {}
+            } catch (err) { /* dir read error, skip */ }
           }
         }
-      } catch {}
+      } catch (err) { /* storage calc error, skip */ }
 
       accounts.push({
         accountId: acc.id,
@@ -5915,7 +6003,7 @@ app.get('/api/repo-dashboard/repositories', async (_req, res) => {
         let remoteUrl = '';
         try {
           remoteUrl = execSync(`cd ${repoPath} && git config --get remote.origin.url 2>/dev/null || echo ""`, { encoding: 'utf8' }).trim();
-        } catch {}
+        } catch (err) { /* no remote configured, skip */ }
 
         repos.push({
           name: repoName,
@@ -6378,7 +6466,7 @@ const WATCHDOG_BASE = 'http://localhost:9090';
 
 app.get('/api/infrastructure/status', async (_req, res) => {
   try {
-    const response = await fetch(`${WATCHDOG_BASE}/api/status`);
+    const response = await fetch(`${WATCHDOG_BASE}/api/status`, { signal: AbortSignal.timeout(8000) });
     if (!response.ok) {
       throw new Error(`Watchdog returned ${response.status}`);
     }
@@ -6395,6 +6483,7 @@ app.post('/api/infrastructure/app/:id/restart', async (req, res) => {
   try {
     const response = await fetch(`${WATCHDOG_BASE}/api/app/${id}/restart`, {
       method: 'POST',
+      signal: AbortSignal.timeout(15000),
     });
     if (!response.ok) {
       throw new Error(`Watchdog returned ${response.status}`);
@@ -6412,7 +6501,7 @@ app.post('/api/infrastructure/app/:id/test/restart', async (req, res) => {
 
   // Check if app has test_port before attempting restart
   try {
-    const statusResponse = await fetch(`${WATCHDOG_BASE}/api/status`);
+    const statusResponse = await fetch(`${WATCHDOG_BASE}/api/status`, { signal: AbortSignal.timeout(8000) });
     if (statusResponse.ok) {
       const statusData = await statusResponse.json();
       const app = statusData.apps?.[id];
@@ -6431,6 +6520,7 @@ app.post('/api/infrastructure/app/:id/test/restart', async (req, res) => {
   try {
     const response = await fetch(`${WATCHDOG_BASE}/api/app/${id}/test/restart`, {
       method: 'POST',
+      signal: AbortSignal.timeout(15000),
     });
     if (!response.ok) {
       throw new Error(`Watchdog returned ${response.status}`);

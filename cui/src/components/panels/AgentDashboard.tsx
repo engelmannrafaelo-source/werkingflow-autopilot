@@ -80,10 +80,14 @@ function MemoryLog({ personaId }: { personaId: string }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`${API}/agents/memory/${personaId}?n=10`)
-      .then(r => r.json())
+    if ((window as any).__cuiServerAlive === false) return;
+    fetch(`${API}/agents/memory/${personaId}?n=10`, { signal: AbortSignal.timeout(8000) })
+      .then(r => {
+        if (!r.ok) throw new Error(`memory fetch failed: ${r.status} ${r.statusText}`);
+        return r.json();
+      })
       .then(d => { setEntries(d.entries ?? []); setLoading(false); })
-      .catch(() => setLoading(false));
+      .catch((err) => { console.warn('[AgentDashboard] memory load:', err); setLoading(false); });
   }, [personaId]);
 
   if (loading) return <div className="agent-detail-loading">Lade Memory-Log...</div>;
@@ -121,10 +125,14 @@ function InboxView({ personaId }: { personaId: string }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`${API}/agents/inbox/${personaId}`)
-      .then(r => r.json())
+    if ((window as any).__cuiServerAlive === false) return;
+    fetch(`${API}/agents/inbox/${personaId}`, { signal: AbortSignal.timeout(8000) })
+      .then(r => {
+        if (!r.ok) throw new Error(`inbox fetch failed: ${r.status} ${r.statusText}`);
+        return r.json();
+      })
       .then(d => { setMessages(d.messages ?? []); setLoading(false); })
-      .catch(() => setLoading(false));
+      .catch((err) => { console.warn('[AgentDashboard] inbox load:', err); setLoading(false); });
   }, [personaId]);
 
   if (loading) return <div className="agent-detail-loading">Lade Inbox...</div>;
@@ -151,24 +159,33 @@ function ApprovalsView({ onApproved }: { onApproved: () => void }) {
   const [processing, setProcessing] = useState<number | null>(null);
 
   const load = useCallback(() => {
-    fetch(`${API}/agents/approvals`)
-      .then(r => r.json())
+    if ((window as any).__cuiServerAlive === false) return;
+    fetch(`${API}/agents/approvals`, { signal: AbortSignal.timeout(8000) })
+      .then(r => {
+        if (!r.ok) throw new Error(`approvals fetch failed: ${r.status} ${r.statusText}`);
+        return r.json();
+      })
       .then(d => { setApprovals(d.approvals ?? []); setLoading(false); })
-      .catch(() => setLoading(false));
+      .catch((err) => { console.warn('[AgentDashboard] approvals load:', err); setLoading(false); });
   }, []);
 
   useEffect(() => { load(); }, [load]);
 
   async function handleApprove(index: number, execute: boolean) {
+    if ((window as any).__cuiServerAlive === false) return;
     setProcessing(index);
     try {
-      await fetch(`${API}/agents/approve`, {
+      const r = await fetch(`${API}/agents/approve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ index, execute }),
+        signal: AbortSignal.timeout(15000),
       });
+      if (!r.ok) throw new Error(`approve failed: ${r.status} ${r.statusText}`);
       load();
       onApproved();
+    } catch (err) {
+      console.warn('[AgentDashboard] approve action:', err);
     } finally {
       setProcessing(null);
     }
@@ -216,24 +233,32 @@ function BriefView({ personaId }: { personaId: string }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`${API}/agents/briefs`)
-      .then(r => r.json())
+    if ((window as any).__cuiServerAlive === false) return;
+    fetch(`${API}/agents/briefs`, { signal: AbortSignal.timeout(8000) })
+      .then(r => {
+        if (!r.ok) throw new Error(`briefs list fetch failed: ${r.status} ${r.statusText}`);
+        return r.json();
+      })
       .then(d => {
         const list = d.briefs ?? [];
         setBriefs(list);
         if (list.length > 0) loadBrief(list[0].name);
         else setLoading(false);
       })
-      .catch(() => setLoading(false));
+      .catch((err) => { console.warn('[AgentDashboard] briefs list load:', err); setLoading(false); });
   }, [personaId]);
 
   function loadBrief(name: string) {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     setSelectedBrief(name);
-    fetch(`${API}/agents/brief/${name}`)
-      .then(r => r.text())
+    fetch(`${API}/agents/brief/${name}`, { signal: AbortSignal.timeout(8000) })
+      .then(r => {
+        if (!r.ok) throw new Error(`brief fetch failed: ${r.status} ${r.statusText}`);
+        return r.text();
+      })
       .then(text => { setContent(text); setLoading(false); })
-      .catch(() => { setContent('Fehler beim Laden.'); setLoading(false); });
+      .catch((err) => { console.warn('[AgentDashboard] brief load:', err); setContent('Fehler beim Laden.'); setLoading(false); });
   }
 
   return (
@@ -276,11 +301,15 @@ function AgentCard({
 
   async function handleTrigger(e: React.MouseEvent) {
     e.stopPropagation();
+    if ((window as any).__cuiServerAlive === false) return;
     if (agent.status === 'working' || triggering) return;
     setTriggering(true);
     try {
-      await fetch(`${API}/agents/trigger/${agent.id}`, { method: 'POST' });
+      const r = await fetch(`${API}/agents/trigger/${agent.id}`, { method: 'POST', signal: AbortSignal.timeout(15000) });
+      if (!r.ok) throw new Error(`trigger failed: ${r.status} ${r.statusText}`);
       onTrigger();
+    } catch (err) {
+      console.warn('[AgentDashboard] trigger agent:', err);
     } finally {
       setTimeout(() => setTriggering(false), 2000);
     }
@@ -399,9 +428,10 @@ export default function AgentDashboard() {
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
 
   const loadStatus = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
-      const res = await fetch(`${API}/agents/status`);
-      if (!res.ok) throw new Error(res.statusText);
+      const res = await fetch(`${API}/agents/status`, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) throw new Error(`status fetch failed: ${res.status} ${res.statusText}`);
       const data = await res.json();
       setAgents(data.agents ?? []);
       setLastRefresh(new Date());
@@ -411,7 +441,7 @@ export default function AgentDashboard() {
         if (updated) setSelected(updated);
       }
     } catch (err) {
-      console.error('[AgentDashboard] Status load failed:', err);
+      console.warn('[AgentDashboard] status load:', err);
     } finally {
       setLoading(false);
     }

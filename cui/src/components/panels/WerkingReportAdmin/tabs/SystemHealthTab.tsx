@@ -69,10 +69,11 @@ export default function SystemHealthTab({ envMode }: { envMode?: string }) {
   }, []);
 
   const fetchHealth = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/admin/wr/system-health');
+      const res = await fetch('/api/admin/wr/system-health', { signal: AbortSignal.timeout(8000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: SystemHealthResponse = await res.json();
       setHealth(data);
@@ -86,8 +87,9 @@ export default function SystemHealthTab({ envMode }: { envMode?: string }) {
           latencyMs: svc.latencyMs,
         });
       });
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err) {
+      console.warn('[WRSystemHealth] fetch failed:', err);
+      setError(err instanceof Error ? err.message : 'Failed to check system health');
     } finally {
       setLoading(false);
     }

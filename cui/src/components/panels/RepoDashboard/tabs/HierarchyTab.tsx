@@ -39,16 +39,17 @@ export default function HierarchyTab() {
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/repo-dashboard/hierarchy');
+      const res = await fetch('/api/repo-dashboard/hierarchy', { signal: AbortSignal.timeout(8000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       setData(json);
-    } catch (err: any) {
-      console.error('[HierarchyTab] Fetch error:', err);
-      setError(err.message || 'Failed to fetch hierarchy');
+    } catch (err) {
+      console.warn('[RepoHierarchy] fetch failed:', err);
+      setError(err instanceof Error ? err.message : 'Failed to fetch hierarchy');
     } finally {
       setLoading(false);
     }

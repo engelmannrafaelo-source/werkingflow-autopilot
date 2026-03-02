@@ -113,14 +113,16 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
   const [downloadingInvoice, setDownloadingInvoice] = useState<string | null>(null);
 
   const fetchBilling = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/admin/wr/billing/overview');
+      const res = await fetch('/api/admin/wr/billing/overview', { signal: AbortSignal.timeout(8000) });
       if (!res.ok) throw new Error(await res.text());
       const result = await res.json();
       setData(result);
     } catch (err: any) {
+      console.warn('[WRBilling] fetchBilling:', err);
       setError(err.message);
     } finally {
       setLoading(false);
@@ -128,62 +130,65 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
   }, []);
 
   const fetchInvoices = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoadingInvoices(true);
     try {
-      const res = await fetch('/api/admin/wr/billing/invoices');
+      const res = await fetch('/api/admin/wr/billing/invoices', { signal: AbortSignal.timeout(8000) });
       if (!res.ok) throw new Error(await res.text());
       const result = await res.json();
       setInvoices(result.invoices || []);
     } catch (err: any) {
-      console.error('Failed to fetch invoices:', err);
+      console.warn('[WRBilling] fetchInvoices:', err);
     } finally {
       setLoadingInvoices(false);
     }
   }, []);
 
   const fetchUsageStats = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoadingUsage(true);
     try {
       const [statsRes, activityRes] = await Promise.all([
-        fetch('/api/admin/wr/usage/stats'),
-        fetch('/api/admin/wr/usage/activity'),
+        fetch('/api/admin/wr/usage/stats', { signal: AbortSignal.timeout(8000) }),
+        fetch('/api/admin/wr/usage/activity', { signal: AbortSignal.timeout(8000) }),
       ]);
 
-      if (statsRes.ok) {
-        const stats = await statsRes.json();
-        setUsageStats(stats);
-      }
+      if (!statsRes.ok) throw new Error(`stats HTTP ${statsRes.status}`);
+      const stats = await statsRes.json();
+      setUsageStats(stats);
 
       if (activityRes.ok) {
         const activity = await activityRes.json();
         setActivityData(activity);
       }
     } catch (err: any) {
-      console.error('Failed to fetch usage stats:', err);
+      console.warn('[WRBilling] fetchUsageStats:', err);
     } finally {
       setLoadingUsage(false);
     }
   }, []);
 
   const fetchEvents = useCallback(async (tenantId: string) => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoadingEvents(true);
     try {
-      const res = await fetch(`/api/admin/wr/billing/events/${tenantId}`);
+      const res = await fetch(`/api/admin/wr/billing/events/${tenantId}`, { signal: AbortSignal.timeout(8000) });
       if (!res.ok) throw new Error(await res.text());
       const result = await res.json();
       setEvents(result.events || []);
     } catch (err: any) {
-      console.error('Failed to fetch billing events:', err);
-      alert(`❌ Failed to fetch events: ${err.message}`);
+      console.warn('[WRBilling] fetchEvents:', err);
+      alert(`Failed to fetch events: ${err.message}`);
     } finally {
       setLoadingEvents(false);
     }
   }, []);
 
   const downloadInvoicePDF = useCallback(async (invoice: Invoice) => {
+    if ((window as any).__cuiServerAlive === false) return;
     setDownloadingInvoice(invoice.id);
     try {
-      const res = await fetch(`/api/admin/wr/billing/invoices/${invoice.id}/pdf?tenantId=${invoice.tenantId}`);
+      const res = await fetch(`/api/admin/wr/billing/invoices/${invoice.id}/pdf?tenantId=${invoice.tenantId}`, { signal: AbortSignal.timeout(15000) });
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({ error: 'Failed to generate PDF' }));
         throw new Error(errorData.error || 'Failed to generate PDF');
@@ -199,8 +204,8 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
       document.body.removeChild(a);
       window.URL.revokeObjectURL(url);
     } catch (err: any) {
-      console.error('Failed to download invoice PDF:', err);
-      alert(`❌ Failed to download PDF: ${err.message}`);
+      console.warn('[WRBilling] downloadInvoicePDF:', err);
+      alert(`Failed to download PDF: ${err.message}`);
     } finally {
       setDownloadingInvoice(null);
     }
@@ -957,6 +962,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                 <button
                   key={amt}
                   onClick={async () => {
+                    if ((window as any).__cuiServerAlive === false) return;
                     try {
                       const res = await fetch('/api/admin/wr/billing/top-up', {
                         method: 'POST',
@@ -967,13 +973,15 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                           method: 'manual',
                           note: `Manual top-up €${amt}`,
                         }),
+                        signal: AbortSignal.timeout(15000),
                       });
                       if (!res.ok) throw new Error(await res.text());
-                      alert(`✅ €${amt} added successfully!`);
+                      alert(`€${amt} added successfully!`);
                       setTopUpTenant(null);
                       fetchBilling();
                     } catch (err: any) {
-                      alert(`❌ Failed: ${err.message}`);
+                      console.warn('[WRBilling] topUp:', err);
+                      alert(`Failed: ${err.message}`);
                     }
                   }}
                   style={{

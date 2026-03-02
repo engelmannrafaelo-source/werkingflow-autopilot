@@ -7,14 +7,14 @@ export default function ScenariosTab() {
   const [filterApp, setFilterApp] = useState<string>('all');
 
   const fetchData = async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
-      const res = await fetch('/api/qa/scenarios');
-      if (res.ok) {
-        const json = await res.json();
-        setData(json);
-      }
+      const res = await fetch('/api/qa/scenarios', { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      setData(json);
     } catch (err) {
-      console.error('[QA] Failed to fetch scenarios:', err);
+      console.warn('[QAScenarios] fetch failed:', err);
     } finally {
       setLoading(false);
     }

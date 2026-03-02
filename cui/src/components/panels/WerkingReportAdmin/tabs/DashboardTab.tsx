@@ -36,22 +36,35 @@ export default function DashboardTab({ envMode }: { envMode?: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  const safeFetch = async (url: string, label: string): Promise<Response | null> => {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res;
+    } catch (err) {
+      console.warn(`[WRDashboard] ${label} fetch failed:`, err);
+      return null;
+    }
+  };
+
   const fetchAll = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {
       const [statsRes, healthRes, infraRes, billingRes] = await Promise.all([
-        fetch('/api/admin/wr/stats').catch(() => null),
-        fetch('/api/admin/wr/health').catch(() => null),
-        fetch('/api/admin/wr/infrastructure').catch(() => null),
-        fetch('/api/admin/wr/billing/overview').catch(() => null),
+        safeFetch('/api/admin/wr/stats', 'stats'),
+        safeFetch('/api/admin/wr/health', 'health'),
+        safeFetch('/api/admin/wr/infrastructure', 'infrastructure'),
+        safeFetch('/api/admin/wr/billing/overview', 'billing'),
       ]);
-      if (statsRes?.ok) setStats(await statsRes.json());
-      if (healthRes?.ok) setHealth(await healthRes.json());
-      if (infraRes?.ok) setInfra(await infraRes.json());
-      if (billingRes?.ok) setBilling(await billingRes.json());
-    } catch (err: any) {
-      setError(err.message);
+      if (statsRes) setStats(await statsRes.json());
+      if (healthRes) setHealth(await healthRes.json());
+      if (infraRes) setInfra(await infraRes.json());
+      if (billingRes) setBilling(await billingRes.json());
+    } catch (err) {
+      console.warn('[WRDashboard] fetchAll failed:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load dashboard');
     } finally {
       setLoading(false);
     }

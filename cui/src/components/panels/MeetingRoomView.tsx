@@ -38,9 +38,12 @@ export default function MeetingRoomView({ personas, onSelectPersona, selected }:
   const [agentMap, setAgentMap] = useState<Record<string, AgentInfo>>({});
 
   useEffect(() => {
-    fetch('/api/agents/status')
-      .then(r => r.json())
-      .then(d => {
+    async function fetchAgentStatus() {
+      if ((window as any).__cuiServerAlive === false) return;
+      try {
+        const r = await fetch('/api/agents/status', { signal: AbortSignal.timeout(8000) });
+        if (!r.ok) throw new Error(`[MeetingRoom] agents/status failed: HTTP ${r.status}`);
+        const d = await r.json();
         const map: Record<string, AgentInfo> = {};
         for (const agent of (d.agents ?? [])) {
           map[agent.persona_id] = {
@@ -53,18 +56,13 @@ export default function MeetingRoomView({ personas, onSelectPersona, selected }:
           };
         }
         setAgentMap(map);
-      })
-      .catch(() => {});
+      } catch (err) {
+        console.warn('[MeetingRoom] fetch agent status error:', err);
+      }
+    }
+    fetchAgentStatus();
     // Refresh every 60s
-    const iv = setInterval(() => {
-      fetch('/api/agents/status').then(r => r.json()).then(d => {
-        const map: Record<string, AgentInfo> = {};
-        for (const agent of (d.agents ?? [])) {
-          map[agent.persona_id] = { status: agent.status, schedule: agent.schedule, last_run: agent.last_run, last_actions: agent.last_actions, inbox_count: agent.inbox_count, approvals_count: agent.approvals_count };
-        }
-        setAgentMap(map);
-      }).catch(() => {});
-    }, 60000);
+    const iv = setInterval(fetchAgentStatus, 60000);
     return () => clearInterval(iv);
   }, []);
   const tables = {

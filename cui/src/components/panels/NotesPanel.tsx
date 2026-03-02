@@ -17,41 +17,82 @@ export default function NotesPanel({ projectId }: NotesPanelProps) {
 
   // Load notes on mount / project change
   useEffect(() => {
-    fetch(`${API}/common-notes`).then(r => r.ok ? r.json() : null).then(d => { if (d) setCommonNotes(d.content ?? ''); }).catch(() => {});
-    fetch(`${API}/shared-notes`).then(r => r.ok ? r.json() : null).then(d => { if (d) setSharedNotes(d.content ?? ''); }).catch(() => {});
+    if ((window as any).__cuiServerAlive === false) return;
+    (async () => {
+      try {
+        const r = await fetch(`${API}/common-notes`, { signal: AbortSignal.timeout(8000) });
+        if (!r.ok) throw new Error(`[NotesPanel] common-notes failed: HTTP ${r.status}`);
+        const d = await r.json();
+        setCommonNotes(d.content ?? '');
+      } catch (err) {
+        console.warn('[NotesPanel] load common-notes error:', err);
+      }
+      try {
+        const r = await fetch(`${API}/shared-notes`, { signal: AbortSignal.timeout(8000) });
+        if (!r.ok) throw new Error(`[NotesPanel] shared-notes failed: HTTP ${r.status}`);
+        const d = await r.json();
+        setSharedNotes(d.content ?? '');
+      } catch (err) {
+        console.warn('[NotesPanel] load shared-notes error:', err);
+      }
+    })();
   }, []);
 
   useEffect(() => {
-    fetch(`${API}/notes/${projectId}`).then(r => r.ok ? r.json() : null).then(d => { if (d) setProjectNotes(d.content ?? ''); }).catch(() => {});
+    if ((window as any).__cuiServerAlive === false) return;
+    (async () => {
+      try {
+        const r = await fetch(`${API}/notes/${projectId}`, { signal: AbortSignal.timeout(8000) });
+        if (!r.ok) throw new Error(`[NotesPanel] project-notes failed: HTTP ${r.status}`);
+        const d = await r.json();
+        setProjectNotes(d.content ?? '');
+      } catch (err) {
+        console.warn('[NotesPanel] load project-notes error:', err);
+      }
+    })();
   }, [projectId]);
 
   const saveCommon = useCallback((text: string) => {
     if (commonTimer.current) clearTimeout(commonTimer.current);
     setSaveStatus('saving');
-    commonTimer.current = setTimeout(() => {
-      fetch(`${API}/common-notes`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: text }),
-      }).then(() => {
+    commonTimer.current = setTimeout(async () => {
+      if ((window as any).__cuiServerAlive === false) return;
+      try {
+        const res = await fetch(`${API}/common-notes`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: text }),
+          signal: AbortSignal.timeout(15000),
+        });
+        if (!res.ok) throw new Error(`[NotesPanel] save common-notes failed: HTTP ${res.status}`);
         setSaveStatus('saved');
         setTimeout(() => setSaveStatus('idle'), 1500);
-      });
+      } catch (err) {
+        console.warn('[NotesPanel] save common-notes error:', err);
+        setSaveStatus('idle');
+      }
     }, 800);
   }, []);
 
   const saveProject = useCallback((text: string) => {
     if (projectTimer.current) clearTimeout(projectTimer.current);
     setSaveStatus('saving');
-    projectTimer.current = setTimeout(() => {
-      fetch(`${API}/notes/${projectId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: text }),
-      }).then(() => {
+    projectTimer.current = setTimeout(async () => {
+      if ((window as any).__cuiServerAlive === false) return;
+      try {
+        const res = await fetch(`${API}/notes/${projectId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: text }),
+          signal: AbortSignal.timeout(15000),
+        });
+        if (!res.ok) throw new Error(`[NotesPanel] save project-notes failed: HTTP ${res.status}`);
         setSaveStatus('saved');
         setTimeout(() => setSaveStatus('idle'), 1500);
-      });
+      } catch (err) {
+        console.warn('[NotesPanel] save project-notes error:', err);
+        setSaveStatus('idle');
+      }
     }, 800);
   }, [projectId]);
 
@@ -97,7 +138,7 @@ export default function NotesPanel({ projectId }: NotesPanelProps) {
             padding: '4px 8px', fontSize: 11, cursor: 'pointer',
           }}
         >
-          🔐 Shared
+          Shared
         </button>
         {statusText && (
           <span style={{ fontSize: 10, color: statusColor, padding: '0 8px', whiteSpace: 'nowrap' }}>
@@ -148,16 +189,23 @@ export default function NotesPanel({ projectId }: NotesPanelProps) {
               {sharedNotes ? 'Credentials aus CLAUDE.md / Scenarios' : 'Noch nicht generiert'}
             </span>
             <button
-              onClick={() => {
+              onClick={async () => {
+                if ((window as any).__cuiServerAlive === false) return;
                 setSaveStatus('saving');
-                fetch(`${API}/shared-notes/refresh`, { method: 'POST' })
-                  .then(r => r.json())
-                  .then(() => {
-                    fetch(`${API}/shared-notes`).then(r => r.json()).then(d => setSharedNotes(d.content ?? ''));
-                    setSaveStatus('saved');
-                    setTimeout(() => setSaveStatus('idle'), 2000);
-                  })
-                  .catch(() => setSaveStatus('idle'));
+                try {
+                  const refreshRes = await fetch(`${API}/shared-notes/refresh`, { method: 'POST', signal: AbortSignal.timeout(15000) });
+                  if (!refreshRes.ok) throw new Error(`[NotesPanel] refresh failed: HTTP ${refreshRes.status}`);
+                  await refreshRes.json();
+                  const loadRes = await fetch(`${API}/shared-notes`, { signal: AbortSignal.timeout(8000) });
+                  if (!loadRes.ok) throw new Error(`[NotesPanel] reload shared-notes failed: HTTP ${loadRes.status}`);
+                  const d = await loadRes.json();
+                  setSharedNotes(d.content ?? '');
+                  setSaveStatus('saved');
+                  setTimeout(() => setSaveStatus('idle'), 2000);
+                } catch (err) {
+                  console.warn('[NotesPanel] refresh shared-notes error:', err);
+                  setSaveStatus('idle');
+                }
               }}
               style={{
                 padding: '2px 8px', fontSize: 9, borderRadius: 3, cursor: 'pointer',

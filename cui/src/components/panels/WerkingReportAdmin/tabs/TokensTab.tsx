@@ -40,25 +40,28 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
   const [processingId, setProcessingId] = useState<string | null>(null);
 
   const fetchTenants = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
-      const res = await fetch('/api/admin/wr/tenants?limit=1000');
-      if (!res.ok) throw new Error('Failed to fetch tenants');
+      const res = await fetch('/api/admin/wr/tenants?limit=1000', { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setTenants(data.tenants || []);
     } catch (err: any) {
-      console.error('Failed to fetch tenants:', err);
+      console.warn('[WRTokens] fetchTenants:', err);
     }
   }, []);
 
   const fetchTokens = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/admin/wr/developer-tokens');
+      const res = await fetch('/api/admin/wr/developer-tokens', { signal: AbortSignal.timeout(8000) });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setTokens(data.tokens || data || []);
     } catch (err: any) {
+      console.warn('[WRTokens] fetchTokens:', err);
       setError(err.message);
     } finally {
       setLoading(false);
@@ -79,6 +82,7 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
       setError('Please select a tenant');
       return;
     }
+    if ((window as any).__cuiServerAlive === false) return;
     setCreating(true);
     setError('');
     setNewToken(null);
@@ -92,6 +96,7 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
           scopes: newScopes.split(',').map(s => s.trim()),
           expiresInDays: parseInt(newExpiry) || null,
         }),
+        signal: AbortSignal.timeout(15000),
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
@@ -101,6 +106,7 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
       setShowCreate(false);
       await fetchTokens();
     } catch (err: any) {
+      console.warn('[WRTokens] handleCreate:', err);
       setError(err.message);
     } finally {
       setCreating(false);
@@ -109,12 +115,14 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
 
   const handleRevoke = async (id: string, name?: string) => {
     if (!confirm(`Revoke token "${name || id}"?`)) return;
+    if ((window as any).__cuiServerAlive === false) return;
     setProcessingId(id);
     try {
-      const res = await fetch(`/api/admin/wr/developer-tokens/${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/admin/wr/developer-tokens/${id}`, { method: 'DELETE', signal: AbortSignal.timeout(15000) });
       if (!res.ok) throw new Error(await res.text());
       await fetchTokens();
     } catch (err: any) {
+      console.warn('[WRTokens] handleRevoke:', err);
       setError(err.message);
     } finally {
       setProcessingId(null);

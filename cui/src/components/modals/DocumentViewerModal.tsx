@@ -20,20 +20,20 @@ export default function DocumentViewerModal({ documentPath, onClose }: DocumentV
   }, [documentPath]);
 
   async function loadDocument() {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
       setLoading(true);
       setError(null);
 
-      // Construct full path (business docs are under /root/projekte/werkingflow/business)
       const fullPath = `/root/projekte/werkingflow/business/${documentPath}`;
-      const response = await fetch(`/api/file?path=${encodeURIComponent(fullPath)}`);
+      const response = await fetch(`/api/file?path=${encodeURIComponent(fullPath)}`, { signal: AbortSignal.timeout(8000) });
 
-      if (!response.ok) throw new Error('Failed to load document');
+      if (!response.ok) throw new Error(`Failed to load document (${response.status})`);
 
       const data = await response.json();
       setContent(data.content || '');
     } catch (err: any) {
-      console.error('[DocumentViewer] Load error:', err);
+      console.warn('[DocumentViewer] loadDocument:', err);
       setError(err.message);
     } finally {
       setLoading(false);

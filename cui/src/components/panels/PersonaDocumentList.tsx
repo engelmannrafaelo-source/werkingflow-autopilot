@@ -33,16 +33,17 @@ export default function PersonaDocumentList({ personaId, personaName }: PersonaD
   }, [personaId]);
 
   async function loadPersonaDocuments() {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
       setLoading(true);
-      const response = await fetch(`/api/team/knowledge/persona/${personaId}`);
+      const response = await fetch(`/api/team/knowledge/persona/${personaId}`, { signal: AbortSignal.timeout(8000) });
 
-      if (!response.ok) throw new Error('Failed to load persona documents');
+      if (!response.ok) throw new Error(`[PersonaDocs] load documents failed: HTTP ${response.status}`);
 
       const data = await response.json();
       setData(data);
     } catch (err: any) {
-      console.error('[PersonaDocumentList] Load error:', err);
+      console.warn('[PersonaDocs] load documents error:', err);
       setError(err.message);
     } finally {
       setLoading(false);

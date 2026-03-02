@@ -41,15 +41,15 @@ export default function NotificationBell({ envMode }: NotificationBellProps) {
 
   // Fetch notifications
   const fetchNotifications = async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
-      const res = await fetch('/api/admin/wr/notifications');
-      if (res.ok) {
-        const data = await res.json();
-        setNotifications(data.notifications || []);
-        setUnreadCount(data.unreadCount || 0);
-      }
+      const res = await fetch('/api/admin/wr/notifications', { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setNotifications(data.notifications || []);
+      setUnreadCount(data.unreadCount || 0);
     } catch (err) {
-      console.error('[NotificationBell] Failed to fetch notifications:', err);
+      console.warn('[WRNotif] fetchNotifications:', err);
     }
   };
 
@@ -62,24 +62,28 @@ export default function NotificationBell({ envMode }: NotificationBellProps) {
 
   // Mark notification as read
   const markAsRead = async (id: string) => {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
-      await fetch(`/api/admin/wr/notifications/${id}/read`, { method: 'POST' });
+      const res = await fetch(`/api/admin/wr/notifications/${id}/read`, { method: 'POST', signal: AbortSignal.timeout(15000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
       setUnreadCount(prev => Math.max(0, prev - 1));
     } catch (err) {
-      console.error('[NotificationBell] Failed to mark as read:', err);
+      console.warn('[WRNotif] markAsRead:', err);
     }
   };
 
   // Mark all as read
   const markAllAsRead = async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     try {
-      await fetch('/api/admin/wr/notifications/read-all', { method: 'POST' });
+      const res = await fetch('/api/admin/wr/notifications/read-all', { method: 'POST', signal: AbortSignal.timeout(15000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setNotifications(prev => prev.map(n => ({ ...n, read: true })));
       setUnreadCount(0);
     } catch (err) {
-      console.error('[NotificationBell] Failed to mark all as read:', err);
+      console.warn('[WRNotif] markAllAsRead:', err);
     }
     setLoading(false);
   };

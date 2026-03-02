@@ -31,8 +31,9 @@ export default function KnowledgeFullscreen({ projectId, workDir }: KnowledgeFul
   }, []);
 
   async function loadPersonas() {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
-      const res = await fetch(`${API}/agents/claude/status`);
+      const res = await fetch(`${API}/agents/claude/status`, { signal: AbortSignal.timeout(8000) });
       if (!res.ok) throw new Error('Failed to load personas');
       const data = await res.json();
 
@@ -48,7 +49,7 @@ export default function KnowledgeFullscreen({ projectId, workDir }: KnowledgeFul
 
       setPersonas(agentPersonas);
     } catch (err) {
-      console.error('Failed to load personas:', err);
+      console.warn('[KnowledgeFS] load personas:', err);
     } finally {
       setLoading(false);
     }

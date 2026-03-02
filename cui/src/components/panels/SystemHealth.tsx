@@ -66,16 +66,25 @@ export default function SystemHealth() {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchAll = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setError('');
     try {
       const [hRes, dRes] = await Promise.all([
-        fetch('/api/admin/wr/system-health'),
-        fetch('/api/ops/deployments'),
+        fetch('/api/admin/wr/system-health', { signal: AbortSignal.timeout(8000) }),
+        fetch('/api/ops/deployments', { signal: AbortSignal.timeout(8000) }),
       ]);
-      if (hRes.ok) setHealth(await hRes.json());
-      else setError(`Health: HTTP ${hRes.status}`);
-      if (dRes.ok) setDeployments(await dRes.json());
+      if (!hRes.ok) {
+        setError(`[SystemHealth] Health: HTTP ${hRes.status}`);
+      } else {
+        setHealth(await hRes.json());
+      }
+      if (!dRes.ok) {
+        console.warn(`[SystemHealth] deployments failed: HTTP ${dRes.status}`);
+      } else {
+        setDeployments(await dRes.json());
+      }
     } catch (err: any) {
+      console.warn('[SystemHealth] fetch error:', err);
       setError(err.message);
     } finally {
       setLoading(false);

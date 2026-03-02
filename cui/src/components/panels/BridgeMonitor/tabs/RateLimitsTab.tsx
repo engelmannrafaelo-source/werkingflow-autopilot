@@ -33,14 +33,16 @@ export default function RateLimitsTab() {
   const [error, setError] = useState('');
 
   const fetchData = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/bridge/metrics/limits');
+      const res = await fetch('/api/bridge/metrics/limits', { signal: AbortSignal.timeout(8000) });
       if (!res.ok) throw new Error(await res.text());
       const result = await res.json();
       setData(result);
     } catch (err: any) {
+      console.warn('[BridgeLimits] fetch limits data failed:', err);
       setError(err.message);
     } finally {
       setLoading(false);

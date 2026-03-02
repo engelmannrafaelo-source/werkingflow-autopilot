@@ -18,14 +18,16 @@ export default function OverviewTab() {
   const [error, setError] = useState('');
 
   const fetchData = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/bridge/metrics/overview');
+      const res = await fetch('/api/bridge/metrics/overview', { signal: AbortSignal.timeout(8000) });
       if (!res.ok) throw new Error(await res.text());
       const result = await res.json();
       setData(result);
     } catch (err: any) {
+      console.warn('[BridgeOverview] fetch overview failed:', err);
       setError(err.message);
     } finally {
       setLoading(false);

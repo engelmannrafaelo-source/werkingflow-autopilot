@@ -22,6 +22,9 @@ export async function bridgeFetch(path: string, opts?: RequestInit & { timeout?:
       headers: { ...authHeaders(), ...init?.headers },
     });
     return res;
+  } catch (err) {
+    console.warn('[BridgeAPI] fetch failed:', path, err);
+    throw err;
   } finally {
     clearTimeout(timer);
   }
@@ -30,7 +33,11 @@ export async function bridgeFetch(path: string, opts?: RequestInit & { timeout?:
 /** Fetch JSON with auth. Throws on non-ok or parse failure. */
 export async function bridgeJson<T = any>(path: string, opts?: RequestInit & { timeout?: number }): Promise<T> {
   const res = await bridgeFetch(path, opts);
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text().catch(() => 'unknown')}`);
+  if (!res.ok) {
+    const body = await res.text().catch(() => 'unknown');
+    console.warn('[BridgeAPI] non-ok response:', path, res.status, body);
+    throw new Error(`HTTP ${res.status}: ${body}`);
+  }
   return res.json();
 }
 

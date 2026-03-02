@@ -10,17 +10,15 @@ export default function ScoresTab() {
   const [loading, setLoading] = useState(true);
 
   const fetchData = async (appId: string) => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     try {
-      const res = await fetch(`/api/qa/app/${appId}`);
-      if (res.ok) {
-        const json = await res.json();
-        setData(json);
-      } else {
-        setData(null);
-      }
+      const res = await fetch(`/api/qa/app/${appId}`, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      setData(json);
     } catch (err) {
-      console.error('[QA] Failed to fetch app data:', err);
+      console.warn('[QAScores] fetch app data failed:', err);
       setData(null);
     } finally {
       setLoading(false);
@@ -32,14 +30,14 @@ export default function ScoresTab() {
   }, [selectedApp]);
 
   const fetchReport = async (filename: string) => {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
-      const res = await fetch(`/api/qa/report/${filename}`);
-      if (res.ok) {
-        const json = await res.json();
-        setSelectedReport(json);
-      }
+      const res = await fetch(`/api/qa/report/${filename}`, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      setSelectedReport(json);
     } catch (err) {
-      console.error('[QA] Failed to fetch report:', err);
+      console.warn('[QAScores] fetch report failed:', err);
     }
   };
 

@@ -251,7 +251,7 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
         // Cache for instant load next time
         try { localStorage.setItem(`cui-convs-${accountId}`, JSON.stringify(filtered.slice(0, 20))); } catch {}
       })
-      .catch(() => setLoading(false));
+      .catch((err) => { console.warn('[QueueOverlay] fetchConversations:', err); setLoading(false); });
   }, [accountId, workDir, useLocal]);
 
   useEffect(() => {
@@ -288,40 +288,43 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
   useEffect(() => {
     if ((window as any).__cuiServerAlive === false) return;
     fetch('/api/prompt-templates', { signal: AbortSignal.timeout(5000) })
-      .then(r => r.ok ? r.json() : null)
+      .then(r => { if (!r.ok) throw new Error(`prompt-templates ${r.status}`); return r.json(); })
       .then(data => {
         if (!data) return;
         const start = (data.templates || []).filter((t: PromptTemplate) => t.category === 'start');
         start.sort((a: PromptTemplate, b: PromptTemplate) => a.order - b.order);
         setStartTemplates(start);
       })
-      .catch(() => {});
+      .catch((err) => { console.warn('[QueueOverlay] fetchStartTemplates:', err); });
   }, []);
 
   const handleSaveStartTemplate = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     if (!newStartTplLabel.trim() || !newStartTplMessage.trim()) return;
-    if (editingStartTpl) {
-      const resp = await fetch(`/api/prompt-templates/${editingStartTpl.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ label: newStartTplLabel, message: newStartTplMessage, subject: newStartTplSubject, category: 'start' }),
-        signal: AbortSignal.timeout(8000),
-      });
-      if (resp.ok) {
+    try {
+      if (editingStartTpl) {
+        const resp = await fetch(`/api/prompt-templates/${editingStartTpl.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ label: newStartTplLabel, message: newStartTplMessage, subject: newStartTplSubject, category: 'start' }),
+          signal: AbortSignal.timeout(15000),
+        });
+        if (!resp.ok) throw new Error(`PUT prompt-templates ${resp.status}`);
         const data = await resp.json();
         setStartTemplates(prev => prev.map(t => t.id === data.template.id ? data.template : t));
-      }
-    } else {
-      const resp = await fetch('/api/prompt-templates', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ label: newStartTplLabel, message: newStartTplMessage, subject: newStartTplSubject, category: 'start' }),
-        signal: AbortSignal.timeout(8000),
-      });
-      if (resp.ok) {
+      } else {
+        const resp = await fetch('/api/prompt-templates', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ label: newStartTplLabel, message: newStartTplMessage, subject: newStartTplSubject, category: 'start' }),
+          signal: AbortSignal.timeout(15000),
+        });
+        if (!resp.ok) throw new Error(`POST prompt-templates ${resp.status}`);
         const data = await resp.json();
         setStartTemplates(prev => [...prev, data.template]);
       }
+    } catch (err) {
+      console.warn('[QueueOverlay] handleSaveStartTemplate:', err);
     }
     setShowStartTplForm(false);
     setEditingStartTpl(null);
@@ -331,8 +334,14 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
   }, [newStartTplLabel, newStartTplSubject, newStartTplMessage, editingStartTpl]);
 
   const handleDeleteStartTemplate = useCallback(async (id: string) => {
-    const resp = await fetch(`/api/prompt-templates/${id}`, { method: 'DELETE', signal: AbortSignal.timeout(8000) });
-    if (resp.ok) setStartTemplates(prev => prev.filter(t => t.id !== id));
+    if ((window as any).__cuiServerAlive === false) return;
+    try {
+      const resp = await fetch(`/api/prompt-templates/${id}`, { method: 'DELETE', signal: AbortSignal.timeout(15000) });
+      if (!resp.ok) throw new Error(`DELETE prompt-templates ${resp.status}`);
+      setStartTemplates(prev => prev.filter(t => t.id !== id));
+    } catch (err) {
+      console.warn('[QueueOverlay] handleDeleteStartTemplate:', err);
+    }
   }, []);
 
   const handleStart = useCallback(async () => {
@@ -351,19 +360,23 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
 
   // Stop conversation
   const handleStop = useCallback((conv: Conversation) => {
-    fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}/stop`, { method: 'POST', signal: AbortSignal.timeout(10000) })
+    if ((window as any).__cuiServerAlive === false) return;
+    fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}/stop`, { method: 'POST', signal: AbortSignal.timeout(15000) })
+      .then(r => { if (!r.ok) throw new Error(`stop ${r.status}`); })
       .then(() => setTimeout(fetchConversations, 1000))
-      .catch((err) => console.error('[QueueOverlay] Stop failed:', err.message));
+      .catch((err) => console.warn('[QueueOverlay] handleStop:', err));
   }, [fetchConversations]);
 
   // Set custom name
   const handleSetName = useCallback((conv: Conversation, name: string) => {
+    if ((window as any).__cuiServerAlive === false) return;
     fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}/name`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ custom_name: name }),
-      signal: AbortSignal.timeout(8000),
-    }).then(() => setTimeout(fetchConversations, 500))
-      .catch((err) => console.error('[QueueOverlay] SetName failed:', err.message));
+      signal: AbortSignal.timeout(15000),
+    }).then(r => { if (!r.ok) throw new Error(`setName ${r.status}`); })
+      .then(() => setTimeout(fetchConversations, 500))
+      .catch((err) => console.warn('[QueueOverlay] handleSetName:', err));
   }, [fetchConversations]);
 
   return (

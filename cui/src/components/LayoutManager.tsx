@@ -204,15 +204,15 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       }
       const cachedTpl = localStorage.getItem(tplCacheKey);
       if (cachedTpl) templateRef.current = JSON.parse(cachedTpl);
-    } catch {
-      // Corrupted cache — clear it
-      localStorage.removeItem(cacheKey);
-      localStorage.removeItem(tplCacheKey);
+    } catch (err) {
+      console.warn('[LayoutManager] Corrupted layout cache, clearing:', err);
+      try { localStorage.removeItem(cacheKey); } catch (e) { console.warn('[LayoutManager] Failed to clear layout cache:', e); }
+      try { localStorage.removeItem(tplCacheKey); } catch (e) { console.warn('[LayoutManager] Failed to clear template cache:', e); }
     }
 
     // 2. Fetch from server in background (update cache for next load)
-    const fetchWithTimeout = (url: string, ms = 5000) =>
-      fetch(url, { signal: AbortSignal.timeout(ms) }).then(r => r.ok ? r.json() : null).catch(() => null);
+    const fetchWithTimeout = (url: string, ms = 8000) =>
+      fetch(url, { signal: AbortSignal.timeout(ms) }).then(r => r.ok ? r.json() : null).catch((err) => { console.warn('[LayoutManager] fetchWithTimeout failed for', url, ':', err); return null; });
     const loadFromServer = () => {
       Promise.all([
         fetchWithTimeout(`${API}/layouts/${projectId}`),
@@ -223,19 +223,19 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         if (activeDir?.path) activeDirRef.current = activeDir.path;
         if (tplJson) {
           templateRef.current = tplJson;
-          try { localStorage.setItem(tplCacheKey, JSON.stringify(tplJson)); } catch {}
+          try { localStorage.setItem(tplCacheKey, JSON.stringify(tplJson)); } catch (e) { console.warn('[LayoutManager] Failed to cache template:', e); }
         }
         if (layoutJson) {
-          try { localStorage.setItem(cacheKey, JSON.stringify(layoutJson)); } catch {}
+          try { localStorage.setItem(cacheKey, JSON.stringify(layoutJson)); } catch (e) { console.warn('[LayoutManager] Failed to cache layout:', e); }
           // Only swap model if we didn't load from cache (avoid layout flicker)
           if (!loadedFromCache) {
-            try { setModel(Model.fromJson(layoutJson)); return; } catch {}
+            try { setModel(Model.fromJson(layoutJson)); return; } catch (e) { console.warn('[LayoutManager] Failed to parse server layout JSON:', e); }
           }
           return;
         }
         // Server returned nothing — use default if not loaded from cache
         if (!loadedFromCache) {
-          setModel(Model.fromJson(defaultLayout(activeDirRef.current)));
+          try { setModel(Model.fromJson(defaultLayout(activeDirRef.current))); } catch (e) { console.warn('[LayoutManager] Failed to create default layout model:', e); }
         }
       });
     };
@@ -245,7 +245,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     if (!loadedFromCache) {
       const fallbackTimer = setTimeout(() => {
         if (cancelled) return;
-        setModel(prev => prev ?? Model.fromJson(defaultLayout(activeDirRef.current)));
+        try { setModel(prev => prev ?? Model.fromJson(defaultLayout(activeDirRef.current))); } catch (e) { console.warn('[LayoutManager] Failed to create fallback layout model:', e); }
       }, 3000);
       return () => { cancelled = true; clearTimeout(fallbackTimer); };
     }
@@ -261,7 +261,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       if (!node) return;
       const existing = node.getConfig() ?? {};
       m.doAction(Actions.updateNodeAttributes(nodeId, { config: { ...existing, ...patch } }));
-    } catch {}
+    } catch (err) { console.warn('[LayoutManager] updateNodeConfig failed for', nodeId, ':', err); }
   }, []);
 
   const factory = useCallback((node: TabNode) => {
@@ -357,12 +357,16 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
   const saveLayout = useCallback((m: Model) => {
     const json = m.toJson();
     // Cache locally for instant load on next visit
-    try { localStorage.setItem(`cui-layout-${projectId}`, JSON.stringify(json)); } catch {}
-    fetch(`${API}/layouts/${projectId}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(json),
-    }).catch(() => {});
+    try { localStorage.setItem(`cui-layout-${projectId}`, JSON.stringify(json)); } catch (e) { console.warn('[LayoutManager] Failed to cache layout locally:', e); }
+    if ((window as any).__cuiServerAlive === false) return;
+    try {
+      fetch(`${API}/layouts/${projectId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(json),
+        signal: AbortSignal.timeout(15000),
+      }).catch((err) => { console.warn('[LayoutManager] saveLayout fetch failed:', err); });
+    } catch (err) { console.warn('[LayoutManager] saveLayout error:', err); }
   }, [projectId]);
 
   const handleModelChange = useCallback(
@@ -375,26 +379,34 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
 
   const saveTemplate = useCallback((tpl: IJsonModel) => {
     templateRef.current = tpl;
-    fetch(`${API}/layouts/${projectId}/template`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(tpl),
-    }).catch(() => {});
+    if ((window as any).__cuiServerAlive === false) return;
+    try {
+      fetch(`${API}/layouts/${projectId}/template`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(tpl),
+        signal: AbortSignal.timeout(15000),
+      }).catch((err) => { console.warn('[LayoutManager] saveTemplate fetch failed:', err); });
+    } catch (err) { console.warn('[LayoutManager] saveTemplate error:', err); }
   }, [projectId]);
 
   const handleApplyLayout = useCallback((layoutJson: IJsonModel) => {
-    const newModel = Model.fromJson(layoutJson);
-    setModel(newModel);
-    setShowBuilder(false);
-    saveLayout(newModel);
-    saveTemplate(layoutJson);
+    try {
+      const newModel = Model.fromJson(layoutJson);
+      setModel(newModel);
+      setShowBuilder(false);
+      saveLayout(newModel);
+      saveTemplate(layoutJson);
+    } catch (err) { console.warn('[LayoutManager] handleApplyLayout Model.fromJson failed:', err); }
   }, [saveLayout, saveTemplate]);
 
   const handleResetLayout = useCallback(() => {
-    const tpl = templateRef.current ?? defaultLayout(workDir);
-    const newModel = Model.fromJson(tpl);
-    setModel(newModel);
-    saveLayout(newModel);
+    try {
+      const tpl = templateRef.current ?? defaultLayout(workDir);
+      const newModel = Model.fromJson(tpl);
+      setModel(newModel);
+      saveLayout(newModel);
+    } catch (err) { console.warn('[LayoutManager] handleResetLayout Model.fromJson failed:', err); }
   }, [workDir, saveLayout]);
 
   const addTab = useCallback((type: 'cui' | 'cui-lite' | 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'repo-dashboard' | 'watchdog', config: Record<string, string>, targetId: string) => {
@@ -418,21 +430,22 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
     if (type === 'preview' && !config.watchPath) {
       config.watchPath = activeDirRef.current || workDir;
     }
-    model.doAction(
-      Actions.addNode(
-        { type: 'tab', name: names[type], component: type, config },
-        targetId,
-        DockLocation.CENTER,
-        -1
-      )
-    );
+    try {
+      model.doAction(
+        Actions.addNode(
+          { type: 'tab', name: names[type], component: type, config },
+          targetId,
+          DockLocation.CENTER,
+          -1
+        )
+      );
+    } catch (err) { console.warn('[LayoutManager] addTab doAction failed for', type, ':', err); }
   }, [model, workDir]);
 
   const onRenderTabSet = useCallback((node: TabSetNode | BorderNode, renderValues: ITabSetRenderValues) => {
     renderValues.stickyButtons.push(
       <select
         key="add-tab"
-        data-ai-id={`add-tab-dropdown-${node.getId()}`}
         value=""
         onChange={(e) => {
           const val = e.target.value;
@@ -464,13 +477,13 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
         <option value="notes">Notes</option>
         <option value="images">Images</option>
         <option value="mission">Mission Control</option>
-        <option value="office">Virtual Office</option>
+        <option value="office">Virtual Office 👥</option>
         <option value="admin-wr">Werking Report Admin</option>
         <option value="system-health">System Health</option>
         <option value="watchdog">Dev Server Watchdog</option>
-        <option value="linkedin">LinkedIn Marketing</option>
-        <option value="bridge-monitor">Bridge Monitor</option>
-        <option value="repo-dashboard">Git & Pipeline Monitor</option>
+        <option value="linkedin">LinkedIn Marketing 🔗</option>
+        <option value="bridge-monitor">Bridge Monitor (Old)</option>
+        <option value="repo-dashboard">Git & Pipeline Monitor 📊</option>
       </select>
     );
   }, [addTab]);
@@ -518,7 +531,7 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
               onCuiStateResetRef.current?.(cuiId);
             }
           }
-        } catch { /* node might not exist */ }
+        } catch (err) { console.warn('[LayoutManager] handleAction tab lookup failed:', err); }
       }
     }
     return action;
@@ -572,6 +585,11 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
 
     const connect = () => {
       if (disposed) return;
+      // Don't hammer WS when server is down — wait for App WS to restore __cuiServerAlive
+      if ((window as any).__cuiServerAlive === false) {
+        reconnectTimer = setTimeout(connect, Math.min(backoff, 10000));
+        return;
+      }
       const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
       const ws = new WebSocket(`${protocol}://${window.location.host}/ws`);
       ws.onerror = () => {}; // Suppress console noise during server restarts
@@ -579,14 +597,16 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
 
       function reportPanels() {
         if (!model || ws.readyState !== WebSocket.OPEN) return;
-        const panels: Array<{ id: string; component: string; config: Record<string, unknown>; name: string }> = [];
-        model.visitNodes((node) => {
-          if (node.getType() === 'tab') {
-            const tab = node as TabNode;
-            panels.push({ id: tab.getId(), component: tab.getComponent() ?? 'unknown', config: tab.getConfig() ?? {}, name: tab.getName() });
-          }
-        });
-        ws.send(JSON.stringify({ type: 'state-report', panels }));
+        try {
+          const panels: Array<{ id: string; component: string; config: Record<string, unknown>; name: string }> = [];
+          model.visitNodes((node) => {
+            if (node.getType() === 'tab') {
+              const tab = node as TabNode;
+              panels.push({ id: tab.getId(), component: tab.getComponent() ?? 'unknown', config: tab.getConfig() ?? {}, name: tab.getName() });
+            }
+          });
+          ws.send(JSON.stringify({ type: 'state-report', panels }));
+        } catch (err) { console.warn('[LayoutManager] reportPanels failed:', err); }
       }
 
       ws.onopen = () => {
@@ -597,7 +617,7 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
       ws.onclose = () => {
         if (controlWsRef.current === ws) controlWsRef.current = null;
         if (!disposed) {
-          console.log(`[LayoutManager WS] Disconnected, reconnecting in ${backoff}ms`);
+          if (backoff <= 1000) console.log('[LayoutManager WS] Disconnected, reconnecting...');
           reconnectTimer = setTimeout(() => {
             backoff = Math.min(backoff * 2, 30000);
             connect();
@@ -611,23 +631,27 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
           let targetId = '';
           model.visitNodes((node) => { if (!targetId && node.getType() === 'tabset') targetId = node.getId(); });
           if (targetId) {
-            model.doAction(Actions.addNode(
-              { type: 'tab', name: msg.name || msg.component, component: msg.component, config: msg.config || {} },
-              targetId, DockLocation.CENTER, -1
-            ));
-            reportPanels();
+            try {
+              model.doAction(Actions.addNode(
+                { type: 'tab', name: msg.name || msg.component, component: msg.component, config: msg.config || {} },
+                targetId, DockLocation.CENTER, -1
+              ));
+              reportPanels();
+            } catch (err) { console.warn('[LayoutManager] panel-add doAction failed:', err); }
           }
         }
         if (msg.type === 'control:panel-remove' && msg.nodeId && model) {
-          model.doAction(Actions.deleteTab(msg.nodeId));
-          reportPanels();
+          try {
+            model.doAction(Actions.deleteTab(msg.nodeId));
+            reportPanels();
+          } catch (err) { console.warn('[LayoutManager] panel-remove doAction failed:', err); }
         }
         // Close panels when a conversation is finished or deleted via Mission Control
         if ((msg.type === 'control:conversation-finished' || msg.type === 'control:conversation-deleted') && msg.panelsToClose && model) {
           const myPanels = (msg.panelsToClose as Array<{ panelId: string; projectId: string }>)
             .filter(p => p.projectId === projectId);
           for (const p of myPanels) {
-            try { model.doAction(Actions.deleteTab(p.panelId)); } catch {}
+            try { model.doAction(Actions.deleteTab(p.panelId)); } catch (err) { console.warn('[LayoutManager] deleteTab failed for panel', p.panelId, ':', err); }
           }
           if (myPanels.length > 0) {
             reportPanels();
@@ -651,8 +675,10 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
             }
           });
           if (foundId) {
-            model.doAction(Actions.selectTab(foundId));
-            ws.send(JSON.stringify({ type: 'tab-selected', nodeId: foundId, target: msg.target }));
+            try {
+              model.doAction(Actions.selectTab(foundId));
+              ws.send(JSON.stringify({ type: 'tab-selected', nodeId: foundId, target: msg.target }));
+            } catch (err) { console.warn('[LayoutManager] select-tab doAction failed:', err); }
           } else {
             ws.send(JSON.stringify({ type: 'tab-select-failed', target: msg.target, error: 'not found' }));
           }
@@ -673,10 +699,12 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
             model.visitNodes((node) => { if (!targetId && node.getType() === 'tabset') targetId = node.getId(); });
             if (targetId) {
               const nameMap: Record<string, string> = { 'admin-wr': 'Werking Report Admin', 'browser': 'Browser', 'images': 'Images', 'notes': 'Notes' };
-              model.doAction(Actions.addNode(
-                { type: 'tab', name: nameMap[msg.component] || msg.component, component: msg.component, config: msg.config || {} },
-                targetId, DockLocation.CENTER, -1
-              ));
+              try {
+                model.doAction(Actions.addNode(
+                  { type: 'tab', name: nameMap[msg.component] || msg.component, component: msg.component, config: msg.config || {} },
+                  targetId, DockLocation.CENTER, -1
+                ));
+              } catch (err) { console.warn('[LayoutManager] ensure-panel addNode failed:', err); }
               // Find the newly added tab
               model.visitNodes((node) => {
                 if (node.getType() === 'tab') {
@@ -687,7 +715,9 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
             }
           }
           if (foundId) {
-            model.doAction(Actions.selectTab(foundId));
+            try {
+              model.doAction(Actions.selectTab(foundId));
+            } catch (err) { console.warn('[LayoutManager] ensure-panel selectTab failed:', err); }
             reportPanels();
             ws.send(JSON.stringify({ type: 'panel-ensured', nodeId: foundId, component: msg.component }));
           } else {
@@ -746,10 +776,12 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
               ? (tabsetCount % 2 === 0 ? DockLocation.RIGHT : DockLocation.BOTTOM)
               : DockLocation.CENTER;
 
-            model.doAction(Actions.addNode(
-              { type: 'tab', name: 'CUI', component: 'cui', config: {} },
-              targetId, dockLocation, -1
-            ));
+            try {
+              model.doAction(Actions.addNode(
+                { type: 'tab', name: 'CUI', component: 'cui', config: {} },
+                targetId, dockLocation, -1
+              ));
+            } catch (err) { console.warn('[LayoutManager] activate-conversations addNode failed:', err); continue; }
             tabsetCount++;
 
             // Find the new node
@@ -782,7 +814,7 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
           saveLayout(model);
           reportPanels();
         }
-      } catch { /* ignore */ }
+      } catch (err) { console.warn('[LayoutManager] WS message handler error:', err); }
     };
     };
 
@@ -855,10 +887,12 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
           ? (tabsetCount % 2 === 0 ? DockLocation.RIGHT : DockLocation.BOTTOM)
           : DockLocation.CENTER;
 
-        model.doAction(Actions.addNode(
-          { type: 'tab', name: 'CUI', component: 'cui', config: {} },
-          targetId, dockLocation, -1
-        ));
+        try {
+          model.doAction(Actions.addNode(
+            { type: 'tab', name: 'CUI', component: 'cui', config: {} },
+            targetId, dockLocation, -1
+          ));
+        } catch (err) { console.warn('[LayoutManager] pendingActivation addNode failed:', err); continue; }
         tabsetCount++;
 
         let newPanelId = '';

@@ -121,16 +121,18 @@ export default function CCUsageTab() {
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
   const fetchStats = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     setError("");
     try {
-      const res = await fetch("/api/claude-code/stats-v2");
+      const res = await fetch("/api/claude-code/stats-v2", { signal: AbortSignal.timeout(8000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (data.error) setError(data.error);
       else setStats(data);
       setLastRefresh(new Date());
     } catch (err: any) {
+      console.warn('[CCUsage] fetch stats failed:', err);
       setError(err.message);
     } finally {
       setLoading(false);
