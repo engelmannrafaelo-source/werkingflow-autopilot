@@ -80,13 +80,14 @@ export default function RepositoriesTab() {
   }
 
   return (
-    <div style={{ padding: 12 }}>
+    <div data-ai-id="repositories-tab" style={{ padding: 12 }}>
       {/* Sort Controls */}
-      <div style={{ marginBottom: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+      <div data-ai-id="repositories-sort-controls" style={{ marginBottom: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
         <span style={{ fontSize: 11, color: 'var(--tn-text-muted)' }}>Sort by:</span>
         {(['size', 'name', 'modified'] as const).map((sort) => (
           <button
             key={sort}
+            data-ai-id={`repositories-sort-${sort}`}
             onClick={() => setSortBy(sort)}
             style={{
               background: sortBy === sort ? 'var(--tn-blue)' : 'transparent',
@@ -106,13 +107,18 @@ export default function RepositoriesTab() {
       </div>
 
       {/* Repositories Table */}
-      <div style={{
-        background: 'var(--tn-bg)',
-        borderRadius: 6,
-        border: '1px solid var(--tn-border)',
-        overflow: 'hidden',
-      }}>
-        <table style={{
+      <div
+        data-ai-id="repositories-table-container"
+        style={{
+          background: 'var(--tn-bg)',
+          borderRadius: 6,
+          border: '1px solid var(--tn-border)',
+          overflow: 'hidden',
+        }}
+      >
+        <table
+          data-ai-id="repositories-table"
+          style={{
           width: '100%',
           borderCollapse: 'collapse',
           fontSize: 11,
@@ -140,10 +146,11 @@ export default function RepositoriesTab() {
               </th>
             </tr>
           </thead>
-          <tbody>
+          <tbody data-ai-id="repositories-table-body">
             {sortedRepos.map((repo) => (
               <tr
                 key={repo.path}
+                data-ai-id={`repo-row-${repo.name}`}
                 style={{
                   borderTop: '1px solid var(--tn-border)',
                   background: getAgeColor(repo.lastModified),
@@ -225,8 +232,8 @@ export default function RepositoriesTab() {
       </div>
 
       {/* Legend & Summary */}
-      <div style={{ marginTop: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div style={{ display: 'flex', gap: 12, fontSize: 10, color: 'var(--tn-text-muted)' }}>
+      <div data-ai-id="repositories-legend" style={{ marginTop: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div data-ai-id="repositories-color-legend" style={{ display: 'flex', gap: 12, fontSize: 10, color: 'var(--tn-text-muted)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <div style={{ width: 12, height: 12, background: 'rgba(158, 206, 106, 0.3)', borderRadius: 2 }} />
             <span>Fresh (&lt;1w)</span>

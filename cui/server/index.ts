@@ -44,6 +44,9 @@ const CUI_PROXIES = [
   { id: 'local',     localPort: 5004, target: 'http://localhost:4004' },
 ];
 
+// Track proxy health to avoid error spam for unconfigured proxies (e.g. local:4004)
+const proxyHealthy = new Map<string, boolean>();
+
 // SSE proxy: monitors upstream for attention markers (plan/question/done).
 // CRITICAL: Only sends SSE headers to browser if upstream has an active stream (200 OK).
 // For dead streams (non-200), forwards the error response so the CUI app knows there's no stream.
@@ -1612,11 +1615,19 @@ app.get('/api/mission/conversation/:accountId/:sessionId', async (req, res) => {
   if (!port) { res.status(400).json({ error: 'unknown account' }); return; }
 
   const tail = parseInt(req.query.tail as string) || 10;
-  const [convResp, permResp] = await Promise.all([
+  let [convResp, permResp] = await Promise.all([
     cuiFetch(port, `/api/conversations/${req.params.sessionId}`),
     cuiFetch(port, `/api/permissions?streamingId=&status=pending`),
   ]);
 
+  // Auto-fix corrupted JSONL on load failure (queue-operation as first line, etc.)
+  if (!convResp.ok) {
+    const cleaned = unstickConversation(req.params.sessionId);
+    if (cleaned > 0) {
+      console.log(`[Load] Auto-cleaned ${cleaned} entries from ${req.params.sessionId}, retrying...`);
+      convResp = await cuiFetch(port, `/api/conversations/${req.params.sessionId}`);
+    }
+  }
   if (!convResp.ok) { res.status(502).json({ error: convResp.error || 'CUI unreachable' }); return; }
 
   // Transform CUI message format, detect rate limits, filter noise
@@ -1906,6 +1917,20 @@ function unstickConversation(sessionId: string): number {
     try {
       const lines = readFileSync(filePath, 'utf-8').split('\n');
       const removeIndices = new Set<number>();
+      // Phase 0: Remove leading queue-operation entries (before system init)
+      // CUI binary writes queue-operation as first line when message was queued - corrupts JSONL
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        try {
+          const obj = JSON.parse(line);
+          if (obj.type === 'queue-operation') {
+            removeIndices.add(i);
+          } else {
+            break; // Stop at first non-queue-operation line (system init or user message)
+          }
+        } catch { break; }
+      }
       // Phase 1: Remove ALL synthetic error messages anywhere in the conversation
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
@@ -2056,6 +2081,12 @@ app.post('/api/mission/start', async (req, res) => {
     monitorStream(`http://localhost:${port}`, startData.streamingId, accountId, {});
   }
     checkSessionForRateLimit(startData.sessionId, accountId);
+
+  // Auto-clean JSONL after start (queue-operation corruption from concurrent spawns)
+  setTimeout(() => {
+    const cleaned = unstickConversation(startData.sessionId);
+    if (cleaned > 0) console.log(`[Start] Auto-cleaned ${cleaned} entries from new session ${startData.sessionId}`);
+  }, 3000);
 
   res.json({ ok: true, sessionId: startData.sessionId, streamingId: startData.streamingId });
 });

@@ -72,12 +72,15 @@ export default function RepoDashboard() {
   };
 
   return (
-    <div style={{
-      display: 'flex',
-      flexDirection: 'column',
-      height: '100%',
-      background: 'var(--tn-surface)',
-    }}>
+    <div
+      data-ai-id="repo-dashboard-panel"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        background: 'var(--tn-surface)',
+      }}
+    >
       {/* Header */}
       <div style={{
         background: 'var(--tn-bg-dark)',
@@ -91,11 +94,14 @@ export default function RepoDashboard() {
           gap: 8,
         }}>
           {/* Status dot */}
-          <span style={{
-            width: 8, height: 8, borderRadius: '50%',
-            background: quickStats?.dirtyRepos === 0 ? 'var(--tn-green)' : 'var(--tn-yellow)',
-            flexShrink: 0,
-          }} />
+          <span
+            data-ai-id="repo-dashboard-status-dot"
+            style={{
+              width: 8, height: 8, borderRadius: '50%',
+              background: quickStats?.dirtyRepos === 0 ? 'var(--tn-green)' : 'var(--tn-yellow)',
+              flexShrink: 0,
+            }}
+          />
 
           <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--tn-text)', flex: 1 }}>
             GIT & PIPELINE MONITOR
@@ -104,9 +110,11 @@ export default function RepoDashboard() {
 
           {/* Quick stats badges */}
           {quickStats && (
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <div data-ai-id="repo-dashboard-quick-stats" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
               {quickStats.dirtyRepos > 0 && (
-                <span style={{
+                <span
+                  data-ai-id="repo-dashboard-dirty-repos-badge"
+                  style={{
                   fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 3,
                   background: 'rgba(224,175,104,0.15)', color: 'var(--tn-yellow)',
                   fontFamily: 'monospace',
@@ -114,14 +122,19 @@ export default function RepoDashboard() {
                   {quickStats.dirtyRepos} uncommitted
                 </span>
               )}
-              <span style={{
-                fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 3,
-                background: 'rgba(122,162,247,0.15)', color: 'var(--tn-blue)',
-                fontFamily: 'monospace',
-              }}>
+              <span
+                data-ai-id="repo-dashboard-total-repos-badge"
+                style={{
+                  fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 3,
+                  background: 'rgba(122,162,247,0.15)', color: 'var(--tn-blue)',
+                  fontFamily: 'monospace',
+                }}
+              >
                 {quickStats.totalRepos} repos
               </span>
-              <span style={{
+              <span
+                data-ai-id="repo-dashboard-total-size-badge"
+                style={{
                 fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 3,
                 background: 'rgba(158,206,106,0.1)', color: 'var(--tn-text-muted)',
                 fontFamily: 'monospace',
@@ -133,6 +146,7 @@ export default function RepoDashboard() {
 
           {/* Refresh Button */}
           <button
+            data-ai-id="repo-dashboard-refresh-button"
             onClick={handleRefresh}
             disabled={refreshing}
             style={{
@@ -162,15 +176,19 @@ export default function RepoDashboard() {
         </div>
 
         {/* Sub-Tabs */}
-        <div style={{
-          display: 'flex',
-          gap: 4,
-          padding: '0 12px 8px',
-          overflowX: 'auto',
-        }}>
+        <div
+          data-ai-id="repo-dashboard-tabs"
+          style={{
+            display: 'flex',
+            gap: 4,
+            padding: '0 12px 8px',
+            overflowX: 'auto',
+          }}
+        >
           {tabs.map((tab) => (
             <button
               key={tab.key}
+              data-ai-id={`repo-dashboard-tab-${tab.key}`}
               onClick={() => setActiveTab(tab.key)}
               style={{
                 background: activeTab === tab.key ? 'var(--tn-blue)' : 'transparent',
@@ -193,7 +211,10 @@ export default function RepoDashboard() {
       </div>
 
       {/* Tab Content */}
-      <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
+      <div
+        data-ai-id={`repo-dashboard-content-${activeTab}`}
+        style={{ flex: 1, overflow: 'auto', minHeight: 0 }}
+      >
         {tabs.find((t) => t.key === activeTab)?.component}
       </div>
     </div>

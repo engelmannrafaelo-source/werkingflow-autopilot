@@ -59,9 +59,11 @@ export default function PipelineTab() {
   };
 
   return (
-    <div style={{ padding: 12 }}>
+    <div data-ai-id="pipeline-tab" style={{ padding: 12 }}>
       {/* Pipeline Diagram */}
-      <div style={{
+      <div
+        data-ai-id="pipeline-diagram"
+        style={{
         background: 'var(--tn-bg)',
         borderRadius: 6,
         border: '1px solid var(--tn-border)',
@@ -112,13 +114,18 @@ export default function PipelineTab() {
       </div>
 
       {/* App Status Table */}
-      <div style={{
-        background: 'var(--tn-bg)',
-        borderRadius: 6,
-        border: '1px solid var(--tn-border)',
-        overflow: 'hidden',
-      }}>
-        <table style={{
+      <div
+        data-ai-id="pipeline-table-container"
+        style={{
+          background: 'var(--tn-bg)',
+          borderRadius: 6,
+          border: '1px solid var(--tn-border)',
+          overflow: 'hidden',
+        }}
+      >
+        <table
+          data-ai-id="pipeline-table"
+          style={{
           width: '100%',
           borderCollapse: 'collapse',
           fontSize: 11,
@@ -143,9 +150,13 @@ export default function PipelineTab() {
               </th>
             </tr>
           </thead>
-          <tbody>
+          <tbody data-ai-id="pipeline-table-body">
             {apps.map(([app, status]) => (
-              <tr key={app} style={{ borderTop: '1px solid var(--tn-border)' }}>
+              <tr
+                key={app}
+                data-ai-id={`pipeline-row-${app}`}
+                style={{ borderTop: '1px solid var(--tn-border)' }}
+              >
                 <td style={{ padding: '8px 12px', fontWeight: 600, color: 'var(--tn-text)' }}>
                   {app}
                 </td>
@@ -188,7 +199,10 @@ export default function PipelineTab() {
         </table>
       </div>
 
-      <div style={{ marginTop: 16, padding: 12, background: 'var(--tn-bg)', borderRadius: 6, border: '1px solid var(--tn-border)' }}>
+      <div
+        data-ai-id="pipeline-legend"
+        style={{ marginTop: 16, padding: 12, background: 'var(--tn-bg)', borderRadius: 6, border: '1px solid var(--tn-border)' }}
+      >
         <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--tn-text-muted)', marginBottom: 8 }}>
           Legend
         </div>

@@ -152,9 +152,11 @@ export default function DiskUsageTab() {
   };
 
   return (
-    <div style={{ padding: 12 }}>
-      {/* Summary */}
-      <div style={{
+    <div data-ai-id="disk-usage-tab" style={{ padding: 12 }}>
+      {/* Summary & View Toggle */}
+      <div
+        data-ai-id="disk-usage-summary"
+        style={{
         background: 'var(--tn-bg)',
         borderRadius: 6,
         border: '1px solid var(--tn-border)',
@@ -164,44 +166,151 @@ export default function DiskUsageTab() {
         justifyContent: 'space-between',
         alignItems: 'center',
       }}>
-        <div>
-          <div style={{ fontSize: 11, color: 'var(--tn-text-muted)', marginBottom: 4 }}>
-            Total Disk Usage
+        <div style={{ display: 'flex', gap: 24 }}>
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--tn-text-muted)', marginBottom: 4 }}>
+              Total Disk Usage
+            </div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--tn-text)', fontFamily: 'monospace' }}>
+              {totalGB} GB
+            </div>
           </div>
-          <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--tn-text)', fontFamily: 'monospace' }}>
-            {totalGB} GB
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--tn-text-muted)', marginBottom: 4 }}>
+              Total Folders
+            </div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--tn-text)', fontFamily: 'monospace' }}>
+              {structure.length}
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--tn-text-muted)', marginBottom: 4 }}>
+              Git Repositories
+            </div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--tn-text)', fontFamily: 'monospace' }}>
+              {structure.filter(i => i.isGit).length}
+            </div>
           </div>
         </div>
-        <div>
-          <div style={{ fontSize: 11, color: 'var(--tn-text-muted)', marginBottom: 4 }}>
-            Total Folders
-          </div>
-          <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--tn-text)', fontFamily: 'monospace' }}>
-            {structure.length}
-          </div>
-        </div>
-        <div>
-          <div style={{ fontSize: 11, color: 'var(--tn-text-muted)', marginBottom: 4 }}>
-            Git Repositories
-          </div>
-          <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--tn-text)', fontFamily: 'monospace' }}>
-            {structure.filter(i => i.isGit).length}
-          </div>
+
+        {/* View Mode Toggle */}
+        <div data-ai-id="disk-usage-view-toggle" style={{ display: 'flex', gap: 4 }}>
+          <button
+            data-ai-id="disk-usage-view-treemap"
+            onClick={() => setViewMode('treemap')}
+            style={{
+              background: viewMode === 'treemap' ? 'var(--tn-blue)' : 'transparent',
+              border: '1px solid var(--tn-border)',
+              color: viewMode === 'treemap' ? '#fff' : 'var(--tn-text-muted)',
+              padding: '4px 12px',
+              borderRadius: 3,
+              fontSize: 10,
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            Treemap
+          </button>
+          <button
+            data-ai-id="disk-usage-view-bars"
+            onClick={() => setViewMode('bars')}
+            style={{
+              background: viewMode === 'bars' ? 'var(--tn-blue)' : 'transparent',
+              border: '1px solid var(--tn-border)',
+              color: viewMode === 'bars' ? '#fff' : 'var(--tn-text-muted)',
+              padding: '4px 12px',
+              borderRadius: 3,
+              fontSize: 10,
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            Bars
+          </button>
         </div>
       </div>
 
+      {/* Treemap View */}
+      {viewMode === 'treemap' && (
+        <>
+          <div
+            data-ai-id="disk-usage-treemap-container"
+            style={{
+              background: 'var(--tn-bg)',
+              borderRadius: 6,
+              border: '1px solid var(--tn-border)',
+              padding: 12,
+              marginBottom: 16,
+              height: 500,
+            }}
+          >
+            <ResponsiveContainer width="100%" height="100%">
+              <Treemap
+                data-ai-id="disk-usage-treemap"
+                data={treemapData}
+                dataKey="size"
+                stroke="var(--tn-border)"
+                content={<CustomTreemapContent />}
+              />
+            </ResponsiveContainer>
+          </div>
+
+          {/* Legend */}
+          <div
+            data-ai-id="disk-usage-treemap-legend"
+            style={{
+              background: 'var(--tn-bg)',
+              borderRadius: 6,
+              border: '1px solid var(--tn-border)',
+              padding: 12,
+            }}
+          >
+            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--tn-text)', marginBottom: 8 }}>
+              Color Legend (Last Modified)
+            </div>
+            <div data-ai-id="disk-usage-color-legend" style={{ display: 'flex', gap: 16, fontSize: 10, color: 'var(--tn-text-muted)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ width: 16, height: 16, background: '#9ece6a', borderRadius: 2 }} />
+                <span>Fresh (&lt;1w)</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ width: 16, height: 16, background: '#e0af68', borderRadius: 2 }} />
+                <span>Recent (&lt;1mo)</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ width: 16, height: 16, background: '#ff9e64', borderRadius: 2 }} />
+                <span>Aging (&lt;3mo)</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ width: 16, height: 16, background: '#f7768e', borderRadius: 2 }} />
+                <span>Stale (&lt;6mo)</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ width: 16, height: 16, background: '#565f89', borderRadius: 2 }} />
+                <span>Dead (&gt;6mo)</span>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
       {/* Disk Usage Bars */}
-      <div style={{
-        background: 'var(--tn-bg)',
-        borderRadius: 6,
-        border: '1px solid var(--tn-border)',
-        overflow: 'hidden',
-      }}>
+      {viewMode === 'bars' && (
+        <div
+          data-ai-id="disk-usage-bars-container"
+          style={{
+            background: 'var(--tn-bg)',
+            borderRadius: 6,
+            border: '1px solid var(--tn-border)',
+            overflow: 'hidden',
+          }}
+        >
         {structure.map((item) => {
           const percent = (item.diskSize.bytes / totalBytes) * 100;
           return (
             <div
               key={item.path}
+              data-ai-id={`disk-usage-bar-${item.name}`}
               style={{
                 borderBottom: '1px solid var(--tn-border)',
                 padding: 12,
@@ -285,7 +394,8 @@ export default function DiskUsageTab() {
             </div>
           );
         })}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
