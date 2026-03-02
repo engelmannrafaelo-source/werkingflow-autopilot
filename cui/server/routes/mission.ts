@@ -87,7 +87,7 @@ function buildSessionProjectMap(): void {
       const p = JSON.parse(readFileSync(join(PROJECTS_DIR, f), 'utf8'));
       if (p.workDir) projectConfigs.push({ id: p.id, name: p.name, workDir: p.workDir, encoded: p.workDir.replace(/\//g, '-') });
     }
-  } catch {}
+  } catch (e: any) { console.warn("[Mission] projectConfigs load error:", e?.message); }
   const extraPaths: Record<string, { name: string; path: string }> = {
     '-root-projekte-orchestrator': { name: 'orchestrator', path: '/root/projekte/orchestrator' },
     '-root-projekte-werkingflow': { name: 'werkingflow', path: '/root/projekte/werkingflow' },
@@ -118,12 +118,12 @@ function buildSessionProjectMap(): void {
             map[f.slice(0, -6)] = { projectName: projName, projectPath: projPath || dirname };
           }
         }
-      } catch {}
+      } catch (e: any) { console.warn("[Mission] projectConfigs load error:", e?.message); }
     }
   }
   _sessionProjectMap = map;
   _sessionMapBuiltAt = Date.now();
-  console.log('[Mission] Session-project map: ' + Object.keys(map).length + ' sessions mapped');
+  console.log("[Mission] Session-project map: " + Object.keys(map).length + " sessions, " + projectConfigs.length + " project configs loaded");
 }
 
 function getSessionProject(sessionId: string): { projectName: string; projectPath: string } | null {
@@ -345,10 +345,12 @@ async function fetchConvList(filterProject?: string) {
   const results: any[] = [];
 
   await Promise.allSettled(CUI_PROXIES.map(async (proxy) => {
-    const resp = await cuiFetch(proxy.localPort, `/api/conversations?limit=${DEFAULT_CONV_LIMIT}&sortBy=updated&order=desc`);
+    const resp = await cuiFetch(proxy.localPort, `/api/conversations?limit=${DEFAULT_CONV_LIMIT}&sortBy=updated&order=desc`, { timeoutMs: 30000 });
     if (!resp.ok || !resp.data?.conversations) return;
     for (const c of resp.data.conversations) {
-      if (filterProject && !c.projectPath?.includes(filterProject)) continue;
+      const _sp = getSessionProject(c.sessionId);
+      const _effectivePath = _sp?.projectPath || c.projectPath || '';
+      if (filterProject && !_effectivePath.includes(filterProject)) continue;
       results.push({
         sessionId: c.sessionId,
         accountId: proxy.id,
@@ -655,28 +657,37 @@ router.get('/conversations', async (req, res) => {
   const now = Date.now();
   const age = now - _convCache.timestamp;
 
+  let data: any = null;
+
   // Serve from cache if fresh
   if (_convCache.data && age < CONV_CACHE_TTL_MS) {
-    return res.json(_convCache.data);
+    data = _convCache.data;
   }
-
   // Serve stale cache while refreshing in background
-  if (_convCache.data && age < CONV_CACHE_STALE_TTL_MS && !_convCache.refreshing) {
+  else if (_convCache.data && age < CONV_CACHE_STALE_TTL_MS && !_convCache.refreshing) {
     _convCache.refreshing = true;
-    // Background refresh (fire-and-forget)
+    data = _convCache.data;
     (async () => {
       try {
-        const fresh = await fetchConvList(filterProject);
+        const fresh = await fetchConvList();
         _convCache = { data: fresh, timestamp: Date.now(), refreshing: false };
       } catch (err) { console.warn('[Mission] Background conv cache refresh failed:', err instanceof Error ? err.message : err); _convCache.refreshing = false; }
     })();
-    return res.json(_convCache.data);
+  }
+  // Cache miss or too stale — blocking fetch (always unfiltered for cache)
+  else {
+    const fresh = await fetchConvList();
+    _convCache = { data: fresh, timestamp: Date.now(), refreshing: false };
+    data = fresh;
   }
 
-  // Cache miss or too stale — blocking fetch
-  const fresh = await fetchConvList(filterProject);
-  _convCache = { data: fresh, timestamp: Date.now(), refreshing: false };
-  res.json(fresh);
+  // Apply project filter AFTER cache
+  if (filterProject && data) {
+    const filtered = { ...data, conversations: data.conversations.filter((c: any) => (c.projectPath || '').includes(filterProject)), total: 0 };
+    filtered.total = filtered.conversations.length;
+    return res.json(filtered);
+  }
+  res.json(data);
   } catch (err: any) {
     // Serve stale cache on error
     if (_convCache.data) return res.json(_convCache.data);
@@ -1355,7 +1366,7 @@ router.post('/auto-titles', async (_req, res) => {
   // Get all conversations
   const allConvs: Array<{ sessionId: string; accountId: string; port: number; summary: string; customName: string }> = [];
   await Promise.all(CUI_PROXIES.map(async (proxy) => {
-    const resp = await cuiFetch(proxy.localPort, `/api/conversations?limit=${DEFAULT_CONV_LIMIT}&sortBy=updated&order=desc`);
+    const resp = await cuiFetch(proxy.localPort, `/api/conversations?limit=${DEFAULT_CONV_LIMIT}&sortBy=updated&order=desc`, { timeoutMs: 30000 });
     if (!resp.ok || !resp.data?.conversations) return;
     for (const c of resp.data.conversations) {
       if (c.sessionInfo?.custom_name || getTitle(c.sessionId)) continue; // Already has a title
@@ -1411,7 +1422,7 @@ router.get('/context', async (_req, res) => {
     // Get all conversations with last 3 messages each
     const conversations: any[] = [];
     await Promise.all(CUI_PROXIES.map(async (proxy) => {
-      const listResp = await cuiFetch(proxy.localPort, '/api/conversations?limit=500&sortBy=updated&order=desc');
+      const listResp = await cuiFetch(proxy.localPort, '/api/conversations?limit=500&sortBy=updated&order=desc', { timeoutMs: 30000 });
       if (!listResp.ok || !listResp.data?.conversations) return;
       for (const c of listResp.data.conversations) {
         const detailResp = await cuiFetch(proxy.localPort, `/api/conversations/${c.sessionId}`);

@@ -110,14 +110,16 @@ export default function InfisicalMonitor() {
 
   if (loading) {
     return (
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        height: '100%',
-        color: 'var(--tn-text-muted)',
-        fontSize: 12,
-      }}>
+      <div
+        data-test-id="loading-indicator"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          height: '100%',
+          color: 'var(--tn-text-muted)',
+          fontSize: 12,
+        }}>
         Loading Infisical status...
       </div>
     );
@@ -125,19 +127,24 @@ export default function InfisicalMonitor() {
 
   if (error) {
     return (
-      <div style={{
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        height: '100%',
-        gap: '1rem',
-        padding: '1rem',
-      }}>
-        <div style={{ color: 'var(--tn-red)', fontSize: 14 }}>
+      <div
+        data-test-id="error-state"
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          height: '100%',
+          gap: '1rem',
+          padding: '1rem',
+        }}>
+        <div
+          data-test-id="error-message"
+          style={{ color: 'var(--tn-red)', fontSize: 14 }}>
           Error: {error}
         </div>
         <button
+          data-test-id="retry-button"
           onClick={fetchAllData}
           style={{
             padding: '6px 12px',
@@ -164,13 +171,18 @@ export default function InfisicalMonitor() {
   ];
 
   return (
-    <div className="infisical-monitor" style={{
-      height: '100%',
-      display: 'flex',
-      flexDirection: 'column',
-      background: 'var(--tn-bg)',
-      overflow: 'hidden',
-    }}>
+    <div
+      className="infisical-monitor"
+      data-test-id="administration-panel"
+      data-panel-id="infisical"
+      data-component="InfisicalMonitor"
+      style={{
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        background: 'var(--tn-bg)',
+        overflow: 'hidden',
+      }}>
       {/* Header with Tabs */}
       <div style={{
         borderBottom: '1px solid var(--tn-border)',
@@ -191,15 +203,18 @@ export default function InfisicalMonitor() {
             }}>
               Infisical Monitor
             </h3>
-            <div style={{
-              fontSize: 10,
-              color: 'var(--tn-text-muted)',
-              marginTop: 2,
-            }}>
+            <div
+              data-test-id="infisical-status"
+              style={{
+                fontSize: 10,
+                color: 'var(--tn-text-muted)',
+                marginTop: 2,
+              }}>
               {data.serverInfo?.server || 'No server info'}
             </div>
           </div>
           <button
+            data-test-id="refresh-button"
             onClick={fetchAllData}
             style={{
               padding: '4px 8px',
@@ -226,6 +241,7 @@ export default function InfisicalMonitor() {
           {tabs.map(tab => (
             <button
               key={tab.id}
+              data-test-id={`tab-${tab.id}`}
               onClick={() => setActiveTab(tab.id)}
               style={{
                 padding: '8px 12px',

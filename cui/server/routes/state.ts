@@ -83,7 +83,7 @@ export type ConvAttentionState = _ConvAttentionState;
 export type SessionState = _SessionState;
 
 // --- Persistent Storage Dirs ---
-export const DATA_DIR = resolve(import.meta.dirname ?? __dirname, '..', 'data');
+export const DATA_DIR = resolve(import.meta.dirname ?? __dirname, '..', '..', 'data');
 export const PROJECTS_DIR = join(DATA_DIR, 'projects');
 export const NOTES_DIR = join(DATA_DIR, 'notes');
 export const LAYOUTS_DIR = join(DATA_DIR, 'layouts');
