@@ -132,7 +132,7 @@ function findJsonlPath(sessionId: string): string | null {
         const wsPath = join(accDir, ws);
         try {
           const files = readdirSync(wsPath);
-          const match = files.find(f => f.startsWith(sessionId));
+          const match = files.find(f => f.startsWith(sessionId) && f.endsWith('.jsonl'));
           if (match) return join(wsPath, match);
         } catch (err) { console.warn('[Index] Unreadable dir in findJsonlPath:', err instanceof Error ? err.message : err); }
       }
