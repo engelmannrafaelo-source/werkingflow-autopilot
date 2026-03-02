@@ -67,6 +67,7 @@ const RepoDashboard = lazy(() => import('./panels/RepoDashboard/RepoDashboard'))
 const SystemHealth = lazy(() => import('./panels/SystemHealth'));
 const WatchdogPanel = lazy(() => import('./panels/WatchdogPanel'));
 const InfrastructurePanel = lazy(() => import('./panels/InfrastructurePanel'));
+const AdministrationPanel = lazy(() => import('./panels/AdministrationPanel'));
 const LayoutBuilder = lazy(() => import('./LayoutBuilder'));
 
 import '../styles/office.css';
@@ -369,6 +370,8 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
         return wrapPanel('WatchdogPanel', withSuspense(<WatchdogPanel />));
       case 'infrastructure':
         return wrapPanel('InfrastructurePanel', withSuspense(<InfrastructurePanel />));
+      case 'administration':
+        return wrapPanel('AdministrationPanel', withSuspense(<AdministrationPanel />));
       default:
         return wrapPanel(`Unknown:${component}`,
           <div style={{ padding: 20, color: 'var(--tn-text-muted)' }}>
@@ -469,9 +472,11 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
   }, [workDir]);
 
   const onRenderTabSet = useCallback((node: TabSetNode | BorderNode, renderValues: ITabSetRenderValues) => {
+    const nodeId = node.getId().replace(/^#/, '');
     renderValues.stickyButtons.push(
       <select
         key="add-tab"
+        data-ai-id={`add-tab-dropdown-${nodeId}`}
         value=""
         onChange={(e) => {
           const val = e.target.value;
