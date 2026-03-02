@@ -31,22 +31,17 @@ export default function PanelConnectivityGuard({
         if (isExternal) {
           // Use proxy for external URLs to bypass CORS
           const proxyUrl = `/api/health-check-proxy?url=${encodeURIComponent(checkUrl)}`;
-          const proxyResponse = await fetch(proxyUrl, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
+          const proxyResponse = await fetch(proxyUrl, { cache: 'no-store', signal: AbortSignal.timeout(10000) });
           if (!proxyResponse.ok) throw new Error(`Proxy HTTP ${proxyResponse.status}`);
           const data = await proxyResponse.json();
           response = { ok: data.ok };
         } else {
           // Direct check for local URLs
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 3000);
-
           response = await fetch(checkUrl, {
             method: 'HEAD',
-            signal: controller.signal,
+            signal: AbortSignal.timeout(10000),
             cache: 'no-store'
           });
-
-          clearTimeout(timeoutId);
         }
 
         if (!cancelled) {

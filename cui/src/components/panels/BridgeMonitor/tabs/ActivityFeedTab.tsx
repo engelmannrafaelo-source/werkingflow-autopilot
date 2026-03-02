@@ -36,7 +36,7 @@ export default function ActivityFeedTab() {
     if ((window as any).__cuiServerAlive !== true) return;
     setError('');
     try {
-      const res = await fetch('/api/bridge/metrics/activity?limit=100', { signal: AbortSignal.timeout(8000) });
+      const res = await fetch('/api/bridge/metrics/activity?limit=100', { signal: AbortSignal.timeout(10000) });
       if (!res.ok) throw new Error(await res.text());
       const result = await res.json();
       setData(result);

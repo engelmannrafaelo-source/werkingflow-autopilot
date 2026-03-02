@@ -273,7 +273,7 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
     // Also check on mount (delayed to allow WS to connect first)
     setTimeout(() => {
       if ((window as any).__cuiServerAlive === false) return;
-      fetch('/api/cui-sync/pending', { signal: AbortSignal.timeout(8000) })
+      fetch('/api/cui-sync/pending', { signal: AbortSignal.timeout(10000) })
         .then(r => { if (!r.ok) throw new Error(`cui-sync/pending ${r.status}`); return r.json(); })
         .then(d => { if (d?.count > 0) setPendingCount(d.count); })
         .catch((err) => { console.warn('[ProjectTabs] fetchPending:', err); });

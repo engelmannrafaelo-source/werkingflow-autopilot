@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, unlinkSync, rmSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, unlinkSync, rmSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { execSync } from 'child_process';
@@ -207,8 +207,13 @@ function loadWorkDirs(): Record<string, string> {
   if (!WORKDIRS_FILE || !existsSync(WORKDIRS_FILE)) return {};
   try { return JSON.parse(readFileSync(WORKDIRS_FILE, 'utf8')); } catch (err) { console.warn('[Mission] loadWorkDirs parse error:', err instanceof Error ? err.message : err); return {}; }
 }
+/** Validates that a workDir is under an allowed root path */
+function isValidWorkDir(d: string): boolean {
+  return !!d && (d.startsWith('/root/projekte') || d.startsWith('/root/orchestrator') || d.startsWith('/home/claude-user'));
+}
+
 function saveWorkDir(sessionId: string, workDir: string) {
-  if (!workDir || workDir === '/root/projekte') return;
+  if (!workDir || workDir === '/root/projekte' || workDir === '/root/orchestrator') return;
   const workDirs = loadWorkDirs();
   if (workDirs[sessionId] === workDir) return;
   workDirs[sessionId] = workDir;
@@ -903,7 +908,6 @@ router.post('/send', async (req, res) => {
   if (!port) { res.status(400).json({ error: 'unknown account' }); return; }
 
   // Resolve workDir: validate explicit > persisted > default
-  const isValidWorkDir = (d: string) => d && (d.startsWith('/root/projekte') || d.startsWith('/home/claude-user'));
   const resolvedWorkDir = (isValidWorkDir(workDir) ? workDir : null) || getWorkDir(sessionId) || '/root/projekte';
   // Persist workDir for future account switches
   if (workDir) saveWorkDir(sessionId, workDir);
@@ -980,7 +984,7 @@ router.post('/send', async (req, res) => {
 
   // Fire-and-forget: monitor with retry on silent failure
   let currentStreamingId = sendResult.streamingId;
-  (async () => {
+  (async () => { try {
     for (let attempt = 0; attempt <= MAX_SEND_RETRIES; attempt++) {
       // 1. Await stream completion
       if (currentStreamingId) {
@@ -1017,7 +1021,7 @@ router.post('/send', async (req, res) => {
     console.error(`[Send] All ${MAX_SEND_RETRIES + 1} attempts failed for ${finalSessionId.slice(0, 8)}`);
     broadcast({ type: 'cui-state', cuiId: accountId, state: 'error', message: 'Nachricht konnte nicht zugestellt werden. Bitte erneut versuchen.' });
     setSessionState(accountId, accountId, 'needs_attention', 'send_failed', finalSessionId);
-  })();
+  } catch (err) { console.error('[Send] Monitor IIFE crashed:', err); } })();
   } catch (err: any) {
     console.warn('[Server] POST /api/mission/send error:', err);
     res.status(500).json({ error: 'Internal error' });
@@ -1211,8 +1215,7 @@ router.post('/start', async (req, res) => {
   const port = getProxyPort(effectiveAccountId);
   if (!port) { res.status(400).json({ error: 'unknown account' }); return; }
 
-  const isValidWorkDir2 = (d: string) => d && (d.startsWith('/root/projekte') || d.startsWith('/home/claude-user'));
-  const resolvedWorkDir = (isValidWorkDir2(workDir) ? workDir : null) || '/root/projekte';
+  const resolvedWorkDir = (isValidWorkDir(workDir) ? workDir : null) || '/root/projekte';
   // Start conversation (60s timeout — Claude v1.0.128 spawn takes ~34s)
   const startResp = await cuiFetch(port, '/api/conversations/start', {
     method: 'POST',
@@ -1250,7 +1253,7 @@ router.post('/start', async (req, res) => {
 
   // Fire-and-forget: monitor with retry on silent failure
   let currentStreamingId = startData.streamingId;
-  (async () => {
+  (async () => { try {
     for (let attempt = 0; attempt <= MAX_SEND_RETRIES; attempt++) {
       if (currentStreamingId) {
         await monitorStream(`http://localhost:${port}`, currentStreamingId, accountId, {});
@@ -1282,7 +1285,7 @@ router.post('/start', async (req, res) => {
     console.error(`[Start] All ${MAX_SEND_RETRIES + 1} attempts failed for ${startData.sessionId.slice(0, 8)}`);
     broadcast({ type: 'cui-state', cuiId: accountId, state: 'error', message: 'Konversation konnte nicht gestartet werden. Bitte erneut versuchen.' });
     setSessionState(accountId, accountId, 'needs_attention', 'send_failed', startData.sessionId);
-  })();
+  } catch (err) { console.error('[Start] Monitor IIFE crashed:', err); } })();
   } catch (err: any) {
     console.warn('[Server] POST /api/mission/start error:', err);
     res.status(500).json({ error: 'Internal error' });
@@ -1475,8 +1478,8 @@ router.get('/context', async (_req, res) => {
       if (!p.workDir) continue;
       try {
         const [statusResult, logResult] = await Promise.allSettled([
-          execAsync(`cd ${p.workDir} && git status --short 2>/dev/null || echo '(kein Git repo)'`),
-          execAsync(`cd ${p.workDir} && git log --oneline -5 2>/dev/null || echo '(keine commits)'`),
+          execAsync('git status --short 2>/dev/null || echo "(kein Git repo)"', { cwd: p.workDir }),
+          execAsync('git log --oneline -5 2>/dev/null || echo "(keine commits)"', { cwd: p.workDir }),
         ]);
         gitStatus[p.id] = {
           status: statusResult.status === 'fulfilled' ? statusResult.value.stdout.trim() : '(error)',

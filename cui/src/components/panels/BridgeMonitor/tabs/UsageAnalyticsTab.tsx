@@ -38,7 +38,7 @@ export default function UsageAnalyticsTab() {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/bridge/metrics/usage', { signal: AbortSignal.timeout(8000) });
+      const res = await fetch('/api/bridge/metrics/usage', { signal: AbortSignal.timeout(10000) });
       if (!res.ok) throw new Error(await res.text());
       const result = await res.json();
       setData(result);

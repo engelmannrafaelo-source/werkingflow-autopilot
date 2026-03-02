@@ -22,9 +22,6 @@ export async function bridgeFetch(path: string, opts?: RequestInit & { timeout?:
       headers: { ...authHeaders(), ...init?.headers },
     });
     return res;
-  } catch (err) {
-    // Rethrown — caller handles error state
-    throw err;
   } finally {
     clearTimeout(timer);
   }

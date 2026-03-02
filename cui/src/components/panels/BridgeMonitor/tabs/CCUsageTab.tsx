@@ -128,7 +128,7 @@ export default function CCUsageTab() {
       // Trigger scraping if requested
       if (triggerScrape) {
         try {
-          const scrapeRes = await fetch("/api/claude-code/scrape-now", { method: "POST", signal: AbortSignal.timeout(8000) });
+          const scrapeRes = await fetch("/api/claude-code/scrape-now", { method: "POST", signal: AbortSignal.timeout(10000) });
           if (!scrapeRes.ok) {
             // Scrape may not be available — non-critical
             setError(`Scrape failed: HTTP ${scrapeRes.status}`);
@@ -140,7 +140,7 @@ export default function CCUsageTab() {
         }
       }
 
-      const res = await fetch("/api/claude-code/stats-v2", { signal: AbortSignal.timeout(8000) });
+      const res = await fetch("/api/claude-code/stats-v2", { signal: AbortSignal.timeout(10000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (data.error) setError(data.error);

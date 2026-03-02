@@ -469,8 +469,6 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   const circuitOpenRef = useRef(false); // Circuit breaker: stops polling after persistent failures
   // Track last poll data to skip redundant setState (avoids re-render + LCP shift)
   const lastPollHashRef = useRef('');
-  // Debounce: coalesce rapid-fire setTimeout(pollNow) into single call
-  const debouncedPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const account = ACCOUNTS.find(a => a.id === selectedId) || ACCOUNTS[0];
   const pollInterval = liveMode ? 2000 : 15000;
@@ -479,7 +477,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   const pollNow = useCallback(async () => {
     if (!sessionId) return;
     // Skip if server is known to be down (WS disconnected)
-    if ((window as any).__cuiServerAlive === false) return;
+    if ((window as any).__cuiServerAlive !== true) return;
     // Skip if circuit breaker is open (persistent 502s for this conversation)
     if (circuitOpenRef.current) return;
     try {
@@ -528,15 +526,6 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       // Silent: circuit breaker handles recovery, WS reconnect re-triggers polling
     }
   }, [sessionId, selectedId]);
-
-  // Debounced poll: coalesces multiple rapid setTimeout(pollNow) into one call
-  const debouncedPoll = useCallback((delayMs: number) => {
-    if (debouncedPollRef.current) clearTimeout(debouncedPollRef.current);
-    debouncedPollRef.current = setTimeout(() => {
-      debouncedPollRef.current = null;
-      pollNow();
-    }, delayMs);
-  }, [pollNow]);
 
   // Fetch states once on mount/account change (WS handles updates after that)
   useEffect(() => {

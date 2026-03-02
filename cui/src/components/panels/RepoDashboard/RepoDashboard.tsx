@@ -34,7 +34,7 @@ export default function RepoDashboard() {
     async function fetchQuick() {
       if ((window as any).__cuiServerAlive !== true) return;
       try {
-        const res = await fetch('/api/repo-dashboard/repositories', { signal: AbortSignal.timeout(8000) });
+        const res = await fetch('/api/repo-dashboard/repositories', { signal: AbortSignal.timeout(10000) });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
 
@@ -63,7 +63,7 @@ export default function RepoDashboard() {
       const refreshRes = await fetch('/api/repo-dashboard/refresh', { method: 'POST', signal: AbortSignal.timeout(15000) });
       if (!refreshRes.ok) throw new Error(`Refresh HTTP ${refreshRes.status}`);
       // Re-trigger stats fetch
-      const res = await fetch('/api/repo-dashboard/repositories', { signal: AbortSignal.timeout(8000) });
+      const res = await fetch('/api/repo-dashboard/repositories', { signal: AbortSignal.timeout(10000) });
       if (!res.ok) throw new Error(`Repos HTTP ${res.status}`);
       const data = await res.json();
       const totalSize = data.repos.reduce((sum: number, r: any) => sum + r.diskSize.bytes, 0);

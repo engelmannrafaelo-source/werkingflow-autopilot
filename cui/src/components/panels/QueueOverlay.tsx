@@ -214,7 +214,7 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
   const lastCountRef = useRef(-1);
   const fetchConversations = useCallback(() => {
     if ((window as any).__cuiServerAlive === false) { setLoading(false); return; }
-    fetch(`${API}/mission/conversations`, { signal: AbortSignal.timeout(8000) })
+    fetch(`${API}/mission/conversations`, { signal: AbortSignal.timeout(10000) })
       .then(r => { if (!r.ok) throw new Error('fetch failed'); return r.json(); })
       .then(data => {
         const convs: Conversation[] = data.conversations || [];
