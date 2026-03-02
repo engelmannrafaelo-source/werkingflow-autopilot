@@ -1,1 +1,71 @@
-[]
+[
+  {
+    "account": "rafael",
+    "timestamp": "2026-03-02T12:00:50.340Z",
+    "plan": "unknown",
+    "currentSession": {
+      "percent": 0,
+      "resetIn": ""
+    },
+    "weeklyAllModels": {
+      "percent": 0,
+      "resetDate": ""
+    },
+    "weeklySonnet": {
+      "percent": 0,
+      "resetDate": ""
+    },
+    "extraUsage": {
+      "percent": 0,
+      "spent": "",
+      "limit": "",
+      "balance": ""
+    }
+  },
+  {
+    "account": "office",
+    "timestamp": "2026-03-02T12:01:24.109Z",
+    "plan": "unknown",
+    "currentSession": {
+      "percent": 0,
+      "resetIn": ""
+    },
+    "weeklyAllModels": {
+      "percent": 0,
+      "resetDate": ""
+    },
+    "weeklySonnet": {
+      "percent": 0,
+      "resetDate": ""
+    },
+    "extraUsage": {
+      "percent": 0,
+      "spent": "",
+      "limit": "",
+      "balance": ""
+    }
+  },
+  {
+    "account": "engelmann",
+    "timestamp": "2026-03-02T12:02:12.107Z",
+    "plan": "unknown",
+    "currentSession": {
+      "percent": 0,
+      "resetIn": ""
+    },
+    "weeklyAllModels": {
+      "percent": 0,
+      "resetDate": ""
+    },
+    "weeklySonnet": {
+      "percent": 0,
+      "resetDate": ""
+    },
+    "extraUsage": {
+      "percent": 0,
+      "spent": "",
+      "limit": "",
+      "balance": ""
+    }
+  }
+]

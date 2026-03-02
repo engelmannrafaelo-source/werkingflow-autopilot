@@ -93,13 +93,14 @@ export default function UsageAnalyticsTab() {
   );
 
   return (
-    <div style={{ padding: 12 }}>
+    <div data-ai-id="stats-tab-content" style={{ padding: 12 }}>
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0, color: 'var(--tn-text)' }}>
           Usage Analytics
         </h3>
         <button
+          data-ai-id="stats-refresh-button"
           onClick={fetchData}
           style={{
             padding: '3px 10px',
@@ -141,7 +142,7 @@ export default function UsageAnalyticsTab() {
       {/* Overview Stats */}
       {data && (
         <>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 20 }}>
+          <div data-ai-id="stats-summary-cards" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 20 }}>
             {statCard(
               'Total Requests',
               formatNumber(data.total_requests),
@@ -159,7 +160,7 @@ export default function UsageAnalyticsTab() {
           {/* Endpoint Usage Chart */}
           {data.endpoints.length > 0 ? (
             <>
-              <div style={{ marginBottom: 20 }}>
+              <div data-ai-id="stats-chart-container" style={{ marginBottom: 20 }}>
                 <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--tn-text)', marginBottom: 8 }}>
                   REQUESTS BY ENDPOINT
                 </div>

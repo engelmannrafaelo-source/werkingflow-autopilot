@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import RepositoriesTab from './tabs/RepositoriesTab';
 import PipelineTab from './tabs/PipelineTab';
 import DiskUsageTab from './tabs/DiskUsageTab';
+import HierarchyTab from './tabs/HierarchyTab';
 import { BuildInfo } from '../../BuildInfo';
 
 interface Tab {
@@ -19,6 +20,7 @@ interface QuickStats {
 export default function RepoDashboard() {
   const tabs: Tab[] = [
     { key: 'repos', label: 'Repositories', component: <RepositoriesTab /> },
+    { key: 'hierarchy', label: 'Hierarchy (Sankey)', component: <HierarchyTab /> },
     { key: 'pipeline', label: 'Pipeline', component: <PipelineTab /> },
     { key: 'disk', label: 'Disk Usage', component: <DiskUsageTab /> },
   ];

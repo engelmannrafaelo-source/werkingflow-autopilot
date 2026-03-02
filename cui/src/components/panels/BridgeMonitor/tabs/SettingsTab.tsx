@@ -92,24 +92,29 @@ export default function SettingsTab() {
   if (!config) return <ErrorBanner message="No configuration data available" onRetry={fetchAll} />;
 
   return (
-    <div style={{ padding: '16px 12px', overflowY: 'auto', height: '100%' }}>
+    <div data-ai-id="settings-tab-content" style={{ padding: '16px 12px', overflowY: 'auto', height: '100%' }}>
       <Toolbar onRefresh={fetchAll} lastRefresh={lastRefresh} />
 
-      <Section title="Bridge Configuration">
+      <div data-ai-id="settings-bridge-config">
+        <Section title="Bridge Configuration">
         <Row label="Version" value={config.version} />
         <Row label="API Key Required" value={config.api_key_required ? 'Yes' : 'No'} />
         <Row label="API Key Source" value={config.api_key_source} />
         <Row label="Load Balancer" value={config.load_balancer} />
         <Row label="Strategy" value={config.strategy} />
         <Row label="Failover" value={config.failover} />
-      </Section>
+        </Section>
+      </div>
 
-      <Section title="Privacy Settings">
+      <div data-ai-id="settings-privacy">
+        <Section title="Privacy Settings">
         <Row label="Privacy Enabled" value={config.privacy_enabled ? 'Yes' : 'No'} />
         <Row label="Language" value={config.privacy_language.toUpperCase()} />
-      </Section>
+        </Section>
+      </div>
 
-      <SectionFlat title={`Workers (${config.workers} total)`}>
+      <div data-ai-id="settings-workers">
+        <SectionFlat title={`Workers (${config.workers} total)`}>
         {workers.length === 0 ? (
           <div style={{
             padding: '24px',
@@ -158,7 +163,8 @@ export default function SettingsTab() {
             </tbody>
           </table>
         )}
-      </SectionFlat>
+        </SectionFlat>
+      </div>
 
       <div style={{ marginTop: 12, padding: 12, background: 'var(--tn-bg-dark)', borderRadius: 4, fontSize: 11, color: 'var(--tn-text-dim)' }}>
         <strong>Note:</strong> Settings are read-only. Configuration changes must be made on the Bridge server.

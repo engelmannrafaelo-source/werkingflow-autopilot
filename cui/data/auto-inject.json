@@ -1,4 +1,31 @@
 {
-  "configs": {},
-  "lastInject": {}
+  "configs": {
+    "engelmann": {
+      "accountId": "engelmann",
+      "sessionId": "8e20ddda-1099-4023-a0d7-700ab5bb6750",
+      "workDir": "/root/orchestrator/workspaces/administration",
+      "message": "continu e -implement all tests properly similar to how its down for the bridge - then test all layers - always cuorrect errors in the most clean and arhictecturally sound method - go back to testing - continue until all problems are solved and you can guarantett the panel is 100 % functionl.",
+      "intervalMs": 300000,
+      "enabled": true
+    },
+    "rafael": {
+      "accountId": "rafael",
+      "sessionId": "73b74b01-4cf4-42d0-b855-481e9248dfa1",
+      "workDir": "/root/orchestrator/workspaces/engelmann-ai-hub",
+      "message": "Schau dir die aktuellen Test-Logs an und entscheide selbst: Wenn Probleme sichtbar sind, behebe sie (defensive coding, fail fast) und committe. Wenn Tests noch laufen oder alles passt, sage kurz Bescheid und warte.",
+      "intervalMs": 600000,
+      "enabled": true
+    },
+    "office": {
+      "accountId": "office",
+      "sessionId": "fd8da35e-70de-4ddf-90b4-8a543afed89d",
+      "workDir": "/root/orchestrator/workspaces/administration",
+      "message": "Schau dir die aktuellen Test-Logs an und entscheide selbst: Wenn Probleme sichtbar sind, behebe sie (defensive coding, fail fast) und committe. Wenn Tests noch laufen oder alles passt, sage kurz Bescheid und warte.",
+      "intervalMs": 300000,
+      "enabled": true
+    }
+  },
+  "lastInject": {
+    "engelmann": "2026-03-02T11:09:08.105Z"
+  }
 }

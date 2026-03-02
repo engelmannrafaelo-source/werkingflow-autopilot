@@ -76,7 +76,7 @@ export default function OverviewTab() {
   };
 
   return (
-    <div style={{ padding: 12 }}>
+    <div data-ai-id="overview-tab-content" style={{ padding: 12 }}>
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0, color: 'var(--tn-text)' }}>
@@ -124,7 +124,7 @@ export default function OverviewTab() {
       {/* Quick Stats */}
       {data && (
         <>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 20 }}>
+          <div data-ai-id="overview-stats-cards" style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 20 }}>
             {statCard(
               'Health',
               data.health,

@@ -513,6 +513,23 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     };
   }, [sessionId, selectedId, isTabVisible, pollNow, pollInterval]);
 
+  // --- Fetch Prompt Templates (retry on failure — server may be restarting) ---
+  const loadTemplates = useCallback(() => {
+    fetch('/api/prompt-templates', { signal: AbortSignal.timeout(5000) })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data) return;
+        const reply = (data.templates || []).filter((t: PromptTemplate) => t.category === 'reply');
+        reply.sort((a: PromptTemplate, b: PromptTemplate) => a.order - b.order);
+        setReplyTemplates(reply);
+      })
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    if ((window as any).__cuiServerAlive === false) return;
+    loadTemplates();
+  }, [loadTemplates]);
+
   // --- WS for realtime attention events (auto-reconnect) ---
   useEffect(() => {
     if (!isTabVisible) return;
@@ -533,6 +550,8 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         circuitOpenRef.current = false;
         pollFailCountRef.current = 0;
         if (sessionId) setTimeout(pollNow, 300);
+        // Re-fetch templates (may have failed during server restart)
+        loadTemplates();
       };
       ws.onclose = () => {
         if (!disposed) {
@@ -597,7 +616,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       disposed = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
     };
-  }, [selectedId, isTabVisible, sessionId, pollNow]);
+  }, [selectedId, isTabVisible, sessionId, pollNow, loadTemplates]);
 
   // Auto-scroll only when user is near bottom (not scrolled up reading)
   useEffect(() => {
@@ -617,20 +636,6 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   }, []);
 
   // --- Handlers ---
-
-  // --- Fetch Prompt Templates ---
-  useEffect(() => {
-    if ((window as any).__cuiServerAlive === false) return;
-    fetch('/api/prompt-templates', { signal: AbortSignal.timeout(5000) })
-      .then(r => r.ok ? r.json() : null)
-      .then(data => {
-        if (!data) return;
-        const reply = (data.templates || []).filter((t: PromptTemplate) => t.category === 'reply');
-        reply.sort((a: PromptTemplate, b: PromptTemplate) => a.order - b.order);
-        setReplyTemplates(reply);
-      })
-      .catch(() => {});
-  }, []);
 
   // --- Auto-Inject (Loop) Sync ---
   const syncLoopState = useCallback(async () => {

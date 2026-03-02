@@ -5744,6 +5744,7 @@ app.get('/api/bridge/metrics/activity', async (req, res) => {
 let repoCache: { data: any; timestamp: number } | null = null;
 let pipelineCache: { data: any; timestamp: number } | null = null;
 let structureCache: { data: any; timestamp: number } | null = null;
+let hierarchyCache: { data: any; timestamp: number } | null = null;
 const CACHE_TTL = 60000; // 60 seconds
 
 // GET /api/repo-dashboard/repositories — Scan all git repos + disk usage
@@ -5901,12 +5902,202 @@ app.get('/api/repo-dashboard/structure', async (_req, res) => {
   }
 });
 
+// GET /api/repo-dashboard/hierarchy — Full hierarchical tree for Sankey diagram
+app.get('/api/repo-dashboard/hierarchy', async (_req, res) => {
+  try {
+    // Check cache
+    if (hierarchyCache && Date.now() - hierarchyCache.timestamp < CACHE_TTL) {
+      return res.json(hierarchyCache.data);
+    }
+
+    const projectsRoot = '/root/projekte';
+
+    interface HierarchyNode {
+      name: string;
+      path: string;
+      fullPath: string;
+      level: number;
+      isGit: boolean;
+      diskSize: { bytes: number; human: string };
+      lastModified: string;
+      children?: HierarchyNode[];
+      parent?: string;
+    }
+
+    const buildHierarchy = (basePath: string, level: number, maxDepth: number = 3): HierarchyNode[] => {
+      if (level > maxDepth) return [];
+
+      const nodes: HierarchyNode[] = [];
+
+      try {
+        const items = readdirSync(basePath);
+
+        for (const item of items) {
+          // Skip hidden and common excludes
+          if (item.startsWith('.') || item === 'node_modules' || item === 'dist' || item === '.next') {
+            continue;
+          }
+
+          const itemPath = join(basePath, item);
+
+          try {
+            const stat = statSync(itemPath);
+            if (!stat.isDirectory()) continue;
+
+            const isGit = existsSync(join(itemPath, '.git'));
+            const sizeHuman = execSync(`du -sh "${itemPath}" 2>/dev/null | cut -f1`, { encoding: 'utf8' }).trim();
+            const sizeBytes = parseInt(execSync(`du -sb "${itemPath}" 2>/dev/null | cut -f1`, { encoding: 'utf8' }).trim() || '0');
+
+            const node: HierarchyNode = {
+              name: item,
+              path: itemPath.replace('/root/projekte/', ''),
+              fullPath: itemPath,
+              level,
+              isGit,
+              diskSize: {
+                bytes: sizeBytes,
+                human: sizeHuman,
+              },
+              lastModified: stat.mtime.toISOString(),
+              parent: level > 0 ? basePath.replace('/root/projekte/', '') : undefined,
+            };
+
+            // Recursively get children (only if not a git repo or if level < 2)
+            if (level < maxDepth && (!isGit || level < 1)) {
+              const children = buildHierarchy(itemPath, level + 1, maxDepth);
+              if (children.length > 0) {
+                node.children = children;
+              }
+            }
+
+            nodes.push(node);
+          } catch (err: any) {
+            // Skip inaccessible directories
+            console.error(`[Hierarchy] Error scanning ${itemPath}:`, err.message);
+          }
+        }
+      } catch (err: any) {
+        console.error(`[Hierarchy] Error reading ${basePath}:`, err.message);
+      }
+
+      // Sort by size (largest first)
+      nodes.sort((a, b) => b.diskSize.bytes - a.diskSize.bytes);
+
+      return nodes;
+    };
+
+    const hierarchy = buildHierarchy(projectsRoot, 0, 3);
+
+    // Flatten for Sankey diagram (nodes + links)
+    interface SankeyNode {
+      id: string;
+      name: string;
+      level: number;
+      isGit: boolean;
+      diskSize: { bytes: number; human: string };
+      lastModified: string;
+      ageColor: string;
+    }
+
+    interface SankeyLink {
+      source: string;
+      target: string;
+      value: number; // disk size in bytes
+    }
+
+    const nodes: SankeyNode[] = [];
+    const links: SankeyLink[] = [];
+    const nodeMap = new Map<string, boolean>();
+
+    // Age-based color function (same as heatmap)
+    const getAgeColor = (lastModified: string): string => {
+      const now = Date.now();
+      const modified = new Date(lastModified).getTime();
+      const ageMs = now - modified;
+      const ageWeeks = ageMs / (1000 * 60 * 60 * 24 * 7);
+
+      if (ageWeeks < 1) return '#9ece6a'; // < 1 week: green
+      if (ageWeeks < 4) return '#e0af68'; // < 1 month: yellow
+      if (ageWeeks < 13) return '#ff9e64'; // < 3 months: orange
+      if (ageWeeks < 26) return '#f7768e'; // < 6 months: red
+      return '#565f89'; // > 6 months: gray
+    };
+
+    const flattenToSankey = (items: HierarchyNode[], parentId?: string) => {
+      for (const item of items) {
+        const nodeId = item.path || item.name;
+
+        // Add node if not already added
+        if (!nodeMap.has(nodeId)) {
+          nodes.push({
+            id: nodeId,
+            name: item.name,
+            level: item.level,
+            isGit: item.isGit,
+            diskSize: item.diskSize,
+            lastModified: item.lastModified,
+            ageColor: getAgeColor(item.lastModified),
+          });
+          nodeMap.set(nodeId, true);
+        }
+
+        // Add link from parent
+        if (parentId) {
+          links.push({
+            source: parentId,
+            target: nodeId,
+            value: item.diskSize.bytes,
+          });
+        }
+
+        // Recurse into children
+        if (item.children && item.children.length > 0) {
+          flattenToSankey(item.children, nodeId);
+        }
+      }
+    };
+
+    // Add root node
+    const rootNode: SankeyNode = {
+      id: '',
+      name: '/root/projekte',
+      level: 0,
+      isGit: false,
+      diskSize: {
+        bytes: hierarchy.reduce((sum, n) => sum + n.diskSize.bytes, 0),
+        human: execSync(`du -sh /root/projekte 2>/dev/null | cut -f1`, { encoding: 'utf8' }).trim(),
+      },
+      lastModified: new Date().toISOString(),
+      ageColor: '#9ece6a',
+    };
+    nodes.push(rootNode);
+    nodeMap.set('', true);
+
+    flattenToSankey(hierarchy, '');
+
+    const result = {
+      hierarchy, // Tree structure
+      sankey: { nodes, links }, // Flattened for Sankey
+      totalSize: rootNode.diskSize,
+      nodeCount: nodes.length,
+      scannedAt: new Date().toISOString(),
+    };
+
+    hierarchyCache = { data: result, timestamp: Date.now() };
+    res.json(result);
+  } catch (err: any) {
+    console.error('[Repo Dashboard] Hierarchy error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/repo-dashboard/refresh — Force refresh (re-scan)
 app.post('/api/repo-dashboard/refresh', async (_req, res) => {
   // Clear all caches
   repoCache = null;
   pipelineCache = null;
   structureCache = null;
+  hierarchyCache = null;
   res.json({ message: 'Cache cleared — next requests will re-scan' });
 });
 
