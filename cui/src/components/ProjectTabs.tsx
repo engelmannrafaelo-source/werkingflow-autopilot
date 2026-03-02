@@ -170,16 +170,22 @@ function SyncthingToggle() {
   const [toggling, setToggling] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval>>(null);
 
+  const syncUnavailableRef = useRef(false);
   const fetchStatus = useCallback(() => {
-    if ((window as any).__cuiServerAlive === false) return;
-    fetch('/api/syncthing/status', { signal: AbortSignal.timeout(8000) })
-      .then(r => { if (!r.ok) throw new Error(`syncthing/status ${r.status}`); return r.json(); })
+    if ((window as any).__cuiServerAlive !== true) return;
+    if (syncUnavailableRef.current) return; // Syncthing not running — stop polling
+    fetch('/api/syncthing/status', { signal: AbortSignal.timeout(10000) })
+      .then(r => {
+        if (r.status === 502) { syncUnavailableRef.current = true; return null; } // Syncthing offline (evening-only)
+        if (!r.ok) return null;
+        return r.json();
+      })
       .then(data => {
         if (!data) return;
         setPaused(data.paused);
         if (data.lastSyncAt) setLastSync(data.lastSyncAt);
       })
-      .catch((err) => { console.warn('[ProjectTabs] fetchSyncthingStatus:', err); });
+      .catch(() => { /* timeout on slow connections */ });
   }, []);
 
   useEffect(() => {

@@ -540,8 +540,8 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
 
   // Fetch states once on mount/account change (WS handles updates after that)
   useEffect(() => {
-    if ((window as any).__cuiServerAlive === false) return;
-    fetch('/api/mission/states', { signal: AbortSignal.timeout(5000) })
+    if ((window as any).__cuiServerAlive !== true) return;
+    fetch('/api/mission/states', { signal: AbortSignal.timeout(10000) })
       .then(r => r.ok ? r.json() : null)
       .then(states => {
         if (!states) return;
@@ -551,7 +551,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
           setAttentionReason(myState.reason);
         }
       })
-      .catch((err) => { console.warn('[CuiLite] Fetch states error:', err); });
+      .catch(() => { /* timeout expected on slow connections — WS will sync state */ });
   }, [selectedId]);
 
   // Adaptive polling with recursive setTimeout (interval adjusts to failure count)
@@ -586,7 +586,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
 
   // --- Fetch Prompt Templates (retry on failure — server may be restarting) ---
   const loadTemplates = useCallback(() => {
-    fetch('/api/prompt-templates', { signal: AbortSignal.timeout(5000) })
+    fetch('/api/prompt-templates', { signal: AbortSignal.timeout(10000) })
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (!data) return;
@@ -594,10 +594,10 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         reply.sort((a: PromptTemplate, b: PromptTemplate) => a.order - b.order);
         setReplyTemplates(reply);
       })
-      .catch((err) => { console.warn('[CuiLite] Load templates error:', err); });
+      .catch(() => { /* timeout expected — templates load lazily on next attempt */ });
   }, []);
   useEffect(() => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if ((window as any).__cuiServerAlive !== true) return;
     loadTemplates();
   }, [loadTemplates]);
 
@@ -717,12 +717,12 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
 
   // --- Auto-Inject (Loop) Sync ---
   const syncLoopState = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if ((window as any).__cuiServerAlive !== true) return;
     try {
-      const r = await fetch("/api/auto-inject", { signal: AbortSignal.timeout(5000) });
-      if (!r.ok) { console.warn('[CuiLite] Sync loop state HTTP error:', r.status); return; }
+      const r = await fetch("/api/auto-inject", { signal: AbortSignal.timeout(10000) });
+      if (!r.ok) return;
       const state = await r.json().catch(() => null);
-      if (!state) { console.warn('[CuiLite] Sync loop state: invalid JSON response'); return; }
+      if (!state) return;
       const cfg = state.configs?.[selectedId || ""];
       if (cfg) {
         setLoopEnabled(cfg.enabled);
@@ -733,7 +733,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       }
       const lastTs = state.lastInject?.[selectedId || ""];
       setLastInjectTime(lastTs || null);
-    } catch (err) { console.warn('[CuiLite] Sync loop state error:', err); }
+    } catch { /* timeout expected on slow connections */ }
   }, [selectedId]);
 
   useEffect(() => { syncLoopState(); }, [syncLoopState]);
