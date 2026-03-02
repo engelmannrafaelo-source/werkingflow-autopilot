@@ -22,6 +22,7 @@ const PANEL_OPTIONS = [
   { value: 'linkedin', label: 'LinkedIn Marketing 🔗' },
   { value: 'bridge-monitor', label: 'Bridge Monitor' },
   { value: 'qa-dashboard', label: 'QA Dashboard 📊' },
+  { value: 'administration', label: 'Administration 🔧' },
 ];
 
 const CELL_DEFAULTS = [
@@ -104,6 +105,7 @@ function panelFromValue(value: string, workDir: string): PanelConfig {
     case 'admin-wr': return { component: 'admin-wr', name: 'Werking Report Admin', config: {} };
     case 'linkedin':                return { component: 'linkedin', name: 'LinkedIn Marketing 🔗', config: {} };
     case 'bridge-monitor':          return { component: 'bridge-monitor', name: 'Bridge Monitor', config: {} };
+    case 'administration':          return { component: 'administration', name: 'Administration 🔧', config: {} };
     default:                        throw new Error(`Unknown panel type: ${value}`);
   }
 }

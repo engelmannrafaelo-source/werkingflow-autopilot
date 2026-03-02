@@ -102,14 +102,17 @@ export function SectionFlat({ title, children }: { title: string; children: Reac
   );
 }
 
-export function StatCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
+export function StatCard({ label, value, sub, color, aiId }: { label: string; value: string; sub?: string; color?: string; aiId?: string }) {
   return (
-    <div style={{
-      background: 'var(--tn-bg-dark)', border: '1px solid var(--tn-border)', borderRadius: 6,
-      padding: '10px 12px', flex: '1 1 0', minWidth: 100,
-    }}>
+    <div
+      data-ai-id={aiId}
+      style={{
+        background: 'var(--tn-bg-dark)', border: '1px solid var(--tn-border)', borderRadius: 6,
+        padding: '10px 12px', flex: '1 1 0', minWidth: 100,
+      }}
+    >
       <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 4 }}>{label}</div>
-      <div style={{ fontSize: 18, fontWeight: 700, color: color ?? 'var(--tn-text)', fontFamily: 'monospace' }}>{value}</div>
+      <div data-ai-id={aiId ? `${aiId}-value` : undefined} style={{ fontSize: 18, fontWeight: 700, color: color ?? 'var(--tn-text)', fontFamily: 'monospace' }}>{value}</div>
       {sub && <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginTop: 2 }}>{sub}</div>}
     </div>
   );
@@ -159,12 +162,16 @@ export function Toolbar({ lastRefresh, loading, onRefresh, autoRefresh }: {
   autoRefresh?: number;
 }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+    <div
+      data-ai-id="bridge-monitor-toolbar"
+      style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}
+    >
       <span style={{ fontSize: 10, color: 'var(--tn-text-muted)' }}>
         {lastRefresh ? `Aktualisiert: ${lastRefresh.toLocaleTimeString('de-AT')}` : 'Wird geladen...'}
         {autoRefresh && <span style={{ marginLeft: 8, opacity: 0.6 }}>• Auto-Refresh alle {autoRefresh}s</span>}
       </span>
       <button
+        data-ai-id="bridge-monitor-refresh-button"
         onClick={onRefresh}
         disabled={loading}
         style={{

@@ -91,10 +91,10 @@ export default function SessionsTab() {
       {cliStats && (
         <SectionFlat title="CLI-Sessions (Research-Tasks)">
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-            <StatCard label="Gesamt" value={String(cliStats.total)} />
-            <StatCard label="Laufend" value={String(cliStats.running)} color={cliStats.running > 0 ? 'var(--tn-blue)' : 'var(--tn-text-muted)'} />
-            <StatCard label="Abgeschlossen" value={String(cliStats.completed)} color="var(--tn-green)" />
-            <StatCard label="Fehlgeschlagen" value={String(cliStats.failed)} color={cliStats.failed > 0 ? 'var(--tn-red)' : 'var(--tn-text-muted)'} />
+            <StatCard label="Gesamt" value={String(cliStats.total)} aiId="sessions-cli-total-stat" />
+            <StatCard label="Laufend" value={String(cliStats.running)} color={cliStats.running > 0 ? 'var(--tn-blue)' : 'var(--tn-text-muted)'} aiId="sessions-cli-running-stat" />
+            <StatCard label="Abgeschlossen" value={String(cliStats.completed)} color="var(--tn-green)" aiId="sessions-cli-completed-stat" />
+            <StatCard label="Fehlgeschlagen" value={String(cliStats.failed)} color={cliStats.failed > 0 ? 'var(--tn-red)' : 'var(--tn-text-muted)'} aiId="sessions-cli-failed-stat" />
           </div>
 
           {/* Filter */}

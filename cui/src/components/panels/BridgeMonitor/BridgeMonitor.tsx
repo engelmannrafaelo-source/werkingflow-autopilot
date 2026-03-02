@@ -181,12 +181,21 @@ export default function BridgeMonitor() {
         </div>
       </div>
 
-      {/* Tab Content */}
-      <div
-        data-ai-id={`bridge-monitor-content-${activeTab}`}
-        style={{ flex: 1, overflow: 'auto', minHeight: 0 }}
-      >
-        {tabs.find((t) => t.key === activeTab)?.component}
+      {/* Tab Content - Defensive: Keep all mounted, toggle visibility to prevent race conditions */}
+      <div style={{ flex: 1, overflow: 'auto', minHeight: 0, position: 'relative' }}>
+        {tabs.map((tab) => (
+          <div
+            key={tab.key}
+            data-ai-id={`bridge-monitor-content-${tab.key}`}
+            style={{
+              display: activeTab === tab.key ? 'block' : 'none',
+              height: '100%',
+              overflow: 'auto',
+            }}
+          >
+            {tab.component}
+          </div>
+        ))}
       </div>
     </div>
   );

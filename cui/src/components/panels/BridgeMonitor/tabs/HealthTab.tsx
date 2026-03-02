@@ -125,16 +125,20 @@ export default function HealthTab() {
     return () => clearInterval(interval);
   }, [fetchAll]);
 
-  if (loading) return <LoadingSpinner />;
-  if (error) return <ErrorBanner message={error} onRetry={fetchAll} />;
-  if (!health) return <ErrorBanner message="No health data available" onRetry={fetchAll} />;
-
-  const uptimeHours = Math.floor(health.uptime_seconds / 3600);
+  const uptimeHours = health ? Math.floor(health.uptime_seconds / 3600) : 0;
   const uptimeDays = Math.floor(uptimeHours / 24);
 
   return (
     <div style={{ padding: '16px 12px', overflowY: 'auto', height: '100%' }}>
       <Toolbar onRefresh={fetchAll} lastRefresh={lastRefresh} />
+
+      {/* Defensive: Show loading/error INSIDE wrapper, never replace it */}
+      {loading && <LoadingSpinner />}
+      {error && <ErrorBanner message={error} onRetry={fetchAll} />}
+      {!loading && !error && !health && <ErrorBanner message="No health data available" onRetry={fetchAll} />}
+
+      {!loading && !error && health && (
+        <>
 
       {/* Overall Status Card */}
       <div style={{
@@ -229,6 +233,8 @@ export default function HealthTab() {
           </div>
         </div>
       </div>
+      </>
+      )}
     </div>
   );
 }
