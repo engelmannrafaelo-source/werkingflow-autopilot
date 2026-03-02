@@ -61,6 +61,7 @@ const KnowledgeFullscreen = lazy(() => import('./panels/KnowledgeFullscreen'));
 const WerkingReportAdmin = lazy(() => import('./panels/WerkingReportAdmin/WerkingReportAdmin'));
 const LinkedInPanel = lazy(() => import('./panels/LinkedInPanel'));
 const BridgeMonitor = lazy(() => import('./panels/BridgeMonitor/BridgeMonitor'));
+const InfisicalMonitor = lazy(() => import('./panels/InfisicalMonitor/InfisicalMonitor'));
 const QADashboard = lazy(() => import('./panels/QADashboard/QADashboard'));
 const RepoDashboard = lazy(() => import('./panels/RepoDashboard/RepoDashboard'));
 const SystemHealth = lazy(() => import('./panels/SystemHealth'));
@@ -357,6 +358,9 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
             {withSuspense(<BridgeMonitor />)}
           </PanelConnectivityGuard>
         );
+      case 'infisical-monitor':
+        // Using mock data in development - no connectivity check needed
+        return wrapPanel('InfisicalMonitor', withSuspense(<InfisicalMonitor />));
       case 'repo-dashboard':
         return wrapPanel('RepoDashboard', withSuspense(<RepoDashboard />));
       case 'system-health':
