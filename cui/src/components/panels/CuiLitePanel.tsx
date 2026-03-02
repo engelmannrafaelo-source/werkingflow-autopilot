@@ -339,28 +339,44 @@ function MessageRow({ msg, onRespond, isLast, workDir }: { msg: Message; onRespo
 }
 
 // --- Loading state with timeout + retry ---
+// Only counts elapsed time when server is alive — pauses during server restarts
 function LoadingConversation({ sessionId, onBack, onRetry, onLoadFailed }: { sessionId: string | null; onBack: () => void; onRetry: () => void; onLoadFailed?: (sessionId: string) => void }) {
   const [elapsed, setElapsed] = useState(0);
   const failedRef = useRef(false);
+  const retriedOnReconnectRef = useRef(false);
   useEffect(() => {
-    const t = setInterval(() => setElapsed(s => s + 1), 1000);
+    const t = setInterval(() => {
+      // Pause timeout while server is down — session is likely fine, just can't reach it
+      if ((window as any).__cuiServerAlive === false) return;
+      setElapsed(s => s + 1);
+    }, 1000);
     return () => clearInterval(t);
   }, []);
+  // Auto-retry when server comes back alive
   useEffect(() => {
-    if (elapsed >= 8 && !failedRef.current && onLoadFailed && sessionId) {
+    if ((window as any).__cuiServerAlive === true && !retriedOnReconnectRef.current && elapsed > 0) {
+      retriedOnReconnectRef.current = true;
+      onRetry();
+    }
+  });
+  useEffect(() => {
+    if (elapsed >= 12 && !failedRef.current && onLoadFailed && sessionId) {
       failedRef.current = true;
       onLoadFailed(sessionId);
     }
   }, [elapsed, onLoadFailed, sessionId]);
+  const serverDown = (window as any).__cuiServerAlive === false;
   return (
     <div style={{ textAlign: 'center', color: 'var(--tn-text-muted)', marginTop: 40, fontSize: 13 }}>
-      {elapsed < 6 ? (
+      {serverDown ? (
+        'Server startet neu...'
+      ) : elapsed < 8 ? (
         'Lade Konversation...'
       ) : (
         <>
           <div>Konversation konnte nicht geladen werden.</div>
           <div style={{ marginTop: 12, display: 'flex', gap: 8, justifyContent: 'center' }}>
-            <button onClick={onRetry} style={{
+            <button onClick={() => { failedRef.current = false; setElapsed(0); retriedOnReconnectRef.current = false; onRetry(); }} style={{
               padding: '6px 16px', fontSize: 12, border: '1px solid var(--tn-border)',
               borderRadius: 4, background: 'var(--tn-surface)', color: 'var(--tn-text)', cursor: 'pointer',
             }}>Retry</button>
@@ -547,6 +563,11 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
 
     const connect = () => {
       if (disposed) return;
+      // Don't hammer WS when server is down — wait for App WS to restore __cuiServerAlive
+      if ((window as any).__cuiServerAlive === false) {
+        reconnectTimer = setTimeout(connect, Math.min(backoff, 10000));
+        return;
+      }
       const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
       const ws = new WebSocket(`${protocol}://${window.location.host}/ws`);
       ws.onerror = () => {}; // Suppress console noise during server restarts
@@ -563,7 +584,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       };
       ws.onclose = () => {
         if (!disposed) {
-          console.log(`[CuiLite WS] Disconnected, reconnecting in ${backoff}ms`);
+          if (backoff <= 1000) console.log('[CuiLite WS] Disconnected, reconnecting...');
           reconnectTimer = setTimeout(() => {
             backoff = Math.min(backoff * 2, 30000);
             connect();
@@ -596,8 +617,9 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
               setRateLimitMessage(null);
             }
             if (msg.state === 'done') {
-              setAttention('idle');
-              setAttentionReason('done');
+              // Don't overwrite rate_limit state — user needs to see it
+              setAttention(prev => prev === 'needs_attention' ? prev : 'idle');
+              setAttentionReason(prev => prev === 'rate_limit' ? prev : 'done');
               if (sessionId) {
                 setTimeout(pollNow, 500);
               }
@@ -668,7 +690,37 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
 
   const toggleLoop = useCallback(async (enable: boolean) => {
     if (!selectedId || !sessionId) return;
-    if (enable) {
+    try {
+      if (enable) {
+        await fetch("/api/auto-inject", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: AbortSignal.timeout(8000),
+          body: JSON.stringify({
+            accountId: selectedId,
+            sessionId,
+            workDir,
+            message: loopMessage,
+            intervalMs: loopIntervalMin * 60000,
+            enabled: true,
+          }),
+        });
+      } else {
+        await fetch("/api/auto-inject", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: AbortSignal.timeout(8000),
+          body: JSON.stringify({ accountId: selectedId, enabled: false }),
+        });
+      }
+      setLoopEnabled(enable);
+      syncLoopState();
+    } catch (err) { console.warn('[CuiLite] Loop toggle error:', (err as Error).message); }
+  }, [selectedId, sessionId, workDir, loopMessage, loopIntervalMin, syncLoopState]);
+
+  const saveLoopConfig = useCallback(async () => {
+    if (!selectedId) return;
+    try {
       await fetch("/api/auto-inject", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -679,64 +731,41 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
           workDir,
           message: loopMessage,
           intervalMs: loopIntervalMin * 60000,
-          enabled: true,
+          enabled: loopEnabled,
         }),
       });
-    } else {
-      await fetch("/api/auto-inject", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(8000),
-        body: JSON.stringify({ accountId: selectedId, enabled: false }),
-      });
-    }
-    setLoopEnabled(enable);
-    syncLoopState();
-  }, [selectedId, sessionId, workDir, loopMessage, loopIntervalMin, syncLoopState]);
-
-  const saveLoopConfig = useCallback(async () => {
-    if (!selectedId) return;
-    await fetch("/api/auto-inject", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        accountId: selectedId,
-        sessionId,
-        workDir,
-        message: loopMessage,
-        intervalMs: loopIntervalMin * 60000,
-        enabled: loopEnabled,
-      }),
-    });
-    syncLoopState();
+      syncLoopState();
+    } catch (err) { console.warn('[CuiLite] Save loop config error:', (err as Error).message); }
     setShowLoopConfig(false);
   }, [selectedId, sessionId, workDir, loopMessage, loopIntervalMin, loopEnabled, syncLoopState]);
 
   const handleSaveTemplate = useCallback(async () => {
     if (!newTplLabel.trim() || !newTplMessage.trim()) return;
-    if (editingTemplate) {
-      const resp = await fetch(`/api/prompt-templates/${editingTemplate.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ label: newTplLabel, message: newTplMessage }),
-        signal: AbortSignal.timeout(8000),
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        setReplyTemplates(prev => prev.map(t => t.id === data.template.id ? data.template : t));
+    try {
+      if (editingTemplate) {
+        const resp = await fetch(`/api/prompt-templates/${editingTemplate.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ label: newTplLabel, message: newTplMessage }),
+          signal: AbortSignal.timeout(8000),
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          setReplyTemplates(prev => prev.map(t => t.id === data.template.id ? data.template : t));
+        }
+      } else {
+        const resp = await fetch('/api/prompt-templates', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ label: newTplLabel, message: newTplMessage, category: 'reply' }),
+          signal: AbortSignal.timeout(8000),
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          setReplyTemplates(prev => [...prev, data.template]);
+        }
       }
-    } else {
-      const resp = await fetch('/api/prompt-templates', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ label: newTplLabel, message: newTplMessage, category: 'reply' }),
-        signal: AbortSignal.timeout(8000),
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        setReplyTemplates(prev => [...prev, data.template]);
-      }
-    }
+    } catch (err) { console.warn('[CuiLite] Save template error:', (err as Error).message); }
     setShowTemplateForm(false);
     setEditingTemplate(null);
     setNewTplLabel('');
@@ -744,13 +773,19 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   }, [newTplLabel, newTplMessage, editingTemplate]);
 
   const handleDeleteTemplate = useCallback(async (id: string) => {
-    const resp = await fetch(`/api/prompt-templates/${id}`, { method: 'DELETE', signal: AbortSignal.timeout(8000) });
-    if (resp.ok) setReplyTemplates(prev => prev.filter(t => t.id !== id));
+    try {
+      const resp = await fetch(`/api/prompt-templates/${id}`, { method: 'DELETE', signal: AbortSignal.timeout(8000) });
+      if (resp.ok) setReplyTemplates(prev => prev.filter(t => t.id !== id));
+    } catch (err) { console.warn('[CuiLite] Delete template error:', (err as Error).message); }
   }, []);
 
   const handleSend = useCallback(async (overrideMessage?: string) => {
     const rawMsg = overrideMessage || input.trim();
     if (!rawMsg || !sessionId) return;
+    if ((window as any).__cuiServerAlive === false) {
+      setMessages(prev => [...prev, { role: 'system', content: 'Server nicht erreichbar — bitte warten bis Verbindung wiederhergestellt ist.', timestamp: new Date().toISOString() }]);
+      return;
+    }
     setIsLoading(true);
     const msg = (!overrideMessage && planMode) ? `Bitte verwende Plan-Modus: ${rawMsg}` : rawMsg;
     if (!overrideMessage) setInput('');
@@ -921,22 +956,40 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
             const newAcct = e.target.value;
             // Cancel in-flight polling before switching
             if (pollTimerRef.current) { clearInterval(pollTimerRef.current); pollTimerRef.current = null; }
-            // Save current session for old account
-            if (sessionId && persistSession) {
-              try { localStorage.setItem(getSessionKey(selectedId), sessionId); } catch {}
+
+            if (sessionId) {
+              // Chat is open — reassign conversation to new account, stay in chat
+              fetch(`/api/mission/conversation/${sessionId}/assign`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ accountId: newAcct }),
+              }).catch(() => {});
+              // Save session for BOTH old and new account
+              if (persistSession) {
+                try { localStorage.setItem(getSessionKey(selectedId), sessionId); } catch {}
+                try { localStorage.setItem(getSessionKey(newAcct), sessionId); } catch {}
+              }
+              setSelectedId(newAcct);
+              // Keep sessionId, messages, and chat view — just switch account
+              setMessages(prev => [...prev, { role: 'system', content: `Account gewechselt → ${ACCOUNTS.find(a => a.id === newAcct)?.label || newAcct}`, timestamp: new Date().toISOString() }]);
+              setAttention('idle');
+              setAttentionReason(undefined);
+              setRateLimitMessage(null);
+              try { localStorage.setItem(storageKey, newAcct); } catch {}
+            } else {
+              // No chat open (queue view) — normal switch
+              let savedSession: string | null = null;
+              try { savedSession = localStorage.getItem(getSessionKey(newAcct)); } catch {}
+              setSelectedId(newAcct);
+              setSessionId(savedSession);
+              setShowQueue(!savedSession);
+              setMessages([]);
+              setAttention('idle');
+              setAttentionReason(undefined);
+              setRateLimitMessage(null);
+              setLiveMode(false);
+              try { localStorage.setItem(storageKey, newAcct); } catch {}
             }
-            // Load session for new account
-            let savedSession: string | null = null;
-            try { savedSession = localStorage.getItem(getSessionKey(newAcct)); } catch {}
-            setSelectedId(newAcct);
-            setSessionId(savedSession);
-            setShowQueue(!savedSession);
-            setMessages([]);
-            setAttention('idle');
-            setAttentionReason(undefined);
-            setRateLimitMessage(null);
-            setLiveMode(false);
-            try { localStorage.setItem(storageKey, newAcct); } catch {}
           }}
           style={{
             background: 'var(--tn-bg)', color: 'var(--tn-text)',

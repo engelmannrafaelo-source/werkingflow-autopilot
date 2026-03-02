@@ -2,19 +2,19 @@
   "engelmann": {
     "state": "idle",
     "reason": "done",
-    "since": 1772453809977,
+    "since": 1772455004320,
     "accountId": "engelmann"
   },
   "rafael": {
-    "state": "working",
-    "since": 1772453897588,
-    "accountId": "rafael",
-    "sessionId": "80db866a-0104-42de-9783-1d04cd9a9806"
+    "state": "idle",
+    "reason": "done",
+    "since": 1772454716460,
+    "accountId": "rafael"
   },
   "office": {
     "state": "idle",
     "reason": "done",
-    "since": 1772453829269,
+    "since": 1772455126443,
     "accountId": "office"
   }
 }

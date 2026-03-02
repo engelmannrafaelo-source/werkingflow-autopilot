@@ -20,7 +20,7 @@ const PANEL_OPTIONS = [
   { value: 'office', label: 'Virtual Office 👥' },
   { value: 'admin-wr', label: 'Werking Report Admin' },
   { value: 'linkedin', label: 'LinkedIn Marketing 🔗' },
-  { value: 'bridge-monitor', label: 'Bridge Monitor (Old)' },
+  { value: 'bridge-monitor', label: 'Bridge Monitor' },
   { value: 'qa-dashboard', label: 'QA Dashboard 📊' },
 ];
 

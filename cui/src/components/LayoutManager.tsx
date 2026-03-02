@@ -432,6 +432,7 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
     renderValues.stickyButtons.push(
       <select
         key="add-tab"
+        data-ai-id={`add-tab-dropdown-${node.getId()}`}
         value=""
         onChange={(e) => {
           const val = e.target.value;
@@ -463,13 +464,13 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
         <option value="notes">Notes</option>
         <option value="images">Images</option>
         <option value="mission">Mission Control</option>
-        <option value="office">Virtual Office 👥</option>
+        <option value="office">Virtual Office</option>
         <option value="admin-wr">Werking Report Admin</option>
         <option value="system-health">System Health</option>
         <option value="watchdog">Dev Server Watchdog</option>
-        <option value="linkedin">LinkedIn Marketing 🔗</option>
-        <option value="bridge-monitor">Bridge Monitor (Old)</option>
-        <option value="repo-dashboard">Git & Pipeline Monitor 📊</option>
+        <option value="linkedin">LinkedIn Marketing</option>
+        <option value="bridge-monitor">Bridge Monitor</option>
+        <option value="repo-dashboard">Git & Pipeline Monitor</option>
       </select>
     );
   }, [addTab]);

@@ -263,7 +263,7 @@ export default function App() {
         (window as any).__cuiServerAlive = false;
         wsRef.current = null;
         if (!disposed) {
-          console.log(`[App WS] Disconnected, reconnecting in ${backoff}ms`);
+          if (backoff <= 1000) console.log('[App WS] Disconnected, reconnecting...');
           reconnectTimer = setTimeout(() => {
             backoff = Math.min(backoff * 2, 30000);
             connect();
