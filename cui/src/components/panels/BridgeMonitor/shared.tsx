@@ -1,4 +1,3 @@
-import React from 'react';
 
 // ─── Config ─────────────────────────────────────────────────────────
 export const BRIDGE_URL = 'http://49.12.72.66:8000';
@@ -201,7 +200,8 @@ export function LoadingSpinner({ text }: { text: string }) {
 
 // ─── Formatting Helpers ─────────────────────────────────────────────
 
-export function formatTokens(n: number): string {
+export function formatTokens(n: number | undefined | null): string {
+  if (n == null || isNaN(n)) return '0';
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return String(n);
@@ -215,7 +215,8 @@ export function formatDuration(seconds: number): string {
   return `${m}m ${s}s`;
 }
 
-export function formatNumber(n: number): string {
+export function formatNumber(n: number | undefined | null): string {
+  if (n == null) return '0';
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return String(n);
@@ -229,4 +230,15 @@ export function timeAgo(dateStr: string): string {
   const hours = Math.floor(mins / 60);
   if (hours < 24) return `vor ${hours}h`;
   return `vor ${Math.floor(hours / 24)}d`;
+}
+
+export function timeAgoEn(iso: string | null): string {
+  if (!iso) return 'Never';
+  const ms = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(ms / 60000);
+  if (m < 1) return 'Just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
 }

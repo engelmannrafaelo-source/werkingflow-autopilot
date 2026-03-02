@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Toolbar, ErrorBanner, LoadingSpinner, SectionFlat, StatusBadge } from "../shared";
+import { Toolbar, ErrorBanner, LoadingSpinner, SectionFlat, StatusBadge, formatTokens, timeAgoEn as timeAgo } from "../shared";
 
 interface ScrapedData {
   plan: string;
@@ -54,24 +54,6 @@ interface StatsData {
   combinedJsonl: CombinedJsonl | null;
   alerts: Alert[];
   timestamp: string;
-}
-
-function formatTokens(n: number | undefined | null): string {
-  if (n == null || isNaN(n)) return "0";
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
-}
-
-function timeAgo(iso: string | null): string {
-  if (!iso) return "Never";
-  const ms = Date.now() - new Date(iso).getTime();
-  const m = Math.floor(ms / 60000);
-  if (m < 1) return "Just now";
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
 }
 
 function pctColor(pct: number): string {

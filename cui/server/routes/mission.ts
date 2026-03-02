@@ -102,7 +102,7 @@ function buildSessionProjectMap(): void {
     '/home/claude-user/.cui-account3/.claude/projects',
   ];
   for (const base of acctDirs) {
-    try { if (!statSync(base).isDirectory()) continue; } catch { continue; }
+    try { if (!statSync(base).isDirectory()) continue; } catch { continue; } // stat failed — skip non-existent dir
     for (const dirname of readdirSync(base)) {
       const dirpath = join(base, dirname);
       try { if (!statSync(dirpath).isDirectory()) continue; } catch { continue; }
@@ -1385,7 +1385,7 @@ router.post('/auto-titles', async (_req, res) => {
 
   // Get all conversations
   const allConvs: Array<{ sessionId: string; accountId: string; port: number; summary: string; customName: string }> = [];
-  await Promise.all(CUI_PROXIES.map(async (proxy) => {
+  await Promise.allSettled(CUI_PROXIES.map(async (proxy) => {
     const resp = await cuiFetch(proxy.localPort, `/api/conversations?limit=${DEFAULT_CONV_LIMIT}&sortBy=updated&order=desc`, { timeoutMs: 30000 });
     if (!resp.ok || !resp.data?.conversations) return;
     for (const c of resp.data.conversations) {
@@ -1441,7 +1441,7 @@ router.get('/context', async (_req, res) => {
   try {
     // Get all conversations with last 3 messages each
     const conversations: any[] = [];
-    await Promise.all(CUI_PROXIES.map(async (proxy) => {
+    await Promise.allSettled(CUI_PROXIES.map(async (proxy) => {
       const listResp = await cuiFetch(proxy.localPort, '/api/conversations?limit=500&sortBy=updated&order=desc', { timeoutMs: 30000 });
       if (!listResp.ok || !listResp.data?.conversations) return;
       for (const c of listResp.data.conversations) {
