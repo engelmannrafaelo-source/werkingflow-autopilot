@@ -107,36 +107,7 @@ export default function LogsTab() {
       {loading && <LoadingSpinner />}
       {error && <ErrorBanner message={error} onRetry={fetchAll} />}
 
-      {!loading && !error && (
-        <>
-
-      {/* Stats Cards */}
-      {stats && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 16 }}>
-          <div style={{ padding: 12, background: 'var(--tn-surface)', borderRadius: 4, border: '1px solid var(--tn-border)' }}>
-            <div style={{ fontSize: 11, color: 'var(--tn-text-dim)', marginBottom: 4 }}>Total Requests</div>
-            <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--tn-text)' }}>{stats.total_requests}</div>
-          </div>
-          <div style={{ padding: 12, background: 'var(--tn-surface)', borderRadius: 4, border: '1px solid var(--tn-border)' }}>
-            <div style={{ fontSize: 11, color: 'var(--tn-text-dim)', marginBottom: 4 }}>Success Rate</div>
-            <div style={{ fontSize: 20, fontWeight: 700, color: stats.success_rate >= 95 ? 'var(--tn-green)' : 'var(--tn-yellow)' }}>
-              {stats.success_rate.toFixed(1)}%
-            </div>
-          </div>
-          <div style={{ padding: 12, background: 'var(--tn-surface)', borderRadius: 4, border: '1px solid var(--tn-border)' }}>
-            <div style={{ fontSize: 11, color: 'var(--tn-text-dim)', marginBottom: 4 }}>Avg Duration</div>
-            <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--tn-text)' }}>{stats.avg_duration_ms.toFixed(0)}ms</div>
-          </div>
-          <div style={{ padding: 12, background: 'var(--tn-surface)', borderRadius: 4, border: '1px solid var(--tn-border)' }}>
-            <div style={{ fontSize: 11, color: 'var(--tn-text-dim)', marginBottom: 4 }}>Errors (24h)</div>
-            <div style={{ fontSize: 20, fontWeight: 700, color: stats.errors_24h > 0 ? 'var(--tn-red)' : 'var(--tn-green)' }}>
-              {stats.errors_24h}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Filters */}
+      {/* Filters - ALWAYS visible (defensive: works even during loading) */}
       <div data-ai-id="logs-filters" style={{ marginBottom: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
         <input
           data-ai-id="logs-search-input"
@@ -172,6 +143,32 @@ export default function LogsTab() {
           <option value="error">Errors Only</option>
         </select>
       </div>
+
+      {/* Stats Cards - Conditional on loading/error */}
+      {!loading && !error && stats && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 16 }}>
+          <div style={{ padding: 12, background: 'var(--tn-surface)', borderRadius: 4, border: '1px solid var(--tn-border)' }}>
+            <div style={{ fontSize: 11, color: 'var(--tn-text-dim)', marginBottom: 4 }}>Total Requests</div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--tn-text)' }}>{stats.total_requests}</div>
+          </div>
+          <div style={{ padding: 12, background: 'var(--tn-surface)', borderRadius: 4, border: '1px solid var(--tn-border)' }}>
+            <div style={{ fontSize: 11, color: 'var(--tn-text-dim)', marginBottom: 4 }}>Success Rate</div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: stats.success_rate >= 95 ? 'var(--tn-green)' : 'var(--tn-yellow)' }}>
+              {stats.success_rate.toFixed(1)}%
+            </div>
+          </div>
+          <div style={{ padding: 12, background: 'var(--tn-surface)', borderRadius: 4, border: '1px solid var(--tn-border)' }}>
+            <div style={{ fontSize: 11, color: 'var(--tn-text-dim)', marginBottom: 4 }}>Avg Duration</div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--tn-text)' }}>{stats.avg_duration_ms.toFixed(0)}ms</div>
+          </div>
+          <div style={{ padding: 12, background: 'var(--tn-surface)', borderRadius: 4, border: '1px solid var(--tn-border)' }}>
+            <div style={{ fontSize: 11, color: 'var(--tn-text-dim)', marginBottom: 4 }}>Errors (24h)</div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: stats.errors_24h > 0 ? 'var(--tn-red)' : 'var(--tn-green)' }}>
+              {stats.errors_24h}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Logs Table */}
       <SectionFlat title={`Request Logs (${filteredLogs.length})`}>
@@ -231,8 +228,6 @@ export default function LogsTab() {
       <div style={{ marginTop: 12, padding: 12, background: 'var(--tn-bg-dark)', borderRadius: 4, fontSize: 11, color: 'var(--tn-text-dim)' }}>
         <strong>Note:</strong> Currently showing session data as proxy logs. Full HTTP request logs require Bridge API extension.
       </div>
-      </>
-      )}
     </div>
   );
 }
