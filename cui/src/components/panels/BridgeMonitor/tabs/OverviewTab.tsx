@@ -40,8 +40,9 @@ export default function OverviewTab() {
     return () => clearInterval(interval);
   }, [fetchData]);
 
-  const statCard = (label: string, value: string | number, color: string, icon?: string) => (
+  const statCard = (label: string, value: string | number, color: string, icon?: string, aiId?: string) => (
     <div
+      data-ai-id={aiId}
       style={{
         padding: '12px 16px',
         background: 'var(--tn-bg-dark)',
@@ -67,7 +68,7 @@ export default function OverviewTab() {
         {icon && <span>{icon}</span>}
         {label}
       </div>
-      <div style={{ fontSize: 20, fontWeight: 700, color }}>{value}</div>
+      <div data-ai-id={aiId ? `${aiId}-value` : undefined} style={{ fontSize: 20, fontWeight: 700, color }}>{value}</div>
     </div>
   );
 
@@ -78,13 +79,14 @@ export default function OverviewTab() {
   };
 
   return (
-    <div data-ai-id="overview-tab-content" style={{ padding: 12 }}>
+    <div data-ai-id="bridge-overview-tab" style={{ padding: 12 }}>
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0, color: 'var(--tn-text)' }}>
+      <div data-ai-id="bridge-overview-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <h3 data-ai-id="bridge-overview-title" style={{ fontSize: 14, fontWeight: 600, margin: 0, color: 'var(--tn-text)' }}>
           AI Bridge Overview
         </h3>
         <button
+          data-ai-id="bridge-overview-refresh-button"
           onClick={fetchData}
           style={{
             padding: '3px 10px',
@@ -103,6 +105,7 @@ export default function OverviewTab() {
       {/* Error */}
       {error && (
         <div
+          data-ai-id="bridge-overview-error"
           style={{
             padding: '6px 10px',
             fontSize: 11,
@@ -118,44 +121,49 @@ export default function OverviewTab() {
 
       {/* Loading */}
       {loading && !data && (
-        <div style={{ padding: 40, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>
+        <div data-ai-id="bridge-overview-loading" style={{ padding: 40, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>
           Loading...
         </div>
       )}
 
       {/* Quick Stats - data-ai-id always present */}
-      <div data-ai-id="overview-stats-cards" style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 20 }}>
+      <div data-ai-id="bridge-overview-stats-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 20 }}>
         {data ? (
           <>
             {statCard(
               'Health',
               data.health,
               data.health === 'healthy' ? 'var(--tn-green)' : 'var(--tn-red)',
-              data.health === 'healthy' ? '✅' : '⚠️'
+              data.health === 'healthy' ? '✅' : '⚠️',
+              'bridge-overview-health-stat'
             )}
             {statCard(
               'Worker',
               data.worker,
               'var(--tn-blue)',
-              '🔧'
+              '🔧',
+              'bridge-overview-worker-stat'
             )}
             {statCard(
               'Uptime',
               `${data.uptime_hours}h`,
               'var(--tn-purple, #bb9af7)',
-              '⏱️'
+              '⏱️',
+              'bridge-overview-uptime-stat'
             )}
             {statCard(
               'Total Requests',
               formatNumber(data.total_requests),
               'var(--tn-blue)',
-              '📊'
+              '📊',
+              'bridge-overview-requests-stat'
             )}
             {statCard(
               'Active Sessions',
               data.active_sessions.toString(),
               'var(--tn-orange)',
-              '⚡'
+              '⚡',
+              'bridge-overview-sessions-stat'
             )}
           </>
         ) : (
@@ -167,20 +175,29 @@ export default function OverviewTab() {
 
       {/* Performance Stats */}
       {data && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 20 }}>
-          {statCard(
-            'Avg Response Time',
-            `${(data.avg_response_time ?? 0).toFixed(2)}s`,
-            'var(--tn-text)',
-            '⏱️'
-          )}
-          {statCard(
-            'Success Rate',
-            `${(data.success_rate ?? 0).toFixed(1)}%`,
-            (data.success_rate ?? 0) >= 99 ? 'var(--tn-green)' : (data.success_rate ?? 0) >= 95 ? 'var(--tn-orange)' : 'var(--tn-red)',
-            (data.success_rate ?? 0) >= 99 ? '✅' : (data.success_rate ?? 0) >= 95 ? '⚠️' : '❌'
-          )}
-        </div>
+        <>
+          <div data-ai-id="bridge-overview-performance-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 20 }}>
+            {statCard(
+              'Avg Response Time',
+              `${(data.avg_response_time ?? 0).toFixed(2)}s`,
+              'var(--tn-text)',
+              '⏱️',
+              'bridge-overview-response-time-stat'
+            )}
+            {statCard(
+              'Success Rate',
+              `${(data.success_rate ?? 0).toFixed(1)}%`,
+              (data.success_rate ?? 0) >= 99 ? 'var(--tn-green)' : (data.success_rate ?? 0) >= 95 ? 'var(--tn-orange)' : 'var(--tn-red)',
+              (data.success_rate ?? 0) >= 99 ? '✅' : (data.success_rate ?? 0) >= 95 ? '⚠️' : '❌',
+              'bridge-overview-success-rate-stat'
+            )}
+          </div>
+
+          {/* Timestamp */}
+          <div data-ai-id="bridge-overview-timestamp" style={{ fontSize: 9, color: 'var(--tn-text-muted)', textAlign: 'right' }}>
+            Last updated: {data.timestamp ? new Date(data.timestamp).toLocaleString() : 'N/A'}
+          </div>
+        </>
       )}
     </div>
   );

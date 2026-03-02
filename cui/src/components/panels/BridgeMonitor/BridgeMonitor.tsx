@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { BRIDGE_URL, bridgeJson } from './shared';
+import ErrorBoundary from '../../ErrorBoundary';
 // New Business-Focused Tabs
 import OverviewTab from './tabs/OverviewTab';
 import SessionsTab from './tabs/SessionsTab';
@@ -32,19 +33,19 @@ interface QuickStatus {
 export default function BridgeMonitor() {
   const tabs: Tab[] = [
     // Primary Monitoring Tabs (Match Test Expectations)
-    { key: 'overview',   label: 'Overview',     component: <OverviewTab /> },
-    { key: 'sessions',   label: 'Sessions',     component: <SessionsTab /> },
-    { key: 'stats',      label: 'Stats',        component: <UsageAnalyticsTab /> },
-    { key: 'costs',      label: 'Costs',        component: <CostAnalyticsTab /> },
-    { key: 'settings',   label: 'Settings',     component: <SettingsTab /> },
-    { key: 'logs',       label: 'Logs',         component: <LogsTab /> },
-    { key: 'health',     label: 'Health',       component: <HealthTab /> },
+    { key: 'overview',   label: 'Overview',     component: <ErrorBoundary componentName="OverviewTab"><OverviewTab /></ErrorBoundary> },
+    { key: 'sessions',   label: 'Sessions',     component: <ErrorBoundary componentName="SessionsTab"><SessionsTab /></ErrorBoundary> },
+    { key: 'stats',      label: 'Stats',        component: <ErrorBoundary componentName="UsageAnalyticsTab"><UsageAnalyticsTab /></ErrorBoundary> },
+    { key: 'costs',      label: 'Costs',        component: <ErrorBoundary componentName="CostAnalyticsTab"><CostAnalyticsTab /></ErrorBoundary> },
+    { key: 'settings',   label: 'Settings',     component: <ErrorBoundary componentName="SettingsTab"><SettingsTab /></ErrorBoundary> },
+    { key: 'logs',       label: 'Logs',         component: <ErrorBoundary componentName="LogsTab"><LogsTab /></ErrorBoundary> },
+    { key: 'health',     label: 'Health',       component: <ErrorBoundary componentName="HealthTab"><HealthTab /></ErrorBoundary> },
     // Additional Tabs
-    { key: 'limits',     label: 'Limits',       component: <RateLimitsTab /> },
-    { key: 'activity',   label: 'Activity',     component: <ActivityFeedTab /> },
-    { key: 'status',     label: 'Status',       component: <StatusTab /> },
-    { key: 'metriken',   label: 'Metriken',     component: <MetrikenTab /> },
-    { key: 'cc-usage',   label: 'CC-Usage',     component: <CCUsageTab /> },
+    { key: 'limits',     label: 'Limits',       component: <ErrorBoundary componentName="RateLimitsTab"><RateLimitsTab /></ErrorBoundary> },
+    { key: 'activity',   label: 'Activity',     component: <ErrorBoundary componentName="ActivityFeedTab"><ActivityFeedTab /></ErrorBoundary> },
+    { key: 'status',     label: 'Status',       component: <ErrorBoundary componentName="StatusTab"><StatusTab /></ErrorBoundary> },
+    { key: 'metriken',   label: 'Metriken',     component: <ErrorBoundary componentName="MetrikenTab"><MetrikenTab /></ErrorBoundary> },
+    { key: 'cc-usage',   label: 'CC-Usage',     component: <ErrorBoundary componentName="CCUsageTab"><CCUsageTab /></ErrorBoundary> },
   ];
 
   const [activeTab, setActiveTab] = useState(tabs[0].key);

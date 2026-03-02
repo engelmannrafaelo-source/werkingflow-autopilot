@@ -120,11 +120,26 @@ export default function CCUsageTab() {
   const [error, setError] = useState("");
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
-  const fetchStats = useCallback(async () => {
+  const fetchStats = useCallback(async (triggerScrape = false) => {
     if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     setError("");
     try {
+      // Trigger scraping if requested
+      if (triggerScrape) {
+        try {
+          const scrapeRes = await fetch("/api/claude-code/scrape-now", { method: "POST", signal: AbortSignal.timeout(8000) });
+          if (!scrapeRes.ok) {
+            console.warn("[CCUsage] Scrape trigger failed:", scrapeRes.status);
+            setError(`Scrape failed: HTTP ${scrapeRes.status}`);
+          }
+          // Wait a bit for scrape to complete
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        } catch (scrapeErr: any) {
+          console.warn('[CCUsage] scrape-now request failed:', scrapeErr);
+        }
+      }
+
       const res = await fetch("/api/claude-code/stats-v2", { signal: AbortSignal.timeout(8000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
@@ -147,7 +162,7 @@ export default function CCUsageTab() {
 
   return (
     <div style={{ padding: 12 }}>
-      <Toolbar lastRefresh={lastRefresh} loading={loading} onRefresh={fetchStats} autoRefresh={60} />
+      <Toolbar lastRefresh={lastRefresh} loading={loading} onRefresh={() => fetchStats(true)} autoRefresh={60} />
       {error && <ErrorBanner message={error} />}
       {loading && <LoadingSpinner text="Lade Claude Code Stats..." />}
 

@@ -156,7 +156,9 @@ async function scrapeAccount(accountName: string): Promise<UsageData | null> {
       throw new Error(`Unexpected redirect to: ${usageUrl}`);
     }
 
-    await page.screenshot({ path: `/tmp/cc-usage-${accountName}.png`, fullPage: true });
+    // Screenshots disabled (permission issues)
+    // const screenshotPath = `/home/claude-user/.cui-account1/cc-usage-${accountName}.png`;
+    // await page.screenshot({ path: screenshotPath, fullPage: true });
 
     const bodyText = await page.evaluate(() => document.body.innerText);
     const parsed = parseUsagePage(bodyText);

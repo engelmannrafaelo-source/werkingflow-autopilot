@@ -69,13 +69,14 @@ export default function RateLimitsTab() {
   };
 
   return (
-    <div style={{ padding: 12 }}>
+    <div data-ai-id="bridge-limits-container" style={{ padding: 12 }}>
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+      <div data-ai-id="bridge-limits-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0, color: 'var(--tn-text)' }}>
           Rate Limit Monitoring
         </h3>
         <button
+          data-ai-id="bridge-limits-refresh-btn"
           onClick={fetchData}
           style={{
             padding: '3px 10px',
@@ -93,6 +94,7 @@ export default function RateLimitsTab() {
 
       {error && (
         <div
+          data-ai-id="bridge-limits-error"
           style={{
             padding: '6px 10px',
             fontSize: 11,
@@ -107,7 +109,7 @@ export default function RateLimitsTab() {
       )}
 
       {loading && !data && (
-        <div style={{ padding: 40, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>
+        <div data-ai-id="bridge-limits-loading" style={{ padding: 40, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>
           Loading...
         </div>
       )}
@@ -115,14 +117,15 @@ export default function RateLimitsTab() {
       {data && (
         <>
           {/* Provider Gauges */}
-          <div style={{ marginBottom: 24 }}>
+          <div data-ai-id="bridge-limits-providers-section" style={{ marginBottom: 24 }}>
             <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--tn-text)', marginBottom: 12 }}>
               PROVIDER RATE LIMITS
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16 }}>
+            <div data-ai-id="bridge-limits-providers-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16 }}>
               {data.providers.map((provider, idx) => (
                 <div
                   key={idx}
+                  data-ai-id={`bridge-limits-provider-${provider.provider}`}
                   style={{
                     padding: 16,
                     background: 'var(--tn-bg-dark)',
@@ -161,24 +164,24 @@ export default function RateLimitsTab() {
           </div>
 
           {/* Status Legend */}
-          <div style={{ marginBottom: 24, padding: 12, background: 'var(--tn-bg-dark)', borderRadius: 4 }}>
+          <div data-ai-id="bridge-limits-status-legend" style={{ marginBottom: 24, padding: 12, background: 'var(--tn-bg-dark)', borderRadius: 4 }}>
             <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--tn-text)', marginBottom: 8 }}>
               STATUS LEGEND
             </div>
             <div style={{ display: 'flex', gap: 16, fontSize: 9, color: 'var(--tn-text-muted)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div data-ai-id="bridge-limits-legend-safe" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <div style={{ width: 12, height: 12, borderRadius: '50%', background: 'var(--tn-green)' }} />
                 Safe (&lt;60%)
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div data-ai-id="bridge-limits-legend-caution" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <div style={{ width: 12, height: 12, borderRadius: '50%', background: 'var(--tn-blue)' }} />
                 Caution (60-80%)
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div data-ai-id="bridge-limits-legend-warning" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <div style={{ width: 12, height: 12, borderRadius: '50%', background: 'var(--tn-orange)' }} />
                 Warning (80-95%)
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div data-ai-id="bridge-limits-legend-critical" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <div style={{ width: 12, height: 12, borderRadius: '50%', background: 'var(--tn-red)' }} />
                 Critical (&gt;95%)
               </div>
@@ -186,13 +189,14 @@ export default function RateLimitsTab() {
           </div>
 
           {/* Historical Rate Limit Events */}
-          <div>
+          <div data-ai-id="bridge-limits-history-section">
             <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--tn-text)', marginBottom: 8 }}>
               RATE LIMIT EVENTS (LAST 24H)
             </div>
             {data.history.length > 0 ? (
-              <div>
+              <div data-ai-id="bridge-limits-history-table">
                 <div
+                  data-ai-id="bridge-limits-history-header"
                   style={{
                     display: 'grid',
                     gridTemplateColumns: '140px 1fr 1fr 2fr',
@@ -214,6 +218,7 @@ export default function RateLimitsTab() {
                 {data.history.map((event, idx) => (
                   <div
                     key={idx}
+                    data-ai-id={`bridge-limits-event-${idx}`}
                     style={{
                       display: 'grid',
                       gridTemplateColumns: '140px 1fr 1fr 2fr',
@@ -235,6 +240,7 @@ export default function RateLimitsTab() {
               </div>
             ) : (
               <div
+                data-ai-id="bridge-limits-no-events"
                 style={{
                   padding: 20,
                   textAlign: 'center',
@@ -250,7 +256,7 @@ export default function RateLimitsTab() {
           </div>
 
           {/* Last Updated */}
-          <div style={{ marginTop: 16, fontSize: 9, color: 'var(--tn-text-muted)', textAlign: 'right' }}>
+          <div data-ai-id="bridge-limits-timestamp" style={{ marginTop: 16, fontSize: 9, color: 'var(--tn-text-muted)', textAlign: 'right' }}>
             Last updated: {data.lastUpdated ? new Date(data.lastUpdated).toLocaleString() : 'N/A'}
           </div>
         </>

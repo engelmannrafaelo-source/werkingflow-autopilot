@@ -263,10 +263,17 @@ export default function UsageAnalyticsTab() {
                 fontSize: 11,
               }}
             >
-              No usage data available yet
+              No usage data available yet (no requests tracked)
             </div>
           )}
         </div>
+
+          {/* Timestamp */}
+          {data && (
+            <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', textAlign: 'right', marginTop: 20 }}>
+              Last updated: {data.timestamp ? new Date(data.timestamp).toLocaleString() : 'N/A'}
+            </div>
+          )}
     </div>
   );
 }

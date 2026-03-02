@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ACCOUNTS } from '../../types';
@@ -16,7 +16,7 @@ interface ContentBlock {
 }
 
 interface Message {
-  role: 'user' | 'assistant' | 'system' | 'rate_limit';
+  role: 'user' | 'assistant' | 'system' | 'rate_limit' | 'api_error';
   content: string | ContentBlock[];
   timestamp?: string;
 }
@@ -80,9 +80,17 @@ function ToolUseBlock({ block, onRespond, workDir }: { block: ContentBlock; onRe
   const [planLoading, setPlanLoading] = useState(false);
   const [responded, setResponded] = useState(false);
 
-  // Load plan text when ExitPlanMode block is rendered
+  // Load plan text: prefer inline from tool input, fall back to file
   useEffect(() => {
-    if (block.name !== 'ExitPlanMode' || !workDir || planText !== null) return;
+    if (block.name !== 'ExitPlanMode' || planText !== null) return;
+    // Plan content is included directly in ExitPlanMode tool_use input
+    const inlinePlan = block.input?.plan as string | undefined;
+    if (inlinePlan && inlinePlan.trim()) {
+      setPlanText(inlinePlan);
+      return;
+    }
+    // Fallback: load from file
+    if (!workDir) { setPlanText(''); return; }
     setPlanLoading(true);
     if ((window as any).__cuiServerAlive === false) { setPlanLoading(false); return; }
     fetch(`/api/file-read?path=${encodeURIComponent(workDir + '/.claude/plan.md')}`, { signal: AbortSignal.timeout(5000) })
@@ -247,8 +255,8 @@ function ToolUseBlock({ block, onRespond, workDir }: { block: ContentBlock; onRe
   );
 }
 
-// --- Message Row ---
-function MessageRow({ msg, onRespond, isLast, workDir }: { msg: Message; onRespond?: (text: string) => void; isLast: boolean; workDir?: string }) {
+// --- Message Row (memoized: prevents re-rendering 200+ ReactMarkdown instances on poll) ---
+const MessageRow = memo(function MessageRow({ msg, onRespond, isLast, workDir }: { msg: Message; onRespond?: (text: string) => void; isLast: boolean; workDir?: string }) {
   const blocks: ContentBlock[] = typeof msg.content === 'string'
     ? [{ type: 'text', text: msg.content }]
     : Array.isArray(msg.content) ? msg.content : [];
@@ -268,16 +276,19 @@ function MessageRow({ msg, onRespond, isLast, workDir }: { msg: Message; onRespo
   const text = textBlocks.map(b => b.text || '').join('\n');
   if (!text.trim() && toolUseBlocks.length === 0) return null;
 
-  // Rate limit messages get special styling
-  if (msg.role === 'rate_limit') {
+  // Rate limit and API error messages get special styling
+  if (msg.role === 'rate_limit' || msg.role === 'api_error') {
+    const isRateLimit = msg.role === 'rate_limit';
     return (
-      <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--tn-border)', background: 'rgba(239,68,68,0.08)' }}>
+      <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--tn-border)', background: isRateLimit ? 'rgba(239,68,68,0.08)' : 'rgba(245,158,11,0.08)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-          <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: '#EF4444' }}>Rate Limit</span>
+          <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: isRateLimit ? '#EF4444' : '#F59E0B' }}>
+            {isRateLimit ? 'Rate Limit' : 'API Fehler'}
+          </span>
           {msg.timestamp && <span style={{ fontSize: 10, color: 'var(--tn-text-muted)' }}>{new Date(msg.timestamp).toLocaleTimeString()}</span>}
         </div>
-        <div style={{ fontSize: 12, color: '#EF4444', lineHeight: 1.5 }}>
-          {typeof msg.content === 'string' ? msg.content : 'Nutzungslimit erreicht. Bitte anderen Account verwenden oder warten.'}
+        <div style={{ fontSize: 12, color: isRateLimit ? '#EF4444' : '#F59E0B', lineHeight: 1.5 }}>
+          {typeof msg.content === 'string' ? msg.content : isRateLimit ? 'Nutzungslimit erreicht. Bitte anderen Account verwenden oder warten.' : 'API Fehler aufgetreten.'}
         </div>
       </div>
     );
@@ -337,7 +348,7 @@ function MessageRow({ msg, onRespond, isLast, workDir }: { msg: Message; onRespo
       ))}
     </div>
   );
-}
+});
 
 // --- Loading state with timeout + retry ---
 // Only counts elapsed time when server is alive — pauses during server restarts
@@ -408,7 +419,14 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     if (initialSessionId) return initialSessionId;
     try { return localStorage.getItem(getSessionKey(initialAccount)); } catch { return null; }
   });
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<Message[]>(() => {
+    if (initialSessionId || !sessionId) return [];
+    try {
+      const cached = localStorage.getItem(`cui-msgs-${sessionId}`);
+      if (cached) return JSON.parse(cached);
+    } catch {}
+    return [];
+  });
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [convStatus, setConvStatus] = useState<'ongoing' | 'completed'>('completed');
@@ -425,6 +443,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   const [planMode, setPlanMode] = useState(false);
   const [liveMode, setLiveMode] = useState(false);
   const [isAgentDone, setIsAgentDone] = useState(false);
+  const [showAllMessages, setShowAllMessages] = useState(false);
 
   // --- Prompt Templates ---
   interface PromptTemplate { id: string; label: string; message: string; category: "reply" | "start"; subject?: string; order: number; createdAt: string; }
@@ -448,6 +467,10 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollFailCountRef = useRef(0);
   const circuitOpenRef = useRef(false); // Circuit breaker: stops polling after persistent failures
+  // Track last poll data to skip redundant setState (avoids re-render + LCP shift)
+  const lastPollHashRef = useRef('');
+  // Debounce: coalesce rapid-fire setTimeout(pollNow) into single call
+  const debouncedPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const account = ACCOUNTS.find(a => a.id === selectedId) || ACCOUNTS[0];
   const pollInterval = liveMode ? 2000 : 15000;
@@ -464,14 +487,27 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       if (convResp.ok) {
         const data = await convResp.json().catch(() => null);
         if (!data) { console.warn('[CuiLite] Poll: invalid JSON response'); return; }
-        setMessages(data.messages || []);
-        setConvStatus(data.status === 'ongoing' ? 'ongoing' : 'completed');
-        setPermissions(data.permissions || []);
-        setConvName(data.summary || '');
-        setIsAgentDone(!!data.isAgentDone);
-        if (data.rateLimited) {
-          setAttention('needs_attention');
-          setAttentionReason('rate_limit');
+        const newMsgs: Message[] = data.messages || [];
+        const newStatus = data.status === 'ongoing' ? 'ongoing' : 'completed';
+        const newPerms: Permission[] = data.permissions || [];
+        const newName = data.summary || '';
+        const newDone = !!data.isAgentDone;
+        // Fast hash: skip redundant setState when nothing changed
+        const lastTs = newMsgs[newMsgs.length - 1]?.timestamp || '';
+        const hash = `${newMsgs.length}|${lastTs}|${newStatus}|${newPerms.length}|${newName}|${newDone}|${data.rateLimited || ''}`;
+        if (hash !== lastPollHashRef.current) {
+          lastPollHashRef.current = hash;
+          setMessages(newMsgs);
+          // Cache messages for instant load on next visit
+          try { localStorage.setItem(`cui-msgs-${sessionId}`, JSON.stringify(newMsgs)); } catch {}
+          setConvStatus(newStatus as 'ongoing' | 'completed');
+          setPermissions(newPerms);
+          setConvName(newName);
+          setIsAgentDone(newDone);
+          if (data.rateLimited) {
+            setAttention('needs_attention');
+            setAttentionReason('rate_limit');
+          }
         }
         pollFailCountRef.current = 0;
         circuitOpenRef.current = false;
@@ -492,6 +528,15 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       if (pollFailCountRef.current <= 2) console.warn('[CuiLite] Poll network error:', err);
     }
   }, [sessionId, selectedId]);
+
+  // Debounced poll: coalesces multiple rapid setTimeout(pollNow) into one call
+  const debouncedPoll = useCallback((delayMs: number) => {
+    if (debouncedPollRef.current) clearTimeout(debouncedPollRef.current);
+    debouncedPollRef.current = setTimeout(() => {
+      debouncedPollRef.current = null;
+      pollNow();
+    }, delayMs);
+  }, [pollNow]);
 
   // Fetch states once on mount/account change (WS handles updates after that)
   useEffect(() => {
@@ -628,7 +673,8 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
             }
             if (msg.state === "error" && msg.message) {
               setAttention("needs_attention");
-              setAttentionReason("rate_limit");
+              const isRateLimit = msg.message.toLowerCase().includes('rate limit') || msg.message.toLowerCase().includes('nutzungslimit');
+              setAttentionReason(isRateLimit ? "rate_limit" : "error");
               setRateLimitMessage(msg.message);
               if (sessionId) setTimeout(pollNow, 1000);
             }
@@ -819,7 +865,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ accountId: selectedId, sessionId, message: msg, workDir }),
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(65000),
       });
       if (!resp.ok) {
         const errData = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
@@ -841,6 +887,8 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       setMessages(prev => [...prev, { role: 'system', content: `Netzwerkfehler: ${errMsg}`, timestamp: new Date().toISOString() }]);
     }
     setIsLoading(false);
+    // Invalidate hash so next poll always applies state (user just sent a message)
+    lastPollHashRef.current = '';
     // Single delayed poll — WS will handle the rest via cui-state/done events
     setTimeout(pollNow, 2000);
   }, [input, sessionId, selectedId, workDir, planMode, pollNow, onRouteChange]);
@@ -859,7 +907,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ accountId: selectedId, sessionId, message: text, workDir }),
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(65000),
       });
       if (resp.ok) {
         const data = await resp.json().catch(() => ({}));
@@ -876,6 +924,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       console.error('[CuiLite] Respond error:', err);
     }
     setIsLoading(false);
+    lastPollHashRef.current = '';
     setTimeout(pollNow, 1000);
   }, [sessionId, selectedId, workDir, pollNow, onRouteChange]);
 
@@ -891,6 +940,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         body: JSON.stringify({ action }),
         signal: AbortSignal.timeout(10000),
       });
+      lastPollHashRef.current = '';
       setTimeout(pollNow, 500);
     } catch (err) {
       console.error('[CuiLite] Permission error:', err);
@@ -909,6 +959,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       setAttention('idle');
       setAttentionReason('done');
       setConvStatus('completed');
+      lastPollHashRef.current = '';
       if (!data.apiStopOk && !data.childrenKilled) {
         console.warn('[CuiLite] Stop: API stop failed and no children killed — agent may still be running');
       }
@@ -941,7 +992,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ accountId: selectedId, message, workDir, subject }),
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(65000),
       });
       if (!resp.ok) {
         console.warn('[CuiLite] Start new HTTP error:', resp.status);
@@ -1063,7 +1114,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         )}
         {attention === 'needs_attention' && sessionId && (
           <span style={{ fontSize: 9, color: '#F59E0B', fontWeight: 600 }}>
-            {attentionReason === 'plan' ? 'Plan' : attentionReason === 'question' ? 'Frage' : attentionReason === 'rate_limit' ? 'Rate Limit' : attentionReason === 'error' ? 'Fehler' : attentionReason === 'done' ? 'Fertig' : 'Aktion'}
+            {attentionReason === 'plan' ? 'Plan' : attentionReason === 'question' ? 'Frage' : attentionReason === 'rate_limit' ? 'Rate Limit' : attentionReason === 'error' || attentionReason === 'send_failed' ? 'Fehler' : attentionReason === 'done' ? 'Fertig' : 'Aktion'}
           </span>
         )}
 
@@ -1100,7 +1151,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
 
         {/* Manual refresh */}
         {sessionId && !liveMode && (
-          <button onClick={() => pollNow()} style={{
+          <button onClick={() => { lastPollHashRef.current = ''; pollNow(); }} style={{
             background: 'var(--tn-bg)', color: 'var(--tn-text-muted)',
             border: '1px solid var(--tn-border)', borderRadius: 4,
             padding: '1px 8px', fontSize: 10, cursor: 'pointer',
@@ -1152,11 +1203,11 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
             {attentionReason === 'plan' ? 'Plan wartet auf Freigabe'
               : attentionReason === 'question' ? 'Claude hat eine Frage'
               : attentionReason === 'rate_limit' ? 'Rate Limit — Account hat das Nutzungslimit erreicht. Anderen Account verwenden!'
-              : attentionReason === 'error' ? 'Fehler aufgetreten'
+              : (attentionReason === 'error' || attentionReason === 'send_failed') ? (rateLimitMessage || 'Nachricht konnte nicht zugestellt werden. Bitte erneut versuchen.')
               : 'Aktion erforderlich'}
           </span>
           <span style={{ flex: 1 }} />
-          <button onClick={() => pollNow()} style={{
+          <button onClick={() => { lastPollHashRef.current = ''; pollNow(); }} style={{
             padding: '2px 10px', fontSize: 11, borderRadius: 3, cursor: 'pointer',
             background: 'var(--tn-bg)', border: '1px solid var(--tn-border)', color: 'var(--tn-text)',
           }}>
@@ -1244,8 +1295,16 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
             {messages.length === 0 && (
               <LoadingConversation sessionId={sessionId} onBack={() => { setSessionId(null); setShowQueue(true); }} onRetry={pollNow} onLoadFailed={onLoadFailed} />
             )}
-            {messages.map((msg, i) => (
-              <MessageRow key={i} msg={msg} onRespond={handleRespond} isLast={i === messages.length - 1} workDir={workDir} />
+            {messages.length > 15 && !showAllMessages && (
+              <button onClick={() => setShowAllMessages(true)} style={{
+                display: 'block', width: '100%', padding: '8px', background: 'var(--tn-bg-highlight)',
+                border: 'none', color: 'var(--tn-blue)', cursor: 'pointer', fontSize: 11,
+              }}>
+                {messages.length - 15} aeltere Nachrichten laden...
+              </button>
+            )}
+            {(showAllMessages ? messages : messages.slice(-15)).map((msg, i, arr) => (
+              <MessageRow key={msg.timestamp || i} msg={msg} onRespond={handleRespond} isLast={i === arr.length - 1} workDir={workDir} />
             ))}
             <div ref={messagesEndRef} />
           </div>

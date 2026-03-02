@@ -1,7 +1,7 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, lazy, Suspense } from 'react';
 import ProjectTabs from './components/ProjectTabs';
 import LayoutManager from './components/LayoutManager';
-import MissionControl from './components/panels/MissionControl';
+const MissionControl = lazy(() => import('./components/panels/MissionControl'));
 import AllChatsView from './components/AllChatsView';
 import type { Project, CuiStates } from './types';
 
@@ -679,7 +679,9 @@ export default function App() {
             position: 'absolute', inset: 0, zIndex: 2,
             display: 'flex', flexDirection: 'column',
           }}>
-            <MissionControl />
+            <Suspense fallback={<div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--tn-text-muted)' }}>Loading Mission Control...</div>}>
+              <MissionControl />
+            </Suspense>
           </div>
         )}
         {/* All Chats - consolidated view of all active conversations */}

@@ -159,70 +159,67 @@ function setIdleIfNotRateLimited(cuiId: string) {
 }
 
 // --- Auto-Refresh: Monitor CUI streams for response completion ---
-const activeMonitors = new Set<string>();
+// Returns Promise so callers can await completion. Unawaited calls work fine (fire-and-forget).
+function monitorStream(targetBase: string, streamingId: string, cuiId: string, authHeaders: Record<string, string>): Promise<'ended' | 'error' | 'timeout'> {
+  return new Promise((resolve) => {
+    let resolved = false;
+    const done = (result: 'ended' | 'error' | 'timeout') => {
+      if (resolved) return;
+      resolved = true;
+      resolve(result);
+    };
 
-function monitorStream(targetBase: string, streamingId: string, cuiId: string, authHeaders: Record<string, string>, sessionId?: string) {
-  // Prevent duplicate monitors for the same stream
-  if (activeMonitors.has(streamingId)) {
-    console.log(`[Monitor] Skip duplicate for ${streamingId.slice(0, 8)} (${cuiId})`);
-    return;
-  }
-  activeMonitors.add(streamingId);
-  const url = new URL(`/api/stream/${streamingId}`, targetBase);
-  const headers: Record<string, string> = { 'Accept': 'text/event-stream' };
-  if (authHeaders.authorization) headers['Authorization'] = authHeaders.authorization;
-  if (authHeaders.cookie) headers['Cookie'] = authHeaders.cookie;
+    const url = new URL(`/api/stream/${streamingId}`, targetBase);
+    const headers: Record<string, string> = { 'Accept': 'text/event-stream' };
+    if (authHeaders.authorization) headers['Authorization'] = authHeaders.authorization;
+    if (authHeaders.cookie) headers['Cookie'] = authHeaders.cookie;
 
-  const cleanup = () => {
-    activeMonitors.delete(streamingId);
-    if (sessionId) activeStreams.delete(sessionId);
-  };
-
-  const monitorReq = httpRequest(url, { method: 'GET', headers }, (monitorRes) => {
-    if (monitorRes.statusCode !== 200) {
-      // Stream not available — set idle after delay
-      setTimeout(() => {
-        cleanup();
-        setIdleIfNotRateLimited(cuiId);
-      }, 8000);
-      return;
-    }
-    monitorRes.on('data', (chunk: Buffer) => {
-      const attention = detectAttentionMarkers(chunk.toString());
-      if (attention) {
-        if (attention.state === 'idle') {
-          cleanup();
+    const monitorReq = httpRequest(url, { method: 'GET', headers }, (monitorRes) => {
+      if (monitorRes.statusCode !== 200) {
+        // Stream not available — set idle after delay
+        setTimeout(() => {
           setIdleIfNotRateLimited(cuiId);
-          monitorReq.destroy();
-        } else {
-          console.log(`[Monitor] ${cuiId}: ${attention.reason}`);
-          setSessionState(cuiId, cuiId, attention.state, attention.reason);
-        }
+          done('error');
+        }, 8000);
+        return;
       }
+      monitorRes.on('data', (chunk: Buffer) => {
+        const attention = detectAttentionMarkers(chunk.toString());
+        if (attention) {
+          if (attention.state === 'idle') {
+            setIdleIfNotRateLimited(cuiId);
+            monitorReq.destroy();
+            done('ended');
+          } else {
+            console.log(`[Monitor] ${cuiId}: ${attention.reason}`);
+            setSessionState(cuiId, cuiId, attention.state, attention.reason);
+          }
+        }
+      });
+      monitorRes.on('end', () => {
+        setIdleIfNotRateLimited(cuiId);
+        done('ended');
+      });
     });
-    monitorRes.on('end', () => {
-      cleanup();
-      setIdleIfNotRateLimited(cuiId);
+    monitorReq.on('error', () => {
+      // Connection error — set idle after delay
+      setTimeout(() => {
+        setIdleIfNotRateLimited(cuiId);
+        done('error');
+      }, 8000);
     });
-  });
-  monitorReq.on('error', () => {
-    // Connection error — set idle after delay
+    monitorReq.end();
+    // Safety timeout: if stream hasn't ended in 45s, set idle
     setTimeout(() => {
-      cleanup();
-      setIdleIfNotRateLimited(cuiId);
-    }, 8000);
+      const current = sessionStates.get(cuiId);
+      if (current?.state === 'working') {
+        console.log(`[Monitor] ${cuiId}: 45s timeout, setting idle`);
+        setIdleIfNotRateLimited(cuiId);
+      }
+      monitorReq.destroy();
+      done('timeout');
+    }, 45000);
   });
-  monitorReq.end();
-  // Safety timeout: if stream hasn't ended in 45s, set idle
-  setTimeout(() => {
-    const current = sessionStates.get(cuiId);
-    if (current?.state === 'working') {
-      console.log(`[Monitor] ${cuiId}: 45s timeout, setting idle`);
-      cleanup();
-      setIdleIfNotRateLimited(cuiId);
-    }
-    monitorReq.destroy();
-  }, 45000);
 }
 
 // Check if a just-started session immediately hit a rate limit
@@ -230,34 +227,51 @@ function monitorStream(targetBase: string, streamingId: string, cuiId: string, a
 function checkSessionForRateLimit(sessionId: string, cuiId: string, delayMs = 5000) {
   setTimeout(() => {
     try {
-      const projectsDir = join("/home/claude-user/.claude/projects");
-      if (!existsSync(projectsDir)) return;
-      const dirs = readdirSync(projectsDir);
-      for (const dir of dirs) {
-        const jsonlPath = join(projectsDir, dir, sessionId + ".jsonl");
-        if (!existsSync(jsonlPath)) continue;
-        const content = readFileSync(jsonlPath, "utf-8");
-        const lines = content.trim().split("\n").filter(Boolean);
-        // Check last few lines for rate limit indicators
-        for (let i = lines.length - 1; i >= Math.max(0, lines.length - 3); i--) {
-          try {
-            const entry = JSON.parse(lines[i]);
-            const isSynthetic = entry.message?.model === "<synthetic>" || entry.isApiErrorMessage === true;
-            if (isSynthetic) {
-              const errorText = entry.message?.content?.[0]?.text || entry.error || "Rate limit reached";
-              console.log("[RateLimit] " + cuiId + " session " + sessionId.slice(0, 8) + ": " + errorText.slice(0, 100));
-              broadcast({ type: "cui-state", cuiId, state: "error", message: "Rate Limit: Account hat das Nutzungslimit erreicht. Bitte anderen Account verwenden." });
-              broadcast({ type: "cui-rate-limit-hit", cuiId, sessionId, error: errorText });
-              setSessionState(cuiId, cuiId, "idle", "rate_limit");
-              return;
-            }
-          } catch { /* skip */ }
-        }
+      const jsonlPath = findJsonlPath(sessionId);
+      if (!jsonlPath) return;
+      const content = readFileSync(jsonlPath, "utf-8");
+      const lines = content.trim().split("\n").filter(Boolean);
+      // Check last few lines for rate limit indicators
+      for (let i = lines.length - 1; i >= Math.max(0, lines.length - 3); i--) {
+        try {
+          const entry = JSON.parse(lines[i]);
+          const isSynthetic = entry.message?.model === "<synthetic>" || entry.isApiErrorMessage === true;
+          if (isSynthetic) {
+            const errorText = entry.message?.content?.[0]?.text || entry.error || "Rate limit reached";
+            console.log("[RateLimit] " + cuiId + " session " + sessionId.slice(0, 8) + ": " + errorText.slice(0, 100));
+            broadcast({ type: "cui-state", cuiId, state: "error", message: "Rate Limit: Account hat das Nutzungslimit erreicht. Bitte anderen Account verwenden." });
+            broadcast({ type: "cui-rate-limit-hit", cuiId, sessionId, error: errorText });
+            setSessionState(cuiId, cuiId, "idle", "rate_limit");
+            return;
+          }
+        } catch { /* skip */ }
       }
     } catch (err) {
       console.error("[RateLimit] Check failed:", (err as Error).message);
     }
   }, delayMs);
+}
+
+// Verify if a send actually produced an assistant response in the JSONL
+function verifySendSuccess(sessionId: string): 'success' | 'no_response' | 'rate_limit' | 'no_file' {
+  const jsonlPath = findJsonlPath(sessionId);
+  if (!jsonlPath) return 'no_file';
+  const content = readFileSync(jsonlPath, "utf-8");
+  const lines = content.trim().split("\n").filter(Boolean);
+  // Walk backwards through last 10 lines
+  const start = Math.max(0, lines.length - 10);
+  for (let i = lines.length - 1; i >= start; i--) {
+    try {
+      const entry = JSON.parse(lines[i]);
+      // Rate limit = synthetic error
+      if (entry.isApiErrorMessage === true || entry.message?.model === '<synthetic>') return 'rate_limit';
+      // Assistant response = success
+      if (entry.message?.role === 'assistant' && entry.message?.model !== '<synthetic>') return 'success';
+      // User message without assistant after it = no response yet
+      if (entry.message?.role === 'user') return 'no_response';
+    } catch { continue; }
+  }
+  return 'no_response';
 }
 
 // Manual proxy for message POST to capture streamingId for auto-refresh
@@ -314,8 +328,8 @@ function messagePostProxy(targetBase: string, cuiId: string, req: IncomingMessag
     });
     proxyReq.on('error', (err) => {
       console.error(`[${cuiId}] Message POST proxy error:`, err.message);
-      if (!res.headersSent) res.writeHead(502);
-      res.end();
+      if (!res.headersSent) res.writeHead(502, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: `CUI Binary ${cuiId} nicht erreichbar: ${err.message}` }));
     });
     proxyReq.write(body);
     proxyReq.end();
@@ -760,16 +774,12 @@ setInterval(() => {
       activeStreams.delete(key); cleaned++;
     }
   }
-  // activeMonitors: cap at 50
-  if (activeMonitors.size > 50) {
-    activeMonitors.clear(); cleaned += 50;
-  }
   if (cleaned > 0) console.log(`[Cleanup] Removed ${cleaned} stale state entries`);
 }, 300000); // Every 5 minutes
 
 // --- Per-Session Attention State Tracker ---
 // Tracks whether each conversation needs user attention (plan, question, permission, done)
-type AttentionReason = 'plan' | 'question' | 'permission' | 'error' | 'done';
+type AttentionReason = 'plan' | 'question' | 'permission' | 'error' | 'done' | 'rate_limit' | 'send_failed';
 type ConvAttentionState = 'working' | 'needs_attention' | 'idle';
 interface SessionState {
   state: ConvAttentionState;
@@ -1730,19 +1740,40 @@ app.get('/api/mission/conversation/:accountId/:sessionId', async (req, res) => {
   if (!convResp.ok) { res.status(502).json({ error: convResp.error || 'CUI unreachable' }); return; }
 
   // Transform CUI message format, detect rate limits, filter noise
-  const allMessages = convResp.data.messages || [];
-  // Detect if the LAST message is a rate limit (show to user, don't filter!)
+  const allMessages: any[] = convResp.data.messages || [];
+
+  // Supplement: CUI binary sometimes misses the last JSONL entry (off-by-one).
+  // Read the JSONL tail directly and append any messages the binary missed.
+  const jsonlPath = findJsonlPath(req.params.sessionId);
+  if (jsonlPath) {
+    try {
+      const rawTail = readFileSync(jsonlPath, 'utf-8').split('\n');
+      const lastLines = rawTail.filter(l => l.trim()).slice(-5);
+      const lastBinaryTs = allMessages.length > 0 ? allMessages[allMessages.length - 1].timestamp : '';
+      for (const line of lastLines) {
+        try {
+          const obj = JSON.parse(line);
+          if (obj.timestamp && obj.timestamp > lastBinaryTs && obj.message?.role) {
+            allMessages.push(obj);
+          }
+        } catch { /* skip unparseable */ }
+      }
+    } catch { /* JSONL read failed, binary data is good enough */ }
+  }
+  // Detect if the LAST message is a synthetic error (rate limit or API error)
   let rateLimited = false;
-  let rateLimitText = '';
+  let hasApiError = false;
+  let errorText = '';
   for (let i = allMessages.length - 1; i >= Math.max(0, allMessages.length - 3); i--) {
     const m = allMessages[i];
     const isSynthetic = m.isApiErrorMessage === true || m.message?.model === '<synthetic>';
     if (isSynthetic) {
-      rateLimited = true;
-      rateLimitText = m.message?.content?.[0]?.text || m.error || 'Rate limit reached';
+      errorText = m.message?.content?.[0]?.text || m.error || '';
+      const isRateLimit = /rate.?limit|usage.?limit|too many requests|429/i.test(errorText);
+      if (isRateLimit) { rateLimited = true; } else { hasApiError = true; }
       break;
     }
-    if (m.message?.role === 'assistant') break; // Stop at first real assistant message
+    if (m.message?.role === 'assistant') break;
   }
   // Find index of last real assistant message to distinguish trailing vs old synthetic messages
   let lastAssistantIdx = -1;
@@ -1755,8 +1786,8 @@ app.get('/api/mission/conversation/:accountId/:sessionId', async (req, res) => {
   }
   const rawMessages = allMessages.filter((m: any, i: number) => {
     const isSynthetic = m.isApiErrorMessage === true || m.message?.model === '<synthetic>';
-    // Keep trailing synthetic messages (after last real assistant) so user sees rate limits
-    if (rateLimited && isSynthetic && i > lastAssistantIdx) return true;
+    // Keep trailing synthetic messages (after last real assistant) so user sees errors/rate limits
+    if ((rateLimited || hasApiError) && isSynthetic && i > lastAssistantIdx) return true;
     // Filter all other synthetic messages
     if (isSynthetic) return false;
     // Filter orphaned "continue" user messages (unstick attempts before/after errors)
@@ -1768,13 +1799,52 @@ app.get('/api/mission/conversation/:accountId/:sessionId', async (req, res) => {
     }
     return true;
   });
-  const messages = rawMessages.slice(-tail).map((m: any) => {
-    // Map synthetic error messages to a special role so frontend can style them
+
+  // Two visibility levels:
+  // 1. "countable" = has TEXT the user actually reads (counts toward tail limit)
+  // 2. "includable" = rendered in frontend (tool_use blocks show as badges)
+  // 3. "excluded" = invisible noise (tool_result user messages, empty entries)
+  function hasTextContent(m: any): boolean {
+    const content = m.message?.content;
+    if (typeof content === 'string') return content.trim().length > 0;
+    if (Array.isArray(content)) return content.some((c: any) => c.type === 'text' && c.text?.trim());
+    return false;
+  }
+  function isIncludable(m: any): boolean {
+    const role = m.message?.role;
+    const content = m.message?.content;
+    if (role === 'user') {
+      if (Array.isArray(content) && content.length > 0 && content.every((c: any) => c.type === 'tool_result')) return false;
+      return true;
+    }
+    if (role === 'assistant') {
+      if (typeof content === 'string') return content.trim().length > 0;
+      if (Array.isArray(content)) {
+        return content.some((c: any) => c.type === 'text' && c.text?.trim()) || content.some((c: any) => c.type === 'tool_use');
+      }
+      return false;
+    }
+    return true;
+  }
+
+  // Collect last `tail` TEXT messages, including tool_use messages in between
+  let textCount = 0;
+  let sliceFrom = rawMessages.length;
+  for (let i = rawMessages.length - 1; i >= 0 && textCount < tail; i--) {
+    if (hasTextContent(rawMessages[i])) textCount++;
+    sliceFrom = i;
+  }
+  const messages = rawMessages.slice(sliceFrom)
+    .filter((m: any) => isIncludable(m))  // Only send includable messages to frontend
+    .map((m: any) => {
+    // Map synthetic error messages to appropriate role
     const isSynthetic = m.isApiErrorMessage === true || m.message?.model === '<synthetic>';
     if (isSynthetic) {
+      const errorText = m.message?.content?.[0]?.text || m.error || '';
+      const isRateLimit = /rate.?limit|usage.?limit|too many requests|429/i.test(errorText);
       return {
-        role: 'rate_limit' as const,
-        content: m.message?.content?.[0]?.text || m.error || 'Rate limit reached',
+        role: (isRateLimit ? 'rate_limit' : 'api_error') as any,
+        content: errorText || (isRateLimit ? 'Rate limit reached' : 'API Fehler aufgetreten'),
         timestamp: m.timestamp || '',
       };
     }
@@ -1811,7 +1881,9 @@ app.get('/api/mission/conversation/:accountId/:sessionId', async (req, res) => {
     totalMessages: rawMessages.length,
     isAgentDone,
     rateLimited,
-    rateLimitText: rateLimited ? rateLimitText : undefined,
+    rateLimitText: rateLimited ? errorText : undefined,
+    apiError: hasApiError || undefined,
+    apiErrorText: hasApiError ? errorText : undefined,
   });
   } catch (err: any) {
     console.warn('[Server] GET /api/mission/conversation detail error:', err);
@@ -1834,9 +1906,9 @@ app.post('/api/mission/send', async (req, res) => {
 
   const resolvedWorkDir = workDir || '/root';
 
-  // Auto-clean synthetic error messages (rate limit, billing) from JSONL before resuming
+  // Sanitize JSONL before resuming — removes queue-ops, progress, corrupted entries
   const cleaned = unstickConversation(sessionId);
-  if (cleaned > 0) console.log(`[Send] Auto-cleaned ${cleaned} error messages from ${sessionId}`);
+  if (cleaned > 0) console.log(`[Send] Sanitized ${cleaned} entries from ${sessionId}`);
 
   let resp = await cuiFetch(port, '/api/conversations/start', {
     method: 'POST',
@@ -1848,19 +1920,37 @@ app.post('/api/mission/send', async (req, res) => {
     }),
   });
 
-  // Auto-recover: if resume fails (e.g. missing system init in JSONL), start a fresh session
+  // If resume failed, try deep repair: run sanitizer again (it's idempotent) then retry once
   let resumeFailed = false;
   if (!resp.ok && resp.error?.includes('system init')) {
-    console.log(`[Send] Resume failed for ${sessionId}: ${resp.error} — starting fresh session`);
-    resp = await cuiFetch(port, '/api/conversations/start', {
-      method: 'POST',
-      timeoutMs: 60000,
-      body: JSON.stringify({
-        workingDirectory: resolvedWorkDir,
-        initialPrompt: message,
-      }),
-    });
-    resumeFailed = true;
+    console.log(`[Send] Resume failed for ${sessionId}: ${resp.error} — attempting deep JSONL repair...`);
+    // Deep repair: strip trailing entries that might confuse the CLI
+    const deepCleaned = deepRepairJsonl(sessionId);
+    if (deepCleaned > 0) {
+      console.log(`[Send] Deep repair removed ${deepCleaned} more entries — retrying resume...`);
+      resp = await cuiFetch(port, '/api/conversations/start', {
+        method: 'POST',
+        timeoutMs: 60000,
+        body: JSON.stringify({
+          workingDirectory: resolvedWorkDir,
+          initialPrompt: message,
+          resumedSessionId: sessionId,
+        }),
+      });
+    }
+    // If still fails after repair, fall back to fresh session
+    if (!resp.ok) {
+      console.log(`[Send] Resume still failed after repair — starting fresh session`);
+      resp = await cuiFetch(port, '/api/conversations/start', {
+        method: 'POST',
+        timeoutMs: 60000,
+        body: JSON.stringify({
+          workingDirectory: resolvedWorkDir,
+          initialPrompt: message,
+        }),
+      });
+      resumeFailed = true;
+    }
   }
 
   if (!resp.ok || !resp.data?.sessionId) {
@@ -1877,24 +1967,54 @@ app.post('/api/mission/send', async (req, res) => {
   saveAssignment(sendResult.sessionId || sessionId, accountId);
   setLastPrompt(sendResult.sessionId || sessionId);
 
-  // Track state + cache streamingId for stop calls
-  const resolvedSessionId = sendResult.sessionId || sessionId;
+  const finalSessionId = sendResult.sessionId || sessionId;
+
+  // Track state + respond immediately
   broadcast({ type: 'cui-state', cuiId: accountId, state: 'processing' });
-  setSessionState(accountId, accountId, 'working', undefined, resolvedSessionId);
-  if (sendResult.streamingId) {
-    activeStreams.set(resolvedSessionId, sendResult.streamingId);
-  }
+  setSessionState(accountId, accountId, 'working', undefined, finalSessionId);
+  res.json({ ok: true, streamingId: sendResult.streamingId, sessionId: finalSessionId, resumeFailed });
 
-  // Monitor the new stream (pass sessionId for cleanup)
-  if (sendResult.streamingId) {
-    monitorStream(`http://localhost:${port}`, sendResult.streamingId, accountId, {}, resolvedSessionId);
-  }
-    checkSessionForRateLimit(sendResult.sessionId || sessionId, accountId);
-
-  // Track account assignment for this conversation
-  saveAssignment(sendResult.sessionId || sessionId, accountId);
-
-  res.json({ ok: true, streamingId: sendResult.streamingId, sessionId: sendResult.sessionId || sessionId, resumeFailed });
+  // Fire-and-forget: monitor with retry on silent failure
+  const MAX_SEND_RETRIES = 2;
+  let currentStreamingId = sendResult.streamingId;
+  (async () => {
+    for (let attempt = 0; attempt <= MAX_SEND_RETRIES; attempt++) {
+      // 1. Await stream completion
+      if (currentStreamingId) {
+        await monitorStream(`http://localhost:${port}`, currentStreamingId, accountId, {});
+      }
+      // 2. Let JSONL flush
+      await new Promise(r => setTimeout(r, 2000));
+      // 3. Verify actual response in JSONL
+      const result = verifySendSuccess(finalSessionId);
+      if (result === 'success') return;
+      if (result === 'rate_limit') {
+        broadcast({ type: 'cui-state', cuiId: accountId, state: 'error', message: 'Rate Limit: Account hat das Nutzungslimit erreicht.' });
+        setSessionState(accountId, accountId, 'idle', 'rate_limit', finalSessionId);
+        return;
+      }
+      // no_response or no_file — retry if attempts remain
+      if (attempt >= MAX_SEND_RETRIES) break;
+      console.log(`[Send] Attempt ${attempt + 1} got no response for ${finalSessionId.slice(0, 8)} — retrying...`);
+      unstickConversation(finalSessionId);
+      await new Promise(r => setTimeout(r, 3000 * (attempt + 1)));
+      const retryResp = await cuiFetch(port, '/api/conversations/start', {
+        method: 'POST', timeoutMs: 60000,
+        body: JSON.stringify({ workingDirectory: resolvedWorkDir, initialPrompt: message, resumedSessionId: finalSessionId }),
+      });
+      if (!retryResp.ok || !retryResp.data?.streamingId) {
+        console.log(`[Send] Retry ${attempt + 1} cuiFetch failed: ${retryResp.error}`);
+        continue;
+      }
+      currentStreamingId = retryResp.data.streamingId;
+      broadcast({ type: 'cui-state', cuiId: accountId, state: 'processing' });
+      setSessionState(accountId, accountId, 'working', undefined, finalSessionId);
+    }
+    // All retries exhausted
+    console.error(`[Send] All ${MAX_SEND_RETRIES + 1} attempts failed for ${finalSessionId.slice(0, 8)}`);
+    broadcast({ type: 'cui-state', cuiId: accountId, state: 'error', message: 'Nachricht konnte nicht zugestellt werden. Bitte erneut versuchen.' });
+    setSessionState(accountId, accountId, 'needs_attention', 'send_failed', finalSessionId);
+  })();
   } catch (err: any) {
     console.warn('[Server] POST /api/mission/send error:', err);
     res.status(500).json({ error: 'Internal error' });
@@ -2018,83 +2138,214 @@ app.delete('/api/mission/conversation/:sessionId', (req, res) => {
   res.json({ ok: true, deleted, errors });
 });
 
-// --- Unstick: remove API error messages + orphaned user messages from conversation JSONL ---
-// Handles: rate_limit, billing_error, unknown, invalid_request, etc.
-// Also removes trailing orphaned user/queue-operation messages that have no assistant response.
-// This prevents the "multiple consecutive user messages" problem that causes context loss.
-function unstickConversation(sessionId: string): number {
+// Find JSONL file path for a session across all project dirs
+function findJsonlPath(sessionId: string): string | null {
   const cuiProjectsDir = join(homedir(), '.claude', 'projects');
-  if (!existsSync(cuiProjectsDir)) return 0;
-  let totalRemoved = 0;
-  const projectDirs = readdirSync(cuiProjectsDir);
-  for (const dir of projectDirs) {
+  if (!existsSync(cuiProjectsDir)) return null;
+  for (const dir of readdirSync(cuiProjectsDir)) {
     const dirPath = join(cuiProjectsDir, dir);
     try { if (!statSync(dirPath).isDirectory()) continue; } catch { continue; }
     const filePath = join(dirPath, `${sessionId}.jsonl`);
-    if (!existsSync(filePath)) continue;
-    try {
-      const lines = readFileSync(filePath, 'utf-8').split('\n');
-      const removeIndices = new Set<number>();
-      // Phase 0: Remove leading queue-operation entries (before system init)
-      // CUI binary writes queue-operation as first line when message was queued - corrupts JSONL
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (!line) continue;
-        try {
-          const obj = JSON.parse(line);
-          if (obj.type === 'queue-operation') {
-            removeIndices.add(i);
-          } else {
-            break; // Stop at first non-queue-operation line (system init or user message)
-          }
-        } catch { break; }
-      }
-      // Phase 1: Remove ALL synthetic error messages anywhere in the conversation
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (!line) continue;
-        try {
-          const obj = JSON.parse(line);
-          if (obj.isApiErrorMessage === true) { removeIndices.add(i); continue; }
-          const msg = obj.message;
-          if (msg && typeof msg === 'object' && msg.model === '<synthetic>') { removeIndices.add(i); continue; }
-        } catch { continue; }
-      }
-      // Phase 2: Remove trailing orphaned user/queue-operation entries (no assistant response after them)
-      // Walk backwards from the end, remove user messages and queue-operations until we hit an assistant message.
-      // Keep ONE trailing user message if it's the most recent (will be the "resume" trigger).
-      const remaining = lines.map((l, i) => ({ line: l, idx: i })).filter(x => !removeIndices.has(x.idx));
-      let trailingUserCount = 0;
-      for (let k = remaining.length - 1; k >= 0; k--) {
-        const line = remaining[k].line.trim();
-        if (!line) continue;
-        try {
-          const obj = JSON.parse(line);
-          const role = obj.message?.role || obj.type;
-          if (role === 'assistant') break; // Found last assistant message — stop
-          if (role === 'user') {
-            trailingUserCount++;
-            if (trailingUserCount > 1) {
-              // Keep only the LAST user message, remove earlier orphaned ones
-              removeIndices.add(remaining[k].idx);
-            }
-          }
-          if (obj.type === 'queue-operation' && trailingUserCount > 0) {
-            // Remove queue-operations associated with orphaned user messages
-            removeIndices.add(remaining[k].idx);
-          }
-        } catch { break; }
-      }
-      if (removeIndices.size > 0) {
-        writeFileSync(filePath, lines.filter((_, i) => !removeIndices.has(i)).join('\n'));
-        totalRemoved += removeIndices.size;
-        if (trailingUserCount > 1) {
-          console.log(`[Unstick] ${sessionId}: removed ${trailingUserCount - 1} orphaned user messages`);
+    if (existsSync(filePath)) return filePath;
+  }
+  return null;
+}
+
+// Comprehensive JSONL sanitizer — fixes ALL known corruption patterns:
+// 1. Remove ALL queue-operation entries (CUI binary bookkeeping, not conversation)
+// 2. Remove ALL progress entries (streaming artifacts)
+// 3. Remove synthetic error messages (rate limit, billing)
+// 4. Fix write-corrupted lines (two JSON objects concatenated on one line)
+// 5. Remove consecutive duplicate user messages (orphaned sends)
+// 6. Remove trailing truncated assistant if it's the very last entry with no content
+// 7. Ensure conversation ends cleanly (last entry = assistant or single user)
+function unstickConversation(sessionId: string): number {
+  const filePath = findJsonlPath(sessionId);
+  if (!filePath) return 0;
+  try {
+    const rawLines = readFileSync(filePath, 'utf-8').split('\n');
+    const cleanLines: string[] = [];
+    let totalRemoved = 0;
+
+    // Phase 1: Parse all lines, fix corrupted ones, filter non-conversation entries
+    for (const rawLine of rawLines) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      // Try to parse — handle write-corruption (two JSON objects on one line)
+      let objects: any[] = [];
+      try {
+        objects = [JSON.parse(line)];
+      } catch {
+        // Try splitting concatenated JSON objects: }{"type":...
+        const parts = line.split(/(?<=\})\s*(?=\{)/);
+        for (const part of parts) {
+          try { objects.push(JSON.parse(part)); } catch { /* skip unparseable */ }
+        }
+        if (objects.length === 0) { totalRemoved++; continue; } // completely broken line
+        if (objects.length > 1) {
+          console.log(`[Sanitize] ${sessionId.slice(0, 8)}: split corrupted line into ${objects.length} objects`);
         }
       }
-    } catch { /* skip unreadable */ }
+
+      for (const obj of objects) {
+        const type = obj.type;
+        // Remove non-conversation entries
+        if (type === 'queue-operation' || type === 'progress') { totalRemoved++; continue; }
+        // Remove synthetic errors
+        if (obj.isApiErrorMessage === true) { totalRemoved++; continue; }
+        if (obj.message?.model === '<synthetic>') { totalRemoved++; continue; }
+        // Keep conversation entries: user, assistant, system, summary, file-history-snapshot
+        cleanLines.push(JSON.stringify(obj));
+      }
+    }
+
+    // Phase 2: Fix conversation structure — remove orphaned/duplicate entries at the tail
+    // Walk backwards from the end to find a clean conversation boundary
+    let cutIndex = cleanLines.length;
+    let trailingUsers = 0;
+    for (let i = cleanLines.length - 1; i >= 0; i--) {
+      try {
+        const obj = JSON.parse(cleanLines[i]);
+        const role = obj.message?.role;
+        if (role === 'assistant') {
+          // Check if this assistant message has actual content (not truncated/empty)
+          const content = obj.message?.content;
+          const hasContent = Array.isArray(content) ? content.length > 0 : !!content;
+          if (hasContent) {
+            cutIndex = i + 1 + trailingUsers; // Keep one trailing user if present
+            break;
+          }
+          // Empty/truncated assistant — remove it too
+          continue;
+        }
+        if (role === 'user') {
+          trailingUsers++;
+          if (trailingUsers > 1) {
+            // Multiple trailing users — only keep the last one
+            cleanLines.splice(i, 1);
+            totalRemoved++;
+            trailingUsers--;
+          }
+          continue;
+        }
+        // Non-user/assistant at the tail (summary, file-history-snapshot) — skip over
+      } catch { break; }
+    }
+
+    // Phase 3: Remove orphaned tool_result entries (user messages with tool_result
+    // that reference tool_use_ids not present in the preceding assistant message)
+    const finalClean: string[] = [];
+    for (let i = 0; i < cutIndex && i < cleanLines.length; i++) {
+      try {
+        const obj = JSON.parse(cleanLines[i]);
+        const role = obj.message?.role;
+        const content = obj.message?.content;
+        if (role === 'user' && Array.isArray(content) && content.length > 0 &&
+            content.every((c: any) => c.type === 'tool_result')) {
+          // Find preceding assistant message
+          let prevAssistant: any = null;
+          for (let j = finalClean.length - 1; j >= 0; j--) {
+            try {
+              const prev = JSON.parse(finalClean[j]);
+              if (prev.message?.role === 'assistant') { prevAssistant = prev; break; }
+            } catch { /* skip */ }
+          }
+          if (prevAssistant) {
+            const prevContent = prevAssistant.message?.content;
+            const toolUseIds = new Set<string>();
+            if (Array.isArray(prevContent)) {
+              for (const block of prevContent) {
+                if (block.type === 'tool_use' && block.id) toolUseIds.add(block.id);
+              }
+            }
+            const allMatched = content.every((c: any) => toolUseIds.has(c.tool_use_id));
+            if (!allMatched) {
+              totalRemoved++;
+              console.log(`[Sanitize] ${sessionId.slice(0, 8)}: removed orphaned tool_result (refs: ${content.map((c: any) => c.tool_use_id?.slice(0, 12)).join(', ')})`);
+              continue; // skip this line
+            }
+          } else {
+            // tool_result with no preceding assistant at all — remove
+            totalRemoved++;
+            continue;
+          }
+        }
+        finalClean.push(cleanLines[i]);
+      } catch {
+        finalClean.push(cleanLines[i]); // keep unparseable lines
+      }
+    }
+
+    if (totalRemoved > 0) {
+      const finalLines = finalClean.join('\n') + '\n';
+      writeFileSync(filePath, finalLines);
+      console.log(`[Sanitize] ${sessionId.slice(0, 8)}: removed ${totalRemoved} entries (${rawLines.length}→${finalClean.length} lines)`);
+    }
+    return totalRemoved;
+  } catch (err) {
+    console.error(`[Sanitize] ${sessionId.slice(0, 8)}: error: ${(err as Error).message}`);
+    return 0;
   }
-  return totalRemoved;
+}
+
+// Deep JSONL repair — called when normal sanitize wasn't enough and CLI still rejects the session.
+// Aggressively strips trailing entries until we find a clean assistant→user boundary.
+// The CLI error "result/error_during_execution" usually means it can't process the tail of the JSONL.
+function deepRepairJsonl(sessionId: string): number {
+  const filePath = findJsonlPath(sessionId);
+  if (!filePath) return 0;
+  try {
+    const lines = readFileSync(filePath, 'utf-8').split('\n').filter(l => l.trim());
+    if (lines.length < 2) return 0;
+
+    // Strategy: walk backwards, remove entries until we find a clean boundary:
+    // assistant message with actual content, followed by at most one user message
+    let removed = 0;
+    let cutAt = lines.length;
+    let foundCleanAssistant = false;
+
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const obj = JSON.parse(lines[i]);
+        const role = obj.message?.role;
+
+        if (role === 'assistant') {
+          const content = obj.message?.content;
+          const hasText = Array.isArray(content)
+            ? content.some((c: any) => c.type === 'text' && c.text?.length > 0)
+            : typeof content === 'string' && content.length > 0;
+          if (hasText) {
+            // Found a good assistant message — cut here (keep this + everything before)
+            cutAt = i + 1;
+            foundCleanAssistant = true;
+            break;
+          }
+          // Assistant with only tool_use or empty — also a valid boundary
+          const hasToolUse = Array.isArray(content)
+            ? content.some((c: any) => c.type === 'tool_use')
+            : false;
+          if (hasToolUse) {
+            cutAt = i + 1;
+            foundCleanAssistant = true;
+            break;
+          }
+        }
+        // Keep removing until we find the boundary
+      } catch { /* skip unparseable */ }
+    }
+
+    if (!foundCleanAssistant) return 0; // Don't repair if we can't find any clean point
+
+    removed = lines.length - cutAt;
+    if (removed > 0) {
+      writeFileSync(filePath, lines.slice(0, cutAt).join('\n') + '\n');
+      console.log(`[DeepRepair] ${sessionId.slice(0, 8)}: stripped ${removed} trailing entries (${lines.length}→${cutAt})`);
+    }
+    return removed;
+  } catch (err) {
+    console.error(`[DeepRepair] ${sessionId.slice(0, 8)}: error: ${(err as Error).message}`);
+    return 0;
+  }
 }
 
 // 5f. Remove rate-limit messages from stuck conversations (bulk)
@@ -2195,19 +2446,47 @@ app.post('/api/mission/start', async (req, res) => {
   saveAssignment(startData.sessionId, accountId);
   setLastPrompt(startData.sessionId);
 
+  // Track state + respond immediately
   broadcast({ type: 'cui-state', cuiId: accountId, state: 'processing' });
-  if (startData.streamingId) {
-    monitorStream(`http://localhost:${port}`, startData.streamingId, accountId, {});
-  }
-    checkSessionForRateLimit(startData.sessionId, accountId);
-
-  // Auto-clean JSONL after start (queue-operation corruption from concurrent spawns)
-  setTimeout(() => {
-    const cleaned = unstickConversation(startData.sessionId);
-    if (cleaned > 0) console.log(`[Start] Auto-cleaned ${cleaned} entries from new session ${startData.sessionId}`);
-  }, 3000);
-
+  setSessionState(accountId, accountId, 'working', undefined, startData.sessionId);
   res.json({ ok: true, sessionId: startData.sessionId, streamingId: startData.streamingId });
+
+  // Fire-and-forget: monitor with retry on silent failure
+  const MAX_START_RETRIES = 2;
+  let currentStreamingId = startData.streamingId;
+  (async () => {
+    for (let attempt = 0; attempt <= MAX_START_RETRIES; attempt++) {
+      if (currentStreamingId) {
+        await monitorStream(`http://localhost:${port}`, currentStreamingId, accountId, {});
+      }
+      await new Promise(r => setTimeout(r, 2000));
+      const result = verifySendSuccess(startData.sessionId);
+      if (result === 'success') return;
+      if (result === 'rate_limit') {
+        broadcast({ type: 'cui-state', cuiId: accountId, state: 'error', message: 'Rate Limit: Account hat das Nutzungslimit erreicht.' });
+        setSessionState(accountId, accountId, 'idle', 'rate_limit', startData.sessionId);
+        return;
+      }
+      if (attempt >= MAX_START_RETRIES) break;
+      console.log(`[Start] Attempt ${attempt + 1} got no response for ${startData.sessionId.slice(0, 8)} — retrying...`);
+      unstickConversation(startData.sessionId);
+      await new Promise(r => setTimeout(r, 3000 * (attempt + 1)));
+      const retryResp = await cuiFetch(port, '/api/conversations/start', {
+        method: 'POST', timeoutMs: 60000,
+        body: JSON.stringify({ workingDirectory: resolvedWorkDir, initialPrompt: message }),
+      });
+      if (!retryResp.ok || !retryResp.data?.streamingId) {
+        console.log(`[Start] Retry ${attempt + 1} cuiFetch failed: ${retryResp.error}`);
+        continue;
+      }
+      currentStreamingId = retryResp.data.streamingId;
+      broadcast({ type: 'cui-state', cuiId: accountId, state: 'processing' });
+      setSessionState(accountId, accountId, 'working', undefined, startData.sessionId);
+    }
+    console.error(`[Start] All ${MAX_START_RETRIES + 1} attempts failed for ${startData.sessionId.slice(0, 8)}`);
+    broadcast({ type: 'cui-state', cuiId: accountId, state: 'error', message: 'Konversation konnte nicht gestartet werden. Bitte erneut versuchen.' });
+    setSessionState(accountId, accountId, 'needs_attention', 'send_failed', startData.sessionId);
+  })();
   } catch (err: any) {
     console.warn('[Server] POST /api/mission/start error:', err);
     res.status(500).json({ error: 'Internal error' });
@@ -5148,20 +5427,43 @@ app.get('/api/persona-tags/status', async (_req, res) => {
 });
 
 // Demo activity events (simulated agent actions)
-const demoActivities = [
-  { persona_id: 'sarah-koch', persona_name: 'Sarah Koch', action: 'started', task: 'OAuth implementation review' },
-  { persona_id: 'klaus-schmidt', persona_name: 'Klaus Schmidt', action: 'completed', task: 'Production deployment' },
-  { persona_id: 'herbert-sicher', persona_name: 'Herbert Sicher', action: 'started', task: 'Security audit Q1' },
-  { persona_id: 'lisa-mueller', persona_name: 'Lisa Müller', action: 'completed', task: 'Test coverage analysis' },
-  { persona_id: 'mira-marketing', persona_name: 'Mira Marketing', action: 'started', task: 'Brand strategy update' },
-  { persona_id: 'vera-vertrieb', persona_name: 'Vera Vertrieb', action: 'completed', task: 'Pricing strategy revision' },
-  { persona_id: 'finn-finanzen', persona_name: 'Finn Finanzen', action: 'started', task: 'Q1 budget review' },
-  { persona_id: 'chris-customer', persona_name: 'Chris Customer', action: 'completed', task: 'Onboarding playbook v2' }
-];
+// Helper: Map persona IDs to display names
+function getPersonaDisplayName(personaId: string): string {
+  const nameMap: Record<string, string> = {
+    'sarah-koch': 'Sarah Koch',
+    'klaus-mueller': 'Klaus Schmidt',
+    'klaus-schmidt': 'Klaus Schmidt',
+    'herbert-sicher': 'Herbert Sicher',
+    'lisa-mueller': 'Lisa Müller',
+    'lisa-wagner': 'Lisa Wagner',
+    'mira-hoffmann': 'Mira Marketing',
+    'mira-marketing': 'Mira Marketing',
+    'vera-jung': 'Vera Vertrieb',
+    'vera-vertrieb': 'Vera Vertrieb',
+    'finn-richter': 'Finn Finanzen',
+    'finn-finanzen': 'Finn Finanzen',
+    'chris-bauer': 'Chris Customer',
+    'chris-customer': 'Chris Customer',
+    'anna-klein': 'Anna Frontend',
+    'anna-frontend': 'Anna Frontend',
+    'tim-fischer': 'Tim Berger',
+    'tim-berger': 'Tim Berger',
+    'peter-zimmermann': 'Peter Doku',
+    'peter-doku': 'Peter Doku',
+    'birgit-schuster': 'Birgit Bauer',
+    'birgit-bauer': 'Birgit Bauer',
+    'emma-schmidt': 'Emma Schmidt',
+    'otto-bergmann': 'Otto Operations',
+    'otto-operations': 'Otto Operations',
+    'felix-neumann': 'Felix Krause',
+    'felix-krause': 'Felix Krause',
+    'max-weber': 'Max Weber',
+    'rafbot': 'Rafbot'
+  };
+  return nameMap[personaId] || personaId;
+}
 
-let activityIndex = 0;
-
-// GET /api/agents/activity-stream — SSE stream of agent activities
+// GET /api/agents/activity-stream — SSE stream of REAL agent activities
 app.get('/api/agents/activity-stream', (_req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -5175,20 +5477,43 @@ app.get('/api/agents/activity-stream', (_req, res) => {
     message: 'Activity stream connected'
   })}\n\n`);
 
-  // Send a demo activity event every 10 seconds
-  const interval = setInterval(() => {
-    const activity = demoActivities[activityIndex % demoActivities.length];
-    activityIndex++;
+  // Load events.json and stream latest events
+  const eventsFile = join(ACTIVE_DIR, 'team', 'events.json');
 
-    res.write(`data: ${JSON.stringify({
-      timestamp: new Date().toISOString(),
-      type: 'activity',
-      persona_id: activity.persona_id,
-      persona_name: activity.persona_name,
-      action: activity.action,
-      task: activity.task
-    })}\n\n`);
-  }, 10000); // Every 10 seconds
+  let eventIndex = 0;
+  const interval = setInterval(() => {
+    try {
+      // Re-read events.json every cycle (allows live updates)
+      const eventsData = JSON.parse(readFileSync(eventsFile, 'utf8'));
+      const events = Array.isArray(eventsData) ? eventsData : (eventsData.events || []);
+
+      if (events.length === 0) {
+        // No events available - send placeholder
+        res.write(`data: ${JSON.stringify({
+          timestamp: new Date().toISOString(),
+          type: 'info',
+          message: 'No recent activities'
+        })}\n\n`);
+        return;
+      }
+
+      // Cycle through events (newest first)
+      const event = events[eventIndex % events.length];
+      eventIndex++;
+
+      // Map event to ActivityEvent format expected by frontend
+      res.write(`data: ${JSON.stringify({
+        timestamp: event.timestamp,
+        personaId: event.personaId,
+        personaName: getPersonaDisplayName(event.personaId),
+        action: event.action,
+        description: `${event.action} ${event.target || ''}: ${event.details || ''}`.trim()
+      })}\n\n`);
+    } catch (err) {
+      console.error('[SSE] Failed to read events.json:', err);
+      // Continue streaming, don't crash
+    }
+  }, 3000); // Every 3 seconds (faster than polling fallback)
 
   // Cleanup on client disconnect
   _req.on('close', () => {

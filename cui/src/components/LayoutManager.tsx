@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, useEffect, useMemo } from 'react';
+import { useCallback, useRef, useState, useEffect, useMemo, lazy, Suspense } from 'react';
 import { Layout, Model, TabNode, TabSetNode, BorderNode, IJsonModel, ITabSetRenderValues, ITabRenderValues, Actions, DockLocation, Rect } from 'flexlayout-react';
 import type { CuiStates } from '../types';
 import { copyToClipboard } from '../utils/clipboard';
@@ -44,26 +44,38 @@ function patchLayoutRedraw(layoutRef: any) {
   };
   internal._redrawPatched = true;
 }
+// --- Critical-path panels (lightweight, needed immediately) ---
 import CuiLitePanel from './panels/CuiLitePanel';
 import NativeChat from './panels/NativeChat';
 import ImageDrop from './panels/ImageDrop';
 import BrowserPanel from './panels/BrowserPanel';
 import FilePreview from './panels/FilePreview';
 import NotesPanel from './panels/NotesPanel';
-import MissionControl from './panels/MissionControl';
-import OfficePanel from './panels/OfficePanel';
-import KnowledgeFullscreen from './panels/KnowledgeFullscreen';
 import ErrorBoundary from './ErrorBoundary';
-import WerkingReportAdmin from './panels/WerkingReportAdmin/WerkingReportAdmin';
-import LinkedInPanel from './panels/LinkedInPanel';
-import BridgeMonitor from './panels/BridgeMonitor/BridgeMonitor';
-import QADashboard from './panels/QADashboard/QADashboard';
-import RepoDashboard from './panels/RepoDashboard/RepoDashboard';
-import SystemHealth from './panels/SystemHealth';
-import WatchdogPanel from './panels/WatchdogPanel';
 import PanelConnectivityGuard from './panels/PanelConnectivityGuard';
-import LayoutBuilder from './LayoutBuilder';
+
+// --- Heavy panels (lazy-loaded: recharts, d3, large component trees) ---
+const MissionControl = lazy(() => import('./panels/MissionControl'));
+const OfficePanel = lazy(() => import('./panels/OfficePanel'));
+const KnowledgeFullscreen = lazy(() => import('./panels/KnowledgeFullscreen'));
+const WerkingReportAdmin = lazy(() => import('./panels/WerkingReportAdmin/WerkingReportAdmin'));
+const LinkedInPanel = lazy(() => import('./panels/LinkedInPanel'));
+const BridgeMonitor = lazy(() => import('./panels/BridgeMonitor/BridgeMonitor'));
+const QADashboard = lazy(() => import('./panels/QADashboard/QADashboard'));
+const RepoDashboard = lazy(() => import('./panels/RepoDashboard/RepoDashboard'));
+const SystemHealth = lazy(() => import('./panels/SystemHealth'));
+const WatchdogPanel = lazy(() => import('./panels/WatchdogPanel'));
+const InfrastructurePanel = lazy(() => import('./panels/InfrastructurePanel'));
+const LayoutBuilder = lazy(() => import('./LayoutBuilder'));
+
 import '../styles/office.css';
+
+// Shared loading spinner for lazy panels
+const PanelLoader = () => (
+  <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--tn-text-muted)", fontSize: 11 }}>
+    Loading panel...
+  </div>
+);
 
 const API = '/api';
 
@@ -172,7 +184,14 @@ interface LayoutManagerProps {
 }
 
 export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAttentionChange, onCuiStateReset, pendingActivation, onActivationProcessed }: LayoutManagerProps) {
-  const [model, setModel] = useState<Model | null>(null);
+  // Stale-while-revalidate: use cached layout instantly, refresh in background
+  const [model, setModel] = useState<Model | null>(() => {
+    try {
+      const cached = localStorage.getItem(`cui-layout-${projectId}`);
+      if (cached) return Model.fromJson(JSON.parse(cached));
+    } catch (err) { console.warn('[LayoutManager] Corrupted layout cache in initializer:', err); }
+    return null;
+  });
   const [showBuilder, setShowBuilder] = useState(false);
   const templateRef = useRef<IJsonModel | null>(null);
   const layoutRef = useRef<Layout>(null);
@@ -188,61 +207,55 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
   const modelRef = useRef<Model | null>(null);
   modelRef.current = model;
 
-  // Load layout: localStorage cache → instant render, server fetch → background update
+  // Background refresh: fetch fresh layout from server (stale-while-revalidate)
+  // Model is already loaded from localStorage cache in useState initializer above
   useEffect(() => {
     let cancelled = false;
     const cacheKey = `cui-layout-${projectId}`;
     const tplCacheKey = `cui-template-${projectId}`;
+    const hadCachedModel = model !== null;
 
-    // 1. Instant load from localStorage (no "Loading layout..." wait)
-    let loadedFromCache = false;
+    // Load template cache if available
     try {
-      const cached = localStorage.getItem(cacheKey);
-      if (cached) {
-        setModel(Model.fromJson(JSON.parse(cached)));
-        loadedFromCache = true;
-      }
       const cachedTpl = localStorage.getItem(tplCacheKey);
       if (cachedTpl) templateRef.current = JSON.parse(cachedTpl);
     } catch (err) {
-      console.warn('[LayoutManager] Corrupted layout cache, clearing:', err);
-      try { localStorage.removeItem(cacheKey); } catch (e) { console.warn('[LayoutManager] Failed to clear layout cache:', e); }
+      console.warn('[LayoutManager] Corrupted template cache:', err);
       try { localStorage.removeItem(tplCacheKey); } catch (e) { console.warn('[LayoutManager] Failed to clear template cache:', e); }
     }
 
-    // 2. Fetch from server in background (update cache for next load)
+    // Fetch from server in background (update cache for next load)
     const fetchWithTimeout = (url: string, ms = 8000) =>
       fetch(url, { signal: AbortSignal.timeout(ms) }).then(r => r.ok ? r.json() : null).catch((err) => { console.warn('[LayoutManager] fetchWithTimeout failed for', url, ':', err); return null; });
-    const loadFromServer = () => {
-      Promise.all([
-        fetchWithTimeout(`${API}/layouts/${projectId}`),
-        fetchWithTimeout(`${API}/layouts/${projectId}/template`),
-        fetchWithTimeout(`${API}/active-dir/${projectId}`),
-      ]).then(([layoutJson, tplJson, activeDir]) => {
-        if (cancelled) return;
-        if (activeDir?.path) activeDirRef.current = activeDir.path;
-        if (tplJson) {
-          templateRef.current = tplJson;
-          try { localStorage.setItem(tplCacheKey, JSON.stringify(tplJson)); } catch (e) { console.warn('[LayoutManager] Failed to cache template:', e); }
-        }
-        if (layoutJson) {
-          try { localStorage.setItem(cacheKey, JSON.stringify(layoutJson)); } catch (e) { console.warn('[LayoutManager] Failed to cache layout:', e); }
-          // Only swap model if we didn't load from cache (avoid layout flicker)
-          if (!loadedFromCache) {
-            try { setModel(Model.fromJson(layoutJson)); return; } catch (e) { console.warn('[LayoutManager] Failed to parse server layout JSON:', e); }
-          }
-          return;
-        }
-        // Server returned nothing — use default if not loaded from cache
-        if (!loadedFromCache) {
-          try { setModel(Model.fromJson(defaultLayout(activeDirRef.current))); } catch (e) { console.warn('[LayoutManager] Failed to create default layout model:', e); }
-        }
-      });
-    };
-    loadFromServer();
 
-    // 3. If nothing loaded after 3s (no cache, server slow), show default
-    if (!loadedFromCache) {
+    Promise.all([
+      fetchWithTimeout(`${API}/layouts/${projectId}`),
+      fetchWithTimeout(`${API}/layouts/${projectId}/template`),
+      fetchWithTimeout(`${API}/active-dir/${projectId}`),
+    ]).then(([layoutJson, tplJson, activeDir]) => {
+      if (cancelled) return;
+      if (activeDir?.path) activeDirRef.current = activeDir.path;
+      if (tplJson) {
+        templateRef.current = tplJson;
+        try { localStorage.setItem(tplCacheKey, JSON.stringify(tplJson)); } catch (e) { console.warn('[LayoutManager] Failed to cache template:', e); }
+      }
+      if (layoutJson) {
+        // Cache for next load
+        try { localStorage.setItem(cacheKey, JSON.stringify(layoutJson)); } catch (e) { console.warn('[LayoutManager] Failed to cache layout:', e); }
+        // Only update model if we didn't have a cache (avoid destroying existing Layout tree)
+        if (!hadCachedModel) {
+          try { setModel(Model.fromJson(layoutJson)); } catch (e) { console.warn('[LayoutManager] Failed to parse server layout JSON:', e); }
+        }
+        return;
+      }
+      // Server returned nothing — use default if not loaded from cache
+      if (!hadCachedModel) {
+        try { setModel(Model.fromJson(defaultLayout(activeDirRef.current))); } catch (e) { console.warn('[LayoutManager] Failed to create default layout model:', e); }
+      }
+    });
+
+    // If nothing loaded after 3s (no cache, server slow), show default
+    if (!hadCachedModel) {
       const fallbackTimer = setTimeout(() => {
         if (cancelled) return;
         try { setModel(prev => prev ?? Model.fromJson(defaultLayout(activeDirRef.current))); } catch (e) { console.warn('[LayoutManager] Failed to create fallback layout model:', e); }
@@ -280,6 +293,11 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       </div>
     );
 
+    // Helper: wrap lazy-loaded components with Suspense
+    const withSuspense = (children: React.ReactNode) => (
+      <Suspense fallback={<PanelLoader />}>{children}</Suspense>
+    );
+
     switch (component) {
       case 'cui':
       case 'cui-lite':
@@ -305,15 +323,15 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       case 'notes':
         return wrapPanel('NotesPanel', <NotesPanel projectId={projectId} />);
       case 'mission':
-        return wrapPanel('MissionControl', <MissionControl projectId={config.projectId || projectId} workDir={config.workDir || workDir} />);
+        return wrapPanel('MissionControl', withSuspense(<MissionControl projectId={config.projectId || projectId} workDir={config.workDir || workDir} />));
       case 'office':
       case 'virtual-office':
-        return wrapPanel('OfficePanel', <OfficePanel projectId={projectId} workDir={workDir} />);
+        return wrapPanel('OfficePanel', withSuspense(<OfficePanel projectId={projectId} workDir={workDir} />));
       case 'knowledge':
       case 'knowledge-fullscreen':
-        return wrapPanel('KnowledgeFullscreen', <KnowledgeFullscreen projectId={projectId} workDir={workDir} />);
+        return wrapPanel('KnowledgeFullscreen', withSuspense(<KnowledgeFullscreen projectId={projectId} workDir={workDir} />));
       case 'admin-wr':
-        return wrapPanel('WerkingReportAdmin', <WerkingReportAdmin />);
+        return wrapPanel('WerkingReportAdmin', withSuspense(<WerkingReportAdmin />));
       case 'linkedin':
         return wrapPanel('LinkedInPanel',
           <PanelConnectivityGuard
@@ -322,11 +340,11 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
             port={3004}
             startCommand="cd /root/projekte/werkingflow/platform && npm run build:local"
           >
-            <LinkedInPanel />
+            {withSuspense(<LinkedInPanel />)}
           </PanelConnectivityGuard>
         );
       case 'qa-dashboard':
-        return wrapPanel('QADashboard', <QADashboard />);
+        return wrapPanel('QADashboard', withSuspense(<QADashboard />));
       case 'bridge-monitor':
         return wrapPanel('BridgeMonitor',
           <PanelConnectivityGuard
@@ -336,15 +354,17 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
 ssh root@49.12.72.66 'docker ps | grep ai-bridge'
 ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
           >
-            <BridgeMonitor />
+            {withSuspense(<BridgeMonitor />)}
           </PanelConnectivityGuard>
         );
       case 'repo-dashboard':
-        return wrapPanel('RepoDashboard', <RepoDashboard />);
+        return wrapPanel('RepoDashboard', withSuspense(<RepoDashboard />));
       case 'system-health':
-        return wrapPanel('SystemHealth', <SystemHealth />);
+        return wrapPanel('SystemHealth', withSuspense(<SystemHealth />));
       case 'watchdog':
-        return wrapPanel('WatchdogPanel', <WatchdogPanel />);
+        return wrapPanel('WatchdogPanel', withSuspense(<WatchdogPanel />));
+      case 'infrastructure':
+        return wrapPanel('InfrastructurePanel', withSuspense(<InfrastructurePanel />));
       default:
         return wrapPanel(`Unknown:${component}`,
           <div style={{ padding: 20, color: 'var(--tn-text-muted)' }}>
@@ -409,8 +429,9 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
     } catch (err) { console.warn('[LayoutManager] handleResetLayout Model.fromJson failed:', err); }
   }, [workDir, saveLayout]);
 
-  const addTab = useCallback((type: 'cui' | 'cui-lite' | 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'repo-dashboard' | 'watchdog', config: Record<string, string>, targetId: string) => {
-    if (!model) return;
+  const addTab = useCallback((type: 'cui' | 'cui-lite' | 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'repo-dashboard' | 'watchdog' | 'infrastructure', config: Record<string, string>, targetId: string) => {
+    const m = modelRef.current;
+    if (!m) return;
     const names: Record<string, string> = {
       cui: 'CUI',
       'cui-lite': 'CUI',
@@ -421,17 +442,18 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
       mission: 'Mission Control',
       office: 'Virtual Office',
       'admin-wr': 'Werking Report Admin',
-      linkedin: 'LinkedIn Marketing 🔗',
+      linkedin: 'LinkedIn Marketing',
       'system-health': 'System Health',
       'bridge-monitor': 'Bridge Monitor',
       'repo-dashboard': 'Git & Pipeline Monitor',
       watchdog: 'Dev Server Watchdog',
+      infrastructure: 'Infrastructure',
     };
     if (type === 'preview' && !config.watchPath) {
       config.watchPath = activeDirRef.current || workDir;
     }
     try {
-      model.doAction(
+      m.doAction(
         Actions.addNode(
           { type: 'tab', name: names[type], component: type, config },
           targetId,
@@ -440,7 +462,7 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
         )
       );
     } catch (err) { console.warn('[LayoutManager] addTab doAction failed for', type, ':', err); }
-  }, [model, workDir]);
+  }, [workDir]);
 
   const onRenderTabSet = useCallback((node: TabSetNode | BorderNode, renderValues: ITabSetRenderValues) => {
     renderValues.stickyButtons.push(
@@ -453,7 +475,7 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
           if (val === 'cui') {
             addTab('cui', {}, node.getId());
           } else {
-            addTab(val as 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'repo-dashboard' | 'watchdog', {}, node.getId());
+            addTab(val as 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'repo-dashboard' | 'watchdog' | 'infrastructure', {}, node.getId());
           }
           e.target.value = '';
         }}
@@ -483,7 +505,8 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
         <option value="watchdog">Dev Server Watchdog</option>
         <option value="linkedin">LinkedIn Marketing 🔗</option>
         <option value="bridge-monitor">Bridge Monitor (Old)</option>
-        <option value="repo-dashboard">Git & Pipeline Monitor 📊</option>
+        <option value="repo-dashboard">Git & Pipeline Monitor</option>
+        <option value="infrastructure">Infrastructure</option>
       </select>
     );
   }, [addTab]);
@@ -520,11 +543,12 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
 
   // Reset CUI state to idle when user selects a CUI tab
   const handleAction = useCallback((action: any) => {
-    if (action.type === 'FlexLayout_SelectTab' && model) {
+    const m = modelRef.current;
+    if (action.type === 'FlexLayout_SelectTab' && m) {
       const nodeId = action.data?.tabNode;
       if (nodeId) {
         try {
-          const node = model.getNodeById(nodeId);
+          const node = m.getNodeById(nodeId);
           if (node && (node as TabNode).getComponent?.() === 'cui') {
             const cuiId = (node as TabNode).getConfig?.()?.accountId;
             if (cuiId && cuiStatesRef.current[cuiId] === 'done') {
@@ -535,7 +559,7 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
       }
     }
     return action;
-  }, [model]);
+  }, []);
 
   // CUI state indicators on tabs (stable JSX refs to avoid per-render allocation)
   const processingDot = <span key="dot" style={{ width: 7, height: 7, borderRadius: '50%', background: '#9ece6a', display: 'inline-block', marginRight: 4, flexShrink: 0 }} />;
@@ -1012,11 +1036,13 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
       </div>
 
       {showBuilder && (
-        <LayoutBuilder
-          workDir={workDir}
-          onApply={handleApplyLayout}
-          onClose={() => setShowBuilder(false)}
-        />
+        <Suspense fallback={<PanelLoader />}>
+          <LayoutBuilder
+            workDir={workDir}
+            onApply={handleApplyLayout}
+            onClose={() => setShowBuilder(false)}
+          />
+        </Suspense>
       )}
     </div>
   );
