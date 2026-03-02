@@ -575,7 +575,7 @@ function NewConversationDialog({ projects, onStart, onClose }: {
     e.preventDefault();
     if (!subject.trim() || !message.trim()) return;
     const proj = projects.find(p => p.id === projectId);
-    onStart(accountId, proj?.workDir || '/root', subject.trim(), message.trim());
+    onStart(accountId, proj?.workDir || '/root/projekte', subject.trim(), message.trim());
   }
 
   const inputStyle: React.CSSProperties = {

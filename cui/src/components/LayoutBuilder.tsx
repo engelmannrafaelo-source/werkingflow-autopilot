@@ -21,6 +21,7 @@ const PANEL_OPTIONS = [
   { value: 'admin-wr', label: 'Werking Report Admin' },
   { value: 'linkedin', label: 'LinkedIn Marketing 🔗' },
   { value: 'bridge-monitor', label: 'Bridge Monitor' },
+  { value: 'infisical-monitor', label: 'Infisical Monitor 🔐' },
   { value: 'qa-dashboard', label: 'QA Dashboard 📊' },
   { value: 'administration', label: 'Administration 🔧' },
 ];
@@ -105,6 +106,7 @@ function panelFromValue(value: string, workDir: string): PanelConfig {
     case 'admin-wr': return { component: 'admin-wr', name: 'Werking Report Admin', config: {} };
     case 'linkedin':                return { component: 'linkedin', name: 'LinkedIn Marketing 🔗', config: {} };
     case 'bridge-monitor':          return { component: 'bridge-monitor', name: 'Bridge Monitor', config: {} };
+    case 'infisical-monitor':       return { component: 'infisical-monitor', name: 'Infisical Monitor 🔐', config: {} };
     case 'administration':          return { component: 'administration', name: 'Administration 🔧', config: {} };
     default:                        throw new Error(`Unknown panel type: ${value}`);
   }

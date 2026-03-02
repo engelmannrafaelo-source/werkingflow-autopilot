@@ -32,7 +32,7 @@ async function test(name, fn) {
     failures.push({ name, error: err.message });
   }
   // Delay to avoid overwhelming server
-  await new Promise(resolve => setTimeout(resolve, 100));
+  await new Promise(resolve => setTimeout(resolve, 500));
 }
 
 (async () => {
@@ -181,16 +181,17 @@ async function test(name, fn) {
       '/api/infisical/server-info'
     ];
 
-    const now = new Date().getTime();
-    const fiveMinutesAgo = now - (5 * 60 * 1000);
+    const fiveMinutesAgo = Date.now() - (5 * 60 * 1000);
 
     for (const endpoint of endpoints) {
       const res = await fetch(`${BASE_URL}${endpoint}`);
       const data = await res.json();
 
       const timestamp = new Date(data.timestamp || data.last_check).getTime();
+      const now = Date.now(); // Get current time AFTER fetch completes
+
       assert.ok(timestamp > fiveMinutesAgo, `${endpoint} timestamp too old`);
-      assert.ok(timestamp <= now, `${endpoint} timestamp in future`);
+      assert.ok(timestamp <= now + 1000, `${endpoint} timestamp in future (timestamp: ${timestamp}, now: ${now})`); // Allow 1s skew
     }
   });
 

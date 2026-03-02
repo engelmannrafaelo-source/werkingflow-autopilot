@@ -1,71 +1,71 @@
 [
   {
     "account": "rafael",
-    "timestamp": "2026-03-01T08:00:18.319Z",
-    "plan": "Max",
+    "timestamp": "2026-03-02T16:00:28.525Z",
+    "plan": "unknown",
     "currentSession": {
-      "percent": 10,
-      "resetIn": "Resets in 2 hr 59 min"
+      "percent": 0,
+      "resetIn": ""
     },
     "weeklyAllModels": {
-      "percent": 19,
-      "resetDate": "Resets Fri 6:59 AM"
+      "percent": 0,
+      "resetDate": ""
     },
     "weeklySonnet": {
-      "percent": 28,
-      "resetDate": "Resets Fri 6:59 AM"
+      "percent": 0,
+      "resetDate": ""
     },
     "extraUsage": {
-      "percent": 112,
-      "spent": "22.36 EUR",
-      "limit": "20 EUR",
-      "balance": "20.13 EUR"
+      "percent": 0,
+      "spent": "",
+      "limit": "",
+      "balance": ""
     }
   },
   {
     "account": "office",
-    "timestamp": "2026-03-01T08:00:33.914Z",
-    "plan": "Max",
+    "timestamp": "2026-03-02T16:00:53.269Z",
+    "plan": "unknown",
     "currentSession": {
-      "percent": 14,
-      "resetIn": "Zurücksetzung in 2 Std. 59 Min."
+      "percent": 0,
+      "resetIn": ""
     },
     "weeklyAllModels": {
-      "percent": 32,
-      "resetDate": "Zurücksetzung Fr., 07:00"
+      "percent": 0,
+      "resetDate": ""
     },
     "weeklySonnet": {
-      "percent": 36,
-      "resetDate": "Zurücksetzung Fr., 07:00"
+      "percent": 0,
+      "resetDate": ""
     },
     "extraUsage": {
-      "percent": 100,
-      "spent": "42.67 EUR",
-      "limit": "43 EUR",
-      "balance": "0.00 EUR"
+      "percent": 0,
+      "spent": "",
+      "limit": "",
+      "balance": ""
     }
   },
   {
     "account": "engelmann",
-    "timestamp": "2026-03-01T08:00:49.789Z",
-    "plan": "Max",
+    "timestamp": "2026-03-02T16:01:17.695Z",
+    "plan": "unknown",
     "currentSession": {
-      "percent": 2,
-      "resetIn": "Zurücksetzung in 2 Std. 59 Min."
+      "percent": 0,
+      "resetIn": ""
     },
     "weeklyAllModels": {
-      "percent": 29,
-      "resetDate": "Zurücksetzung Fr., 07:00"
+      "percent": 0,
+      "resetDate": ""
     },
     "weeklySonnet": {
-      "percent": 42,
-      "resetDate": "Zurücksetzung Fr., 07:00"
+      "percent": 0,
+      "resetDate": ""
     },
     "extraUsage": {
-      "percent": 101,
-      "spent": "42.84 EUR",
-      "limit": "43 EUR",
-      "balance": "0.00 EUR"
+      "percent": 0,
+      "spent": "",
+      "limit": "",
+      "balance": ""
     }
   }
 ]
