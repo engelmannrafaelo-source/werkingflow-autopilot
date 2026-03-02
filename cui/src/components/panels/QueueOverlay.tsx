@@ -286,16 +286,16 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
 
   // --- Fetch Start Templates ---
   useEffect(() => {
-    if ((window as any).__cuiServerAlive === false) return;
-    fetch('/api/prompt-templates', { signal: AbortSignal.timeout(5000) })
-      .then(r => { if (!r.ok) throw new Error(`prompt-templates ${r.status}`); return r.json(); })
+    if ((window as any).__cuiServerAlive !== true) return;
+    fetch('/api/prompt-templates', { signal: AbortSignal.timeout(10000) })
+      .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (!data) return;
         const start = (data.templates || []).filter((t: PromptTemplate) => t.category === 'start');
         start.sort((a: PromptTemplate, b: PromptTemplate) => a.order - b.order);
         setStartTemplates(start);
       })
-      .catch((err) => { console.warn('[QueueOverlay] fetchStartTemplates:', err); });
+      .catch(() => { /* templates load lazily */ });
   }, []);
 
   const handleSaveStartTemplate = useCallback(async () => {

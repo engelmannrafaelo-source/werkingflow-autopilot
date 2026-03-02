@@ -33,7 +33,7 @@ export default function ActivityFeedTab() {
   const containerRef = useRef<HTMLDivElement>(null);
 
   const fetchData = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if ((window as any).__cuiServerAlive !== true) return;
     setError('');
     try {
       const res = await fetch('/api/bridge/metrics/activity?limit=100', { signal: AbortSignal.timeout(8000) });
@@ -41,7 +41,7 @@ export default function ActivityFeedTab() {
       const result = await res.json();
       setData(result);
     } catch (err: any) {
-      console.warn('[BridgeActivity] fetch activity failed:', err);
+      // Error state shown in UI via setError
       setError(err.message);
     } finally {
       setLoading(false);

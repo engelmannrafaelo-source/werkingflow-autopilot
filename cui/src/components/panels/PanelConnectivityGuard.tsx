@@ -54,7 +54,7 @@ export default function PanelConnectivityGuard({
           setLastCheck(new Date());
         }
       } catch (err) {
-        console.warn('[ConnectivityGuard] health check failed:', err);
+        // Silent: connectivity guard visually shows offline state
         if (!cancelled) {
           setIsOnline(false);
           setLastCheck(new Date());

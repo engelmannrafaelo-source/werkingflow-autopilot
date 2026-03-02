@@ -32,7 +32,7 @@ export default function RepoDashboard() {
   // Quick stats poll
   useEffect(() => {
     async function fetchQuick() {
-      if ((window as any).__cuiServerAlive === false) return;
+      if ((window as any).__cuiServerAlive !== true) return;
       try {
         const res = await fetch('/api/repo-dashboard/repositories', { signal: AbortSignal.timeout(8000) });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -47,7 +47,7 @@ export default function RepoDashboard() {
           totalSize: `${sizeGB}GB`,
         });
       } catch (err) {
-        console.warn('[RepoDashboard] quick stats fetch failed:', err);
+        // Silent: panel shows fallback zeros
         setQuickStats({ totalRepos: 0, dirtyRepos: 0, totalSize: '0GB' });
       }
     }

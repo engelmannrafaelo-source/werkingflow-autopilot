@@ -130,13 +130,13 @@ export default function CCUsageTab() {
         try {
           const scrapeRes = await fetch("/api/claude-code/scrape-now", { method: "POST", signal: AbortSignal.timeout(8000) });
           if (!scrapeRes.ok) {
-            console.warn("[CCUsage] Scrape trigger failed:", scrapeRes.status);
+            // Scrape may not be available — non-critical
             setError(`Scrape failed: HTTP ${scrapeRes.status}`);
           }
           // Wait a bit for scrape to complete
           await new Promise(resolve => setTimeout(resolve, 2000));
         } catch (scrapeErr: any) {
-          console.warn('[CCUsage] scrape-now request failed:', scrapeErr);
+          // Scrape endpoint may be down — non-critical
         }
       }
 
@@ -147,7 +147,7 @@ export default function CCUsageTab() {
       else setStats(data);
       setLastRefresh(new Date());
     } catch (err: any) {
-      console.warn('[CCUsage] fetch stats failed:', err);
+      // Error state shown in UI via setError
       setError(err.message);
     } finally {
       setLoading(false);

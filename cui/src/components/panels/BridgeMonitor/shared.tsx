@@ -23,7 +23,7 @@ export async function bridgeFetch(path: string, opts?: RequestInit & { timeout?:
     });
     return res;
   } catch (err) {
-    console.warn('[BridgeAPI] fetch failed:', path, err);
+    // Rethrown — caller handles error state
     throw err;
   } finally {
     clearTimeout(timer);
@@ -35,7 +35,7 @@ export async function bridgeJson<T = any>(path: string, opts?: RequestInit & { t
   const res = await bridgeFetch(path, opts);
   if (!res.ok) {
     const body = await res.text().catch(() => 'unknown');
-    console.warn('[BridgeAPI] non-ok response:', path, res.status, body);
+    // Rethrown — caller handles error state
     throw new Error(`HTTP ${res.status}: ${body}`);
   }
   return res.json();

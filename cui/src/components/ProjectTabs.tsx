@@ -138,14 +138,14 @@ function UsageBars() {
   const pollRef = useRef<ReturnType<typeof setInterval>>(null);
 
   const fetchUsage = useCallback(() => {
-    if ((window as any).__cuiServerAlive === false) return;
-    fetch('/api/claude-code/stats-v2', { signal: AbortSignal.timeout(8000) })
-      .then(r => { if (!r.ok) throw new Error(`stats-v2 ${r.status}`); return r.json(); })
+    if ((window as any).__cuiServerAlive !== true) return;
+    fetch('/api/claude-code/stats-v2', { signal: AbortSignal.timeout(12000) })
+      .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (!data?.accounts) return;
         setAccounts(data.accounts.filter((a: UsageAccount) => a.accountId !== 'local'));
       })
-      .catch((err) => { console.warn('[ProjectTabs] fetchUsage:', err); });
+      .catch(() => { /* server not ready or timeout */ });
   }, []);
 
   useEffect(() => {
@@ -303,19 +303,17 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
   }, [syncState]);
 
   const checkPanelHealth = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if ((window as any).__cuiServerAlive !== true) return;
     try {
-      const resp = await fetch('/api/panel-health', { signal: AbortSignal.timeout(8000) });
-      if (!resp.ok) throw new Error(`panel-health ${resp.status}`);
+      const resp = await fetch('/api/panel-health', { signal: AbortSignal.timeout(12000) });
+      if (!resp.ok) return;
       const data = await resp.json();
       setPanelHealth({
         running: data.running,
         total: data.total,
         missing: data.panels.filter((p: any) => !p.running).map((p: any) => p.name)
       });
-    } catch (err) {
-      console.warn('[ProjectTabs] checkPanelHealth:', err);
-    }
+    } catch { /* timeout on slow connections */ }
   }, []);
 
   const handleStartPanels = useCallback(async () => {

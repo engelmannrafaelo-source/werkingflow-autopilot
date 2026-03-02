@@ -525,7 +525,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       }
     } catch (err) {
       pollFailCountRef.current++;
-      if (pollFailCountRef.current <= 2) console.warn('[CuiLite] Poll network error:', err);
+      // Silent: circuit breaker handles recovery, WS reconnect re-triggers polling
     }
   }, [sessionId, selectedId]);
 
