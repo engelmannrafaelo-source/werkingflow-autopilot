@@ -205,7 +205,7 @@ function getAssignment(sessionId: string): string {
 let WORKDIRS_FILE: string;
 function loadWorkDirs(): Record<string, string> {
   if (!WORKDIRS_FILE || !existsSync(WORKDIRS_FILE)) return {};
-  try { return JSON.parse(readFileSync(WORKDIRS_FILE, 'utf8')); } catch { return {}; }
+  try { return JSON.parse(readFileSync(WORKDIRS_FILE, 'utf8')); } catch (err) { console.warn('[Mission] loadWorkDirs parse error:', err instanceof Error ? err.message : err); return {}; }
 }
 function saveWorkDir(sessionId: string, workDir: string) {
   if (!workDir || workDir === '/root/projekte') return;
@@ -360,7 +360,7 @@ function invalidateConvCache() {
 }
 
 // 1. List all conversations across all accounts
-async function fetchConvList(filterProject?: string) {
+async function fetchConvList() {
   const results: any[] = [];
 
   await Promise.allSettled(CUI_PROXIES.map(async (proxy) => {
@@ -368,16 +368,14 @@ async function fetchConvList(filterProject?: string) {
     if (!resp.ok || !resp.data?.conversations) return;
     for (const c of resp.data.conversations) {
       const _sp = getSessionProject(c.sessionId);
-      const _effectivePath = _sp?.projectPath || c.projectPath || '';
-      if (filterProject && !_effectivePath.includes(filterProject)) continue;
       results.push({
         sessionId: c.sessionId,
         accountId: proxy.id,
         accountLabel: ({ rafael: 'Engelmann', engelmann: 'Gmail', office: 'Office', local: 'Lokal' } as Record<string, string>)[proxy.id] || proxy.id,
         accountColor: { rafael: '#7aa2f7', engelmann: '#bb9af7', office: '#9ece6a', local: '#e0af68' }[proxy.id] || '#666',
         proxyPort: proxy.localPort,
-        projectPath: getSessionProject(c.sessionId)?.projectPath || c.projectPath || '',
-        projectName: getSessionProject(c.sessionId)?.projectName || resolveProjectName(c.projectPath || ''),
+        projectPath: _sp?.projectPath || c.projectPath || '',
+        projectName: _sp?.projectName || resolveProjectName(c.projectPath || ''),
         summary: c.summary || '',
         customName: getTitle(c.sessionId) || c.sessionInfo?.custom_name || '',
         status: c.status || 'completed',
@@ -904,13 +902,9 @@ router.post('/send', async (req, res) => {
   const port = getProxyPort(effectiveAccountId);
   if (!port) { res.status(400).json({ error: 'unknown account' }); return; }
 
-  // Resolve workDir: explicit > persisted > default
-  const resolvedWorkDir = workDir || getWorkDir(sessionId) || '/root/projekte';
-  if (!resolvedWorkDir.startsWith('/root/projekte') && !resolvedWorkDir.startsWith('/home/claude-user')) {
-    res.status(400).json({ error: 'workDir must be under /root/projekte or /home/claude-user' });
-    return;
-  }
-
+  // Resolve workDir: validate explicit > persisted > default
+  const isValidWorkDir = (d: string) => d && (d.startsWith('/root/projekte') || d.startsWith('/home/claude-user'));
+  const resolvedWorkDir = (isValidWorkDir(workDir) ? workDir : null) || getWorkDir(sessionId) || '/root/projekte';
   // Persist workDir for future account switches
   if (workDir) saveWorkDir(sessionId, workDir);
 
@@ -1068,14 +1062,16 @@ router.post('/conversation/:accountId/:sessionId/name', async (req, res) => {
 
 // 5b. Assign conversation to account (called when chat is opened in a CUI panel)
 router.post('/conversation/:sessionId/assign', (req, res) => {
-  const { accountId } = req.body;
+  const { accountId, workDir } = req.body;
   if (!accountId) { res.status(400).json({ error: 'accountId required' }); return; }
   const sid = req.params.sessionId;
   saveAssignment(sid, accountId);
+  // Persist workDir so it survives account switches
+  if (workDir) saveWorkDir(sid, workDir);
   // Auto-unstick: remove rate-limit messages so the conversation can continue on the new account
   const removed = unstickConversation(sid);
   if (removed > 0) console.log(`[Assign] Unsticked ${sid}: removed ${removed} rate-limit messages`);
-  res.json({ ok: true, sessionId: sid, accountId, unsticked: removed });
+  res.json({ ok: true, sessionId: sid, accountId, unsticked: removed, workDir: getWorkDir(sid) });
 });
 
 // 5c. Get panel visibility (which conversations are open in which panels)
@@ -1215,12 +1211,8 @@ router.post('/start', async (req, res) => {
   const port = getProxyPort(effectiveAccountId);
   if (!port) { res.status(400).json({ error: 'unknown account' }); return; }
 
-  const resolvedWorkDir = workDir || '/root/projekte';
-  if (!resolvedWorkDir.startsWith('/root/projekte') && !resolvedWorkDir.startsWith('/home/claude-user')) {
-    res.status(400).json({ error: 'workDir must be under /root/projekte or /home/claude-user' });
-    return;
-  }
-
+  const isValidWorkDir2 = (d: string) => d && (d.startsWith('/root/projekte') || d.startsWith('/home/claude-user'));
+  const resolvedWorkDir = (isValidWorkDir2(workDir) ? workDir : null) || '/root/projekte';
   // Start conversation (60s timeout — Claude v1.0.128 spawn takes ~34s)
   const startResp = await cuiFetch(port, '/api/conversations/start', {
     method: 'POST',
