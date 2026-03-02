@@ -78,7 +78,7 @@ export default function ImageDrop() {
           accountId,
           images: images.map(img => ({ name: img.name, data: img.preview })),
         }),
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(60000),
       });
       if (!resp.ok) {
         const errBody = await resp.json();
@@ -98,8 +98,10 @@ export default function ImageDrop() {
       }
     } catch (err: any) {
       console.warn('[ImageDrop] upload error:', err);
-      const msg = err.message === "Failed to fetch"
-        ? "Upload fehlgeschlagen (Verbindung abgebrochen). Bilder evtl. zu gross — versuche kleinere Bilder oder einzeln hochladen."
+      const msg = err.name === 'TimeoutError' || err.message?.includes('signal')
+        ? "Upload-Timeout (60s). Bilder evtl. zu gross — versuche kleinere Bilder oder einzeln hochladen."
+        : err.message === "Failed to fetch"
+        ? "Upload fehlgeschlagen (Verbindung abgebrochen)."
         : err.message;
       setError(msg);
     } finally {

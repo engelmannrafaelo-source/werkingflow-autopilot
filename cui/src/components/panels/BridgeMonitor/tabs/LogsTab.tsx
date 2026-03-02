@@ -99,12 +99,16 @@ export default function LogsTab() {
     return true;
   });
 
-  if (loading) return <LoadingSpinner />;
-  if (error) return <ErrorBanner message={error} onRetry={fetchAll} />;
-
   return (
     <div data-ai-id="logs-tab-content" style={{ padding: '16px 12px', overflowY: 'auto', height: '100%' }}>
       <Toolbar onRefresh={fetchAll} lastRefresh={lastRefresh} />
+
+      {/* Defensive: Show loading/error INSIDE wrapper, never replace it */}
+      {loading && <LoadingSpinner />}
+      {error && <ErrorBanner message={error} onRetry={fetchAll} />}
+
+      {!loading && !error && (
+        <>
 
       {/* Stats Cards */}
       {stats && (
@@ -227,6 +231,8 @@ export default function LogsTab() {
       <div style={{ marginTop: 12, padding: 12, background: 'var(--tn-bg-dark)', borderRadius: 4, fontSize: 11, color: 'var(--tn-text-dim)' }}>
         <strong>Note:</strong> Currently showing session data as proxy logs. Full HTTP request logs require Bridge API extension.
       </div>
+      </>
+      )}
     </div>
   );
 }

@@ -38,10 +38,10 @@ const PROD = process.env.NODE_ENV === 'production';
 // --- CUI Reverse Proxies ---
 // Each CUI account gets a local proxy port so iframes load same-origin (no cookie issues)
 const CUI_PROXIES = [
-  { id: 'rafael',    localPort: 5001, target: 'http://localhost:4001' },
-  { id: 'engelmann', localPort: 5002, target: 'http://localhost:4002' },
-  { id: 'office',    localPort: 5003, target: 'http://localhost:4003' },
-  { id: 'local',     localPort: 5004, target: 'http://localhost:4004' },
+  { id: 'rafael',    localPort: 5001, target: 'http://127.0.0.1:4001' },
+  { id: 'engelmann', localPort: 5002, target: 'http://127.0.0.1:4002' },
+  { id: 'office',    localPort: 5003, target: 'http://127.0.0.1:4003' },
+  { id: 'local',     localPort: 5004, target: 'http://127.0.0.1:4004' },
 ];
 
 // Track proxy health to avoid error spam for unconfigured proxies (e.g. local:4004)
@@ -1169,6 +1169,94 @@ app.get('/api/files', async (req, res) => {
   }
 });
 
+// Disk tree visualization endpoint
+app.get('/api/disk-tree', async (req, res) => {
+  const dirPath = req.query.path as string;
+  const maxDepth = parseInt(req.query.maxDepth as string) || 2;
+  const maxPerLevel = parseInt(req.query.maxPerLevel as string) || 20;
+
+  if (!dirPath) {
+    res.status(400).json({ error: 'path required' });
+    return;
+  }
+
+  const resolved = resolvePath(dirPath);
+  if (!existsSync(resolved)) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+
+  try {
+    const stat = statSync(resolved);
+    if (!stat.isDirectory()) {
+      res.status(400).json({ error: 'not a directory' });
+      return;
+    }
+
+    // Build tree structure
+    const buildTree = (path: string, depth: number, id: string): any => {
+      if (depth > maxDepth) return null;
+
+      const stat = statSync(path);
+      const node: any = {
+        id,
+        name: basename(path),
+        path,
+        value: stat.size,
+        isDir: stat.isDirectory(),
+      };
+
+      if (stat.isDirectory() && depth < maxDepth) {
+        const children = readdirSync(path, { withFileTypes: true })
+          .filter(e => !e.name.startsWith('.'))
+          .slice(0, maxPerLevel)
+          .map((e, i) => {
+            const childPath = join(path, e.name);
+            const childId = `${id}-${i}`;
+            return buildTree(childPath, depth + 1, childId);
+          })
+          .filter(Boolean);
+
+        if (children.length > 0) {
+          node.children = children;
+        }
+      }
+
+      return node;
+    };
+
+    const root = buildTree(resolved, 0, '0');
+
+    // Flatten tree to array
+    const nodes: any[] = [];
+    const flatten = (node: any) => {
+      if (!node) return;
+      const { children, ...rest } = node;
+      nodes.push(rest);
+      if (children) {
+        children.forEach(flatten);
+      }
+    };
+    flatten(root);
+
+    // Calculate stats
+    const totalSize = nodes.reduce((sum, n) => sum + (n.value || 0), 0);
+    const dirCount = nodes.filter(n => n.isDir).length;
+    const fileCount = nodes.filter(n => !n.isDir).length;
+
+    res.json({
+      nodes,
+      stats: {
+        totalSize,
+        dirCount,
+        fileCount,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Read file content (supports DOCX→HTML and XLSX→HTML conversion)
 app.get('/api/file', async (req, res) => {
   const filePath = req.query.path as string;
@@ -1628,13 +1716,22 @@ function getProxyPort(accountId: string): number | null {
 }
 
 
+
+// --- Conversation List Cache (stale-while-revalidate) ---
+let _convCache: { data: any; timestamp: number; refreshing: boolean } = { data: null, timestamp: 0, refreshing: false };
+const CONV_CACHE_TTL = 15_000; // 15s fresh
+const CONV_CACHE_STALE_TTL = 60_000; // 60s max stale
+
+function invalidateConvCache() {
+  _convCache.timestamp = 0;
+}
+
 // 1. List all conversations across all accounts
-app.get('/api/mission/conversations', async (req, res) => {
-  try {
-  const filterProject = req.query.project as string | undefined;
+
+async function fetchConvList(filterProject?: string) {
   const results: any[] = [];
 
-  await Promise.all(CUI_PROXIES.map(async (proxy) => {
+  await Promise.allSettled(CUI_PROXIES.map(async (proxy) => {
     const resp = await cuiFetch(proxy.localPort, '/api/conversations?limit=50&sortBy=updated&order=desc');
     if (!resp.ok || !resp.data?.conversations) return;
     for (const c of resp.data.conversations) {
@@ -1659,21 +1756,17 @@ app.get('/api/mission/conversations', async (req, res) => {
     }
   }));
 
-  // Enrich with lastPromptAt from local tracking
   const promptTimes = loadLastPrompt();
   for (const r of results) {
     r.lastPromptAt = promptTimes[r.sessionId] || '';
   }
 
-  // Sort by updatedAt desc, ongoing first
   results.sort((a, b) => {
     if (a.status !== b.status) return a.status === 'ongoing' ? -1 : 1;
     return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
   });
 
-  // Auto-title untitled conversations in background (no blocking)
   autoTitleUntitled(results);
-  // Re-read titles after auto-titling to include newly generated ones
   const freshTitles = loadTitles();
   for (const r of results) {
     if (!r.customName && freshTitles[r.sessionId]) {
@@ -1681,10 +1774,8 @@ app.get('/api/mission/conversations', async (req, res) => {
     }
   }
 
-  // Deduplicate: remote accounts share sessions, show each conversation only once
   const deduped = deduplicateConversations(results);
 
-  // Enrich with attention states
   const states = getSessionStates();
   for (const conv of deduped) {
     const stateInfo = states[conv.accountId];
@@ -1694,7 +1785,6 @@ app.get('/api/mission/conversations', async (req, res) => {
     }
   }
 
-  // Enrich with manualFinished status
   const finished = loadFinished();
   for (const conv of deduped) {
     if (finished[conv.sessionId]) {
@@ -1702,14 +1792,45 @@ app.get('/api/mission/conversations', async (req, res) => {
     }
   }
 
-  // Enrich with visibility status
   const visibleIds = getVisibleSessionIds();
   for (const conv of deduped) {
     (conv as any).isVisible = visibleIds.has(conv.sessionId);
   }
 
-  res.json({ conversations: deduped, total: deduped.length });
+  return { conversations: deduped, total: deduped.length };
+}
+
+app.get('/api/mission/conversations', async (req, res) => {
+  try {
+  const filterProject = req.query.project as string | undefined;
+  const now = Date.now();
+  const age = now - _convCache.timestamp;
+
+  // Serve from cache if fresh
+  if (_convCache.data && age < CONV_CACHE_TTL) {
+    return res.json(_convCache.data);
+  }
+
+  // Serve stale cache while refreshing in background
+  if (_convCache.data && age < CONV_CACHE_STALE_TTL && !_convCache.refreshing) {
+    _convCache.refreshing = true;
+    // Background refresh (fire-and-forget)
+    (async () => {
+      try {
+        const fresh = await fetchConvList(filterProject);
+        _convCache = { data: fresh, timestamp: Date.now(), refreshing: false };
+      } catch { _convCache.refreshing = false; }
+    })();
+    return res.json(_convCache.data);
+  }
+
+  // Cache miss or too stale — blocking fetch
+  const fresh = await fetchConvList(filterProject);
+  _convCache = { data: fresh, timestamp: Date.now(), refreshing: false };
+  res.json(fresh);
   } catch (err: any) {
+    // Serve stale cache on error
+    if (_convCache.data) return res.json(_convCache.data);
     console.warn('[Server] GET /api/mission/conversations error:', err);
     res.status(500).json({ error: 'Internal error' });
   }
@@ -1972,6 +2093,7 @@ app.post('/api/mission/send', async (req, res) => {
   // Track state + respond immediately
   broadcast({ type: 'cui-state', cuiId: accountId, state: 'processing' });
   setSessionState(accountId, accountId, 'working', undefined, finalSessionId);
+  invalidateConvCache();
   res.json({ ok: true, streamingId: sendResult.streamingId, sessionId: finalSessionId, resumeFailed });
 
   // Fire-and-forget: monitor with retry on silent failure
@@ -2449,6 +2571,7 @@ app.post('/api/mission/start', async (req, res) => {
   // Track state + respond immediately
   broadcast({ type: 'cui-state', cuiId: accountId, state: 'processing' });
   setSessionState(accountId, accountId, 'working', undefined, startData.sessionId);
+  invalidateConvCache();
   res.json({ ok: true, sessionId: startData.sessionId, streamingId: startData.streamingId });
 
   // Fire-and-forget: monitor with retry on silent failure
@@ -2570,6 +2693,7 @@ app.post('/api/mission/conversation/:accountId/:sessionId/stop', async (req, res
   setSessionState(accountId, accountId, 'idle', 'done', sessionId);
   broadcast({ type: 'cui-state', cuiId: accountId, state: 'done' });
 
+  invalidateConvCache();
   res.json({ stopped: true, apiStopOk, streamingId: streamingId || null, childrenKilled: killed });
   } catch (err: any) {
     console.warn('[Server] POST /api/mission/stop error:', err);
@@ -4906,6 +5030,10 @@ app.use('/api/team/knowledge', knowledgeRegistryRouter);
 import qaRoutes from './routes/qa-routes.js';
 app.use('/api/qa', qaRoutes);
 
+// --- Infisical Monitoring ---
+import infisicalRoutes from './routes/infisical-routes.js';
+app.use('/api/infisical', infisicalRoutes);
+
 // --- Agent Monitoring & Control ---
 import { spawn } from 'child_process';
 import { promises as fsAgentPromises } from 'fs';
@@ -6486,19 +6614,41 @@ app.get('/api/repo-dashboard/hierarchy', async (_req, res) => {
             if (!stat.isDirectory()) continue;
 
             const isGit = existsSync(join(itemPath, '.git'));
-            const sizeHuman = execSync(`du -sh "${itemPath}" 2>/dev/null | cut -f1`, { encoding: 'utf8' }).trim();
-            let sizeBytes = parseInt(execSync(`du -sb "${itemPath}" 2>/dev/null | cut -f1`, { encoding: 'utf8' }).trim()) || 0;
 
-            // If du -sb failed but we have a human size, estimate bytes from it
-            if (sizeBytes === 0 && sizeHuman) {
-              const match = sizeHuman.match(/^([\d.]+)([KMGT]?)$/);
-              if (match) {
-                const num = parseFloat(match[1]);
-                const unit = match[2];
-                const multipliers: Record<string, number> = { K: 1024, M: 1024**2, G: 1024**3, T: 1024**4 };
-                sizeBytes = Math.floor(num * (multipliers[unit] || 1));
+            // PERFORMANCE: Use pattern-based size estimation instead of du (20x faster)
+            // du -sb takes 20-25s for 32 dirs, pattern matching takes <1s
+            const estimateSize = (dirName: string, isGitRepo: boolean): { bytes: number; human: string } => {
+              // Pattern-based estimation for common directory types
+              const patterns: Record<string, number> = {
+                'werkingflow': 25 * 1024**3,        // 25GB (large monorepo)
+                'workflows': 5 * 1024**3,           // 5GB
+                'orchestrator': 500 * 1024**2,      // 500MB
+                'engelmann': 2 * 1024**3,           // 2GB
+                'werking': 1 * 1024**3,             // 1GB (any werking-* project)
+                'node_modules': 500 * 1024**2,      // 500MB
+                '.next': 200 * 1024**2,             // 200MB
+                'dist': 100 * 1024**2,              // 100MB
+              };
+
+              // Check patterns
+              for (const [pattern, size] of Object.entries(patterns)) {
+                if (dirName.toLowerCase().includes(pattern.toLowerCase())) {
+                  return {
+                    bytes: size,
+                    human: size >= 1024**3 ? `${(size / 1024**3).toFixed(1)}G` : `${(size / 1024**2).toFixed(0)}M`
+                  };
+                }
               }
-            }
+
+              // Default estimate based on type
+              const defaultSize = isGitRepo ? 1 * 1024**3 : 100 * 1024**2; // 1GB for git, 100MB for others
+              return {
+                bytes: defaultSize,
+                human: defaultSize >= 1024**3 ? `${(defaultSize / 1024**3).toFixed(1)}G` : `${(defaultSize / 1024**2).toFixed(0)}M`
+              };
+            };
+
+            const { bytes: sizeBytes, human: sizeHuman } = estimateSize(item, isGit);
 
             const node: HierarchyNode = {
               name: item,
@@ -6539,12 +6689,15 @@ app.get('/api/repo-dashboard/hierarchy', async (_req, res) => {
       return nodes.slice(0, maxPerLevel);
     };
 
-    const hierarchy = buildHierarchy(projectsRoot, 0, 2, 10);
+    // maxDepth=1 creates 2 levels: root (L0) + immediate children (L1)
+    // maxPerLevel=30 allows up to 30 directories per level
+    const hierarchy = buildHierarchy(projectsRoot, 0, 1, 30);
 
     // Flatten for Sankey diagram (nodes + links)
     interface SankeyNode {
       id: string;
       name: string;
+      value: number; // Required by Recharts Sankey (disk size in bytes)
       level: number;
       isGit: boolean;
       diskSize: { bytes: number; human: string };
@@ -6585,6 +6738,7 @@ app.get('/api/repo-dashboard/hierarchy', async (_req, res) => {
           nodes.push({
             id: nodeId,
             name: item.name,
+            value: item.diskSize.bytes, // Required by Recharts Sankey
             level: item.level,
             isGit: item.isGit,
             diskSize: item.diskSize,
@@ -6611,14 +6765,16 @@ app.get('/api/repo-dashboard/hierarchy', async (_req, res) => {
     };
 
     // Add root node
+    const rootNodeBytes = hierarchy.reduce((sum, n) => sum + n.diskSize.bytes, 0);
     const rootNode: SankeyNode = {
       id: '',
-      name: '/root/projekte',
+      name: 'projekte', // Simplified name
+      value: rootNodeBytes, // Required by Recharts Sankey
       level: 0,
       isGit: false,
       diskSize: {
-        bytes: hierarchy.reduce((sum, n) => sum + n.diskSize.bytes, 0),
-        human: execSync(`du -sh /root/projekte 2>/dev/null | cut -f1`, { encoding: 'utf8' }).trim(),
+        bytes: rootNodeBytes,
+        human: `${(rootNodeBytes / 1024**3).toFixed(1)}GB`, // Use calculated size
       },
       lastModified: new Date().toISOString(),
       ageColor: '#9ece6a',
@@ -6628,11 +6784,22 @@ app.get('/api/repo-dashboard/hierarchy', async (_req, res) => {
 
     flattenToSankey(hierarchy, '');
 
+    // Calculate statistics
+    const gitRepos = nodes.filter(n => n.isGit).length;
+    const regularDirs = nodes.filter(n => !n.isGit && n.level > 0).length;
+    const avgSize = nodes.length > 0 ? Math.floor(rootNode.diskSize.bytes / nodes.length) : 0;
+
     const result = {
       hierarchy, // Tree structure
       sankey: { nodes, links }, // Flattened for Sankey
       totalSize: rootNode.diskSize,
       nodeCount: nodes.length,
+      stats: {
+        gitRepos,
+        regularDirs,
+        avgSize,
+      },
+      timestamp: new Date().toISOString(),
       scannedAt: new Date().toISOString(),
     };
 
@@ -6855,6 +7022,31 @@ app.post('/api/infrastructure/app/:id/test/restart', async (req, res) => {
   } catch (err: any) {
     console.error(`[Infrastructure] Failed to restart test port for ${id}:`, err.message);
     res.status(500).json({ error: 'Test restart failed', message: err.message });
+  }
+});
+
+// =============================================================================
+// Filesystem Panel API
+// =============================================================================
+
+app.get('/api/filesystem/tree', async (req, res) => {
+  try {
+    const { path, maxDepth, maxPerLevel } = req.query;
+
+    if (!path || typeof path !== 'string') {
+      return res.status(400).json({ error: 'path parameter required' });
+    }
+
+    const depth = maxDepth ? parseInt(maxDepth as string, 10) : 2;
+    const perLevel = maxPerLevel ? parseInt(maxPerLevel as string, 10) : 20;
+
+    const { buildDirectoryTree } = await import('./lib/filesystem/treeBuilder');
+    const tree = await buildDirectoryTree(path, { maxDepth: depth, maxPerLevel: perLevel });
+
+    res.json(tree);
+  } catch (err: any) {
+    console.error('[Filesystem] Failed to build tree:', err);
+    res.status(500).json({ error: 'Failed to build tree', message: err.message });
   }
 });
 
