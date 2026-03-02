@@ -11,6 +11,8 @@ interface ProjectTabsProps {
   onDelete: (id: string) => void;
   missionActive?: boolean;
   onMissionClick?: () => void;
+  allChatsActive?: boolean;
+  onAllChatsClick?: () => void;
 }
 
 type SyncState = 'idle' | 'syncing' | 'done' | 'error';
@@ -240,7 +242,7 @@ function SyncthingToggle() {
   );
 }
 
-export default memo(function ProjectTabs({ projects, activeId, attention, onSelect, onNew, onEdit, onDelete, missionActive, onMissionClick }: ProjectTabsProps) {
+export default memo(function ProjectTabs({ projects, activeId, attention, onSelect, onNew, onEdit, onDelete, missionActive, onMissionClick, allChatsActive, onAllChatsClick }: ProjectTabsProps) {
   const [syncState, setSyncState] = useState<SyncState>('idle');
   const [syncDetail, setSyncDetail] = useState('');
   const [pendingCount, setPendingCount] = useState(0);
@@ -408,6 +410,37 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
             } as React.CSSProperties}
           >
             MC
+          </button>
+        </div>
+      )}
+
+      {/* All Chats - permanent tab */}
+      {onAllChatsClick && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            background: allChatsActive ? 'var(--tn-surface)' : 'transparent',
+            borderBottom: allChatsActive ? '2px solid #7aa2f7' : '2px solid transparent',
+            borderRadius: '4px 4px 0 0',
+            marginRight: 4,
+          }}
+        >
+          <button
+            onClick={onAllChatsClick}
+            title="All Chats (Cmd+`)"
+            style={{
+              background: 'none',
+              color: allChatsActive ? '#7aa2f7' : 'var(--tn-text-muted)',
+              border: 'none',
+              padding: '6px 12px',
+              fontSize: 12,
+              cursor: 'pointer',
+              fontWeight: allChatsActive ? 700 : 400,
+              WebkitAppRegion: 'no-drag',
+            } as React.CSSProperties}
+          >
+            AC
           </button>
         </div>
       )}

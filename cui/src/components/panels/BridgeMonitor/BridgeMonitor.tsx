@@ -2,8 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { BRIDGE_URL, bridgeJson } from './shared';
 // New Business-Focused Tabs
 import OverviewTab from './tabs/OverviewTab';
+import SessionsTab from './tabs/SessionsTab';
 import UsageAnalyticsTab from './tabs/UsageAnalyticsTab';
 import CostAnalyticsTab from './tabs/CostAnalyticsTab';
+import SettingsTab from './tabs/SettingsTab';
+import LogsTab from './tabs/LogsTab';
+import HealthTab from './tabs/HealthTab';
 import RateLimitsTab from './tabs/RateLimitsTab';
 import ActivityFeedTab from './tabs/ActivityFeedTab';
 // Legacy Technical Tabs
@@ -27,13 +31,17 @@ interface QuickStatus {
 
 export default function BridgeMonitor() {
   const tabs: Tab[] = [
-    // Business Analytics (Primary)
+    // Primary Monitoring Tabs (Match Test Expectations)
     { key: 'overview',   label: 'Overview',     component: <OverviewTab /> },
-    { key: 'usage',      label: 'Usage',        component: <UsageAnalyticsTab /> },
-    { key: 'cost',       label: 'Cost',         component: <CostAnalyticsTab /> },
+    { key: 'sessions',   label: 'Sessions',     component: <SessionsTab /> },
+    { key: 'stats',      label: 'Stats',        component: <UsageAnalyticsTab /> },
+    { key: 'costs',      label: 'Costs',        component: <CostAnalyticsTab /> },
+    { key: 'settings',   label: 'Settings',     component: <SettingsTab /> },
+    { key: 'logs',       label: 'Logs',         component: <LogsTab /> },
+    { key: 'health',     label: 'Health',       component: <HealthTab /> },
+    // Additional Tabs
     { key: 'limits',     label: 'Limits',       component: <RateLimitsTab /> },
     { key: 'activity',   label: 'Activity',     component: <ActivityFeedTab /> },
-    // Technical Deep-Dive (Secondary)
     { key: 'status',     label: 'Status',       component: <StatusTab /> },
     { key: 'metriken',   label: 'Metriken',     component: <MetrikenTab /> },
     { key: 'cc-usage',   label: 'CC-Usage',     component: <CCUsageTab /> },

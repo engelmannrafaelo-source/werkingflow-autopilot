@@ -135,7 +135,7 @@ export default function BusinessApprovalPanel() {
           <PipelineStage
             label="Approval"
             count={byStage.approval.length}
-            color="#f59e0b"
+            color="var(--tn-orange)"
             icon="⚠️"
           />
           <div style={{ width: 20, height: 2, background: 'var(--tn-border)' }} />
@@ -144,7 +144,7 @@ export default function BusinessApprovalPanel() {
           <PipelineStage
             label="Complete"
             count={0}
-            color="#10b981"
+            color="var(--tn-green)"
             icon="✓"
           />
         </div>
@@ -303,7 +303,7 @@ function getStageColor(stage?: string): string {
   switch (stage) {
     case 'draft': return '#6366f1';
     case 'review': return '#0ea5e9';
-    case 'approval': return '#f59e0b';
+    case 'approval': return 'var(--tn-orange)';
     default: return 'var(--tn-text-muted)';
   }
 }

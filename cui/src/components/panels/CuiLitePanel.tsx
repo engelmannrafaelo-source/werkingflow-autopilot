@@ -36,6 +36,7 @@ interface CuiLitePanelProps {
   panelId?: string;
   isTabVisible?: boolean;
   onRouteChange?: (route: string) => void;
+  initialSessionId?: string;
 }
 
 // --- Markdown Components (Tokyo Night) ---
@@ -337,8 +338,9 @@ function MessageRow({ msg, onRespond, isLast, workDir }: { msg: Message; onRespo
 }
 
 // --- Main Component ---
-export default function CuiLitePanel({ accountId, projectId, workDir, panelId, isTabVisible = true, onRouteChange }: CuiLitePanelProps) {
+export default function CuiLitePanel({ accountId, projectId, workDir, panelId, isTabVisible = true, onRouteChange, initialSessionId }: CuiLitePanelProps) {
   const storageKey = `cui-lite-account-${panelId || projectId || 'default'}`;
+  const persistSession = !initialSessionId; // Don't persist to localStorage for AllChats panels
 
   const getSessionKey = (acctId: string) => `cui-lite-session-${panelId || projectId || 'default'}-${acctId}`;
 
@@ -347,13 +349,17 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
 
   const [selectedId, setSelectedId] = useState(initialAccount);
   const [sessionId, setSessionId] = useState<string | null>(() => {
+    if (initialSessionId) return initialSessionId;
     try { return localStorage.getItem(getSessionKey(initialAccount)); } catch { return null; }
   });
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [convStatus, setConvStatus] = useState<'ongoing' | 'completed'>('completed');
-  const [showQueue, setShowQueue] = useState(() => !localStorage.getItem(getSessionKey(initialAccount)));
+  const [showQueue, setShowQueue] = useState(() => {
+    if (initialSessionId) return false;
+    return !localStorage.getItem(getSessionKey(initialAccount));
+  });
   const [queueRefresh, setQueueRefresh] = useState(0);
   const [attention, setAttention] = useState<'idle' | 'working' | 'needs_attention'>('idle');
   const [attentionReason, setAttentionReason] = useState<string | undefined>();
@@ -364,11 +370,27 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   const [liveMode, setLiveMode] = useState(false);
   const [isAgentDone, setIsAgentDone] = useState(false);
 
+  // --- Prompt Templates ---
+  interface PromptTemplate { id: string; label: string; message: string; category: "reply" | "start"; subject?: string; order: number; createdAt: string; }
+  const [replyTemplates, setReplyTemplates] = useState<PromptTemplate[]>([]);
+  const [showTemplateForm, setShowTemplateForm] = useState(false);
+  const [newTplLabel, setNewTplLabel] = useState("");
+  const [newTplMessage, setNewTplMessage] = useState("");
+  const [editingTemplate, setEditingTemplate] = useState<PromptTemplate | null>(null);
+
+  // --- Auto-Inject (Loop Mode) ---
+  const [loopEnabled, setLoopEnabled] = useState(false);
+  const [loopIntervalMin, setLoopIntervalMin] = useState(5);
+  const [loopMessage, setLoopMessage] = useState("Schau dir die aktuellen Test-Logs an und entscheide selbst: Wenn Probleme sichtbar sind, behebe sie (defensive coding, fail fast) und committe. Wenn Tests noch laufen oder alles passt, sage kurz Bescheid und warte.");
+  const [showLoopConfig, setShowLoopConfig] = useState(false);
+  const [lastInjectTime, setLastInjectTime] = useState<string | null>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const userScrolledUpRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollFailCountRef = useRef(0);
 
   const account = ACCOUNTS.find(a => a.id === selectedId) || ACCOUNTS[0];
   const pollInterval = liveMode ? 2000 : 15000;
@@ -409,19 +431,35 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
             setRateLimitMessage(null);
         }
       }
+      pollFailCountRef.current = 0;
     } catch (err) {
-      console.error('[CuiLite] Poll error:', err);
+      pollFailCountRef.current++;
+      if (pollFailCountRef.current <= 3) {
+        console.error('[CuiLite] Poll error:', err);
+      } else if (pollFailCountRef.current === 4) {
+        console.error(`[CuiLite] Poll failing repeatedly (${pollFailCountRef.current}x) — backing off`);
+      }
     }
   }, [sessionId, selectedId]);
 
   // Polling interval (2s live, 15s normal) — auto-off live when tab hidden
+  // Backoff: after 3 consecutive failures, slow down to 30s; after 10, stop polling
   useEffect(() => {
     if (!sessionId || !isTabVisible) {
       if (!isTabVisible && liveMode) setLiveMode(false);
       return;
     }
     pollNow();
-    pollTimerRef.current = setInterval(pollNow, pollInterval);
+    const effectiveInterval = pollFailCountRef.current >= 10
+      ? 60000  // 1 minute after 10 failures
+      : pollFailCountRef.current >= 3
+        ? 30000  // 30s after 3 failures
+        : pollInterval;
+    pollTimerRef.current = setInterval(() => {
+      // Re-check fail count each tick (it may have recovered)
+      if (pollFailCountRef.current >= 10) return; // stop polling after 10 consecutive fails
+      pollNow();
+    }, effectiveInterval);
     return () => { if (pollTimerRef.current) clearInterval(pollTimerRef.current); };
   }, [sessionId, selectedId, isTabVisible, pollNow, pollInterval]);
 
@@ -454,10 +492,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
             setAttention('idle');
             setAttentionReason('done');
             if (sessionId) {
-              // Triple-poll to reliably catch the final response
               setTimeout(pollNow, 500);
-              setTimeout(pollNow, 2000);
-              setTimeout(pollNow, 5000);
             }
           }
           if (msg.state === "error" && msg.message) {
@@ -471,10 +506,12 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         if ((msg.type === 'cui-state' || msg.type === 'cui-response-ready') && msg.cuiId === selectedId) {
           setQueueRefresh(n => n + 1);
         }
-      } catch { /* ignore */ }
+      } catch (err) {
+        console.warn('[CuiLite] WS parse error:', (err as Error).message);
+      }
     };
 
-    return () => ws.close();
+    return () => { ws.onmessage = null; ws.close(); };
   }, [selectedId, isTabVisible, sessionId, pollNow]);
 
   // Auto-scroll only when user is near bottom (not scrolled up reading)
@@ -495,13 +532,124 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   }, []);
 
   // --- Handlers ---
-  const handleSend = useCallback(async () => {
-    if (!input.trim() || !sessionId) return;
+
+  // --- Fetch Prompt Templates ---
+  useEffect(() => {
+    fetch('/api/prompt-templates')
+      .then(r => r.json())
+      .then(data => {
+        const reply = (data.templates || []).filter((t: PromptTemplate) => t.category === 'reply');
+        reply.sort((a: PromptTemplate, b: PromptTemplate) => a.order - b.order);
+        setReplyTemplates(reply);
+      })
+      .catch((err) => console.warn('[CuiLite] Template fetch error:', err.message));
+  }, []);
+
+  // --- Auto-Inject (Loop) Sync ---
+  const syncLoopState = useCallback(async () => {
+    try {
+      const r = await fetch("/api/auto-inject");
+      const state = await r.json();
+      const cfg = state.configs?.[selectedId || ""];
+      if (cfg) {
+        setLoopEnabled(cfg.enabled);
+        setLoopIntervalMin(Math.round(cfg.intervalMs / 60000));
+        setLoopMessage(cfg.message);
+      } else {
+        setLoopEnabled(false);
+      }
+      const lastTs = state.lastInject?.[selectedId || ""];
+      setLastInjectTime(lastTs || null);
+    } catch {}
+  }, [selectedId]);
+
+  useEffect(() => { syncLoopState(); }, [syncLoopState]);
+
+  const toggleLoop = useCallback(async (enable: boolean) => {
+    if (!selectedId || !sessionId) return;
+    if (enable) {
+      await fetch("/api/auto-inject", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accountId: selectedId,
+          sessionId,
+          workDir,
+          message: loopMessage,
+          intervalMs: loopIntervalMin * 60000,
+          enabled: true,
+        }),
+      });
+    } else {
+      await fetch("/api/auto-inject", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accountId: selectedId, enabled: false }),
+      });
+    }
+    setLoopEnabled(enable);
+    syncLoopState();
+  }, [selectedId, sessionId, workDir, loopMessage, loopIntervalMin, syncLoopState]);
+
+  const saveLoopConfig = useCallback(async () => {
+    if (!selectedId) return;
+    await fetch("/api/auto-inject", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        accountId: selectedId,
+        sessionId,
+        workDir,
+        message: loopMessage,
+        intervalMs: loopIntervalMin * 60000,
+        enabled: loopEnabled,
+      }),
+    });
+    syncLoopState();
+    setShowLoopConfig(false);
+  }, [selectedId, sessionId, workDir, loopMessage, loopIntervalMin, loopEnabled, syncLoopState]);
+
+  const handleSaveTemplate = useCallback(async () => {
+    if (!newTplLabel.trim() || !newTplMessage.trim()) return;
+    if (editingTemplate) {
+      const resp = await fetch(`/api/prompt-templates/${editingTemplate.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label: newTplLabel, message: newTplMessage }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        setReplyTemplates(prev => prev.map(t => t.id === data.template.id ? data.template : t));
+      }
+    } else {
+      const resp = await fetch('/api/prompt-templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label: newTplLabel, message: newTplMessage, category: 'reply' }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        setReplyTemplates(prev => [...prev, data.template]);
+      }
+    }
+    setShowTemplateForm(false);
+    setEditingTemplate(null);
+    setNewTplLabel('');
+    setNewTplMessage('');
+  }, [newTplLabel, newTplMessage, editingTemplate]);
+
+  const handleDeleteTemplate = useCallback(async (id: string) => {
+    const resp = await fetch(`/api/prompt-templates/${id}`, { method: 'DELETE' });
+    if (resp.ok) setReplyTemplates(prev => prev.filter(t => t.id !== id));
+  }, []);
+
+  const handleSend = useCallback(async (overrideMessage?: string) => {
+    const rawMsg = overrideMessage || input.trim();
+    if (!rawMsg || !sessionId) return;
     setIsLoading(true);
-    const rawMsg = input;
-    const msg = planMode ? `Bitte verwende Plan-Modus: ${rawMsg}` : rawMsg;
-    setInput('');
-    if (planMode) setPlanMode(false);
+    const msg = (!overrideMessage && planMode) ? `Bitte verwende Plan-Modus: ${rawMsg}` : rawMsg;
+    if (!overrideMessage) setInput('');
+    if (!overrideMessage && planMode) setPlanMode(false);
     setMessages(prev => [...prev, { role: 'user', content: msg, timestamp: new Date().toISOString() }]);
     setIsAgentDone(false);
     setAttentionReason(undefined);
@@ -521,7 +669,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         if (data.resumeFailed && data.sessionId) {
           console.log(`[CuiLite] Resume failed, switched to new session: ${data.sessionId}`);
           setSessionId(data.sessionId);
-          try { localStorage.setItem(getSessionKey(selectedId), data.sessionId); } catch {}
+          if (persistSession) try { localStorage.setItem(getSessionKey(selectedId), data.sessionId); } catch {}
           onRouteChange?.(`/c/${data.sessionId}`);
           setMessages([{ role: 'system', content: 'Neue Session gestartet (alte Session konnte nicht fortgesetzt werden)', timestamp: new Date().toISOString() }, { role: 'user', content: msg, timestamp: new Date().toISOString() }]);
         }
@@ -531,11 +679,8 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       setMessages(prev => [...prev, { role: 'system', content: `Netzwerkfehler: ${err}`, timestamp: new Date().toISOString() }]);
     }
     setIsLoading(false);
-    // Poll immediately to get response status (don't wait 15s)
+    // Single delayed poll — WS will handle the rest via cui-state/done events
     setTimeout(pollNow, 2000);
-    setTimeout(pollNow, 5000);
-    setTimeout(pollNow, 10000);
-    setTimeout(pollNow, 20000);
   }, [input, sessionId, selectedId, workDir, planMode, pollNow, onRouteChange]);
 
   // Respond to tool_use blocks (AskUserQuestion, ExitPlanMode, EnterPlanMode)
@@ -554,7 +699,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         if (data.resumeFailed && data.sessionId) {
           console.log(`[CuiLite] Respond: resume failed, new session: ${data.sessionId}`);
           setSessionId(data.sessionId);
-          try { localStorage.setItem(getSessionKey(selectedId), data.sessionId); } catch {}
+          if (persistSession) try { localStorage.setItem(getSessionKey(selectedId), data.sessionId); } catch {}
           onRouteChange?.(`/c/${data.sessionId}`);
         }
       }
@@ -581,11 +726,16 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   const handleStop = useCallback(async () => {
     if (!sessionId) return;
     try {
-      await fetch(`/api/mission/conversation/${selectedId}/${sessionId}/stop`, { method: 'POST' });
+      const resp = await fetch(`/api/mission/conversation/${selectedId}/${sessionId}/stop`, { method: 'POST' });
+      const data = await resp.json().catch(() => ({}));
       setAttention('idle');
       setAttentionReason('done');
       setConvStatus('completed');
-      setTimeout(pollNow, 1000);
+      if (!data.apiStopOk && !data.childrenKilled) {
+        console.warn('[CuiLite] Stop: API stop failed and no children killed — agent may still be running');
+      }
+      console.log(`[CuiLite] Stop: apiStopOk=${data.apiStopOk}, streamingId=${data.streamingId?.slice(0,8)}, killed=${data.childrenKilled}`);
+      setTimeout(pollNow, 500);
     } catch (err) {
       console.error('[CuiLite] Stop error:', err);
     }
@@ -599,9 +749,9 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     setAttention('idle');
     setAttentionReason(undefined);
             setRateLimitMessage(null);
-    try { localStorage.setItem(getSessionKey(selectedId), sid); } catch {}
+    if (persistSession) try { localStorage.setItem(getSessionKey(selectedId), sid); } catch {}
     onRouteChange?.(`/c/${sid}`);
-  }, [onRouteChange, selectedId]);
+  }, [onRouteChange, selectedId, persistSession]);
 
   const handleStartNew = useCallback(async (subject: string, message: string) => {
     try {
@@ -615,13 +765,13 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       setSessionId(data.sessionId);
       setShowQueue(false);
       setMessages([]);
-      try { localStorage.setItem(getSessionKey(selectedId), data.sessionId); } catch {}
+      if (persistSession) try { localStorage.setItem(getSessionKey(selectedId), data.sessionId); } catch {}
       onRouteChange?.(`/c/${data.sessionId}`);
       return true;
     } catch {
       return false;
     }
-  }, [selectedId, workDir, onRouteChange]);
+  }, [selectedId, workDir, onRouteChange, persistSession]);
 
   const handleBack = useCallback(() => {
     setSessionId(null);
@@ -633,9 +783,9 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     setAttentionReason(undefined);
             setRateLimitMessage(null);
     setLiveMode(false);
-    try { localStorage.removeItem(getSessionKey(selectedId)); } catch {}
+    if (persistSession) try { localStorage.removeItem(getSessionKey(selectedId)); } catch {}
     onRouteChange?.('');
-  }, [onRouteChange]);
+  }, [onRouteChange, persistSession]);
 
   // --- Render ---
   return (
@@ -659,8 +809,10 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
           value={selectedId}
           onChange={(e) => {
             const newAcct = e.target.value;
+            // Cancel in-flight polling before switching
+            if (pollTimerRef.current) { clearInterval(pollTimerRef.current); pollTimerRef.current = null; }
             // Save current session for old account
-            if (sessionId) {
+            if (sessionId && persistSession) {
               try { localStorage.setItem(getSessionKey(selectedId), sessionId); } catch {}
             }
             // Load session for new account
@@ -898,6 +1050,70 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
                 Plan-Modus aktiv — Claude plant zuerst
               </div>
             )}
+            {/* Prompt Template Cards */}
+            {replyTemplates.length > 0 && !showTemplateForm && (
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 4, maxHeight: 80, overflowY: 'auto' }}>
+                {replyTemplates.map(tpl => (
+                  <div key={tpl.id} style={{ display: 'flex', alignItems: 'stretch', borderRadius: 4, border: '1px solid var(--tn-border)', overflow: 'hidden', maxWidth: '48%' }}>
+                    <button
+                      onClick={() => handleSend(tpl.message)}
+                      title={tpl.message}
+                      style={{ padding: '4px 8px', fontSize: 10, cursor: 'pointer', background: 'var(--tn-bg)', border: 'none', color: 'var(--tn-text)', textAlign: 'left', fontFamily: 'inherit', lineHeight: '1.3', flex: 1, minWidth: 0 }}
+                    >
+                      <div style={{ fontWeight: 600, color: 'var(--tn-text)', marginBottom: 1 }}>{tpl.label}</div>
+                      <div style={{ color: 'var(--tn-text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 180 }}>{tpl.message.slice(0, 60)}{tpl.message.length > 60 ? '...' : ''}</div>
+                    </button>
+                    <button
+                      onClick={() => { setEditingTemplate(tpl); setNewTplLabel(tpl.label); setNewTplMessage(tpl.message); setShowTemplateForm(true); }}
+                      title="Bearbeiten"
+                      style={{ padding: '2px 5px', fontSize: 9, cursor: 'pointer', background: 'var(--tn-bg-dark)', border: 'none', borderLeft: '1px solid var(--tn-border)', color: 'var(--tn-text-muted)', fontFamily: 'inherit', flexShrink: 0, display: 'flex', alignItems: 'center' }}
+                    >
+                      &#9998;
+                    </button>
+                  </div>
+                ))}
+                <button
+                  onClick={() => { setShowTemplateForm(true); setEditingTemplate(null); setNewTplLabel(''); setNewTplMessage(''); }}
+                  title="Neues Template erstellen"
+                  style={{ padding: '4px 10px', borderRadius: 4, fontSize: 11, cursor: 'pointer', background: 'transparent', border: '1px dashed var(--tn-border)', color: 'var(--tn-text-muted)', opacity: 0.6, alignSelf: 'stretch', display: 'flex', alignItems: 'center' }}
+                >
+                  + Neu
+                </button>
+              </div>
+            )}
+            {showTemplateForm && (
+              <div style={{ marginBottom: 4, padding: 6, background: 'var(--tn-bg)', border: '1px solid var(--tn-blue)', borderRadius: 4 }}>
+                <div style={{ display: 'flex', gap: 4, marginBottom: 4 }}>
+                  <input value={newTplLabel} onChange={e => setNewTplLabel(e.target.value)} placeholder="Label (kurz)" style={{ width: 100, padding: '4px 6px', fontSize: 11, background: 'var(--tn-bg-dark)', color: 'var(--tn-text)', border: '1px solid var(--tn-border)', borderRadius: 3, fontFamily: 'inherit' }} />
+                  <div style={{ flex: 1 }} />
+                  <button onClick={handleSaveTemplate} disabled={!newTplLabel.trim() || !newTplMessage.trim()} style={{ padding: '4px 10px', borderRadius: 3, fontSize: 11, cursor: 'pointer', background: newTplLabel.trim() && newTplMessage.trim() ? 'var(--tn-blue)' : 'var(--tn-border)', border: 'none', color: '#fff', fontWeight: 600 }}>{editingTemplate ? 'Update' : 'Speichern'}</button>
+                  {editingTemplate && <button onClick={() => { if (confirm(`"${editingTemplate.label}" löschen?`)) { handleDeleteTemplate(editingTemplate.id); setShowTemplateForm(false); setEditingTemplate(null); } }} style={{ padding: '4px 8px', borderRadius: 3, fontSize: 11, cursor: 'pointer', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#EF4444', fontWeight: 600 }}>Löschen</button>}
+                  <button onClick={() => { setShowTemplateForm(false); setEditingTemplate(null); }} style={{ padding: '4px 8px', borderRadius: 3, fontSize: 11, cursor: 'pointer', background: 'transparent', border: '1px solid var(--tn-border)', color: 'var(--tn-text-muted)' }}>X</button>
+                </div>
+                <textarea value={newTplMessage} onChange={e => setNewTplMessage(e.target.value)} placeholder="Prompt-Text eingeben..." rows={3} onKeyDown={e => { if (e.key === 'Escape') { setShowTemplateForm(false); setEditingTemplate(null); } }} style={{ width: '100%', padding: '4px 6px', fontSize: 11, background: 'var(--tn-bg-dark)', color: 'var(--tn-text)', border: '1px solid var(--tn-border)', borderRadius: 3, fontFamily: 'inherit', resize: 'vertical', minHeight: 50, boxSizing: 'border-box', lineHeight: '1.4' }} />
+              </div>
+            )}
+            {showLoopConfig && (
+              <div style={{ marginBottom: 4, padding: 6, background: "var(--tn-bg)", border: "1px solid #10B981", borderRadius: 4 }}>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4 }}>
+                  <span style={{ fontSize: 10, color: "#10B981", fontWeight: 600 }}>Loop Config</span>
+                  <label style={{ fontSize: 10, color: "var(--tn-text-muted)" }}>Interval:</label>
+                  <select value={loopIntervalMin} onChange={e => setLoopIntervalMin(Number(e.target.value))} style={{ padding: "2px 4px", fontSize: 10, background: "var(--tn-bg-dark)", color: "var(--tn-text)", border: "1px solid var(--tn-border)", borderRadius: 3 }}>
+                    <option value={1}>1 min</option>
+                    <option value={2}>2 min</option>
+                    <option value={3}>3 min</option>
+                    <option value={5}>5 min</option>
+                    <option value={10}>10 min</option>
+                    <option value={15}>15 min</option>
+                  </select>
+                  <div style={{ flex: 1 }} />
+                  <button onClick={() => { toggleLoop(true); setShowLoopConfig(false); }} style={{ padding: "3px 10px", borderRadius: 3, fontSize: 10, cursor: "pointer", background: "#10B981", border: "none", color: "#fff", fontWeight: 600 }}>Start</button>
+                  <button onClick={() => setShowLoopConfig(false)} style={{ padding: "3px 6px", borderRadius: 3, fontSize: 10, cursor: "pointer", background: "transparent", border: "1px solid var(--tn-border)", color: "var(--tn-text-muted)" }}>X</button>
+                </div>
+                <textarea value={loopMessage} onChange={e => setLoopMessage(e.target.value)} placeholder="Auto-Inject Nachricht..." rows={2} style={{ width: "100%", padding: "4px 6px", fontSize: 10, background: "var(--tn-bg-dark)", color: "var(--tn-text)", border: "1px solid var(--tn-border)", borderRadius: 3, fontFamily: "inherit", resize: "vertical", minHeight: 36, boxSizing: "border-box", lineHeight: "1.3" }} />
+                {lastInjectTime && <div style={{ fontSize: 9, color: "var(--tn-text-muted)", marginTop: 2 }}>Letzter Inject: {new Date(lastInjectTime).toLocaleTimeString("de-DE")}</div>}
+              </div>
+            )}
             <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
               <button
                 onClick={() => setPlanMode(!planMode)}
@@ -911,6 +1127,19 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
                 }}
               >
                 Plan
+              </button>
+              <button
+                onClick={() => { if (loopEnabled) { toggleLoop(false); } else { setShowLoopConfig(!showLoopConfig); } }}
+                title={loopEnabled ? "Loop stoppen" : "Auto-Inject Loop konfigurieren"}
+                style={{
+                  padding: "6px 8px", borderRadius: 4, cursor: "pointer", flexShrink: 0,
+                  background: loopEnabled ? "rgba(16,185,129,0.15)" : "var(--tn-bg)",
+                  border: `1px solid ${loopEnabled ? "#10B981" : "var(--tn-border)"}`,
+                  color: loopEnabled ? "#10B981" : "var(--tn-text-muted)",
+                  fontSize: 11, fontWeight: loopEnabled ? 700 : 400,
+                }}
+              >
+                {loopEnabled ? "Loop u25CF" : "Loop"}
               </button>
               <textarea
                 ref={textareaRef}
@@ -945,7 +1174,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
                 Stop
               </button>
               <button
-                onClick={handleSend}
+                onClick={() => handleSend()}
                 disabled={!input.trim() || isLoading}
                 style={{
                   padding: '6px 14px', borderRadius: 4, fontSize: 12, cursor: 'pointer',

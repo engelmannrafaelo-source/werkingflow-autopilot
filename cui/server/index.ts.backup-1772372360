@@ -144,30 +144,16 @@ function sseProxy(targetBase: string, req: IncomingMessage, res: ServerResponse,
 }
 
 // --- Auto-Refresh: Monitor CUI streams for response completion ---
-const activeMonitors = new Set<string>();
-
-function monitorStream(targetBase: string, streamingId: string, cuiId: string, authHeaders: Record<string, string>, sessionId?: string) {
-  // Prevent duplicate monitors for the same stream
-  if (activeMonitors.has(streamingId)) {
-    console.log(`[Monitor] Skip duplicate for ${streamingId.slice(0, 8)} (${cuiId})`);
-    return;
-  }
-  activeMonitors.add(streamingId);
+function monitorStream(targetBase: string, streamingId: string, cuiId: string, authHeaders: Record<string, string>) {
   const url = new URL(`/api/stream/${streamingId}`, targetBase);
   const headers: Record<string, string> = { 'Accept': 'text/event-stream' };
   if (authHeaders.authorization) headers['Authorization'] = authHeaders.authorization;
   if (authHeaders.cookie) headers['Cookie'] = authHeaders.cookie;
 
-  const cleanup = () => {
-    activeMonitors.delete(streamingId);
-    if (sessionId) activeStreams.delete(sessionId);
-  };
-
   const monitorReq = httpRequest(url, { method: 'GET', headers }, (monitorRes) => {
     if (monitorRes.statusCode !== 200) {
       // Stream not available — set idle after delay
       setTimeout(() => {
-        cleanup();
         broadcast({ type: 'cui-state', cuiId, state: 'done' });
         broadcast({ type: 'cui-response-ready', cuiId });
         setSessionState(cuiId, cuiId, 'idle', 'done');
@@ -178,7 +164,6 @@ function monitorStream(targetBase: string, streamingId: string, cuiId: string, a
       const attention = detectAttentionMarkers(chunk.toString());
       if (attention) {
         if (attention.state === 'idle') {
-          cleanup();
           broadcast({ type: 'cui-response-ready', cuiId });
           broadcast({ type: 'cui-state', cuiId, state: 'done' });
           setSessionState(cuiId, cuiId, 'idle', 'done');
@@ -190,7 +175,6 @@ function monitorStream(targetBase: string, streamingId: string, cuiId: string, a
       }
     });
     monitorRes.on('end', () => {
-      cleanup();
       broadcast({ type: 'cui-response-ready', cuiId });
       broadcast({ type: 'cui-state', cuiId, state: 'done' });
       setSessionState(cuiId, cuiId, 'idle', 'done');
@@ -199,7 +183,6 @@ function monitorStream(targetBase: string, streamingId: string, cuiId: string, a
   monitorReq.on('error', () => {
     // Connection error — set idle after delay
     setTimeout(() => {
-      cleanup();
       broadcast({ type: 'cui-state', cuiId, state: 'done' });
       broadcast({ type: 'cui-response-ready', cuiId });
       setSessionState(cuiId, cuiId, 'idle', 'done');
@@ -211,7 +194,6 @@ function monitorStream(targetBase: string, streamingId: string, cuiId: string, a
     const current = sessionStates.get(cuiId);
     if (current?.state === 'working') {
       console.log(`[Monitor] ${cuiId}: 45s timeout, setting idle`);
-      cleanup();
       broadcast({ type: 'cui-state', cuiId, state: 'done' });
       broadcast({ type: 'cui-response-ready', cuiId });
       setSessionState(cuiId, cuiId, 'idle', 'done');
@@ -734,34 +716,6 @@ setInterval(() => {
   }
 }, 60000);
 
-// --- Active Stream Tracking: sessionId → streamingId ---
-// Maps Claude sessionIds to CUI binary streamingIds for correct stop calls
-const activeStreams = new Map<string, string>();
-
-// --- Periodic cleanup of stale state entries ---
-setInterval(() => {
-  const now = Date.now();
-  let cleaned = 0;
-  // sessionStates: remove entries older than 24h
-  for (const [k, v] of sessionStates) {
-    if (now - v.since > 24 * 60 * 60 * 1000) { sessionStates.delete(k); cleaned++; }
-  }
-  // activeStreams: cap at 50 entries (remove oldest by order)
-  if (activeStreams.size > 50) {
-    const excess = activeStreams.size - 50;
-    let i = 0;
-    for (const key of activeStreams.keys()) {
-      if (i++ >= excess) break;
-      activeStreams.delete(key); cleaned++;
-    }
-  }
-  // activeMonitors: cap at 50
-  if (activeMonitors.size > 50) {
-    activeMonitors.clear(); cleaned += 50;
-  }
-  if (cleaned > 0) console.log(`[Cleanup] Removed ${cleaned} stale state entries`);
-}, 300000); // Every 5 minutes
-
 // --- Per-Session Attention State Tracker ---
 // Tracks whether each conversation needs user attention (plan, question, permission, done)
 type AttentionReason = 'plan' | 'question' | 'permission' | 'error' | 'done';
@@ -813,10 +767,7 @@ const clients = new Set<WebSocket>();
 
 wss.on('connection', (ws) => {
   clients.add(ws);
-  (ws as any)._alive = true;
-  ws.on('pong', () => { (ws as any)._alive = true; });
   ws.on('close', () => clients.delete(ws));
-  ws.on('error', (err) => { console.warn('[WS] Client error:', (err as Error).message); clients.delete(ws); });
 
   // Register for Document Manager broadcasts
   registerWebSocketClient(ws);
@@ -863,15 +814,6 @@ wss.on('connection', (ws) => {
     }
   });
 });
-
-// WebSocket ping/pong heartbeat — detect dead connections every 30s
-setInterval(() => {
-  for (const ws of clients) {
-    if (!(ws as any)._alive) { ws.terminate(); clients.delete(ws); continue; }
-    (ws as any)._alive = false;
-    try { ws.ping(); } catch { clients.delete(ws); }
-  }
-}, 30000);
 
 // --- Broadcast dedup + throttling ---
 // Tracks last broadcast per type+key to suppress duplicates
@@ -934,9 +876,7 @@ function broadcast(data: Record<string, unknown>) {
       _broadcastCount++;
       const json = JSON.stringify(data);
       for (const client of clients) {
-        if (client.readyState === WebSocket.OPEN) {
-          try { client.send(json); } catch { clients.delete(client); }
-        }
+        if (client.readyState === WebSocket.OPEN) client.send(json);
       }
     }, throttleMs);
     return;
@@ -947,7 +887,7 @@ function broadcast(data: Record<string, unknown>) {
   const json = JSON.stringify(data);
   for (const client of clients) {
     if (client.readyState === WebSocket.OPEN) {
-      try { client.send(json); } catch { clients.delete(client); }
+      client.send(json);
     }
   }
 }
@@ -1236,130 +1176,6 @@ function autoTitleUntitled(results: Array<{ sessionId: string; summary: string; 
     console.log(`[AutoTitle] Generated ${saved} titles from summaries`);
   }
 }
-
-
-// --- Prompt Templates ---
-// Persistent prompt templates for quick-reply and quick-start actions
-const TEMPLATES_FILE = join(DATA_DIR, "prompt-templates.json");
-
-interface PromptTemplate {
-  id: string;
-  label: string;
-  message: string;
-  category: "reply" | "start";
-  subject?: string;
-  order: number;
-  createdAt: string;
-}
-
-const DEFAULT_TEMPLATES: PromptTemplate[] = [
-  { id: "tpl_fix_commit", label: "Fix & Commit", message: "Mache die architektonisch sauberste Lösung. Defensive coding, fail fast. Committe die Änderungen.", category: "reply", order: 1, createdAt: "2026-03-01T00:00:00Z" },
-  { id: "tpl_fix_test_commit", label: "Fix → Test → Commit", message: "Spawne einen Subtask um die Probleme zu beheben: Defensive coding, fail fast. Committe. Dann teste weiter bis alles voll funktionsfähig ist.", category: "reply", order: 2, createdAt: "2026-03-01T00:00:00Z" },
-  { id: "tpl_weiter_testen", label: "Weiter testen", message: "Teste weiter bis alles voll funktionsfähig ist.", category: "reply", order: 3, createdAt: "2026-03-01T00:00:00Z" },
-  { id: "tpl_approve_plan", label: "Approve Plan", message: "Ja, mach weiter mit diesem Plan.", category: "reply", order: 4, createdAt: "2026-03-01T00:00:00Z" },
-  { id: "tpl_weiter", label: "Weiter", message: "Weiter.", category: "reply", order: 5, createdAt: "2026-03-01T00:00:00Z" },
-  { id: "tpl_unified_test", label: "Unified Test Run", message: "Führe den Unified Tester aus und behebe alle gefundenen Probleme. Defensive coding, fail fast. Committe nach jedem Fix.", category: "start", subject: "Test Run", order: 1, createdAt: "2026-03-01T00:00:00Z" },
-];
-
-function loadTemplates(): PromptTemplate[] {
-  if (!existsSync(TEMPLATES_FILE)) {
-    writeFileSync(TEMPLATES_FILE, JSON.stringify(DEFAULT_TEMPLATES, null, 2));
-    return [...DEFAULT_TEMPLATES];
-  }
-  try { return JSON.parse(readFileSync(TEMPLATES_FILE, "utf8")); } catch { return [...DEFAULT_TEMPLATES]; }
-}
-
-function saveTemplates(templates: PromptTemplate[]) {
-  writeFileSync(TEMPLATES_FILE, JSON.stringify(templates, null, 2));
-}
-
-// --- Auto-Inject System ---
-// Periodically injects a message into idle conversations (autonomous test-fix loop)
-const AUTOINJECT_FILE = join(DATA_DIR, "auto-inject.json");
-
-interface AutoInjectConfig {
-  accountId: string;
-  sessionId: string;
-  workDir: string;
-  message: string;
-  intervalMs: number;
-  enabled: boolean;
-  idleSinceMs?: number;
-}
-
-interface AutoInjectState {
-  configs: Record<string, AutoInjectConfig>;
-  lastInject: Record<string, string>;
-}
-
-function loadAutoInject(): AutoInjectState {
-  if (!existsSync(AUTOINJECT_FILE)) return { configs: {}, lastInject: {} };
-  try { return JSON.parse(readFileSync(AUTOINJECT_FILE, "utf8")); } catch { return { configs: {}, lastInject: {} }; }
-}
-
-function saveAutoInject(state: AutoInjectState) {
-  writeFileSync(AUTOINJECT_FILE, JSON.stringify(state, null, 2));
-}
-
-let autoInjectTimer: ReturnType<typeof setInterval> | null = null;
-
-async function autoInjectTick() {
-  const state = loadAutoInject();
-  for (const [accountId, cfg] of Object.entries(state.configs)) {
-    if (!cfg.enabled) continue;
-    const ss = sessionStates.get(accountId);
-    if (!ss || ss.state !== "idle") continue;
-    if (ss.reason === "rate_limit") continue;
-    const idleMs = Date.now() - ss.since;
-    const minIdle = cfg.idleSinceMs || cfg.intervalMs;
-    if (idleMs < minIdle) continue;
-    const lastInject = state.lastInject[accountId];
-    if (lastInject) {
-      const sinceLast = Date.now() - new Date(lastInject).getTime();
-      if (sinceLast < cfg.intervalMs) continue;
-    }
-    console.log(`[AutoInject] Injecting into ${accountId} (idle for ${Math.round(idleMs/1000)}s): "${cfg.message.slice(0, 50)}..."`);
-    const port = getProxyPort(accountId);
-    if (!port) { console.log(`[AutoInject] No port for ${accountId}`); continue; }
-    try {
-      unstickConversation(cfg.sessionId);
-      const resp = await cuiFetch(port, "/api/conversations/start", {
-        method: "POST",
-        timeoutMs: 60000,
-        body: JSON.stringify({
-          workingDirectory: cfg.workDir,
-          initialPrompt: cfg.message,
-          resumedSessionId: cfg.sessionId,
-        }),
-      });
-      if (resp.ok) {
-        state.lastInject[accountId] = new Date().toISOString();
-        saveAutoInject(state);
-        setSessionState(accountId, accountId, "working", undefined, cfg.sessionId);
-        broadcast({ type: "cui-state", cuiId: accountId, state: "processing" });
-        const sendResult = resp.data;
-        if (sendResult?.streamingId) {
-          monitorStream(`http://localhost:${port}`, sendResult.streamingId, accountId, {});
-        }
-        logUserInput({ type: "auto-inject", accountId, workDir: cfg.workDir, message: cfg.message, sessionId: cfg.sessionId, result: "ok" });
-        console.log(`[AutoInject] Successfully injected into ${accountId}`);
-      } else {
-        console.log(`[AutoInject] Failed for ${accountId}: ${resp.error}`);
-        logUserInput({ type: "auto-inject", accountId, workDir: cfg.workDir, message: cfg.message, sessionId: cfg.sessionId, result: "error", error: resp.error });
-      }
-    } catch (err) {
-      console.log(`[AutoInject] Error for ${accountId}: ${err}`);
-    }
-  }
-}
-
-function startAutoInjectTimer() {
-  if (autoInjectTimer) clearInterval(autoInjectTimer);
-  autoInjectTimer = setInterval(autoInjectTick, 30_000);
-  console.log("[AutoInject] Timer started (30s check interval)");
-}
-
-startAutoInjectTimer();
 
 // --- User Input Log ---
 // Persistent log of all user inputs (subject + message) from Queue/Commander
@@ -1762,17 +1578,13 @@ app.post('/api/mission/send', async (req, res) => {
   saveAssignment(sendResult.sessionId || sessionId, accountId);
   setLastPrompt(sendResult.sessionId || sessionId);
 
-  // Track state + cache streamingId for stop calls
-  const resolvedSessionId = sendResult.sessionId || sessionId;
+  // Track state
   broadcast({ type: 'cui-state', cuiId: accountId, state: 'processing' });
-  setSessionState(accountId, accountId, 'working', undefined, resolvedSessionId);
-  if (sendResult.streamingId) {
-    activeStreams.set(resolvedSessionId, sendResult.streamingId);
-  }
+  setSessionState(accountId, accountId, 'working', undefined, sendResult.sessionId || sessionId);
 
-  // Monitor the new stream (pass sessionId for cleanup)
+  // Monitor the new stream
   if (sendResult.streamingId) {
-    monitorStream(`http://localhost:${port}`, sendResult.streamingId, accountId, {}, resolvedSessionId);
+    monitorStream(`http://localhost:${port}`, sendResult.streamingId, accountId, {});
   }
     checkSessionForRateLimit(sendResult.sessionId || sessionId, accountId);
 
@@ -2078,65 +1890,47 @@ app.post('/api/mission/conversation/:accountId/:sessionId/stop', async (req, res
   const port = getProxyPort(accountId);
   if (!port) { res.status(400).json({ error: 'unknown account' }); return; }
 
-  // 1. Resolve streamingId: cache first, then query binary as fallback
-  let streamingId = activeStreams.get(sessionId);
-  if (!streamingId) {
-    const listResp = await cuiFetch(port, '/api/conversations?limit=50');
-    if (listResp.ok && listResp.data?.conversations) {
-      const match = listResp.data.conversations.find(
-        (c: any) => c.sessionId === sessionId && c.streamingId
-      );
-      streamingId = match?.streamingId;
-    }
-  }
+  // 1. Send stop to Claude Code binary (stops current LLM generation)
+  const resp = await cuiFetch(port, `/api/conversations/${sessionId}/stop`, { method: 'POST' });
+  console.log(`[Stop] ${accountId}/${sessionId.slice(0,8)}: API stop ${resp.ok ? 'OK' : 'FAIL (' + resp.error + ')'}`);
 
-  // 2. API stop with correct streamingId (native CUI expects streamingId, NOT sessionId)
-  let apiStopOk = false;
-  if (streamingId) {
-    const resp = await cuiFetch(port, `/api/conversations/${streamingId}/stop`, { method: 'POST' });
-    apiStopOk = resp.ok;
-    console.log(`[Stop] ${accountId}/${sessionId.slice(0,8)}: API stop (stream=${streamingId.slice(0,8)}) ${resp.ok ? 'OK' : 'FAIL (' + resp.error + ')'}`);
-    activeStreams.delete(sessionId);
-  } else {
-    console.log(`[Stop] ${accountId}/${sessionId.slice(0,8)}: No streamingId found — API stop skipped`);
-  }
-
-  // 3. Nuclear kill only if API stop failed (fallback)
+  // 2. Nuclear kill: terminate all child processes of the binary (bash, subagents, etc.)
   const pmName = ACCOUNT_PM2_MAP[accountId];
   let killed = 0;
-  if (!apiStopOk && pmName) {
+  if (pmName) {
     try {
       const { execSync } = require('child_process');
+      // Get binary PID from PM2
       const pm2Json = execSync(`su - claude-user -c 'pm2 jlist' 2>/dev/null`, { encoding: 'utf8', timeout: 5000 });
       const pm2Apps = JSON.parse(pm2Json);
       const pmApp = pm2Apps.find((a: any) => a.name === pmName);
       const binaryPid = pmApp?.pid;
       if (binaryPid && binaryPid > 0) {
+        // Find all descendant PIDs via pstree (NOT the binary itself)
         const tree = execSync(
-          `pstree -p ${binaryPid} 2>/dev/null | grep -oP '\\(\\K[0-9]+(?=\\))' | grep -v '^${binaryPid}$' || true`,
+          `pstree -p ${binaryPid} 2>/dev/null | grep -oP '\(\K[0-9]+(?=\))' | grep -v '^${binaryPid}$' || true`,
           { encoding: 'utf8', timeout: 5000 }
         ).trim();
         const uniquePids = [...new Set(tree.split('\n').filter(Boolean).map(Number).filter(p => p > 0 && p !== binaryPid))];
         if (uniquePids.length > 0) {
           execSync(`kill -TERM ${uniquePids.join(' ')} 2>/dev/null || true`, { timeout: 3000 });
           killed = uniquePids.length;
+          // SIGKILL stragglers after 1.5s
           setTimeout(() => {
             try { execSync(`kill -KILL ${uniquePids.join(' ')} 2>/dev/null || true`, { timeout: 3000 }); }
             catch { /* already dead */ }
           }, 1500);
         }
-        console.log(`[Stop] ${accountId}: nuclear kill — ${killed} child processes of ${pmName} (PID ${binaryPid})`);
+        console.log(`[Stop] ${accountId}: killed ${killed} child processes of ${pmName} (PID ${binaryPid})`);
+      } else {
+        console.log(`[Stop] ${accountId}: ${pmName} not running (no PID)`);
       }
     } catch (err: any) {
       console.error(`[Stop] ${accountId}: child kill error: ${err.message}`);
     }
   }
 
-  // 4. Update state: mark as idle/done
-  setSessionState(accountId, accountId, 'idle', 'done', sessionId);
-  broadcast({ type: 'cui-state', cuiId: accountId, state: 'done' });
-
-  res.json({ stopped: true, apiStopOk, streamingId: streamingId || null, childrenKilled: killed });
+  res.json({ ...(resp.data || {}), stopped: true, childrenKilled: killed });
 });
 
 // 8. Auto-title: set conversation name from first user message
@@ -2537,157 +2331,6 @@ app.get('/api/layouts/:projectId/template', (req, res) => {
 
 app.post('/api/layouts/:projectId/template', (req, res) => {
   writeFileSync(join(LAYOUTS_DIR, `${req.params.projectId}_template.json`), JSON.stringify(req.body, null, 2));
-  res.json({ ok: true });
-});
-
-// --- All Active Chats API (scans layout files for CUI panels with active sessions) ---
-app.get('/api/all-active-chats', (_req, res) => {
-  const projects = readdirSync(PROJECTS_DIR)
-    .filter(f => f.endsWith('.json'))
-    .map(f => { try { return JSON.parse(readFileSync(join(PROJECTS_DIR, f), 'utf8')); } catch { return null; } })
-    .filter(Boolean);
-
-  interface ActiveChat {
-    projectId: string;
-    projectName: string;
-    workDir: string;
-    panelId: string;
-    accountId: string;
-    sessionId: string;
-    attentionState?: string;
-    attentionReason?: string;
-  }
-
-  const chats: ActiveChat[] = [];
-
-  function findCuiPanels(node: any, projectId: string, projectName: string, workDir: string): void {
-    if (node.type === 'tab' && (node.component === 'cui' || node.component === 'cui-lite')) {
-      const route: string = node.config?._route || '';
-      const match = route.match(/\/c\/(.+)/);
-      if (match) {
-        chats.push({
-          projectId,
-          projectName,
-          workDir,
-          panelId: node.id || '',
-          accountId: node.config?.accountId || 'rafael',
-          sessionId: match[1],
-        });
-      }
-    }
-    if (node.children) for (const child of node.children) findCuiPanels(child, projectId, projectName, workDir);
-  }
-
-  for (const project of projects) {
-    const layoutPath = join(LAYOUTS_DIR, `${project.id}.json`);
-    if (!existsSync(layoutPath)) continue;
-    try {
-      const layout = JSON.parse(readFileSync(layoutPath, 'utf8'));
-      findCuiPanels(layout.layout || layout, project.id, project.name, project.workDir || '');
-    } catch { /* skip corrupted layouts */ }
-  }
-
-  // Enrich with attention states
-  const states = getSessionStates();
-  for (const chat of chats) {
-    for (const [_key, state] of Object.entries(states)) {
-      if (state.sessionId === chat.sessionId || state.accountId === chat.accountId) {
-        chat.attentionState = state.state;
-        chat.attentionReason = state.reason;
-      }
-    }
-  }
-
-  // Sort: needs_attention first, then working, then idle
-  chats.sort((a, b) => {
-    const score = (c: ActiveChat) => c.attentionState === 'needs_attention' ? 3 : c.attentionState === 'working' ? 2 : 1;
-    return score(b) - score(a);
-  });
-
-  res.json({ chats, total: chats.length });
-});
-
-// --- Prompt Templates API ---
-app.get("/api/prompt-templates", (_req, res) => {
-  const templates = loadTemplates();
-  templates.sort((a, b) => a.order - b.order);
-  res.json({ templates });
-});
-
-app.post("/api/prompt-templates", (req, res) => {
-  const { label, message, category, subject, order } = req.body;
-  if (!label || !message || !category) return res.status(400).json({ error: "label, message, and category are required" });
-  if (category !== "reply" && category !== "start") return res.status(400).json({ error: "category must be reply or start" });
-  const templates = loadTemplates();
-  const maxOrder = templates.filter(t => t.category === category).reduce((m, t) => Math.max(m, t.order), 0);
-  const newTemplate: PromptTemplate = {
-    id: `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-    label: label.trim(),
-    message: message.trim(),
-    category,
-    subject: subject?.trim() || undefined,
-    order: typeof order === "number" ? order : maxOrder + 1,
-    createdAt: new Date().toISOString(),
-  };
-  templates.push(newTemplate);
-  saveTemplates(templates);
-  res.json({ template: newTemplate });
-});
-
-app.put("/api/prompt-templates/:id", (req, res) => {
-  const templates = loadTemplates();
-  const idx = templates.findIndex(t => t.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: "Template not found" });
-  const { label, message, category, subject, order } = req.body;
-  if (label !== undefined) templates[idx].label = label.trim();
-  if (message !== undefined) templates[idx].message = message.trim();
-  if (category === "reply" || category === "start") templates[idx].category = category;
-  if (subject !== undefined) templates[idx].subject = subject?.trim() || undefined;
-  if (typeof order === "number") templates[idx].order = order;
-  saveTemplates(templates);
-  res.json({ template: templates[idx] });
-});
-
-app.delete("/api/prompt-templates/:id", (req, res) => {
-  const templates = loadTemplates();
-  const filtered = templates.filter(t => t.id !== req.params.id);
-  if (filtered.length === templates.length) return res.status(404).json({ error: "Template not found" });
-  saveTemplates(filtered);
-  res.json({ ok: true });
-});
-
-// --- Auto-Inject API ---
-app.get("/api/auto-inject", (_req, res) => {
-  const state = loadAutoInject();
-  res.json(state);
-});
-
-app.post("/api/auto-inject", (req, res) => {
-  const { accountId, sessionId, workDir, message, intervalMs, enabled, idleSinceMs } = req.body;
-  if (!accountId) return res.status(400).json({ error: "accountId is required" });
-  const state = loadAutoInject();
-  const existing = state.configs[accountId];
-  state.configs[accountId] = {
-    accountId,
-    sessionId: sessionId || existing?.sessionId || "",
-    workDir: workDir || existing?.workDir || "",
-    message: message || existing?.message || "Schau dir die aktuellen Test-Logs an und entscheide selbst: Wenn Probleme sichtbar sind, behebe sie (defensive coding, fail fast) und committe. Wenn Tests noch laufen oder alles passt, sage kurz Bescheid und warte.",
-    intervalMs: typeof intervalMs === "number" ? intervalMs : (existing?.intervalMs || 300000),
-    enabled: typeof enabled === "boolean" ? enabled : (existing?.enabled ?? true),
-    idleSinceMs: typeof idleSinceMs === "number" ? idleSinceMs : (existing?.idleSinceMs || undefined),
-  };
-  saveAutoInject(state);
-  console.log(`[AutoInject] Config updated for ${accountId}: enabled=${state.configs[accountId].enabled}, interval=${state.configs[accountId].intervalMs}ms`);
-  res.json({ config: state.configs[accountId] });
-});
-
-app.delete("/api/auto-inject/:accountId", (req, res) => {
-  const state = loadAutoInject();
-  if (!state.configs[req.params.accountId]) return res.status(404).json({ error: "No config for this account" });
-  delete state.configs[req.params.accountId];
-  delete state.lastInject[req.params.accountId];
-  saveAutoInject(state);
-  console.log(`[AutoInject] Config removed for ${req.params.accountId}`);
   res.json({ ok: true });
 });
 
@@ -5612,32 +5255,14 @@ app.post("/api/claude-code/scrape-now", async (req, res) => {
 const BRIDGE_URL = 'http://49.12.72.66:8000';
 const BRIDGE_API_KEY = process.env.AI_BRIDGE_API_KEY || '';
 
-let _bridgeFailCount = 0;
-let _bridgeCircuitOpenUntil = 0;
-
 async function bridgeFetch(path: string, options: any = {}) {
-  // Circuit breaker: skip requests when bridge is known-down
-  if (_bridgeCircuitOpenUntil > Date.now()) {
-    throw new Error('Bridge circuit breaker open — skipping request');
-  }
   const headers = {
     'Authorization': `Bearer ${BRIDGE_API_KEY}`,
     ...options.headers,
   };
-  try {
-    const response = await fetch(`${BRIDGE_URL}${path}`, { ...options, headers, signal: AbortSignal.timeout(5000) });
-    if (!response.ok) throw new Error(`Bridge API error: ${response.status}`);
-    _bridgeFailCount = 0; // Reset on success
-    return response.json();
-  } catch (err) {
-    _bridgeFailCount++;
-    if (_bridgeFailCount >= 3) {
-      _bridgeCircuitOpenUntil = Date.now() + 60000; // Open circuit for 60s
-      console.warn(`[Bridge] Circuit breaker OPEN after ${_bridgeFailCount} failures — pausing 60s`);
-      _bridgeFailCount = 0;
-    }
-    throw err;
-  }
+  const response = await fetch(`${BRIDGE_URL}${path}`, { ...options, headers, signal: AbortSignal.timeout(10000) });
+  if (!response.ok) throw new Error(`Bridge API error: ${response.status}`);
+  return response.json();
 }
 
 // Overview: Quick stats + Sankey data
@@ -5700,181 +5325,6 @@ app.get('/api/bridge/metrics/activity', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
-// ═══════════════════════════════════════════════════════════════════
-// Repository Dashboard API
-// ═══════════════════════════════════════════════════════════════════
-
-// Simple cache (60 seconds TTL)
-let repoCache: { data: any; timestamp: number } | null = null;
-let pipelineCache: { data: any; timestamp: number } | null = null;
-let structureCache: { data: any; timestamp: number } | null = null;
-const CACHE_TTL = 60000; // 60 seconds
-
-// GET /api/repo-dashboard/repositories — Scan all git repos + disk usage
-app.get('/api/repo-dashboard/repositories', async (_req, res) => {
-  try {
-    // Check cache
-    if (repoCache && Date.now() - repoCache.timestamp < CACHE_TTL) {
-      return res.json(repoCache.data);
-    }
-
-    const projectsRoot = '/root/projekte';
-    const repos: any[] = [];
-
-    // Find all .git directories
-    const gitDirs = execSync(`find ${projectsRoot} -type d -name .git 2>/dev/null`, { encoding: 'utf8' })
-      .trim()
-      .split('\n')
-      .filter(Boolean);
-
-    for (const gitDir of gitDirs) {
-      const repoPath = gitDir.replace('/.git', '');
-      const repoName = repoPath.split('/').pop() || 'unknown';
-
-      try {
-        // Git status
-        const branch = execSync(`cd ${repoPath} && git branch --show-current 2>/dev/null || echo "detached"`, { encoding: 'utf8' }).trim();
-        const uncommitted = execSync(`cd ${repoPath} && git status --porcelain 2>/dev/null | wc -l`, { encoding: 'utf8' }).trim();
-        const lastCommitRaw = execSync(`cd ${repoPath} && git log -1 --format="%H|%an|%s|%ci" 2>/dev/null || echo "|||"`, { encoding: 'utf8' }).trim();
-        const [hash, author, message, date] = lastCommitRaw.split('|');
-
-        // Disk size
-        const sizeBytes = parseInt(execSync(`du -sb ${repoPath} 2>/dev/null | cut -f1`, { encoding: 'utf8' }).trim() || '0');
-        const sizeHuman = execSync(`du -sh ${repoPath} 2>/dev/null | cut -f1`, { encoding: 'utf8' }).trim();
-
-        // Last modified
-        const stat = statSync(repoPath);
-        const lastModified = stat.mtime.toISOString();
-
-        // Remote URL
-        let remoteUrl = '';
-        try {
-          remoteUrl = execSync(`cd ${repoPath} && git config --get remote.origin.url 2>/dev/null || echo ""`, { encoding: 'utf8' }).trim();
-        } catch {}
-
-        repos.push({
-          name: repoName,
-          path: repoPath,
-          branch,
-          uncommitted: parseInt(uncommitted),
-          lastCommit: {
-            hash: hash?.slice(0, 7) || '',
-            author: author || '',
-            message: message || '',
-            date: date || '',
-          },
-          diskSize: {
-            bytes: sizeBytes,
-            human: sizeHuman,
-          },
-          lastModified,
-          remoteUrl,
-          status: parseInt(uncommitted) > 0 ? 'dirty' : 'clean',
-        });
-      } catch (err: any) {
-        console.error(`[Repo Dashboard] Error scanning ${repoPath}:`, err.message);
-      }
-    }
-
-    // Sort by size (largest first)
-    repos.sort((a, b) => b.diskSize.bytes - a.diskSize.bytes);
-
-    const result = { repos, count: repos.length, scannedAt: new Date().toISOString() };
-    repoCache = { data: result, timestamp: Date.now() };
-    res.json(result);
-  } catch (err: any) {
-    console.error('[Repo Dashboard] Repositories error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// GET /api/repo-dashboard/pipeline — Run pipeline-check script
-app.get('/api/repo-dashboard/pipeline', async (_req, res) => {
-  try {
-    // Check cache
-    if (pipelineCache && Date.now() - pipelineCache.timestamp < CACHE_TTL) {
-      return res.json(pipelineCache.data);
-    }
-
-    const pipelineScript = '/root/projekte/orchestrator/bin/pipeline-check';
-    const output = execSync(`${pipelineScript} --json 2>/dev/null || echo '{}'`, { encoding: 'utf8' }).trim();
-
-    let pipelineData = {};
-    try {
-      pipelineData = JSON.parse(output);
-    } catch {
-      pipelineData = { error: 'Failed to parse pipeline-check output' };
-    }
-
-    const result = { pipeline: pipelineData, scannedAt: new Date().toISOString() };
-    pipelineCache = { data: result, timestamp: Date.now() };
-    res.json(result);
-  } catch (err: any) {
-    console.error('[Repo Dashboard] Pipeline error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// GET /api/repo-dashboard/structure — Tree view of /root/projekte
-app.get('/api/repo-dashboard/structure', async (_req, res) => {
-  try {
-    // Check cache
-    if (structureCache && Date.now() - structureCache.timestamp < CACHE_TTL) {
-      return res.json(structureCache.data);
-    }
-
-    const projectsRoot = '/root/projekte';
-    const structure: any[] = [];
-
-    const topLevel = readdirSync(projectsRoot);
-
-    for (const item of topLevel) {
-      const itemPath = join(projectsRoot, item);
-      try {
-        const stat = statSync(itemPath);
-        if (!stat.isDirectory()) continue;
-
-        const isGit = existsSync(join(itemPath, '.git'));
-        const sizeHuman = execSync(`du -sh "${itemPath}" 2>/dev/null | cut -f1`, { encoding: 'utf8' }).trim();
-        const sizeBytes = parseInt(execSync(`du -sb "${itemPath}" 2>/dev/null | cut -f1`, { encoding: 'utf8' }).trim() || '0');
-
-        structure.push({
-          name: item,
-          path: itemPath,
-          isGit,
-          diskSize: {
-            bytes: sizeBytes,
-            human: sizeHuman,
-          },
-          lastModified: stat.mtime.toISOString(),
-        });
-      } catch (err: any) {
-        console.error(`[Repo Dashboard] Error scanning ${itemPath}:`, err.message);
-      }
-    }
-
-    // Sort by size (largest first)
-    structure.sort((a, b) => b.diskSize.bytes - a.diskSize.bytes);
-
-    const result = { structure, count: structure.length, scannedAt: new Date().toISOString() };
-    structureCache = { data: result, timestamp: Date.now() };
-    res.json(result);
-  } catch (err: any) {
-    console.error('[Repo Dashboard] Structure error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// POST /api/repo-dashboard/refresh — Force refresh (re-scan)
-app.post('/api/repo-dashboard/refresh', async (_req, res) => {
-  // Clear all caches
-  repoCache = null;
-  pipelineCache = null;
-  structureCache = null;
-  res.json({ message: 'Cache cleared — next requests will re-scan' });
-});
-
 // --- Serve Frontend in Production ---
 if (PROD) {
   const distPath = resolve(import.meta.dirname ?? __dirname, '..', 'dist');
@@ -6006,77 +5456,148 @@ app.post('/api/bridge-db/admin/refresh-stats', async (req, res) => {
   }
 });
 
-// --- Infrastructure Monitoring (Watchdog Integration) ---
-// Proxy endpoints to the Watchdog API (http://localhost:9090)
-const WATCHDOG_BASE = 'http://localhost:9090';
+// ═══════════════════════════════════════════════════════════════════
+// Repository Dashboard API
+// ═══════════════════════════════════════════════════════════════════
 
-app.get('/api/infrastructure/status', async (_req, res) => {
+// GET /api/repo-dashboard/repositories — Scan all git repos + disk usage
+app.get('/api/repo-dashboard/repositories', async (_req, res) => {
   try {
-    const response = await fetch(`${WATCHDOG_BASE}/api/status`);
-    if (!response.ok) {
-      throw new Error(`Watchdog returned ${response.status}`);
-    }
-    const data = await response.json();
-    res.json(data);
-  } catch (err: any) {
-    console.error('[Infrastructure] Failed to fetch watchdog status:', err.message);
-    res.status(503).json({ error: 'Watchdog unavailable', message: err.message });
-  }
-});
+    const projectsRoot = '/root/projekte';
+    const repos: any[] = [];
 
-app.post('/api/infrastructure/app/:id/restart', async (req, res) => {
-  const { id } = req.params;
-  try {
-    const response = await fetch(`${WATCHDOG_BASE}/api/app/${id}/restart`, {
-      method: 'POST',
-    });
-    if (!response.ok) {
-      throw new Error(`Watchdog returned ${response.status}`);
-    }
-    const data = await response.json();
-    res.json(data);
-  } catch (err: any) {
-    console.error(`[Infrastructure] Failed to restart ${id}:`, err.message);
-    res.status(500).json({ error: 'Restart failed', message: err.message });
-  }
-});
+    // Find all .git directories
+    const gitDirs = execSync(`find ${projectsRoot} -type d -name .git 2>/dev/null`, { encoding: 'utf8' })
+      .trim()
+      .split('\n')
+      .filter(Boolean);
 
-app.post('/api/infrastructure/app/:id/test/restart', async (req, res) => {
-  const { id } = req.params;
+    for (const gitDir of gitDirs) {
+      const repoPath = gitDir.replace('/.git', '');
+      const repoName = repoPath.split('/').pop() || 'unknown';
 
-  // Check if app has test_port before attempting restart
-  try {
-    const statusResponse = await fetch(`${WATCHDOG_BASE}/api/status`);
-    if (statusResponse.ok) {
-      const statusData = await statusResponse.json();
-      const app = statusData.apps?.[id];
-      if (app && !app.test_port) {
-        return res.status(410).json({
-          error: 'App uses single-port architecture',
-          message: `${id} no longer has a test port (migrated to single-port mode)`
+      try {
+        // Git status
+        const branch = execSync(`cd ${repoPath} && git branch --show-current 2>/dev/null || echo "detached"`, { encoding: 'utf8' }).trim();
+        const uncommitted = execSync(`cd ${repoPath} && git status --porcelain 2>/dev/null | wc -l`, { encoding: 'utf8' }).trim();
+        const lastCommitRaw = execSync(`cd ${repoPath} && git log -1 --format="%H|%an|%s|%ci" 2>/dev/null || echo "|||"`, { encoding: 'utf8' }).trim();
+        const [hash, author, message, date] = lastCommitRaw.split('|');
+
+        // Disk size
+        const sizeBytes = parseInt(execSync(`du -sb ${repoPath} 2>/dev/null | cut -f1`, { encoding: 'utf8' }).trim() || '0');
+        const sizeHuman = execSync(`du -sh ${repoPath} 2>/dev/null | cut -f1`, { encoding: 'utf8' }).trim();
+
+        // Last modified
+        const stat = statSync(repoPath);
+        const lastModified = stat.mtime.toISOString();
+
+        // Remote URL
+        let remoteUrl = '';
+        try {
+          remoteUrl = execSync(`cd ${repoPath} && git config --get remote.origin.url 2>/dev/null || echo ""`, { encoding: 'utf8' }).trim();
+        } catch {}
+
+        repos.push({
+          name: repoName,
+          path: repoPath,
+          branch,
+          uncommitted: parseInt(uncommitted),
+          lastCommit: {
+            hash: hash?.slice(0, 7) || '',
+            author: author || '',
+            message: message || '',
+            date: date || '',
+          },
+          diskSize: {
+            bytes: sizeBytes,
+            human: sizeHuman,
+          },
+          lastModified,
+          remoteUrl,
+          status: parseInt(uncommitted) > 0 ? 'dirty' : 'clean',
         });
+      } catch (err: any) {
+        console.error(`[Repo Dashboard] Error scanning ${repoPath}:`, err.message);
       }
     }
-  } catch (err) {
-    console.warn('[Infrastructure] Could not verify test_port existence:', err);
-    // Continue anyway - let watchdog handle the error
-  }
 
-  try {
-    const response = await fetch(`${WATCHDOG_BASE}/api/app/${id}/test/restart`, {
-      method: 'POST',
-    });
-    if (!response.ok) {
-      throw new Error(`Watchdog returned ${response.status}`);
-    }
-    const data = await response.json();
-    res.json(data);
+    // Sort by size (largest first)
+    repos.sort((a, b) => b.diskSize.bytes - a.diskSize.bytes);
+
+    res.json({ repos, count: repos.length, scannedAt: new Date().toISOString() });
   } catch (err: any) {
-    console.error(`[Infrastructure] Failed to restart test port for ${id}:`, err.message);
-    res.status(500).json({ error: 'Test restart failed', message: err.message });
+    console.error('[Repo Dashboard] Repositories error:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
+// GET /api/repo-dashboard/pipeline — Run pipeline-check script
+app.get('/api/repo-dashboard/pipeline', async (_req, res) => {
+  try {
+    const pipelineScript = '/root/projekte/orchestrator/bin/pipeline-check';
+    const output = execSync(`${pipelineScript} --json 2>/dev/null || echo '{}'`, { encoding: 'utf8' }).trim();
+
+    let pipelineData = {};
+    try {
+      pipelineData = JSON.parse(output);
+    } catch {
+      pipelineData = { error: 'Failed to parse pipeline-check output' };
+    }
+
+    res.json({ pipeline: pipelineData, scannedAt: new Date().toISOString() });
+  } catch (err: any) {
+    console.error('[Repo Dashboard] Pipeline error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/repo-dashboard/structure — Tree view of /root/projekte
+app.get('/api/repo-dashboard/structure', async (_req, res) => {
+  try {
+    const projectsRoot = '/root/projekte';
+    const structure: any[] = [];
+
+    const topLevel = readdirSync(projectsRoot);
+
+    for (const item of topLevel) {
+      const itemPath = join(projectsRoot, item);
+      try {
+        const stat = statSync(itemPath);
+        if (!stat.isDirectory()) continue;
+
+        const isGit = existsSync(join(itemPath, '.git'));
+        const sizeHuman = execSync(`du -sh "${itemPath}" 2>/dev/null | cut -f1`, { encoding: 'utf8' }).trim();
+        const sizeBytes = parseInt(execSync(`du -sb "${itemPath}" 2>/dev/null | cut -f1`, { encoding: 'utf8' }).trim() || '0');
+
+        structure.push({
+          name: item,
+          path: itemPath,
+          isGit,
+          diskSize: {
+            bytes: sizeBytes,
+            human: sizeHuman,
+          },
+          lastModified: stat.mtime.toISOString(),
+        });
+      } catch (err: any) {
+        console.error(`[Repo Dashboard] Error scanning ${itemPath}:`, err.message);
+      }
+    }
+
+    // Sort by size (largest first)
+    structure.sort((a, b) => b.diskSize.bytes - a.diskSize.bytes);
+
+    res.json({ structure, count: structure.length, scannedAt: new Date().toISOString() });
+  } catch (err: any) {
+    console.error('[Repo Dashboard] Structure error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/repo-dashboard/refresh — Force refresh (re-scan)
+app.post('/api/repo-dashboard/refresh', async (_req, res) => {
+  res.json({ message: 'Refresh triggered — re-fetch /repositories, /pipeline, /structure' });
+});
 
   if (existsSync(distPath)) {
     // Hashed assets (JS/CSS) can be cached forever

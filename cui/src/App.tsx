@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import ProjectTabs from './components/ProjectTabs';
 import LayoutManager from './components/LayoutManager';
 import MissionControl from './components/panels/MissionControl';
+import AllChatsView from './components/AllChatsView';
 import type { Project, CuiStates } from './types';
 
 const API = '/api';
@@ -219,6 +220,7 @@ export default function App() {
   const [cuiStates, setCuiStates] = useState<CuiStates>({});
   const [projectAttention, setProjectAttention] = useState<Set<string>>(new Set());
   const [showMission, setShowMission] = useState(false);
+  const [showAllChats, setShowAllChats] = useState(false);
   const [pendingActivation, setPendingActivation] = useState<Array<{ projectId: string; conversations: Array<{ sessionId: string; accountId: string }> }> | null>(null);
 
   // Global WebSocket for CUI state tracking + Control API
@@ -463,7 +465,14 @@ export default function App() {
       // Cmd+0: toggle Mission Control
       if (e.key === '0') {
         e.preventDefault();
-        setShowMission(prev => !prev);
+        setShowMission(prev => { if (!prev) setShowAllChats(false); return !prev; });
+        return;
+      }
+
+      // Cmd+`: toggle All Chats
+      if (e.key === '`') {
+        e.preventDefault();
+        setShowAllChats(prev => { if (!prev) setShowMission(false); return !prev; });
         return;
       }
 
@@ -550,12 +559,14 @@ export default function App() {
         projects={projects}
         activeId={activeId}
         attention={projectAttention}
-        onSelect={(id) => { setShowMission(false); handleSelect(id); }}
+        onSelect={(id) => { setShowMission(false); setShowAllChats(false); handleSelect(id); }}
         onNew={handleNew}
         onEdit={handleEdit}
         onDelete={handleDelete}
         missionActive={showMission}
-        onMissionClick={() => setShowMission(prev => !prev)}
+        onMissionClick={() => setShowMission(prev => { if (!prev) setShowAllChats(false); return !prev; })}
+        allChatsActive={showAllChats}
+        onAllChatsClick={() => setShowAllChats(prev => { if (!prev) setShowMission(false); return !prev; })}
       />
       <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
         {/* Mission Control - global view */}
@@ -565,6 +576,20 @@ export default function App() {
             display: 'flex', flexDirection: 'column',
           }}>
             <MissionControl />
+          </div>
+        )}
+        {/* All Chats - consolidated view of all active conversations */}
+        {showAllChats && (
+          <div style={{
+            position: 'absolute', inset: 0, zIndex: 2,
+            display: 'flex', flexDirection: 'column',
+          }}>
+            <AllChatsView
+              onNavigateToProject={(projectId) => {
+                setShowAllChats(false);
+                setActiveId(projectId);
+              }}
+            />
           </div>
         )}
         {projects.filter(p => p.id === activeId).map((p) => (

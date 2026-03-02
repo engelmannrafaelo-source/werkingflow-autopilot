@@ -144,15 +144,17 @@ function sseProxy(targetBase: string, req: IncomingMessage, res: ServerResponse,
 }
 
 // --- Auto-Refresh: Monitor CUI streams for response completion ---
+// Dedup: prevent multiple monitors for the same streamingId
 const activeMonitors = new Set<string>();
 
 function monitorStream(targetBase: string, streamingId: string, cuiId: string, authHeaders: Record<string, string>, sessionId?: string) {
-  // Prevent duplicate monitors for the same stream
+  // Dedup: skip if already monitoring this stream
   if (activeMonitors.has(streamingId)) {
     console.log(`[Monitor] Skip duplicate for ${streamingId.slice(0, 8)} (${cuiId})`);
     return;
   }
   activeMonitors.add(streamingId);
+
   const url = new URL(`/api/stream/${streamingId}`, targetBase);
   const headers: Record<string, string> = { 'Accept': 'text/event-stream' };
   if (authHeaders.authorization) headers['Authorization'] = authHeaders.authorization;
@@ -163,25 +165,23 @@ function monitorStream(targetBase: string, streamingId: string, cuiId: string, a
     if (sessionId) activeStreams.delete(sessionId);
   };
 
+  const setDone = () => {
+    cleanup();
+    broadcast({ type: 'cui-response-ready', cuiId });
+    broadcast({ type: 'cui-state', cuiId, state: 'done' });
+    setSessionState(cuiId, cuiId, 'idle', 'done');
+  };
+
   const monitorReq = httpRequest(url, { method: 'GET', headers }, (monitorRes) => {
     if (monitorRes.statusCode !== 200) {
-      // Stream not available — set idle after delay
-      setTimeout(() => {
-        cleanup();
-        broadcast({ type: 'cui-state', cuiId, state: 'done' });
-        broadcast({ type: 'cui-response-ready', cuiId });
-        setSessionState(cuiId, cuiId, 'idle', 'done');
-      }, 8000);
+      setTimeout(() => { setDone(); }, 8000);
       return;
     }
     monitorRes.on('data', (chunk: Buffer) => {
       const attention = detectAttentionMarkers(chunk.toString());
       if (attention) {
         if (attention.state === 'idle') {
-          cleanup();
-          broadcast({ type: 'cui-response-ready', cuiId });
-          broadcast({ type: 'cui-state', cuiId, state: 'done' });
-          setSessionState(cuiId, cuiId, 'idle', 'done');
+          setDone();
           monitorReq.destroy();
         } else {
           console.log(`[Monitor] ${cuiId}: ${attention.reason}`);
@@ -189,32 +189,20 @@ function monitorStream(targetBase: string, streamingId: string, cuiId: string, a
         }
       }
     });
-    monitorRes.on('end', () => {
-      cleanup();
-      broadcast({ type: 'cui-response-ready', cuiId });
-      broadcast({ type: 'cui-state', cuiId, state: 'done' });
-      setSessionState(cuiId, cuiId, 'idle', 'done');
-    });
+    monitorRes.on('end', () => { setDone(); });
   });
   monitorReq.on('error', () => {
-    // Connection error — set idle after delay
-    setTimeout(() => {
-      cleanup();
-      broadcast({ type: 'cui-state', cuiId, state: 'done' });
-      broadcast({ type: 'cui-response-ready', cuiId });
-      setSessionState(cuiId, cuiId, 'idle', 'done');
-    }, 8000);
+    setTimeout(() => { setDone(); }, 8000);
   });
   monitorReq.end();
-  // Safety timeout: if stream hasn't ended in 45s, set idle
+  // Safety timeout: 45s max monitor lifetime
   setTimeout(() => {
     const current = sessionStates.get(cuiId);
     if (current?.state === 'working') {
       console.log(`[Monitor] ${cuiId}: 45s timeout, setting idle`);
-      cleanup();
-      broadcast({ type: 'cui-state', cuiId, state: 'done' });
-      broadcast({ type: 'cui-response-ready', cuiId });
-      setSessionState(cuiId, cuiId, 'idle', 'done');
+      setDone();
+    } else {
+      cleanup(); // Just cleanup tracking, don't broadcast
     }
     monitorReq.destroy();
   }, 45000);
@@ -738,28 +726,37 @@ setInterval(() => {
 // Maps Claude sessionIds to CUI binary streamingIds for correct stop calls
 const activeStreams = new Map<string, string>();
 
-// --- Periodic cleanup of stale state entries ---
+// --- Periodic Cleanup: prevent unbounded Map growth ---
 setInterval(() => {
-  const now = Date.now();
-  let cleaned = 0;
   // sessionStates: remove entries older than 24h
-  for (const [k, v] of sessionStates) {
-    if (now - v.since > 24 * 60 * 60 * 1000) { sessionStates.delete(k); cleaned++; }
+  const staleAge = Date.now() - 24 * 60 * 60 * 1000;
+  let cleaned = 0;
+  for (const [key, entry] of sessionStates) {
+    if (entry.since < staleAge) { sessionStates.delete(key); cleaned++; }
   }
-  // activeStreams: cap at 50 entries (remove oldest by order)
-  if (activeStreams.size > 50) {
-    const excess = activeStreams.size - 50;
-    let i = 0;
-    for (const key of activeStreams.keys()) {
-      if (i++ >= excess) break;
-      activeStreams.delete(key); cleaned++;
+  // activeStreams: remove entries not in activeMonitors (orphaned)
+  for (const [sid] of activeStreams) {
+    let found = false;
+    for (const mid of activeMonitors) { if (mid) { found = true; break; } }
+    if (!found && activeStreams.size > 50) { activeStreams.delete(sid); cleaned++; }
+  }
+  // panelSnapshots: remove entries older than 12h
+  for (const [panel, snap] of panelSnapshots) {
+    if (new Date(snap.capturedAt).getTime() < staleAge) { panelSnapshots.delete(panel); cleaned++; }
+  }
+  // panelScreenshots: remove entries older than 12h + delete files
+  for (const [panel, ss] of panelScreenshots) {
+    if (new Date(ss.capturedAt).getTime() < staleAge) {
+      if (ss.filePath && existsSync(ss.filePath)) { try { unlinkSync(ss.filePath); } catch {} }
+      panelScreenshots.delete(panel); cleaned++;
     }
   }
-  // activeMonitors: cap at 50
-  if (activeMonitors.size > 50) {
-    activeMonitors.clear(); cleaned += 50;
+  // screenshotErrors: remove entries older than 1h
+  const errorAge = Date.now() - 60 * 60 * 1000;
+  for (const [panel, data] of screenshotErrors) {
+    if (new Date(data.at).getTime() < errorAge) { screenshotErrors.delete(panel); cleaned++; }
   }
-  if (cleaned > 0) console.log(`[Cleanup] Removed ${cleaned} stale state entries`);
+  if (cleaned > 0) console.log(`[Cleanup] Removed ${cleaned} stale entries (states=${sessionStates.size}, streams=${activeStreams.size}, monitors=${activeMonitors.size})`);
 }, 300000); // Every 5 minutes
 
 // --- Per-Session Attention State Tracker ---
@@ -816,7 +813,10 @@ wss.on('connection', (ws) => {
   (ws as any)._alive = true;
   ws.on('pong', () => { (ws as any)._alive = true; });
   ws.on('close', () => clients.delete(ws));
-  ws.on('error', (err) => { console.warn('[WS] Client error:', (err as Error).message); clients.delete(ws); });
+  ws.on('error', (err) => {
+    console.warn('[WS] Client error:', err.message);
+    clients.delete(ws);
+  });
 
   // Register for Document Manager broadcasts
   registerWebSocketClient(ws);
@@ -864,15 +864,6 @@ wss.on('connection', (ws) => {
   });
 });
 
-// WebSocket ping/pong heartbeat — detect dead connections every 30s
-setInterval(() => {
-  for (const ws of clients) {
-    if (!(ws as any)._alive) { ws.terminate(); clients.delete(ws); continue; }
-    (ws as any)._alive = false;
-    try { ws.ping(); } catch { clients.delete(ws); }
-  }
-}, 30000);
-
 // --- Broadcast dedup + throttling ---
 // Tracks last broadcast per type+key to suppress duplicates
 const _lastBroadcast: Record<string, { state: string; at: number }> = {};
@@ -887,12 +878,28 @@ const _broadcastThrottled: Record<string, ReturnType<typeof setTimeout>> = {};
 setInterval(() => {
   if (_broadcastCount > 0 || _broadcastDropped > 0) {
     const s = ((Date.now() - _broadcastT0) / 1000).toFixed(0);
-    console.log(`[Broadcast] ${s}s: ${_broadcastCount} sent, ${_broadcastDropped} dropped (${(_broadcastCount / (+s || 1)).toFixed(1)}/s)`);
+    console.log(`[Broadcast] ${s}s: ${_broadcastCount} sent, ${_broadcastDropped} dropped (${(_broadcastCount / (+s || 1)).toFixed(1)}/s) clients=${clients.size}`);
   }
   _broadcastCount = 0;
   _broadcastDropped = 0;
   _broadcastT0 = Date.now();
 }, 60000);
+
+// Ping/pong heartbeat: detect dead WebSocket connections every 30s
+setInterval(() => {
+  let cleaned = 0;
+  for (const ws of clients) {
+    if (!(ws as any)._alive) {
+      ws.terminate();
+      clients.delete(ws);
+      cleaned++;
+      continue;
+    }
+    (ws as any)._alive = false;
+    try { ws.ping(); } catch { clients.delete(ws); cleaned++; }
+  }
+  if (cleaned > 0) console.log(`[WS] Cleaned ${cleaned} dead connections (${clients.size} remaining)`);
+}, 30000);
 
 function broadcast(data: Record<string, unknown>) {
   const type = data.type as string;
@@ -1236,130 +1243,6 @@ function autoTitleUntitled(results: Array<{ sessionId: string; summary: string; 
     console.log(`[AutoTitle] Generated ${saved} titles from summaries`);
   }
 }
-
-
-// --- Prompt Templates ---
-// Persistent prompt templates for quick-reply and quick-start actions
-const TEMPLATES_FILE = join(DATA_DIR, "prompt-templates.json");
-
-interface PromptTemplate {
-  id: string;
-  label: string;
-  message: string;
-  category: "reply" | "start";
-  subject?: string;
-  order: number;
-  createdAt: string;
-}
-
-const DEFAULT_TEMPLATES: PromptTemplate[] = [
-  { id: "tpl_fix_commit", label: "Fix & Commit", message: "Mache die architektonisch sauberste Lösung. Defensive coding, fail fast. Committe die Änderungen.", category: "reply", order: 1, createdAt: "2026-03-01T00:00:00Z" },
-  { id: "tpl_fix_test_commit", label: "Fix → Test → Commit", message: "Spawne einen Subtask um die Probleme zu beheben: Defensive coding, fail fast. Committe. Dann teste weiter bis alles voll funktionsfähig ist.", category: "reply", order: 2, createdAt: "2026-03-01T00:00:00Z" },
-  { id: "tpl_weiter_testen", label: "Weiter testen", message: "Teste weiter bis alles voll funktionsfähig ist.", category: "reply", order: 3, createdAt: "2026-03-01T00:00:00Z" },
-  { id: "tpl_approve_plan", label: "Approve Plan", message: "Ja, mach weiter mit diesem Plan.", category: "reply", order: 4, createdAt: "2026-03-01T00:00:00Z" },
-  { id: "tpl_weiter", label: "Weiter", message: "Weiter.", category: "reply", order: 5, createdAt: "2026-03-01T00:00:00Z" },
-  { id: "tpl_unified_test", label: "Unified Test Run", message: "Führe den Unified Tester aus und behebe alle gefundenen Probleme. Defensive coding, fail fast. Committe nach jedem Fix.", category: "start", subject: "Test Run", order: 1, createdAt: "2026-03-01T00:00:00Z" },
-];
-
-function loadTemplates(): PromptTemplate[] {
-  if (!existsSync(TEMPLATES_FILE)) {
-    writeFileSync(TEMPLATES_FILE, JSON.stringify(DEFAULT_TEMPLATES, null, 2));
-    return [...DEFAULT_TEMPLATES];
-  }
-  try { return JSON.parse(readFileSync(TEMPLATES_FILE, "utf8")); } catch { return [...DEFAULT_TEMPLATES]; }
-}
-
-function saveTemplates(templates: PromptTemplate[]) {
-  writeFileSync(TEMPLATES_FILE, JSON.stringify(templates, null, 2));
-}
-
-// --- Auto-Inject System ---
-// Periodically injects a message into idle conversations (autonomous test-fix loop)
-const AUTOINJECT_FILE = join(DATA_DIR, "auto-inject.json");
-
-interface AutoInjectConfig {
-  accountId: string;
-  sessionId: string;
-  workDir: string;
-  message: string;
-  intervalMs: number;
-  enabled: boolean;
-  idleSinceMs?: number;
-}
-
-interface AutoInjectState {
-  configs: Record<string, AutoInjectConfig>;
-  lastInject: Record<string, string>;
-}
-
-function loadAutoInject(): AutoInjectState {
-  if (!existsSync(AUTOINJECT_FILE)) return { configs: {}, lastInject: {} };
-  try { return JSON.parse(readFileSync(AUTOINJECT_FILE, "utf8")); } catch { return { configs: {}, lastInject: {} }; }
-}
-
-function saveAutoInject(state: AutoInjectState) {
-  writeFileSync(AUTOINJECT_FILE, JSON.stringify(state, null, 2));
-}
-
-let autoInjectTimer: ReturnType<typeof setInterval> | null = null;
-
-async function autoInjectTick() {
-  const state = loadAutoInject();
-  for (const [accountId, cfg] of Object.entries(state.configs)) {
-    if (!cfg.enabled) continue;
-    const ss = sessionStates.get(accountId);
-    if (!ss || ss.state !== "idle") continue;
-    if (ss.reason === "rate_limit") continue;
-    const idleMs = Date.now() - ss.since;
-    const minIdle = cfg.idleSinceMs || cfg.intervalMs;
-    if (idleMs < minIdle) continue;
-    const lastInject = state.lastInject[accountId];
-    if (lastInject) {
-      const sinceLast = Date.now() - new Date(lastInject).getTime();
-      if (sinceLast < cfg.intervalMs) continue;
-    }
-    console.log(`[AutoInject] Injecting into ${accountId} (idle for ${Math.round(idleMs/1000)}s): "${cfg.message.slice(0, 50)}..."`);
-    const port = getProxyPort(accountId);
-    if (!port) { console.log(`[AutoInject] No port for ${accountId}`); continue; }
-    try {
-      unstickConversation(cfg.sessionId);
-      const resp = await cuiFetch(port, "/api/conversations/start", {
-        method: "POST",
-        timeoutMs: 60000,
-        body: JSON.stringify({
-          workingDirectory: cfg.workDir,
-          initialPrompt: cfg.message,
-          resumedSessionId: cfg.sessionId,
-        }),
-      });
-      if (resp.ok) {
-        state.lastInject[accountId] = new Date().toISOString();
-        saveAutoInject(state);
-        setSessionState(accountId, accountId, "working", undefined, cfg.sessionId);
-        broadcast({ type: "cui-state", cuiId: accountId, state: "processing" });
-        const sendResult = resp.data;
-        if (sendResult?.streamingId) {
-          monitorStream(`http://localhost:${port}`, sendResult.streamingId, accountId, {});
-        }
-        logUserInput({ type: "auto-inject", accountId, workDir: cfg.workDir, message: cfg.message, sessionId: cfg.sessionId, result: "ok" });
-        console.log(`[AutoInject] Successfully injected into ${accountId}`);
-      } else {
-        console.log(`[AutoInject] Failed for ${accountId}: ${resp.error}`);
-        logUserInput({ type: "auto-inject", accountId, workDir: cfg.workDir, message: cfg.message, sessionId: cfg.sessionId, result: "error", error: resp.error });
-      }
-    } catch (err) {
-      console.log(`[AutoInject] Error for ${accountId}: ${err}`);
-    }
-  }
-}
-
-function startAutoInjectTimer() {
-  if (autoInjectTimer) clearInterval(autoInjectTimer);
-  autoInjectTimer = setInterval(autoInjectTick, 30_000);
-  console.log("[AutoInject] Timer started (30s check interval)");
-}
-
-startAutoInjectTimer();
 
 // --- User Input Log ---
 // Persistent log of all user inputs (subject + message) from Queue/Commander
@@ -2537,157 +2420,6 @@ app.get('/api/layouts/:projectId/template', (req, res) => {
 
 app.post('/api/layouts/:projectId/template', (req, res) => {
   writeFileSync(join(LAYOUTS_DIR, `${req.params.projectId}_template.json`), JSON.stringify(req.body, null, 2));
-  res.json({ ok: true });
-});
-
-// --- All Active Chats API (scans layout files for CUI panels with active sessions) ---
-app.get('/api/all-active-chats', (_req, res) => {
-  const projects = readdirSync(PROJECTS_DIR)
-    .filter(f => f.endsWith('.json'))
-    .map(f => { try { return JSON.parse(readFileSync(join(PROJECTS_DIR, f), 'utf8')); } catch { return null; } })
-    .filter(Boolean);
-
-  interface ActiveChat {
-    projectId: string;
-    projectName: string;
-    workDir: string;
-    panelId: string;
-    accountId: string;
-    sessionId: string;
-    attentionState?: string;
-    attentionReason?: string;
-  }
-
-  const chats: ActiveChat[] = [];
-
-  function findCuiPanels(node: any, projectId: string, projectName: string, workDir: string): void {
-    if (node.type === 'tab' && (node.component === 'cui' || node.component === 'cui-lite')) {
-      const route: string = node.config?._route || '';
-      const match = route.match(/\/c\/(.+)/);
-      if (match) {
-        chats.push({
-          projectId,
-          projectName,
-          workDir,
-          panelId: node.id || '',
-          accountId: node.config?.accountId || 'rafael',
-          sessionId: match[1],
-        });
-      }
-    }
-    if (node.children) for (const child of node.children) findCuiPanels(child, projectId, projectName, workDir);
-  }
-
-  for (const project of projects) {
-    const layoutPath = join(LAYOUTS_DIR, `${project.id}.json`);
-    if (!existsSync(layoutPath)) continue;
-    try {
-      const layout = JSON.parse(readFileSync(layoutPath, 'utf8'));
-      findCuiPanels(layout.layout || layout, project.id, project.name, project.workDir || '');
-    } catch { /* skip corrupted layouts */ }
-  }
-
-  // Enrich with attention states
-  const states = getSessionStates();
-  for (const chat of chats) {
-    for (const [_key, state] of Object.entries(states)) {
-      if (state.sessionId === chat.sessionId || state.accountId === chat.accountId) {
-        chat.attentionState = state.state;
-        chat.attentionReason = state.reason;
-      }
-    }
-  }
-
-  // Sort: needs_attention first, then working, then idle
-  chats.sort((a, b) => {
-    const score = (c: ActiveChat) => c.attentionState === 'needs_attention' ? 3 : c.attentionState === 'working' ? 2 : 1;
-    return score(b) - score(a);
-  });
-
-  res.json({ chats, total: chats.length });
-});
-
-// --- Prompt Templates API ---
-app.get("/api/prompt-templates", (_req, res) => {
-  const templates = loadTemplates();
-  templates.sort((a, b) => a.order - b.order);
-  res.json({ templates });
-});
-
-app.post("/api/prompt-templates", (req, res) => {
-  const { label, message, category, subject, order } = req.body;
-  if (!label || !message || !category) return res.status(400).json({ error: "label, message, and category are required" });
-  if (category !== "reply" && category !== "start") return res.status(400).json({ error: "category must be reply or start" });
-  const templates = loadTemplates();
-  const maxOrder = templates.filter(t => t.category === category).reduce((m, t) => Math.max(m, t.order), 0);
-  const newTemplate: PromptTemplate = {
-    id: `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-    label: label.trim(),
-    message: message.trim(),
-    category,
-    subject: subject?.trim() || undefined,
-    order: typeof order === "number" ? order : maxOrder + 1,
-    createdAt: new Date().toISOString(),
-  };
-  templates.push(newTemplate);
-  saveTemplates(templates);
-  res.json({ template: newTemplate });
-});
-
-app.put("/api/prompt-templates/:id", (req, res) => {
-  const templates = loadTemplates();
-  const idx = templates.findIndex(t => t.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: "Template not found" });
-  const { label, message, category, subject, order } = req.body;
-  if (label !== undefined) templates[idx].label = label.trim();
-  if (message !== undefined) templates[idx].message = message.trim();
-  if (category === "reply" || category === "start") templates[idx].category = category;
-  if (subject !== undefined) templates[idx].subject = subject?.trim() || undefined;
-  if (typeof order === "number") templates[idx].order = order;
-  saveTemplates(templates);
-  res.json({ template: templates[idx] });
-});
-
-app.delete("/api/prompt-templates/:id", (req, res) => {
-  const templates = loadTemplates();
-  const filtered = templates.filter(t => t.id !== req.params.id);
-  if (filtered.length === templates.length) return res.status(404).json({ error: "Template not found" });
-  saveTemplates(filtered);
-  res.json({ ok: true });
-});
-
-// --- Auto-Inject API ---
-app.get("/api/auto-inject", (_req, res) => {
-  const state = loadAutoInject();
-  res.json(state);
-});
-
-app.post("/api/auto-inject", (req, res) => {
-  const { accountId, sessionId, workDir, message, intervalMs, enabled, idleSinceMs } = req.body;
-  if (!accountId) return res.status(400).json({ error: "accountId is required" });
-  const state = loadAutoInject();
-  const existing = state.configs[accountId];
-  state.configs[accountId] = {
-    accountId,
-    sessionId: sessionId || existing?.sessionId || "",
-    workDir: workDir || existing?.workDir || "",
-    message: message || existing?.message || "Schau dir die aktuellen Test-Logs an und entscheide selbst: Wenn Probleme sichtbar sind, behebe sie (defensive coding, fail fast) und committe. Wenn Tests noch laufen oder alles passt, sage kurz Bescheid und warte.",
-    intervalMs: typeof intervalMs === "number" ? intervalMs : (existing?.intervalMs || 300000),
-    enabled: typeof enabled === "boolean" ? enabled : (existing?.enabled ?? true),
-    idleSinceMs: typeof idleSinceMs === "number" ? idleSinceMs : (existing?.idleSinceMs || undefined),
-  };
-  saveAutoInject(state);
-  console.log(`[AutoInject] Config updated for ${accountId}: enabled=${state.configs[accountId].enabled}, interval=${state.configs[accountId].intervalMs}ms`);
-  res.json({ config: state.configs[accountId] });
-});
-
-app.delete("/api/auto-inject/:accountId", (req, res) => {
-  const state = loadAutoInject();
-  if (!state.configs[req.params.accountId]) return res.status(404).json({ error: "No config for this account" });
-  delete state.configs[req.params.accountId];
-  delete state.lastInject[req.params.accountId];
-  saveAutoInject(state);
-  console.log(`[AutoInject] Config removed for ${req.params.accountId}`);
   res.json({ ok: true });
 });
 
@@ -5612,11 +5344,12 @@ app.post("/api/claude-code/scrape-now", async (req, res) => {
 const BRIDGE_URL = 'http://49.12.72.66:8000';
 const BRIDGE_API_KEY = process.env.AI_BRIDGE_API_KEY || '';
 
+// Circuit breaker: after 3 consecutive failures, stop trying for 60s
 let _bridgeFailCount = 0;
 let _bridgeCircuitOpenUntil = 0;
 
 async function bridgeFetch(path: string, options: any = {}) {
-  // Circuit breaker: skip requests when bridge is known-down
+  // Circuit breaker: if open, fail fast without making request
   if (_bridgeCircuitOpenUntil > Date.now()) {
     throw new Error('Bridge circuit breaker open — skipping request');
   }
@@ -5632,9 +5365,8 @@ async function bridgeFetch(path: string, options: any = {}) {
   } catch (err) {
     _bridgeFailCount++;
     if (_bridgeFailCount >= 3) {
-      _bridgeCircuitOpenUntil = Date.now() + 60000; // Open circuit for 60s
-      console.warn(`[Bridge] Circuit breaker OPEN after ${_bridgeFailCount} failures — pausing 60s`);
-      _bridgeFailCount = 0;
+      _bridgeCircuitOpenUntil = Date.now() + 60000; // 60s cooldown
+      console.warn(`[Bridge] Circuit breaker OPEN after ${_bridgeFailCount} failures — pausing for 60s`);
     }
     throw err;
   }

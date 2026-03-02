@@ -507,7 +507,7 @@ function PersonaTaggingPanel() {
           fontSize: 11,
           fontWeight: 600,
           background: status === 'updating' ? 'rgba(124,58,237,0.1)' : 'rgba(124,58,237,0.2)',
-          color: status === 'updating' ? '#a78bfa' : '#c4b5fd',
+          color: status === 'updating' ? 'var(--tn-purple-dim)' : '#c4b5fd',
           border: '1px solid rgba(124,58,237,0.4)',
           borderRadius: 6,
           cursor: status === 'updating' ? 'not-allowed' : 'pointer',

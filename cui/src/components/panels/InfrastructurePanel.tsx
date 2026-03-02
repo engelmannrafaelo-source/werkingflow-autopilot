@@ -152,9 +152,8 @@ export default function InfrastructurePanel() {
     );
   }
 
-  // Filter to only show dual-port apps
-  const dualPortApps = Object.entries(status.apps)
-    .filter(([_, app]) => app.test_port !== null)
+  // Show ALL apps (both single-port and dual-port)
+  const allApps = Object.entries(status.apps)
     .sort(([a], [b]) => a.localeCompare(b));
 
   return (
@@ -266,7 +265,7 @@ export default function InfrastructurePanel() {
             </tr>
           </thead>
           <tbody>
-            {dualPortApps.map(([id, app]) => {
+            {allApps.map(([id, app]) => {
               const userRestartKey = `${id}-user`;
               const testRestartKey = `${id}-test`;
               const isUserRestarting = restarting.has(userRestartKey) || app.status === 'restarting';
@@ -341,7 +340,7 @@ export default function InfrastructurePanel() {
                     </div>
                   </td>
                   <td style={{ padding: '12px' }}>
-                    {app.test_port && (
+                    {app.test_port ? (
                       <>
                         <div style={{
                           display: 'flex',
@@ -380,6 +379,32 @@ export default function InfrastructurePanel() {
                           )}
                         </div>
                       </>
+                    ) : (
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6
+                      }}>
+                        <span style={{
+                          fontSize: 11,
+                          color: 'var(--tn-text-muted)',
+                          fontStyle: 'italic'
+                        }}>
+                          N/A
+                        </span>
+                        <span style={{
+                          fontSize: 9,
+                          padding: '2px 6px',
+                          background: 'var(--tn-green-bg, #d4edda)',
+                          color: 'var(--tn-green, #155724)',
+                          borderRadius: 3,
+                          fontWeight: 600,
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.5px'
+                        }}>
+                          Single-Port
+                        </span>
+                      </div>
                     )}
                   </td>
                   <td style={{ padding: '12px' }}>
@@ -407,24 +432,26 @@ export default function InfrastructurePanel() {
                       >
                         {isUserRestarting ? '⏳ User' : '⟳ User'}
                       </button>
-                      <button
-                        onClick={() => handleRestart(id, 'test')}
-                        disabled={isTestRestarting}
-                        style={{
-                          padding: '4px 8px',
-                          background: isTestRestarting ? 'var(--tn-surface-alt)' : 'var(--tn-orange)',
-                          color: isTestRestarting ? 'var(--tn-text-muted)' : 'white',
-                          border: 'none',
-                          borderRadius: 3,
-                          cursor: isTestRestarting ? 'not-allowed' : 'pointer',
-                          fontSize: 10,
-                          fontWeight: 600,
-                          opacity: isTestRestarting ? 0.6 : 1
-                        }}
-                        title="Restart test port"
-                      >
-                        {isTestRestarting ? '⏳ Test' : '⟳ Test'}
-                      </button>
+                      {app.test_port && (
+                        <button
+                          onClick={() => handleRestart(id, 'test')}
+                          disabled={isTestRestarting}
+                          style={{
+                            padding: '4px 8px',
+                            background: isTestRestarting ? 'var(--tn-surface-alt)' : 'var(--tn-orange)',
+                            color: isTestRestarting ? 'var(--tn-text-muted)' : 'white',
+                            border: 'none',
+                            borderRadius: 3,
+                            cursor: isTestRestarting ? 'not-allowed' : 'pointer',
+                            fontSize: 10,
+                            fontWeight: 600,
+                            opacity: isTestRestarting ? 0.6 : 1
+                          }}
+                          title="Restart test port"
+                        >
+                          {isTestRestarting ? '⏳ Test' : '⟳ Test'}
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -433,14 +460,14 @@ export default function InfrastructurePanel() {
           </tbody>
         </table>
 
-        {dualPortApps.length === 0 && (
+        {allApps.length === 0 && (
           <div style={{
             textAlign: 'center',
             padding: '40px 20px',
             color: 'var(--tn-text-muted)',
             fontSize: 12
           }}>
-            No dual-port apps found
+            No apps found
           </div>
         )}
       </div>

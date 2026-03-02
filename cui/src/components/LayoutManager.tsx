@@ -57,6 +57,7 @@ import ErrorBoundary from './ErrorBoundary';
 import WerkingReportAdmin from './panels/WerkingReportAdmin/WerkingReportAdmin';
 import LinkedInPanel from './panels/LinkedInPanel';
 import BridgeMonitor from './panels/BridgeMonitor/BridgeMonitor';
+import RepoDashboard from './panels/RepoDashboard/RepoDashboard';
 import SystemHealth from './panels/SystemHealth';
 import WatchdogPanel from './panels/WatchdogPanel';
 import PanelConnectivityGuard from './panels/PanelConnectivityGuard';
@@ -303,6 +304,12 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
           </PanelConnectivityGuard>
           </ErrorBoundary>
         );
+      case 'repo-dashboard':
+        return wrapWithId(
+          <ErrorBoundary>
+            <RepoDashboard />
+          </ErrorBoundary>
+        );
       case 'system-health':
         return wrapWithId(<SystemHealth />);
       case 'watchdog':
@@ -356,7 +363,7 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
     saveLayout(newModel);
   }, [workDir, saveLayout]);
 
-  const addTab = useCallback((type: 'cui' | 'cui-lite' | 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'watchdog', config: Record<string, string>, targetId: string) => {
+  const addTab = useCallback((type: 'cui' | 'cui-lite' | 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'repo-dashboard' | 'watchdog', config: Record<string, string>, targetId: string) => {
     if (!model) return;
     const names: Record<string, string> = {
       cui: 'CUI',
@@ -371,6 +378,7 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
       linkedin: 'LinkedIn Marketing 🔗',
       'system-health': 'System Health',
       'bridge-monitor': 'Bridge Monitor',
+      'repo-dashboard': 'Git & Pipeline Monitor',
       watchdog: 'Dev Server Watchdog',
     };
     if (type === 'preview' && !config.watchPath) {
@@ -397,7 +405,7 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
           if (val === 'cui') {
             addTab('cui', {}, node.getId());
           } else {
-            addTab(val as 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'watchdog', {}, node.getId());
+            addTab(val as 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'repo-dashboard' | 'watchdog', {}, node.getId());
           }
           e.target.value = '';
         }}
@@ -427,6 +435,7 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
         <option value="watchdog">Dev Server Watchdog</option>
         <option value="linkedin">LinkedIn Marketing 🔗</option>
         <option value="bridge-monitor">Bridge Monitor (Old)</option>
+        <option value="repo-dashboard">Git & Pipeline Monitor 📊</option>
       </select>
     );
   }, [addTab]);
