@@ -1,20 +1,20 @@
 {
   "engelmann": {
-    "state": "idle",
-    "reason": "done",
-    "since": 1772457450268,
-    "accountId": "engelmann"
+    "state": "working",
+    "since": 1772457795819,
+    "accountId": "engelmann",
+    "sessionId": "8e20ddda-1099-4023-a0d7-700ab5bb6750"
   },
   "rafael": {
     "state": "idle",
     "reason": "done",
-    "since": 1772457105445,
+    "since": 1772457619207,
     "accountId": "rafael"
   },
   "office": {
-    "state": "idle",
-    "reason": "done",
-    "since": 1772457484011,
-    "accountId": "office"
+    "state": "working",
+    "since": 1772457801863,
+    "accountId": "office",
+    "sessionId": "fd8da35e-70de-4ddf-90b4-8a543afed89d"
   }
 }
