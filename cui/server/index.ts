@@ -5,7 +5,7 @@
 // ./routes/*.ts — this file only does wiring + startup.
 
 // ─── Section 1: ENV Loading ─────────────────────────────────────────────────
-import { readFileSync as _readEnvFile, existsSync as _envExists } from 'fs';
+import { readFileSync as _readEnvFile, existsSync as _envExists, readFileSync } from 'fs';
 import { resolve as _resolvePath } from 'path';
 
 const _envPath = _resolvePath(import.meta.dirname ?? '.', '..', '.env');
@@ -303,10 +303,21 @@ app.use('/api/team', documentManager);
     app.use(express.static(distPath, { etag: false, lastModified: false, setHeaders: (res, filePath) => {
       if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     }}));
-    // SPA fallback
+    // SPA fallback - inject security token into HTML
     app.use((_req, res) => {
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-      res.sendFile(join(distPath, 'index.html'));
+
+      // Read index.html and inject CUI_REBUILD_TOKEN (Herbert's Security Recommendation #2)
+      const indexPath = join(distPath, 'index.html');
+      let html = readFileSync(indexPath, 'utf-8');
+
+      const rebuildToken = process.env.CUI_REBUILD_TOKEN || '';
+      const tokenScript = `<script>window.CUI_REBUILD_TOKEN = ${JSON.stringify(rebuildToken)};</script>`;
+
+      // Inject before closing </head> tag
+      html = html.replace('</head>', `${tokenScript}\n</head>`);
+
+      res.send(html);
     });
   }
 }

@@ -224,8 +224,40 @@ export default function createInfrastructureRouter(deps: InfrastructureDeps): Ro
 
   // POST /api/rebuild-frontend — called by ProjectTabs Rebuild button
   // Spawns cui-rebuild as detached background process (because it restarts this server)
-  router.post('/api/rebuild-frontend', async (_req: Request, res: Response) => {
-    console.log('[Rebuild-Frontend] Spawning cui-rebuild (detached)...');
+  router.post('/api/rebuild-frontend', async (req: Request, res: Response) => {
+    // ============================================================================
+    // SECURITY: Validate Auth Token (Herbert's Recommendation #2)
+    // ============================================================================
+    // Prevents unauthorized rebuilds via CSRF/XSS/direct POST
+    const authHeader = req.headers.authorization;
+    const expectedToken = process.env.CUI_REBUILD_TOKEN;
+
+    if (!expectedToken) {
+      console.error('[Rebuild-Frontend] SECURITY: CUI_REBUILD_TOKEN not configured!');
+      return res.status(500).json({
+        error: 'Server misconfiguration',
+        detail: 'CUI_REBUILD_TOKEN not set'
+      });
+    }
+
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      console.warn('[Rebuild-Frontend] SECURITY: Missing Authorization header');
+      return res.status(401).json({
+        error: 'Unauthorized',
+        detail: 'Missing Authorization header'
+      });
+    }
+
+    const token = authHeader.split(' ')[1];
+    if (token !== expectedToken) {
+      console.warn('[Rebuild-Frontend] SECURITY: Invalid token attempt');
+      return res.status(403).json({
+        error: 'Forbidden',
+        detail: 'Invalid rebuild token'
+      });
+    }
+
+    console.log('[Rebuild-Frontend] Auth validated, spawning cui-rebuild (detached)...');
     broadcast({ type: 'cui-rebuilding' });
 
     // Respond immediately — the server will be killed by cui-rebuild

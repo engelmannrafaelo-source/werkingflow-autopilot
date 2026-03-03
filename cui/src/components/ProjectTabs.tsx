@@ -17,6 +17,23 @@ interface ProjectTabsProps {
 
 type SyncState = 'idle' | 'syncing' | 'done' | 'error';
 
+// --- Mode Detection (from Electron preload or URL param) ---
+type CuiMode = 'remote' | 'local' | 'dev';
+const MODE_COLORS: Record<CuiMode, string> = {
+  remote: '#e0af68',  // orange — remote server
+  local: '#9ece6a',   // green — local copy
+  dev: '#bb9af7',     // purple — development
+};
+function detectCuiMode(): CuiMode {
+  // URL param set by main.cjs is most reliable (preload may not get argv in sandbox)
+  const fromUrl = new URLSearchParams(window.location.search).get('mode');
+  if (fromUrl === 'local' || fromUrl === 'dev' || fromUrl === 'remote') return fromUrl;
+  const fromElectron = (window as any).electronAPI?.mode;
+  if (fromElectron) return fromElectron as CuiMode;
+  return 'remote';
+}
+const CUI_MODE = detectCuiMode();
+
 // --- Account Usage Types ---
 interface UsageAccount {
   accountId: string;
@@ -354,7 +371,18 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
     setSyncState('syncing');
     setSyncDetail('Rebuilding frontend...');
     try {
-      const resp = await fetch('/api/rebuild-frontend', { method: 'POST', signal: AbortSignal.timeout(15000) });
+      // SECURITY: Include auth token (Herbert's Recommendation #2)
+      const rebuildToken = (window as any).CUI_REBUILD_TOKEN || '';
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (rebuildToken) {
+        headers['Authorization'] = `Bearer ${rebuildToken}`;
+      }
+
+      const resp = await fetch('/api/rebuild-frontend', {
+        method: 'POST',
+        headers,
+        signal: AbortSignal.timeout(15000)
+      });
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error || `rebuild-frontend ${resp.status}`);
       setSyncState('done');
@@ -385,6 +413,7 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
         gap: 2,
         padding: '0 8px 0 80px',
         background: 'var(--tn-bg-dark)',
+        borderTop: `2px solid ${MODE_COLORS[CUI_MODE]}`,
         borderBottom: '1px solid var(--tn-border)',
         height: 36,
         flexShrink: 0,
@@ -396,11 +425,31 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
           fontSize: 13,
           fontWeight: 600,
           color: 'var(--tn-blue)',
-          marginRight: 12,
+          marginRight: 4,
           whiteSpace: 'nowrap',
         }}
       >
-        CUI Workspace
+        CUI
+      </span>
+      <span
+        title={CUI_MODE === 'local'
+          ? 'LOCAL MODE\n\nProjekte: ~/.cui/local-data/projects/\nLayouts: ~/.cui/local-data/layouts/\nWorkspaces: ~/Projects/{id}\nChats: Remote (CUI Binary)'
+          : 'REMOTE MODE\n\nProjekte: data/projects/\nLayouts: data/layouts/\nWorkspaces: /root/orchestrator/workspaces/\nChats: /home/claude-user/.cui-account{1-3}/'}
+        style={{
+          fontSize: 10,
+          fontWeight: 700,
+          color: '#1a1b26',
+          background: MODE_COLORS[CUI_MODE],
+          padding: '1px 6px',
+          borderRadius: 4,
+          marginRight: 12,
+          textTransform: 'uppercase',
+          letterSpacing: '0.5px',
+          whiteSpace: 'nowrap',
+          cursor: 'help',
+        }}
+      >
+        {CUI_MODE}
       </span>
 
       {/* Mission Control - permanent tab */}
