@@ -11,13 +11,22 @@ process.on('unhandledRejection', (reason) => {
   console.error('[Electron] Unhandled rejection:', reason);
 });
 
+// Set process name based on mode — visible in Activity Monitor / Dock
+const isLocalMode = process.argv.includes('--local');
+const isDevMode = process.argv.includes('--dev');
+const appLabel = isDevMode ? 'CUI Dev' : isLocalMode ? 'CUI Local' : 'CUI Remote';
+app.name = appLabel;
+if (process.platform === 'darwin') {
+  process.title = appLabel;
+}
+
 let mainWindow;
 
 function createWindow() {
   // macOS needs an application menu for Cmd+C/V/X/A to work
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     {
-      label: app.name || 'Workspace',
+      label: appLabel,
       submenu: [
         { role: 'about' },
         { type: 'separator' },
@@ -99,15 +108,13 @@ function createWindow() {
   const LOCAL_URL = 'http://localhost:4005';
   const DEV_URL = 'http://localhost:5173';
 
-  const isDev = process.argv.includes('--dev');
-  const isLocal = process.argv.includes('--local');
-  const targetURL = isDev ? DEV_URL : isLocal ? LOCAL_URL : REMOTE_URL;
-  const modeLabel = isDev ? 'Dev' : isLocal ? 'Local' : 'Remote';
+  const targetURL = isDevMode ? DEV_URL : isLocalMode ? LOCAL_URL : REMOTE_URL;
+  const modeLabel = isDevMode ? 'Dev' : isLocalMode ? 'Local' : 'Remote';
 
   mainWindow.setTitle(`CUI Workspace [${modeLabel}]`);
   console.log(`[Electron] Mode: ${modeLabel} → ${targetURL}`);
 
-  if (isDev) {
+  if (isDevMode) {
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   }
   mainWindow.loadURL(targetURL);
@@ -122,6 +129,12 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  // macOS Dock: show mode badge so user can distinguish instances
+  if (process.platform === 'darwin' && app.dock) {
+    const badge = isDevMode ? 'DEV' : isLocalMode ? 'L' : 'R';
+    app.dock.setBadge(badge);
+  }
+
   // IPC: open DevTools for a specific webview
   ipcMain.handle('open-devtools', (_event, webContentsId) => {
     const contents = require('electron').webContents.fromId(webContentsId);
