@@ -1,8 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import ErrorBoundary from '../../ErrorBoundary';
 import OverviewTab from './tabs/OverviewTab';
+import PyramidTab from './tabs/PyramidTab';
 import ScoresTab from './tabs/ScoresTab';
 import TestRunsTab from './tabs/TestRunsTab';
 import ScenariosTab from './tabs/ScenariosTab';
+import CoverageTab from './tabs/CoverageTab';
+import { resilientFetch } from '../../../utils/resilientFetch';
 
 interface Tab {
   key: string;
@@ -17,47 +21,62 @@ export default function QADashboard() {
   const [runningCount, setRunningCount] = useState(0);
 
   // Lightweight poll für Running Tests Badge
-  useEffect(() => {
-    async function fetchRunningCount() {
-      if ((window as any).__cuiServerAlive === false) return;
-      try {
-        const res = await fetch('/api/qa/runs', { signal: AbortSignal.timeout(8000) });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        setRunningCount(data.running?.length ?? 0);
-      } catch (err) {
-        console.warn('[QADashboard] fetch running count failed:', err);
-      }
+  const fetchRunningCount = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
+    try {
+      const res = await resilientFetch('/api/qa/runs');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setRunningCount(data.running?.length ?? 0);
+    } catch (err) {
+      console.warn('[QADashboard] fetch running count failed:', err);
     }
-    fetchRunningCount();
-    const interval = setInterval(fetchRunningCount, 15000); // 15s
-    return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    fetchRunningCount();
+    const interval = setInterval(fetchRunningCount, 15000);
+    const onReconnect = () => fetchRunningCount();
+    window.addEventListener('cui-reconnected', onReconnect);
+    return () => { clearInterval(interval); window.removeEventListener('cui-reconnected', onReconnect); };
+  }, [fetchRunningCount]);
 
   const tabs: Tab[] = [
     {
       key: 'overview',
       label: 'Overview',
-      component: <OverviewTab />,
+      component: <ErrorBoundary componentName="OverviewTab"><OverviewTab /></ErrorBoundary>,
       group: 'monitoring'
+    },
+    {
+      key: 'pyramid',
+      label: 'Pyramid',
+      component: <ErrorBoundary componentName="PyramidTab"><PyramidTab /></ErrorBoundary>,
+      group: 'quality'
     },
     {
       key: 'scores',
       label: 'Scores & Reports',
-      component: <ScoresTab />,
+      component: <ErrorBoundary componentName="ScoresTab"><ScoresTab /></ErrorBoundary>,
       group: 'quality'
     },
     {
       key: 'test-runs',
       label: 'Test Runs',
-      component: <TestRunsTab />,
+      component: <ErrorBoundary componentName="TestRunsTab"><TestRunsTab /></ErrorBoundary>,
       group: 'monitoring',
       badge: runningCount
     },
     {
+      key: 'coverage',
+      label: 'Coverage Gaps',
+      component: <ErrorBoundary componentName="CoverageTab"><CoverageTab /></ErrorBoundary>,
+      group: 'quality'
+    },
+    {
       key: 'scenarios',
       label: 'Scenarios',
-      component: <ScenariosTab />,
+      component: <ErrorBoundary componentName="ScenariosTab"><ScenariosTab /></ErrorBoundary>,
       group: 'quality'
     }
   ];
@@ -163,12 +182,21 @@ export default function QADashboard() {
         </div>
       </div>
 
-      {/* Tab Content */}
-      <div
-        data-ai-id={`qa-dashboard-content-${activeTab}`}
-        style={{ flex: 1, overflow: 'auto', minHeight: 0 }}
-      >
-        {tabs.find(t => t.key === activeTab)?.component}
+      {/* Tab Content - Defensive: Keep all mounted, toggle visibility */}
+      <div style={{ flex: 1, overflow: 'auto', minHeight: 0, position: 'relative' }}>
+        {tabs.map((tab) => (
+          <div
+            key={tab.key}
+            data-ai-id={`qa-dashboard-content-${tab.key}`}
+            style={{
+              display: activeTab === tab.key ? 'block' : 'none',
+              height: '100%',
+              overflow: 'auto',
+            }}
+          >
+            {tab.component}
+          </div>
+        ))}
       </div>
     </div>
   );
