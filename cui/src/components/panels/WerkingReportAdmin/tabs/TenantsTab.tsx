@@ -49,7 +49,7 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
       if (planFilter) params.set('plan', planFilter);
       params.set('offset', offset.toString());
       params.set('limit', limit.toString());
-      const res = await fetch(`/api/admin/wr/tenants?${params}`, { signal: AbortSignal.timeout(8000) });
+      const res = await fetch(`/api/admin/wr/tenants?${params}`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setTenants(data.tenants || data || []);

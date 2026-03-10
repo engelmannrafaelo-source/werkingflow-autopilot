@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Verify data-ai-id attributes in RepoDashboard components
+ * Verify data-ai-id attributes in CUI components
  * Quick smoke test to ensure all test IDs are present in built files
  */
 
@@ -14,30 +14,53 @@ const __dirname = path.dirname(__filename);
 
 const distDir = path.join(__dirname, 'dist/assets');
 const expectedIds = [
-  // Main Panel
+  // RepoDashboard - Main Panel
   'repo-dashboard-panel',
   'repo-dashboard-status-dot',
   'repo-dashboard-tabs',
   'repo-dashboard-refresh-button',
 
-  // Repositories Tab
+  // RepoDashboard - Repositories Tab
   'repositories-tab',
   'repositories-sort-controls',
   'repositories-table',
 
-  // Pipeline Tab
+  // RepoDashboard - Pipeline Tab
   'pipeline-tab',
   'pipeline-diagram',
   'pipeline-table',
 
-  // Disk Usage Tab
+  // RepoDashboard - Disk Usage Tab
   'disk-usage-tab',
   'disk-usage-view-toggle',
   'disk-usage-treemap-container',
-  'disk-usage-bars-container'
+  'disk-usage-bars-container',
+
+  // InfisicalMonitor - Main Panel
+  'infisical-monitor-panel',
+  'infisical-monitor-loading',
+  'infisical-monitor-error-state',
+  'infisical-monitor-error-message',
+  'infisical-monitor-retry-button',
+  'infisical-monitor-status-dot',
+  'infisical-monitor-refresh-button',
+
+  // InfisicalMonitor - Tabs
+  'infisical-monitor-tab-overview',
+  'infisical-monitor-tab-projects',
+  'infisical-monitor-tab-syncs',
+  'infisical-monitor-tab-health',
+  'infisical-monitor-tab-settings',
+
+  // InfisicalMonitor - Content Areas (dynamic based on activeTab)
+  'infisical-monitor-content-overview',
+  'infisical-monitor-content-projects',
+  'infisical-monitor-content-syncs',
+  'infisical-monitor-content-health',
+  'infisical-monitor-content-settings',
 ];
 
-console.log('🔍 Verifying data-ai-id attributes in RepoDashboard...\n');
+console.log('🔍 Verifying data-ai-id attributes in CUI components...\n');
 
 // Read all JS files in dist/assets
 const jsFiles = fs.readdirSync(distDir)
@@ -75,5 +98,7 @@ if (missingIds.length > 0) {
   process.exit(1);
 } else {
   console.log('\n🎉 All test IDs verified successfully!');
-  console.log('✨ RepoDashboard is ready for automated testing');
+  console.log('✨ CUI components are ready for automated testing');
+  console.log('   - RepoDashboard: ✅');
+  console.log('   - InfisicalMonitor: ✅');
 }

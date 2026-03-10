@@ -182,12 +182,12 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
   // Load cached conversations for instant display
   const [conversations, setConversations] = useState<Conversation[]>(() => {
     try {
-      const cached = localStorage.getItem(`cui-convs-${accountId}`);
+      const cached = localStorage.getItem(`cui-convs-${workDir || 'all'}`);
       return cached ? JSON.parse(cached) : [];
     } catch { return []; }
   });
   const [loading, setLoading] = useState(() => {
-    try { return !localStorage.getItem(`cui-convs-${accountId}`); } catch { return true; }
+    try { return !localStorage.getItem(`cui-convs-${workDir || 'all'}`); } catch { return true; }
   });
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
@@ -225,13 +225,10 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
           ? workDir.slice(REMOTE_WS_PREFIX.length).replace(/\/$/, '')
           : '';
         const filtered = convs.filter(c => {
-          if (useLocal) {
-            if (c.accountId !== 'local') return false;
-          } else if (REMOTE_IDS.has(accountId)) {
-            if (c.accountId !== accountId) return false;
-          } else {
-            if (c.accountId !== accountId) return false;
-          }
+          // Show conversations from ALL accounts (no account filtering)
+          // Only filter local vs remote: in local mode hide remote, in remote mode hide local
+          if (useLocal && c.accountId !== 'local') return false;
+          if (!useLocal && c.accountId === 'local') return false;
           if (workDir) {
             const pp = (c.projectPath || '').replace(/\/$/, '');
             const wd = workDir.replace(/\/$/, '');
@@ -249,10 +246,10 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
         setConversations(filtered);
         setLoading(false);
         // Cache for instant load next time
-        try { localStorage.setItem(`cui-convs-${accountId}`, JSON.stringify(filtered.slice(0, 20))); } catch {}
+        try { localStorage.setItem(`cui-convs-${workDir || 'all'}`, JSON.stringify(filtered.slice(0, 20))); } catch {}
       })
       .catch((err) => { console.warn('[QueueOverlay] fetchConversations:', err); setLoading(false); });
-  }, [accountId, workDir, useLocal]);
+  }, [workDir, useLocal]); // accountId intentionally excluded — conversations are shown for ALL accounts
 
   useEffect(() => {
     fetchConversations();

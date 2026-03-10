@@ -24,7 +24,7 @@ export default function ConfigTab({ envMode }: { envMode?: string }) {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/admin/wr/config', { signal: AbortSignal.timeout(8000) });
+      const res = await fetch('/api/admin/wr/config', { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       // Normalize: could be { configs: [...] } or { key: value, ... } or [...]

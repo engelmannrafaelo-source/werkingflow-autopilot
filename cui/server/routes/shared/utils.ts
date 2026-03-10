@@ -5,9 +5,24 @@
  * to eliminate duplication.
  */
 
-import { appendFileSync } from 'fs';
-import { basename } from 'path';
-import type { CuiProxy } from './types.js';
+import { appendFileSync, writeFileSync, renameSync } from 'fs';
+import { basename, dirname, join } from 'path';
+
+// ---------------------------------------------------------------------------
+// atomicWriteFileSync — crash-safe JSON file writes (write tmp + rename).
+// H4+H5 fix: Prevents JSON corruption on crash mid-write.
+// ---------------------------------------------------------------------------
+
+/**
+ * Write content to a file atomically: writes to a temp file first, then
+ * renames (which is atomic on POSIX). If the process crashes during write,
+ * the original file remains intact.
+ */
+export function atomicWriteFileSync(filePath: string, content: string): void {
+  const tmpPath = join(dirname(filePath), `.${basename(filePath)}.tmp`);
+  writeFileSync(tmpPath, content);
+  renameSync(tmpPath, filePath);
+}
 
 // ---------------------------------------------------------------------------
 // logUserInput — appends a structured JSONL entry to the input log file.
@@ -38,23 +53,6 @@ export function logUserInput(inputLogFile: string, entry: UserInputLogEntry): vo
   } catch (err) {
     console.warn('[SharedUtils] Failed to write input log:', err instanceof Error ? err.message : err);
   }
-}
-
-// ---------------------------------------------------------------------------
-// getProxyPort — resolves an accountId to the corresponding proxy port.
-// Previously duplicated in mission.ts and autoinject.ts.
-// ---------------------------------------------------------------------------
-
-/**
- * Look up the local proxy port for the given CUI account.
- *
- * @param proxies    Array of CUI proxy definitions.
- * @param accountId  Account identifier (e.g. 'rafael', 'engelmann').
- * @returns The local port number, or null if the account is unknown.
- */
-export function getProxyPort(proxies: CuiProxy[], accountId: string): number | null {
-  const proxy = proxies.find(p => p.id === accountId);
-  return proxy?.localPort ?? null;
 }
 
 // ---------------------------------------------------------------------------

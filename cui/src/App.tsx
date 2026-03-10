@@ -2,25 +2,25 @@ import { useState, useCallback, useEffect, useRef, lazy, Suspense } from 'react'
 import ProjectTabs from './components/ProjectTabs';
 import LayoutManager from './components/LayoutManager';
 const MissionControl = lazy(() => import('./components/panels/MissionControl'));
+const SyncPanel = lazy(() => import('./components/panels/SyncPanel').then(m => ({ default: m.SyncPanel })));
+const MobileLayout = lazy(() => import('./components/MobileLayout'));
 import AllChatsView from './components/AllChatsView';
-import type { Project, CuiStates } from './types';
+import type { Project } from './types';
+import { useSessionStore } from './contexts/SessionStore';
 
 const API = '/api';
+const IS_LOCAL = new URLSearchParams(window.location.search).get('mode') === 'local';
+const IS_TOUCH_DEVICE = typeof window !== "undefined" && "ontouchstart" in window && window.innerWidth < 1200;
+const IS_MOBILE = new URLSearchParams(window.location.search).has("mobile") || new URLSearchParams(window.location.search).get("mode") === "mobile";
 
-const DEFAULT_PROJECTS: Project[] = [
-  {
-    id: 'rlb-campus',
-    name: 'RLB Campus',
-    workDir: '/Users/rafael/Desktop/5B-FLAG/B-0070_RLB_nachfolgeprojekt',
-    lastOpened: new Date().toISOString(),
-  },
-  {
-    id: 'general',
-    name: 'General',
-    workDir: '~',
-    lastOpened: new Date().toISOString(),
-  },
-];
+// Auto-redirect touch devices to mobile mode (unless explicitly opted out with ?desktop)
+if (IS_TOUCH_DEVICE && !IS_MOBILE && !new URLSearchParams(window.location.search).has("desktop")) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("mobile", "");
+  window.location.replace(url.toString());
+}
+
+const DEFAULT_PROJECTS: Project[] = [];
 
 async function fetchProjects(): Promise<Project[]> {
   const res = await fetch(`${API}/projects`, { signal: AbortSignal.timeout(5000) });
@@ -36,7 +36,7 @@ async function saveProject(project: Project): Promise<void> {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(project),
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(20000),
     });
   } catch (err) {
     console.warn('[App] saveProject failed:', err);
@@ -46,7 +46,7 @@ async function saveProject(project: Project): Promise<void> {
 async function deleteProject(id: string): Promise<void> {
   if ((window as any).__cuiServerAlive === false) return;
   try {
-    await fetch(`${API}/projects/${id}`, { method: 'DELETE', signal: AbortSignal.timeout(8000) });
+    await fetch(`${API}/projects/${id}`, { method: 'DELETE', signal: AbortSignal.timeout(20000) });
   } catch (err) {
     console.warn('[App] deleteProject failed:', err);
   }
@@ -71,8 +71,8 @@ function ProjectDialog({ mode, initialName = '', initialWorkDir = '', onSubmit, 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim()) return;
-    // For new projects: server auto-creates /root/orchestrator/workspaces/{id}
-    onSubmit(name.trim(), mode === 'edit' ? workDir.trim() : '');
+    // Local mode: user provides workDir; Remote: server auto-creates workspace
+    onSubmit(name.trim(), (mode === 'edit' || IS_LOCAL) ? workDir.trim() : '');
   }
 
   const isEdit = mode === 'edit';
@@ -117,7 +117,7 @@ function ProjectDialog({ mode, initialName = '', initialWorkDir = '', onSubmit, 
           }}
         />
 
-        {isEdit && (
+        {(isEdit || IS_LOCAL) && (
           <>
             <label style={{ fontSize: 11, color: 'var(--tn-text-muted)', display: 'block', marginBottom: 4 }}>
               Arbeitsverzeichnis (absoluter Pfad)
@@ -125,7 +125,7 @@ function ProjectDialog({ mode, initialName = '', initialWorkDir = '', onSubmit, 
             <input
               value={workDir}
               onChange={(e) => setWorkDir(e.target.value)}
-              placeholder="/Users/..."
+              placeholder={IS_LOCAL ? '/Users/rafael/Documents/...' : '/root/projekte/...'}
               style={{
                 width: '100%', padding: '6px 10px', fontSize: 12,
                 background: 'var(--tn-bg)', color: 'var(--tn-text)',
@@ -135,7 +135,7 @@ function ProjectDialog({ mode, initialName = '', initialWorkDir = '', onSubmit, 
             />
           </>
         )}
-        {!isEdit && (
+        {!isEdit && !IS_LOCAL && (
           <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 16, opacity: 0.7 }}>
             Workspace wird automatisch erstellt
           </div>
@@ -228,10 +228,12 @@ export default function App() {
   const [dialogMode, setDialogMode] = useState<'create' | 'edit' | null>(null);
   const [editTarget, setEditTarget] = useState<Project | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
-  const [cuiStates, setCuiStates] = useState<CuiStates>({});
-  const [projectAttention, setProjectAttention] = useState<Set<string>>(new Set());
+  // cuiStates + serverAlive from shared SessionStore (single WS)
+  const { sendWs, addMessageHandler } = useSessionStore();
+  const [projectAttention, setProjectAttention] = useState<Record<string, 'working' | 'needs_attention'>>({}); // projectId → state
   const [showMission, setShowMission] = useState(false);
   const [showAllChats, setShowAllChats] = useState(false);
+  const [showSync, setShowSync] = useState(false);
   const [pendingActivation, setPendingActivation] = useState<Array<{ projectId: string; conversations: Array<{ sessionId: string; accountId: string }> }> | null>(null);
 
   // Auto-reload when bundle changes (detects Syncthing-triggered rebuilds)
@@ -240,7 +242,7 @@ export default function App() {
   );
   const checkForUpdate = useCallback(async () => {
     try {
-      const resp = await fetch('/?_v=' + Date.now(), { headers: { 'Accept': 'text/html' }, signal: AbortSignal.timeout(8000) });
+      const resp = await fetch('/?_v=' + Date.now(), { headers: { 'Accept': 'text/html' }, signal: AbortSignal.timeout(20000) });
       if (!resp.ok) return;
       const html = await resp.text();
       const match = html.match(/src="(\/assets\/index-[^"]+)"/);
@@ -253,241 +255,165 @@ export default function App() {
     }
   }, []);
 
-  // Global WebSocket for CUI state tracking + Control API (auto-reconnect)
-  const wsRef = useRef<WebSocket | null>(null);
+  // Control API message handler (via shared SessionStore WebSocket)
   useEffect(() => {
-    // Global health signal — components check this before making requests
-    (window as any).__cuiServerAlive = undefined; // unknown until WS connects
-    let disposed = false;
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    let backoff = 1000; // start at 1s, doubles up to 30s max
-
-    const connect = () => {
-      if (disposed) return;
-      const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-      const ws = new WebSocket(`${protocol}://${window.location.host}/ws`);
-      ws.onerror = () => {}; // Suppress console noise during server restarts
-      ws.onopen = () => {
-        (window as any).__cuiServerAlive = true;
-        backoff = 1000; // reset backoff on successful connection
-        console.log('[App WS] Connected');
-      };
-      ws.onclose = () => {
-        (window as any).__cuiServerAlive = false;
-        wsRef.current = null;
-        if (!disposed) {
-          if (backoff <= 1000) console.log('[App WS] Disconnected, reconnecting...');
-          reconnectTimer = setTimeout(() => {
-            backoff = Math.min(backoff * 2, 30000);
-            connect();
-          }, backoff);
+    return addMessageHandler((msg: any) => {
+      // Control API: switch project
+      if (msg.type === 'control:project-switch' && msg.projectId) {
+        setActiveId(msg.projectId);
+      }
+      // Activation: switch to target project, hide MC, pass plan as prop
+      if (msg.type === 'control:activate-conversations' && msg.plan?.length > 0) {
+        const firstProjectId = msg.plan[0].projectId;
+        if (firstProjectId) {
+          setPendingActivation(msg.plan);
+          setActiveId(firstProjectId);
+          setShowMission(false);
         }
-      };
-      wsRef.current = ws;
-      ws.onmessage = (e) => {
-        try {
-          const msg = JSON.parse(e.data);
-          if (msg.type === 'cui-state' && msg.cuiId && msg.state) {
-            setCuiStates(prev => prev[msg.cuiId] === msg.state ? prev : { ...prev, [msg.cuiId]: msg.state });
-          }
-          // Control API: switch project
-          if (msg.type === 'control:project-switch' && msg.projectId) {
-            setActiveId(msg.projectId);
-          }
-          // Activation: switch to target project, hide MC, pass plan as prop
-          if (msg.type === 'control:activate-conversations' && msg.plan?.length > 0) {
-            const firstProjectId = msg.plan[0].projectId;
-            if (firstProjectId) {
-              setPendingActivation(msg.plan);
-              setActiveId(firstProjectId);
-              setShowMission(false);
-            }
-          }
-          // Forward sync-related messages to ProjectTabs via window.postMessage
-          if (msg.type === 'cui-update-available' || (msg.type === 'cui-sync' && msg.auto)) {
-            window.postMessage(e.data, '*');
-            // Check if a new bundle was built (auto-reload if hash changed)
-            if (msg.type === 'cui-update-available') {
-              setTimeout(checkForUpdate, 8000); // Wait for vite build to complete
-            }
-          }
-          // Snapshot request: fetch panel data and POST back to server
-          if (msg.type === 'control:snapshot-request' && msg.panel) {
-            (async () => {
-              try {
-                const panelRes = await fetch(`/api/admin/wr/${msg.panel}`, { signal: AbortSignal.timeout(8000) });
-                if (!panelRes.ok) throw new Error(`Panel fetch failed: ${panelRes.status}`);
-                const panelData = await panelRes.json();
-                await fetch(`/api/snapshot/${msg.panel}`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(panelData),
-                  signal: AbortSignal.timeout(8000),
-                });
-              } catch (err) {
-                console.warn('[Snapshot] Failed to capture panel:', msg.panel, err);
-              }
-            })();
-          }
-          // Screenshot request: capture DOM of matching panel via html2canvas
-          // Supports: data-panel="x", data-node-id="x" (full or partial), component name (e.g. "admin-wr"), or "full" for entire app
-          // Auto-activates hidden tabs and auto-adds missing panels before capturing
-          if (msg.type === 'control:screenshot-request' && msg.panel) {
-            (async () => {
-              try {
-                const panelId: string = msg.panel;
-                let target: HTMLElement | null = null;
-                let matchedVia = '';
-
-                const findTarget = (): { el: HTMLElement | null; via: string } => {
-                  if (panelId === 'full') return { el: document.getElementById('root'), via: 'root' };
-                  // 1. Exact data-node-id match
-                  let el = document.querySelector<HTMLElement>(`[data-node-id="${panelId}"]`);
-                  if (el) return { el, via: 'data-node-id-exact' };
-                  // 2. Partial data-node-id match (short IDs)
-                  const allNodes = document.querySelectorAll<HTMLElement>('[data-node-id]');
-                  for (const node of allNodes) {
-                    const nid = node.getAttribute('data-node-id') || '';
-                    if (nid.startsWith(panelId)) return { el: node, via: `data-node-id-partial:${nid}` };
-                  }
-                  // 3. Exact data-panel attribute
-                  el = document.querySelector<HTMLElement>(`[data-panel="${panelId}"]`);
-                  if (el) return { el, via: 'data-panel' };
-                  // 4. data-panel inside flexlayout tab
-                  const candidates = document.querySelectorAll<HTMLElement>('.flexlayout__tab');
-                  for (const tab of candidates) {
-                    if (tab.querySelector(`[data-panel="${panelId}"]`)) return { el: tab, via: 'flexlayout-tab-child' };
-                  }
-                  return { el: null, via: '' };
-                };
-
-                let found = findTarget();
-                target = found.el;
-                matchedVia = found.via;
-
-                // If not found or hidden, try to ensure the panel via LayoutManager
-                const isHidden = target && (target.getBoundingClientRect().width === 0 || target.getBoundingClientRect().height === 0);
-                if (!target || isHidden) {
-                  // Send ensure-panel (adds if missing, selects if hidden) via WS
-                  const ensureTarget = panelId; // could be component name like "admin-wr" or a nodeId
-                  wsRef.current?.send(JSON.stringify({ type: 'control:ensure-panel', component: ensureTarget }));
-                  // Also try select-tab in case it's a nodeId
-                  wsRef.current?.send(JSON.stringify({ type: 'control:select-tab', target: ensureTarget }));
-                  // Wait for DOM to update
-                  await new Promise(r => setTimeout(r, 1500));
-                  // Re-find target
-                  found = findTarget();
-                  target = found.el;
-                  matchedVia = found.via ? `auto-activated:${found.via}` : '';
-                }
-
-                if (!target) {
-                  const existingIds = Array.from(document.querySelectorAll<HTMLElement>('[data-node-id]'))
-                    .map(el => el.getAttribute('data-node-id'));
-                  throw new Error(`Panel "${panelId}" not found in DOM. Available node IDs: [${existingIds.join(', ')}]`);
-                }
-                const rect = target.getBoundingClientRect();
-                if (rect.width === 0 || rect.height === 0) {
-                  throw new Error(`Panel "${panelId}" exists but is hidden (${rect.width}x${rect.height}) even after activation attempt.`);
-                }
-
-                // Wait for panel content to render (data loading etc.)
-                const contentWait = msg.contentWait ?? 2000;
-                if (contentWait > 0) await new Promise(r => setTimeout(r, contentWait));
-
-                const html2canvas = (await import('html2canvas')).default;
-                const canvas = await html2canvas(target, {
-                  backgroundColor: '#1a1b26',
-                  scale: 1,
-                  useCORS: true,
-                  logging: false,
-                  allowTaint: true,
-                });
-                const dataUrl = canvas.toDataURL('image/png');
-                await fetch(`/api/screenshot/${panelId}`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ dataUrl, width: canvas.width, height: canvas.height }),
-                  signal: AbortSignal.timeout(8000),
-                });
-                console.log(`[Screenshot] Captured ${panelId} via ${matchedVia} (${canvas.width}x${canvas.height})`);
-              } catch (err) {
-                const errMsg = err instanceof Error ? err.message : String(err);
-                console.error('[Screenshot] Failed:', msg.panel, errMsg);
-                fetch(`/api/screenshot/${msg.panel}/error`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ error: errMsg }),
-                  signal: AbortSignal.timeout(8000),
-                }).catch((postErr) => { console.warn('[App] Screenshot error report failed:', postErr); });
-              }
-            })();
-          }
-          // DOM introspection: list all panel node IDs for debugging
-          if (msg.type === 'control:list-panels') {
-            const panels = Array.from(document.querySelectorAll<HTMLElement>('[data-node-id]')).map(el => {
-              const rect = el.getBoundingClientRect();
-              return {
-                nodeId: el.getAttribute('data-node-id'),
-                visible: rect.width > 0 && rect.height > 0,
-                size: `${Math.round(rect.width)}x${Math.round(rect.height)}`,
-              };
+      }
+      // Forward sync-related messages to ProjectTabs via window.postMessage
+      if (msg.type === 'cui-update-available' || (msg.type === 'cui-sync' && msg.auto)) {
+        window.postMessage(JSON.stringify(msg), '*');
+        if (msg.type === 'cui-update-available') {
+          setTimeout(checkForUpdate, 8000);
+        }
+      }
+      // Snapshot request
+      if (msg.type === 'control:snapshot-request' && msg.panel) {
+        (async () => {
+          try {
+            const panelRes = await fetch(`/api/admin/wr/${msg.panel}`, { signal: AbortSignal.timeout(20000) });
+            if (!panelRes.ok) throw new Error(`Panel fetch failed: ${panelRes.status}`);
+            const panelData = await panelRes.json();
+            await fetch(`/api/snapshot/${msg.panel}`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(panelData), signal: AbortSignal.timeout(20000),
             });
-            fetch('/api/screenshot/panels', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ panels, timestamp: new Date().toISOString() }),
-              signal: AbortSignal.timeout(8000),
-            }).catch((err) => { console.warn('[App] list-panels POST failed:', err); });
-          }
-          // CPU Profile: capture V8 profile and send result back to server
-          if (msg.type === 'control:cpu-profile' && window.electronAPI?.cpuProfile) {
-            (async () => {
-              try {
-                console.log('[CPU Profile] Capturing 5s V8 profile...');
-                const result = await window.electronAPI!.cpuProfile();
-                console.log('[CPU Profile] Result:', result);
-                if (ws.readyState === WebSocket.OPEN) {
-                  ws.send(JSON.stringify({ type: 'cpu-profile-result', data: result }));
-                }
-              } catch (err) {
-                console.warn('[CPU Profile] Failed:', err);
-                if (ws.readyState === WebSocket.OPEN) {
-                  ws.send(JSON.stringify({ type: 'cpu-profile-result', data: { error: String(err) } }));
-                }
+          } catch (err) { console.warn('[Snapshot] Failed:', msg.panel, err); }
+        })();
+      }
+      // Screenshot request
+      if (msg.type === 'control:screenshot-request' && msg.panel) {
+        (async () => {
+          try {
+            const panelId: string = msg.panel;
+            let target: HTMLElement | null = null;
+            let matchedVia = '';
+            const findTarget = (): { el: HTMLElement | null; via: string } => {
+              if (panelId === 'full') return { el: document.getElementById('root'), via: 'root' };
+              let el = document.querySelector<HTMLElement>(`[data-node-id="${panelId}"]`);
+              if (el) return { el, via: 'data-node-id-exact' };
+              const allNodes = document.querySelectorAll<HTMLElement>('[data-node-id]');
+              for (const node of allNodes) {
+                const nid = node.getAttribute('data-node-id') || '';
+                if (nid.startsWith(panelId)) return { el: node, via: `data-node-id-partial:${nid}` };
               }
-            })();
+              el = document.querySelector<HTMLElement>(`[data-panel="${panelId}"]`);
+              if (el) return { el, via: 'data-panel' };
+              const candidates = document.querySelectorAll<HTMLElement>('.flexlayout__tab');
+              for (const tab of candidates) {
+                if (tab.querySelector(`[data-panel="${panelId}"]`)) return { el: tab, via: 'flexlayout-tab-child' };
+              }
+              return { el: null, via: '' };
+            };
+            let found = findTarget();
+            target = found.el;
+            matchedVia = found.via;
+            const isHidden = target && (target.getBoundingClientRect().width === 0 || target.getBoundingClientRect().height === 0);
+            if (!target || isHidden) {
+              sendWs({ type: 'control:ensure-panel', component: panelId });
+              sendWs({ type: 'control:select-tab', target: panelId });
+              await new Promise(r => setTimeout(r, 1500));
+              found = findTarget();
+              target = found.el;
+              matchedVia = found.via ? `auto-activated:${found.via}` : '';
+            }
+            if (!target) {
+              const existingIds = Array.from(document.querySelectorAll<HTMLElement>('[data-node-id]'))
+                .map(el => el.getAttribute('data-node-id'));
+              throw new Error(`Panel "${panelId}" not found. Available: [${existingIds.join(', ')}]`);
+            }
+            const rect = target.getBoundingClientRect();
+            if (rect.width === 0 || rect.height === 0) {
+              throw new Error(`Panel "${panelId}" hidden (${rect.width}x${rect.height})`);
+            }
+            const contentWait = msg.contentWait ?? 2000;
+            if (contentWait > 0) await new Promise(r => setTimeout(r, contentWait));
+            const html2canvas = (await import('html2canvas')).default;
+            const canvas = await html2canvas(target, {
+              backgroundColor: '#1a1b26', scale: 1, useCORS: true, logging: false, allowTaint: true,
+            });
+            const dataUrl = canvas.toDataURL('image/png');
+            await fetch(`/api/screenshot/${panelId}`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ dataUrl, width: canvas.width, height: canvas.height }),
+              signal: AbortSignal.timeout(20000),
+            });
+            console.log(`[Screenshot] Captured ${panelId} via ${matchedVia} (${canvas.width}x${canvas.height})`);
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            console.error('[Screenshot] Failed:', msg.panel, errMsg);
+            fetch(`/api/screenshot/${msg.panel}/error`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ error: errMsg }), signal: AbortSignal.timeout(20000),
+            }).catch(() => {});
           }
-        } catch (err) { console.warn('[App] WS message parse/handle error:', err); }
-      };
-    };
+        })();
+      }
+      // DOM introspection
+      if (msg.type === 'control:list-panels') {
+        const panels = Array.from(document.querySelectorAll<HTMLElement>('[data-node-id]')).map(el => {
+          const rect = el.getBoundingClientRect();
+          return { nodeId: el.getAttribute('data-node-id'), visible: rect.width > 0 && rect.height > 0, size: `${Math.round(rect.width)}x${Math.round(rect.height)}` };
+        });
+        fetch('/api/screenshot/panels', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ panels, timestamp: new Date().toISOString() }),
+          signal: AbortSignal.timeout(20000),
+        }).catch(() => {});
+      }
+      // CPU Profile
+      if (msg.type === 'control:cpu-profile' && window.electronAPI?.cpuProfile) {
+        (async () => {
+          try {
+            const result = await window.electronAPI!.cpuProfile();
+            sendWs({ type: 'cpu-profile-result', data: result });
+          } catch (err) {
+            sendWs({ type: 'cpu-profile-result', data: { error: String(err) } });
+          }
+        })();
+      }
+    });
+  }, [addMessageHandler, sendWs, checkForUpdate]);
 
-    connect();
-    return () => {
-      disposed = true;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      wsRef.current?.close();
-    };
-  }, []);
-
-  const handleAttentionChange = useCallback((projectId: string, needsAttention: boolean) => {
+  const handleAttentionChange = useCallback((projectId: string, needsAttention: boolean, state?: 'working' | 'needs_attention') => {
     setProjectAttention(prev => {
-      const has = prev.has(projectId);
-      if (needsAttention && has) return prev;
-      if (!needsAttention && !has) return prev;
-      const next = new Set(prev);
-      if (needsAttention) next.add(projectId);
-      else next.delete(projectId);
-      return next;
+      if (needsAttention && state) {
+        if (prev[projectId] === state) return prev;
+        return { ...prev, [projectId]: state };
+      }
+      if (!needsAttention) {
+        if (!(projectId in prev)) return prev;
+        const next = { ...prev };
+        delete next[projectId];
+        return next;
+      }
+      return prev;
     });
   }, []);
 
-  const handleCuiStateReset = useCallback((cuiId: string) => {
-    setCuiStates(prev => prev[cuiId] === 'idle' ? prev : { ...prev, [cuiId]: 'idle' });
-  }, []);
+  // cuiState reset not needed — SessionStore tracks from WS events
 
-  const handleActivationProcessed = useCallback(() => {
-    setPendingActivation(null);
+  const handleActivationProcessed = useCallback((processedProjectId?: string) => {
+    if (!processedProjectId) {
+      setPendingActivation(null);
+      return;
+    }
+    setPendingActivation(prev => {
+      if (!prev) return null;
+      const remaining = prev.filter(p => p.projectId !== processedProjectId);
+      return remaining.length > 0 ? remaining : null;
+    });
   }, []);
 
   // Load projects: localStorage cache → instant, server → background update
@@ -534,8 +460,8 @@ export default function App() {
 
   // Report active project to server (for Control API state queries)
   useEffect(() => {
-    if (activeId && wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'state-report', activeProjectId: activeId }));
+    if (activeId) {
+      sendWs({ type: 'state-report', activeProjectId: activeId });
     }
   }, [activeId]);
 
@@ -565,14 +491,14 @@ export default function App() {
       // Cmd+0: toggle Mission Control
       if (e.key === '0') {
         e.preventDefault();
-        setShowMission(prev => { if (!prev) setShowAllChats(false); return !prev; });
+        setShowMission(prev => { if (!prev) { setShowAllChats(false); setShowSync(false); } return !prev; });
         return;
       }
 
       // Cmd+`: toggle All Chats
       if (e.key === '`') {
         e.preventDefault();
-        setShowAllChats(prev => { if (!prev) setShowMission(false); return !prev; });
+        setShowAllChats(prev => { if (!prev) { setShowMission(false); setShowSync(false); } return !prev; });
         return;
       }
 
@@ -658,23 +584,26 @@ export default function App() {
   const deleteProjectName = deleteTarget ? projects.find(p => p.id === deleteTarget)?.name ?? deleteTarget : '';
 
   return (
-    <>
+    <div className={IS_MOBILE ? 'mobile-mode' : ''} style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <ProjectTabs
         projects={projects}
         activeId={activeId}
         attention={projectAttention}
-        onSelect={(id) => { setShowMission(false); setShowAllChats(false); handleSelect(id); }}
+        onSelect={(id) => { setShowMission(false); setShowAllChats(false); setShowSync(false); handleSelect(id); }}
         onNew={handleNew}
         onEdit={handleEdit}
         onDelete={handleDelete}
         missionActive={showMission}
-        onMissionClick={() => setShowMission(prev => { if (!prev) setShowAllChats(false); return !prev; })}
+        onMissionClick={() => setShowMission(prev => { if (!prev) { setShowAllChats(false); setShowSync(false); } return !prev; })}
         allChatsActive={showAllChats}
-        onAllChatsClick={() => setShowAllChats(prev => { if (!prev) setShowMission(false); return !prev; })}
+        onAllChatsClick={() => setShowAllChats(prev => { if (!prev) { setShowMission(false); setShowSync(false); } return !prev; })}
+        syncPanelActive={showSync}
+        onSyncPanelClick={() => setShowSync(prev => { if (!prev) { setShowMission(false); setShowAllChats(false); } return !prev; })}
+        isMobile={IS_MOBILE}
       />
       <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
         {/* Mission Control - global view */}
-        {showMission && (
+        {!IS_MOBILE && showMission && (
           <div style={{
             position: 'absolute', inset: 0, zIndex: 2,
             display: 'flex', flexDirection: 'column',
@@ -685,7 +614,7 @@ export default function App() {
           </div>
         )}
         {/* All Chats - consolidated view of all active conversations */}
-        {showAllChats && (
+        {!IS_MOBILE && showAllChats && (
           <div style={{
             position: 'absolute', inset: 0, zIndex: 2,
             display: 'flex', flexDirection: 'column',
@@ -699,26 +628,44 @@ export default function App() {
             />
           </div>
         )}
-        {projects.filter(p => p.id === activeId).map((p) => (
+        {/* Synchronise Panel */}
+        {!IS_MOBILE && showSync && (
+          <div style={{
+            position: 'absolute', inset: 0, zIndex: 2,
+            display: 'flex', flexDirection: 'column',
+          }}>
+            <Suspense fallback={<div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--tn-text-muted)' }}>Loading Sync Panel...</div>}>
+              <SyncPanel onClose={() => setShowSync(false)} />
+            </Suspense>
+          </div>
+        )}
+        {projects.filter(p => mounted.has(p.id)).map((p) => (
           <div
             key={p.id}
             style={{
               position: 'absolute',
               inset: 0,
-              zIndex: 1,
-              display: 'flex',
+              zIndex: p.id === activeId ? 1 : -1,
+              display: p.id === activeId ? 'flex' : 'none',
               flexDirection: 'column',
             }}
           >
-            <LayoutManager
-              projectId={p.id}
-              workDir={p.workDir}
-              cuiStates={cuiStates}
-              onAttentionChange={(needs) => handleAttentionChange(p.id, needs)}
-              onCuiStateReset={handleCuiStateReset}
-              pendingActivation={pendingActivation}
-              onActivationProcessed={handleActivationProcessed}
-            />
+            {IS_MOBILE ? (
+              <Suspense fallback={<div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--tn-text-muted)' }}>Loading Mobile...</div>}>
+                <MobileLayout
+                  projectId={p.id}
+                  workDir={p.workDir}
+                />
+              </Suspense>
+            ) : (
+              <LayoutManager
+                projectId={p.id}
+                workDir={p.workDir}
+                onAttentionChange={(needs, state) => handleAttentionChange(p.id, needs, state)}
+                pendingActivation={pendingActivation}
+                onActivationProcessed={handleActivationProcessed}
+              />
+            )}
           </div>
         ))}
       </div>
@@ -740,6 +687,6 @@ export default function App() {
           onClose={() => setDeleteTarget(null)}
         />
       )}
-    </>
+    </div>
   );
 }

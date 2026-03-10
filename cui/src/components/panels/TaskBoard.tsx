@@ -48,7 +48,7 @@ export default function TaskBoard({ personaId }: TaskBoardProps) {
       setLoading(true);
 
       // Load from demo data API (tasks.json)
-      const response = await fetch(`${API}/team/task-board`, { signal: AbortSignal.timeout(8000) });
+      const response = await fetch(`${API}/team/task-board`, { signal: AbortSignal.timeout(20000) });
       if (!response.ok) throw new Error(`[TaskBoard] load tasks failed: HTTP ${response.status}`);
 
       const rawTasks = await response.json();

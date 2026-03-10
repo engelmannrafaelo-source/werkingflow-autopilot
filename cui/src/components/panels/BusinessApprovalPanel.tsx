@@ -26,7 +26,7 @@ export default function BusinessApprovalPanel() {
   const load = useCallback(async () => {
     if ((window as any).__cuiServerAlive === false) return;
     try {
-      const resp = await fetch(`${API}/agents/business/pending`, { signal: AbortSignal.timeout(8000) });
+      const resp = await fetch(`${API}/agents/business/pending`, { signal: AbortSignal.timeout(20000) });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const d = await resp.json();
       const entries = (d.pending ?? []).map((entry: any) => {
@@ -56,7 +56,7 @@ export default function BusinessApprovalPanel() {
     setDiff(null);
     try {
       const filePath = entry.file.replace('/root/projekte/werkingflow/business/', '');
-      const resp = await fetch(`${API}/agents/business/diff/${filePath}`, { signal: AbortSignal.timeout(8000) });
+      const resp = await fetch(`${API}/agents/business/diff/${filePath}`, { signal: AbortSignal.timeout(20000) });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       setDiff(await resp.json());
     } catch (err) {

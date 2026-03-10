@@ -1,9 +1,13 @@
 
 // ─── Config ─────────────────────────────────────────────────────────
-export const BRIDGE_URL = 'http://49.12.72.66:8000';
+// Bridge URL — routed through CUI server proxy (browser can't reach bridge IP directly)
+export const BRIDGE_URL = '/api/bridge-proxy';
 
-// Internal admin API key - this CUI is a local Electron admin tool, not a public frontend
-const API_KEY = '967bf3159a351578f3fafda1e361fd7d4ae32d3c2ff8ee82428bf1ab364c4745';
+// Bridge API key — loaded from server-injected global, not hardcoded
+// API key injected by CUI server at page load (not hardcoded in source)
+const API_KEY = typeof window !== 'undefined'
+  ? (window as any).__CUI_BRIDGE_API_KEY__ || ''
+  : '';
 
 export function authHeaders(): Record<string, string> {
   return { 'Authorization': `Bearer ${API_KEY}` };

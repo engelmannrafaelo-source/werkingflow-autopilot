@@ -38,7 +38,7 @@ export default function DashboardTab({ envMode }: { envMode?: string }) {
 
   const safeFetch = async (url: string, label: string): Promise<Response | null> => {
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res;
     } catch (err) {

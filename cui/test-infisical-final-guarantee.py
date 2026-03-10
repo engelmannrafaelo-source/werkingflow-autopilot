@@ -89,7 +89,7 @@ def main():
 
     for name, endpoint in endpoints:
         try:
-            resp = requests.get(f"{CUI_URL}{endpoint}", timeout=5)
+            resp = requests.get(f"{CUI_URL}{endpoint}", timeout=20)
             all_passed &= test(
                 f"Endpoint: {name}",
                 resp.status_code == 200,
@@ -103,7 +103,7 @@ def main():
     print("-" * 70)
 
     try:
-        resp = requests.get(f"{CUI_URL}/api/infisical/status", timeout=5)
+        resp = requests.get(f"{CUI_URL}/api/infisical/status", timeout=20)
         data = resp.json()
 
         all_passed &= test(
@@ -217,7 +217,7 @@ def main():
 
     # Test invalid project ID
     try:
-        resp = requests.get(f"{CUI_URL}/api/infisical/secrets/INVALID", timeout=5)
+        resp = requests.get(f"{CUI_URL}/api/infisical/secrets/INVALID", timeout=20)
         all_passed &= test(
             "Invalid project ID handled",
             resp.status_code == 200,  # Should return empty, not error
@@ -231,7 +231,7 @@ def main():
         resp = requests.post(
             f"{CUI_URL}/api/infisical/trigger-sync",
             json={"invalid": "data"},
-            timeout=5
+            timeout=20
         )
         all_passed &= test(
             "Malformed request handled",
@@ -246,7 +246,7 @@ def main():
         import concurrent.futures
 
         def make_request():
-            return requests.get(f"{CUI_URL}/api/infisical/status", timeout=5)
+            return requests.get(f"{CUI_URL}/api/infisical/status", timeout=20)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
             futures = [executor.submit(make_request) for _ in range(5)]

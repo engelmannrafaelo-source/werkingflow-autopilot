@@ -32,8 +32,8 @@ export default function DeploymentsTab({ envMode }: { envMode?: string }) {
     setError('');
     try {
       const [depsRes, bridgeRes] = await Promise.all([
-        fetch('/api/ops/deployments', { signal: AbortSignal.timeout(8000) }).catch(() => null),
-        fetch('/api/admin/wr/health', { signal: AbortSignal.timeout(8000) }).catch(() => null),
+        fetch('/api/ops/deployments', { signal: AbortSignal.timeout(20000) }).catch(() => null),
+        fetch('/api/admin/wr/health', { signal: AbortSignal.timeout(20000) }).catch(() => null),
       ]);
       if (depsRes?.ok) {
         const data = await depsRes.json();
@@ -205,7 +205,7 @@ export default function DeploymentsTab({ envMode }: { envMode?: string }) {
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--tn-text)' }}>
                   AI-Bridge Server
-                  <span style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginLeft: 8, fontFamily: 'monospace' }}>49.12.72.66:8000</span>
+                  <span style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginLeft: 8, fontFamily: 'monospace' }}>Bridge API</span>
                 </div>
                 <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginTop: 2, display: 'flex', gap: 10 }}>
                   {bridgeHealth?.version && <span>v{bridgeHealth.version}</span>}

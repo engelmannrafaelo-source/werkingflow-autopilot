@@ -39,6 +39,10 @@ export default function ActivityFeedTab() {
       const res = await fetch('/api/bridge/metrics/activity?limit=100', { signal: AbortSignal.timeout(10000) });
       if (!res.ok) throw new Error(await res.text());
       const result = await res.json();
+      // API returns {sessions: [...]} but component expects {requests: [...]}
+      if (result.sessions && !result.requests) {
+        result.requests = result.sessions;
+      }
       setData(result);
     } catch (err: any) {
       // Error state shown in UI via setError
@@ -55,7 +59,7 @@ export default function ActivityFeedTab() {
     return () => clearInterval(interval);
   }, [fetchData, autoRefresh]);
 
-  const filteredRequests = data?.requests.filter((req) => {
+  const filteredRequests = (data?.requests ?? []).filter((req) => {
     if (filter.user && !req.user.toLowerCase().includes(filter.user.toLowerCase())) return false;
     if (filter.app && !req.app.toLowerCase().includes(filter.app.toLowerCase())) return false;
     if (filter.model && !req.model.toLowerCase().includes(filter.model.toLowerCase())) return false;

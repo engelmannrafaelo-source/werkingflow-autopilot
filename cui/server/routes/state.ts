@@ -6,7 +6,8 @@
  */
 
 import { resolve, join } from 'path';
-import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'fs';
+import { readFileSync, existsSync, mkdirSync } from 'fs';
+import { atomicWriteFileSync } from './shared/utils.js';
 import { homedir } from 'os';
 import { watch } from 'chokidar';
 import type { WebSocket as WsType, WebSocketServer as WssType } from 'ws';
@@ -15,6 +16,9 @@ import { registerWebSocketClient } from '../document-manager.js';
 // Re-export WebSocket constant for readyState checks in broadcast()
 // (ws module exports WebSocket class with OPEN/CLOSED statics)
 import { WebSocket } from 'ws';
+
+// --- Local Mode Detection ---
+export const IS_LOCAL_MODE = process.env.CUI_LOCAL_MODE === 'true';
 
 // Track WS liveness without unsafe (ws as any) casts
 const wsAlive = new WeakMap<WsType, boolean>();
@@ -42,6 +46,17 @@ export function updatePanelVisibility(data: { panelId: string; projectId: string
   const prev = visibilityRegistry.get(key);
   visibilityRegistry.set(key, { ...data, updatedAt: Date.now() });
   if (!prev || prev.sessionId !== data.sessionId) {
+    // Session exclusivity: if this session is now claimed by a new panel, evict it from other panels
+    if (data.sessionId) {
+      for (const [otherKey, entry] of visibilityRegistry) {
+        if (otherKey !== key && entry.sessionId === data.sessionId) {
+          console.log(`[Visibility] Session ${data.sessionId.slice(0, 8)} claimed by ${data.panelId} — evicting from ${entry.panelId}`);
+          broadcast({ type: 'session-claimed', sessionId: data.sessionId, claimedByPanelId: data.panelId, evictPanelId: entry.panelId, projectId: data.projectId });
+          entry.sessionId = ''; // Clear old panel's session
+          entry.route = '';
+        }
+      }
+    }
     broadcast({ type: 'visibility-update', visibleSessionIds: [...getVisibleSessionIds()] });
   }
 }
@@ -67,9 +82,6 @@ _intervals.push(setInterval(() => {
   }
 }, 60000));
 
-// --- Active Stream Tracking: sessionId -> streamingId ---
-export const activeStreams = new Map<string, string>();
-
 // --- Per-Session Attention State Tracker ---
 // Types imported from shared/types.ts — re-exported for backward compatibility.
 // Modules that previously imported these from state.ts will continue to work.
@@ -83,7 +95,9 @@ export type ConvAttentionState = _ConvAttentionState;
 export type SessionState = _SessionState;
 
 // --- Persistent Storage Dirs ---
-export const DATA_DIR = resolve(import.meta.dirname ?? __dirname, '..', '..', 'data');
+export const DATA_DIR = IS_LOCAL_MODE
+  ? resolve(process.env.CUI_DATA_DIR || join(homedir(), '.cui', 'local-data'))
+  : resolve(import.meta.dirname ?? __dirname, '..', '..', 'data');
 export const PROJECTS_DIR = join(DATA_DIR, 'projects');
 export const NOTES_DIR = join(DATA_DIR, 'notes');
 export const LAYOUTS_DIR = join(DATA_DIR, 'layouts');
@@ -102,7 +116,7 @@ export function persistSessionStates() {
   try {
     const out: Record<string, SessionState> = {};
     for (const [k, v] of sessionStates) out[k] = v;
-    writeFileSync(SESSION_STATES_FILE, JSON.stringify(out, null, 2));
+    atomicWriteFileSync(SESSION_STATES_FILE, JSON.stringify(out, null, 2));
   } catch (err) { console.warn('[State] Failed to persist session states:', err instanceof Error ? err.message : err); }
 }
 
@@ -147,25 +161,6 @@ export function getSessionStates(): Record<string, SessionState> {
   return out;
 }
 
-// Detect attention-requiring markers in SSE text
-// IMPORTANT: Only match LIVE stream events, not historical conversation replay data.
-// Historical chunks contain "type":"result", "stop_reason" etc. for every past message.
-export function detectAttentionMarkers(text: string): { state: ConvAttentionState; reason?: AttentionReason } | null {
-  // Plan mode: ExitPlanMode or EnterPlanMode tool calls
-  if (text.includes('"name":"ExitPlanMode"') || text.includes('"name":"EnterPlanMode"')) {
-    return { state: 'needs_attention', reason: 'plan' };
-  }
-  // User question: AskUserQuestion tool call
-  if (text.includes('"name":"AskUserQuestion"')) {
-    return { state: 'needs_attention', reason: 'question' };
-  }
-  // Stream-end markers (only these are reliable for live stream completion)
-  if (text.includes('"type":"closed"') || text.includes('"type":"message_stop"')) {
-    return { state: 'idle', reason: 'done' };
-  }
-  return null;
-}
-
 // --- Periodic cleanup of stale state entries ---
 _intervals.push(setInterval(() => {
   const now = Date.now();
@@ -173,15 +168,6 @@ _intervals.push(setInterval(() => {
   // sessionStates: remove entries older than 24h
   for (const [k, v] of sessionStates) {
     if (now - v.since > 24 * 60 * 60 * 1000) { sessionStates.delete(k); cleaned++; }
-  }
-  // activeStreams: cap at 50 entries (remove oldest by order)
-  if (activeStreams.size > 50) {
-    const excess = activeStreams.size - 50;
-    let i = 0;
-    for (const key of activeStreams.keys()) {
-      if (i++ >= excess) break;
-      activeStreams.delete(key); cleaned++;
-    }
   }
   // _lastBroadcast: evict entries older than 5 minutes when map grows beyond 100 keys
   const lbKeys = Object.keys(_lastBroadcast);
@@ -305,6 +291,7 @@ export function broadcast(data: Record<string, unknown>) {
     'visibility-update': 2000,
     'conv-attention': 1000,
     'cui-update-available': 5000,
+    'tool-heartbeat': 10000,
   };
   const throttleMs = throttledTypes[type];
   if (throttleMs) {
@@ -344,6 +331,22 @@ let _wsInitialized = false;
  * Must be called once after wss is created.
  * Accepts pendingProfileResolve setter so WS messages can resolve CPU profiles.
  */
+// Layout snapshots from LayoutManagers (updated on reportPanels)
+const layoutSnapshots = new Map<string, { panels: Array<{ id: string; component: string; config: Record<string, unknown>; name: string }>; updatedAt: number }>();
+
+export function getLayoutSnapshot(projectId: string) {
+  return layoutSnapshots.get(projectId);
+}
+
+export function getAllLayoutSnapshots() {
+  const result: Record<string, any> = {};
+  for (const [k, v] of layoutSnapshots) result[k] = v;
+  return result;
+}
+
+// Pending navigations for panels that haven't connected yet (race condition fix)
+const pendingNavigations = new Map<string, { type: string; panelId: string; sessionId: string; projectId: string }>();
+
 export function initWebSocket(
   wss: WssType,
   getPendingProfileResolve: () => ((result: unknown) => void) | null,
@@ -380,6 +383,7 @@ export function initWebSocket(
         }
         // Panel visibility reports from CuiPanel
         if (msg.type === 'panel-visibility' && msg.panelId && msg.projectId) {
+          console.log(`[Visibility] Register panel=${msg.panelId} project=${msg.projectId} session=${(msg.sessionId || '').slice(0,8) || 'none'}`);
           updatePanelVisibility({
             panelId: msg.panelId,
             projectId: msg.projectId,
@@ -387,17 +391,48 @@ export function initWebSocket(
             sessionId: msg.sessionId || '',
             route: msg.route || '',
           });
+          // Deliver pending navigation if panel just connected (race condition fix)
+          const pendingNav = pendingNavigations.get(msg.panelId);
+          if (pendingNav) {
+            console.log(`[Navigate] Delivering pending nav to panel ${msg.panelId} -> session=${pendingNav.sessionId.slice(0,8)} (was: ${(msg.sessionId || 'none').slice(0,8)})`);
+            try { ws.send(JSON.stringify(pendingNav)); } catch {}
+            pendingNavigations.delete(msg.panelId);
+          }
         }
         // Panel removed from layout
         if (msg.type === 'panel-removed' && msg.projectId && msg.panelId) {
           removePanelVisibility(msg.projectId, msg.panelId);
         }
-        // Navigate request from LayoutManager -> broadcast to all CuiPanels
+        // Store layout snapshot from LayoutManager
+        if (msg.type === 'state-report' && msg.panels) {
+          // Find which project this WS belongs to (from last panel-visibility or workspace-state)
+          const projId = msg.projectId || '';
+          if (projId) {
+            layoutSnapshots.set(projId, { panels: msg.panels, updatedAt: Date.now() });
+          }
+        }
+        // Panel asks for pending navigation on connect
+        if (msg.type === 'check-pending-navigate' && msg.panelId) {
+          const pendingNav = pendingNavigations.get(msg.panelId);
+          if (pendingNav) {
+            console.log(`[Navigate] Panel ${msg.panelId} asked for pending nav -> delivering session=${pendingNav.sessionId.slice(0,8)}`);
+            try { ws.send(JSON.stringify(pendingNav)); } catch {}
+            pendingNavigations.delete(msg.panelId);
+          }
+        }
+        // Navigate request from LayoutManager -> broadcast + store for late-connecting panels
         if (msg.type === 'navigate-request' && msg.panelId && msg.sessionId) {
-          broadcast({ type: 'control:cui-navigate-conversation', panelId: msg.panelId, sessionId: msg.sessionId, projectId: msg.projectId || '' });
+          console.log(`[Navigate] panel=${msg.panelId} -> session=${msg.sessionId.slice(0,8)} project=${msg.projectId || '?'}`);
+          const navMsg = { type: 'control:cui-navigate-conversation' as const, panelId: msg.panelId, sessionId: msg.sessionId, projectId: msg.projectId || '' };
+          broadcast(navMsg);
+          // Store for panels that connect after broadcast (race condition fix)
+          pendingNavigations.set(msg.panelId, navMsg);
+          setTimeout(() => pendingNavigations.delete(msg.panelId), 30000); // expire after 30s
         }
         // Relay control messages from frontend components to LayoutManager (and other listeners)
-        if (msg.type === 'control:ensure-panel' || msg.type === 'control:select-tab') {
+        if (msg.type === 'control:ensure-panel' || msg.type === 'control:select-tab'
+            || msg.type === 'control:panel-add' || msg.type === 'control:panel-remove'
+            || msg.type === 'control:layout-reset') {
           broadcast(msg);
         }
         // CPU profile result from renderer

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import ErrorBoundary from '../../ErrorBoundary';
 import RepositoriesTab from './tabs/RepositoriesTab';
 import PipelineTab from './tabs/PipelineTab';
 import DiskUsageTab from './tabs/DiskUsageTab';
@@ -19,10 +20,10 @@ interface QuickStats {
 
 export default function RepoDashboard() {
   const tabs: Tab[] = [
-    { key: 'repos', label: 'Repositories', component: <RepositoriesTab /> },
-    { key: 'hierarchy', label: 'Hierarchy (Sankey)', component: <HierarchyTab /> },
-    { key: 'pipeline', label: 'Pipeline', component: <PipelineTab /> },
-    { key: 'disk', label: 'Disk Usage', component: <DiskUsageTab /> },
+    { key: 'repos', label: 'Repositories', component: <ErrorBoundary componentName="RepositoriesTab"><RepositoriesTab /></ErrorBoundary> },
+    { key: 'hierarchy', label: 'Hierarchy (Sankey)', component: <ErrorBoundary componentName="HierarchyTab"><HierarchyTab /></ErrorBoundary> },
+    { key: 'pipeline', label: 'Pipeline', component: <ErrorBoundary componentName="PipelineTab"><PipelineTab /></ErrorBoundary> },
+    { key: 'disk', label: 'Disk Usage', component: <ErrorBoundary componentName="DiskUsageTab"><DiskUsageTab /></ErrorBoundary> },
   ];
 
   const [activeTab, setActiveTab] = useState(tabs[0].key);
@@ -34,7 +35,7 @@ export default function RepoDashboard() {
     async function fetchQuick() {
       if ((window as any).__cuiServerAlive !== true) return;
       try {
-        const res = await fetch('/api/repo-dashboard/repositories', { signal: AbortSignal.timeout(10000) });
+        const res = await fetch('/api/repo-dashboard/repositories', { signal: AbortSignal.timeout(30000) });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
 
@@ -63,7 +64,7 @@ export default function RepoDashboard() {
       const refreshRes = await fetch('/api/repo-dashboard/refresh', { method: 'POST', signal: AbortSignal.timeout(15000) });
       if (!refreshRes.ok) throw new Error(`Refresh HTTP ${refreshRes.status}`);
       // Re-trigger stats fetch
-      const res = await fetch('/api/repo-dashboard/repositories', { signal: AbortSignal.timeout(10000) });
+      const res = await fetch('/api/repo-dashboard/repositories', { signal: AbortSignal.timeout(30000) });
       if (!res.ok) throw new Error(`Repos HTTP ${res.status}`);
       const data = await res.json();
       const totalSize = data.repos.reduce((sum: number, r: any) => sum + r.diskSize.bytes, 0);
@@ -219,12 +220,21 @@ export default function RepoDashboard() {
         </div>
       </div>
 
-      {/* Tab Content */}
-      <div
-        data-ai-id={`repo-dashboard-content-${activeTab}`}
-        style={{ flex: 1, overflow: 'auto', minHeight: 0 }}
-      >
-        {tabs.find((t) => t.key === activeTab)?.component}
+      {/* Tab Content - Defensive: Keep all mounted, toggle visibility */}
+      <div style={{ flex: 1, overflow: 'auto', minHeight: 0, position: 'relative' }}>
+        {tabs.map((tab) => (
+          <div
+            key={tab.key}
+            data-ai-id={`repo-dashboard-content-${tab.key}`}
+            style={{
+              display: activeTab === tab.key ? 'block' : 'none',
+              height: '100%',
+              overflow: 'auto',
+            }}
+          >
+            {tab.component}
+          </div>
+        ))}
       </div>
     </div>
   );

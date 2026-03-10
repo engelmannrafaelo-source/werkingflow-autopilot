@@ -4,7 +4,7 @@ import { type Project, ACCOUNTS } from '../types';
 interface ProjectTabsProps {
   projects: Project[];
   activeId: string;
-  attention?: Set<string>;
+  attention?: Record<string, 'working' | 'needs_attention'>;
   onSelect: (id: string) => void;
   onNew: () => void;
   onEdit: (id: string) => void;
@@ -13,6 +13,9 @@ interface ProjectTabsProps {
   onMissionClick?: () => void;
   allChatsActive?: boolean;
   onAllChatsClick?: () => void;
+  syncPanelActive?: boolean;
+  onSyncPanelClick?: () => void;
+  isMobile?: boolean;
 }
 
 type SyncState = 'idle' | 'syncing' | 'done' | 'error';
@@ -269,7 +272,7 @@ function SyncthingToggle() {
   );
 }
 
-export default memo(function ProjectTabs({ projects, activeId, attention, onSelect, onNew, onEdit, onDelete, missionActive, onMissionClick, allChatsActive, onAllChatsClick }: ProjectTabsProps) {
+export default memo(function ProjectTabs({ projects, activeId, attention, onSelect, onNew, onEdit, onDelete, missionActive, onMissionClick, allChatsActive, onAllChatsClick, syncPanelActive, onSyncPanelClick, isMobile }: ProjectTabsProps) {
   const [syncState, setSyncState] = useState<SyncState>('idle');
   const [syncDetail, setSyncDetail] = useState('');
   const [pendingCount, setPendingCount] = useState(0);
@@ -405,6 +408,45 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
 
   const hasPending = pendingCount > 0 && syncState === 'idle';
 
+  // --- Mobile: compact header with project dropdown ---
+  if (isMobile) {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '0 12px',
+          background: 'var(--tn-bg-dark)',
+          borderTop: `2px solid ${MODE_COLORS[CUI_MODE]}`,
+          borderBottom: '1px solid var(--tn-border)',
+          height: 44,
+          flexShrink: 0,
+        }}
+      >
+        <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--tn-blue)' }}>CUI</span>
+        <select
+          value={activeId}
+          onChange={(e) => onSelect(e.target.value)}
+          style={{
+            flex: 1,
+            background: 'var(--tn-surface)',
+            color: 'var(--tn-text)',
+            border: '1px solid var(--tn-border)',
+            borderRadius: 6,
+            padding: '6px 10px',
+            fontSize: 14,
+            minHeight: 36,
+          }}
+        >
+          {projects.map(p => (
+            <option key={p.id} value={p.id}>{p.name}</option>
+          ))}
+        </select>
+      </div>
+    );
+  }
+
   return (
     <div
       style={{
@@ -514,6 +556,37 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
         </div>
       )}
 
+      {/* Synchronise - permanent tab */}
+      {onSyncPanelClick && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            background: syncPanelActive ? 'var(--tn-surface)' : 'transparent',
+            borderBottom: syncPanelActive ? '2px solid #bb9af7' : '2px solid transparent',
+            borderRadius: '4px 4px 0 0',
+            marginRight: 4,
+          }}
+        >
+          <button
+            onClick={onSyncPanelClick}
+            title="Synchronise Conversations"
+            style={{
+              background: 'none',
+              color: syncPanelActive ? '#bb9af7' : 'var(--tn-text-muted)',
+              border: 'none',
+              padding: '6px 12px',
+              fontSize: 12,
+              cursor: 'pointer',
+              fontWeight: syncPanelActive ? 700 : 400,
+              WebkitAppRegion: 'no-drag',
+            } as React.CSSProperties}
+          >
+            SY
+          </button>
+        </div>
+      )}
+
       <div style={{ width: 1, height: 16, background: 'var(--tn-border)', marginRight: 4, opacity: 0.4 }} />
 
       {projects.map((p, idx) => (
@@ -522,8 +595,16 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
           style={{
             display: 'flex',
             alignItems: 'center',
-            background: p.id === activeId ? 'var(--tn-surface)' : 'transparent',
-            borderBottom: p.id === activeId ? '2px solid var(--tn-blue)' : '2px solid transparent',
+            background: attention?.[p.id] === 'needs_attention'
+              ? 'rgba(247, 118, 142, 0.28)'
+              : attention?.[p.id] === 'working'
+                ? 'rgba(59, 130, 246, 0.22)'
+                : p.id === activeId ? 'var(--tn-surface)' : 'transparent',
+            borderBottom: attention?.[p.id] === 'needs_attention'
+              ? '3px solid #f7768e'
+              : attention?.[p.id] === 'working'
+                ? '3px solid #3B82F6'
+                : p.id === activeId ? '2px solid var(--tn-blue)' : '2px solid transparent',
             borderRadius: '4px 4px 0 0',
             transition: 'all 0.15s',
           }}
@@ -542,11 +623,15 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
               WebkitAppRegion: 'no-drag',
             } as React.CSSProperties}
           >
-            {attention?.has(p.id) && p.id !== activeId && (
+            {attention?.[p.id] && p.id !== activeId && (
               <span style={{
-                width: 6, height: 6, borderRadius: '50%',
-                background: '#e0af68',
+                width: 7, height: 7, borderRadius: '50%',
+                background: attention[p.id] === 'needs_attention' ? '#f7768e' : '#9ece6a',
+                boxShadow: attention[p.id] === 'needs_attention'
+                  ? '0 0 8px #f7768eaa, 0 0 3px #f7768e'
+                  : '0 0 6px #9ece6a88',
                 display: 'inline-block', marginRight: 5, flexShrink: 0,
+                animation: attention[p.id] === 'needs_attention' ? 'pulse-attention 0.8s ease-in-out infinite' : 'pulse 1.5s ease-in-out infinite',
               }} />
             )}
             {idx < 9 && (
@@ -610,18 +695,18 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
       {/* Syncthing toggle */}
       <SyncthingToggle />
 
-      {/* All Live toggle - switches all visible chats to 2s polling */}
+      {/* All Live toggle - enables real-time streaming in all panels */}
       <button
         onClick={() => {
           const newState = !allLive;
           setAllLive(newState);
           window.dispatchEvent(new CustomEvent('cui-all-live', { detail: { live: newState } }));
         }}
-        title={allLive ? 'Live-Modus fuer alle Chats aus (zurueck zu 15s)' : 'Live-Modus fuer alle Chats an (2s Polling)'}
+        title={allLive ? 'Live-Modus aus (Static: WS Events only)' : 'Live-Modus fuer alle Chats (Echtzeit-Streaming)'}
         style={{
-          background: allLive ? 'rgba(239,68,68,0.15)' : 'none',
-          border: `1px solid ${allLive ? '#EF4444' : 'var(--tn-border)'}`,
-          color: allLive ? '#EF4444' : 'var(--tn-text-muted)',
+          background: allLive ? 'rgba(168,85,247,0.15)' : 'none',
+          border: `1px solid ${allLive ? '#A855F7' : 'var(--tn-border)'}`,
+          color: allLive ? '#A855F7' : 'var(--tn-text-muted)',
           padding: '3px 10px',
           fontSize: 10,
           fontWeight: allLive ? 700 : 400,
@@ -633,7 +718,7 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
           marginRight: 6,
         } as React.CSSProperties}
       >
-        {allLive ? '● Live' : '○ Live'}
+        {allLive ? '\u25CF Live' : '\u23F8 Static'}
       </button>
 
       {/* Panel Health Indicator + Start Button */}

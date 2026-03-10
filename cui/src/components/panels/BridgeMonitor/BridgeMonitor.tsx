@@ -142,7 +142,7 @@ export default function BridgeMonitor() {
             border: '1px solid rgba(122,162,247,0.3)', borderRadius: 3,
             padding: '2px 6px', fontFamily: 'monospace',
           }}>
-            49.12.72.66:8000
+            Bridge API
           </span>
         </div>
 

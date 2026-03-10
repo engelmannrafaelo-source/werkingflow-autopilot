@@ -1,5 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { join } from 'path';
+import { homedir } from 'os';
+import { IS_LOCAL_MODE } from './state.js';
 import { readFileSync, readdirSync, statSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
 
 interface LayoutsDeps {
@@ -49,14 +51,17 @@ export default function createLayoutsRouter(deps: LayoutsDeps): Router {
     const isNew = !existsSync(projectFile);
 
     if (isNew && !project.workDir) {
-      // New project without explicit workDir: create remote workspace
-      const remoteWorkDir = `/root/orchestrator/workspaces/${project.id}`;
+      // Auto-create workspace: local (~/Projects/) or remote (/root/orchestrator/workspaces/)
+      const baseDir = IS_LOCAL_MODE
+        ? join(homedir(), 'Projects')
+        : '/root/orchestrator/workspaces';
+      const workDir = join(baseDir, project.id);
       try {
-        mkdirSync(remoteWorkDir, { recursive: true });
-        project.workDir = remoteWorkDir;
-        console.log(`[Project] Created remote workspace: ${remoteWorkDir}`);
+        mkdirSync(workDir, { recursive: true });
+        project.workDir = workDir;
+        console.log(`[Project] Created workspace: ${workDir}`);
       } catch (err: any) {
-        console.error(`[Project] Failed to create remote workspace: ${err.message}`);
+        console.error(`[Project] Failed to create workspace: ${err.message}`);
       }
     }
 

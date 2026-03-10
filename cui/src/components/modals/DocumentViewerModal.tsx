@@ -26,7 +26,7 @@ export default function DocumentViewerModal({ documentPath, onClose }: DocumentV
       setError(null);
 
       const fullPath = `/root/projekte/werkingflow/business/${documentPath}`;
-      const response = await fetch(`/api/file?path=${encodeURIComponent(fullPath)}`, { signal: AbortSignal.timeout(8000) });
+      const response = await fetch(`/api/file?path=${encodeURIComponent(fullPath)}`, { signal: AbortSignal.timeout(20000) });
 
       if (!response.ok) throw new Error(`Failed to load document (${response.status})`);
 

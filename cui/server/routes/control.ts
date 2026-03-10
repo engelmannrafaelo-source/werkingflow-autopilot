@@ -6,6 +6,7 @@ import { promisify } from 'util';
 import { watch } from 'chokidar';
 import type { WebSocket } from 'ws';
 import type { SessionState, ConvAttentionState, AttentionReason, PanelVisibility } from './state.js';
+import * as convMeta from './shared/conv-metadata.js';
 
 const execAsync = promisify(exec);
 
@@ -24,7 +25,7 @@ interface ControlDeps {
   PROJECTS_DIR: string;
   LAYOUTS_DIR: string;
   startTime: number;
-  CUI_PROXIES: Array<{ id: string; localPort: number; target: string }>;
+  ACCOUNT_CONFIG: Array<{ id: string; home: string; label: string; color: string }>;
 }
 
 // --- Syncthing Control ---
@@ -69,16 +70,11 @@ export function resolveCpuProfile(result: unknown): void {
 
 export default function createControlRouter(deps: ControlDeps): Router {
   const router = Router();
-  const { broadcast, clients, workspaceState, visibilityRegistry, sessionStates, getSessionStates, DATA_DIR, PROJECTS_DIR, LAYOUTS_DIR, startTime, CUI_PROXIES } = deps;
+  const { broadcast, clients, workspaceState, visibilityRegistry, sessionStates, getSessionStates, DATA_DIR, PROJECTS_DIR, LAYOUTS_DIR, startTime, ACCOUNT_CONFIG } = deps;
 
-  // --- Finished Status Helper (for all-active-chats) ---
-  const FINISHED_FILE = join(DATA_DIR, 'conv-finished.json');
-  function loadFinished(): Record<string, boolean> {
-    if (!existsSync(FINISHED_FILE)) return {};
-    try { return JSON.parse(readFileSync(FINISHED_FILE, 'utf8')); } catch (err) { console.warn('[Control] Failed to load finished file:', err); return {}; }
-  }
+  // Finished status via shared ConvMetadataStore
   function isFinished(sessionId: string): boolean {
-    return loadFinished()[sessionId] === true;
+    return convMeta.isFinished(sessionId);
   }
 
   // --- Change Detection: Watch src/ and server/, notify frontend (no auto-build) ---
@@ -134,7 +130,7 @@ export default function createControlRouter(deps: ControlDeps): Router {
       ok: true,
       uptime: Math.floor((Date.now() - startTime) / 1000),
       wsClients: clients.size,
-      cuiProxies: CUI_PROXIES.map(c => ({ id: c.id, port: c.localPort, target: c.target })),
+      accounts: ACCOUNT_CONFIG.map(a => ({ id: a.id, label: a.label, home: a.home })),
       frontendConnected: clients.size > 0,
     });
   });
@@ -355,10 +351,11 @@ export default function createControlRouter(deps: ControlDeps): Router {
   });
 
   // ============================================================
-  // All Active Chats API (hybrid: layout scan + visibility registry + finished filter)
+  // All Active Chats API — shows ALL ongoing + recent 24h conversations
+  // This is Rafael's management dashboard: everything not FINISH'd
   // ============================================================
 
-  router.get('/all-active-chats', (_req: Request, res: Response) => {
+  router.get('/all-active-chats', async (_req: Request, res: Response) => {
     interface ActiveChat {
       projectId: string;
       projectName: string;
@@ -369,74 +366,74 @@ export default function createControlRouter(deps: ControlDeps): Router {
       attentionState?: string;
       attentionReason?: string;
       isVisible?: boolean;
+      openInWorkspace?: string;
     }
 
     const chats: ActiveChat[] = [];
     const seenSessions = new Set<string>();
 
-    // Collect visible session IDs from registry (panels actually open in browser)
-    const visibleSessionIds = new Set<string>();
-    for (const entry of visibilityRegistry.values()) {
+    // 1. Collect visibility info (which workspace has which chat open)
+    const sessionToWorkspace = new Map<string, string>();
+    for (const [_key, entry] of visibilityRegistry.entries()) {
       if (entry.sessionId && !entry.panelId.startsWith('allchats-')) {
-        visibleSessionIds.add(entry.sessionId);
+        sessionToWorkspace.set(entry.sessionId, entry.projectId || 'unknown');
       }
     }
 
-    // Scan layout files for all configured CUI panels
-    const projects = readdirSync(PROJECTS_DIR)
-      .filter(f => f.endsWith('.json'))
-      .map(f => { try { return JSON.parse(readFileSync(join(PROJECTS_DIR, f), 'utf8')); } catch (err) { console.warn('[Control] Failed to parse project file:', f, err); return null; } })
-      .filter(Boolean);
+    // 2. Get ALL conversations from the cached conversation list
+    try {
+      const convResp = await fetch(`http://localhost:${process.env.PORT || 4005}/api/mission/conversations`, { signal: AbortSignal.timeout(5000) });
+      if (!convResp.ok) throw new Error('conv fetch failed');
+      const convData = await convResp.json();
+      const conversations = convData.conversations || [];
 
-    function findCuiPanels(node: any, projectId: string, projectName: string, workDir: string): void {
-      if (node.type === 'tab' && (node.component === 'cui' || node.component === 'cui-lite')) {
-        const route: string = node.config?._route || '';
-        const match = route.match(/\/c\/(.+)/);
-        if (match) {
-          const sessionId = match[1];
-          // Skip finished and duplicate sessions
-          if (isFinished(sessionId)) return;
-          if (seenSessions.has(sessionId)) return;
-          seenSessions.add(sessionId);
+      const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
+
+      for (const conv of conversations) {
+        const isOngoing = conv.status === 'ongoing';
+        const isFinishedConv = conv.manualFinished === true;
+        const updatedTime = new Date(conv.updatedAt || 0).getTime();
+        const isRecent = updatedTime > cutoff24h;
+
+        // Show if: not finished AND (ongoing OR recent 24h)
+        if (!isFinishedConv && (isOngoing || isRecent)) {
+          if (seenSessions.has(conv.sessionId)) continue;
+          seenSessions.add(conv.sessionId);
+
           chats.push({
-            projectId,
-            projectName,
-            workDir,
-            panelId: node.id || '',
-            accountId: node.config?.accountId || 'rafael',
-            sessionId,
-            isVisible: visibleSessionIds.has(sessionId),
+            projectId: conv.projectName?.toLowerCase().replace(/[^a-z0-9-]/g, '-') || 'unknown',
+            projectName: conv.projectName || 'Unknown',
+            workDir: conv.projectPath || '',
+            panelId: conv.sessionId,
+            accountId: conv.accountId || 'rafael',
+            sessionId: conv.sessionId,
+            isVisible: sessionToWorkspace.has(conv.sessionId),
+            openInWorkspace: sessionToWorkspace.get(conv.sessionId),
           });
         }
       }
-      if (node.children) for (const child of node.children) findCuiPanels(child, projectId, projectName, workDir);
+    } catch (err) {
+      console.warn('[AllChats] Failed to fetch conversations:', (err as Error).message);
     }
 
-    for (const project of projects) {
-      const layoutPath = join(LAYOUTS_DIR, `${project.id}.json`);
-      if (!existsSync(layoutPath)) continue;
-      try {
-        const layout = JSON.parse(readFileSync(layoutPath, 'utf8'));
-        findCuiPanels(layout.layout || layout, project.id, project.name, project.workDir || '');
-      } catch (err) { console.warn('[Control] Failed to parse layout for project:', project.id, err); }
-    }
-
-    // Enrich with attention states
+    // 3. Enrich with attention states
     const states = getSessionStates();
     for (const chat of chats) {
       for (const [_key, state] of Object.entries(states)) {
-        if (state.sessionId === chat.sessionId || state.accountId === chat.accountId) {
+        if (state.sessionId === chat.sessionId) {
           chat.attentionState = state.state;
           chat.attentionReason = state.reason;
         }
       }
     }
 
-    // Sort: visible first, then needs_attention > working > idle
+    // 4. Sort: needs_attention first, then working, then visible, then by recency
     chats.sort((a, b) => {
       const score = (c: ActiveChat) => {
-        let s = c.attentionState === 'needs_attention' ? 30 : c.attentionState === 'working' ? 20 : 10;
-        if (c.isVisible) s += 100;
+        let s = 0;
+        if (c.attentionState === 'needs_attention') s += 40;
+        if (c.attentionState === 'working') s += 30;
+        if (c.isVisible) s += 20;
         return s;
       };
       return score(b) - score(a);

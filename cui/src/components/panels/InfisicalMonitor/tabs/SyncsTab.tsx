@@ -12,7 +12,7 @@ export default function SyncsTab({ syncs }: Props) {
 
   if (syncs.length === 0) {
     return (
-      <div style={{
+      <div data-ai-id="syncs-tab-empty-state" style={{
         textAlign: 'center',
         padding: '40px 20px',
         color: 'var(--tn-text-muted)',
@@ -24,14 +24,14 @@ export default function SyncsTab({ syncs }: Props) {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+    <div data-ai-id="syncs-tab-container" data-syncs-total={syncs.length} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
       {/* Summary Cards */}
-      <div style={{
+      <div data-ai-id="syncs-tab-summary-cards" style={{
         display: 'grid',
         gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
         gap: '12px',
       }}>
-        <div style={{
+        <div data-ai-id="syncs-tab-summary-succeeded" data-count={succeededSyncs.length} style={{
           padding: '12px',
           background: 'var(--tn-surface)',
           border: '1px solid var(--tn-border)',
@@ -40,12 +40,12 @@ export default function SyncsTab({ syncs }: Props) {
           <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 4 }}>
             Succeeded
           </div>
-          <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--tn-green)' }}>
+          <div data-ai-id="syncs-tab-succeeded-count" style={{ fontSize: 24, fontWeight: 700, color: 'var(--tn-green)' }}>
             {succeededSyncs.length}
           </div>
         </div>
 
-        <div style={{
+        <div data-ai-id="syncs-tab-summary-failed" data-count={failedSyncs.length} style={{
           padding: '12px',
           background: 'var(--tn-surface)',
           border: '1px solid var(--tn-border)',
@@ -54,12 +54,12 @@ export default function SyncsTab({ syncs }: Props) {
           <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 4 }}>
             Failed
           </div>
-          <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--tn-red)' }}>
+          <div data-ai-id="syncs-tab-failed-count" style={{ fontSize: 24, fontWeight: 700, color: 'var(--tn-red)' }}>
             {failedSyncs.length}
           </div>
         </div>
 
-        <div style={{
+        <div data-ai-id="syncs-tab-summary-pending" data-count={pendingSyncs.length} style={{
           padding: '12px',
           background: 'var(--tn-surface)',
           border: '1px solid var(--tn-border)',
@@ -68,26 +68,26 @@ export default function SyncsTab({ syncs }: Props) {
           <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 4 }}>
             Pending
           </div>
-          <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--tn-orange)' }}>
+          <div data-ai-id="syncs-tab-pending-count" style={{ fontSize: 24, fontWeight: 700, color: 'var(--tn-orange)' }}>
             {pendingSyncs.length}
           </div>
         </div>
       </div>
 
       {/* Syncs Table */}
-      <div style={{
+      <div data-ai-id="syncs-tab-table-container" style={{
         background: 'var(--tn-surface)',
         border: '1px solid var(--tn-border)',
         borderRadius: 8,
         overflow: 'hidden',
       }}>
-        <table style={{
+        <table data-ai-id="syncs-tab-table" style={{
           width: '100%',
           borderCollapse: 'collapse',
           fontSize: 11,
         }}>
           <thead>
-            <tr style={{
+            <tr data-ai-id="syncs-tab-table-header" style={{
               background: 'var(--tn-surface-alt)',
               borderBottom: '1px solid var(--tn-border)',
             }}>
@@ -147,6 +147,10 @@ export default function SyncsTab({ syncs }: Props) {
             {syncs.map((sync, idx) => (
               <tr
                 key={idx}
+                data-ai-id={`syncs-tab-table-row-${idx}`}
+                data-sync-project={sync.project}
+                data-sync-status={sync.status}
+                data-sync-integration={sync.integration}
                 style={{
                   borderBottom: '1px solid var(--tn-border)',
                   transition: 'background 0.2s ease',
@@ -159,7 +163,7 @@ export default function SyncsTab({ syncs }: Props) {
                 }}
               >
                 <td style={{ padding: '12px' }}>
-                  <div style={{
+                  <div data-ai-id={`syncs-tab-sync-status-badge-${idx}`} style={{
                     display: 'inline-flex',
                     alignItems: 'center',
                     gap: 6,
@@ -174,7 +178,7 @@ export default function SyncsTab({ syncs }: Props) {
                     fontSize: 10,
                     fontWeight: 600,
                   }}>
-                    <span style={{ fontSize: 12 }}>
+                    <span data-ai-id={`syncs-tab-sync-status-icon-${idx}`} style={{ fontSize: 12 }}>
                       {sync.status === 'succeeded' ? '✓' :
                        sync.status === 'failed' ? '✗' : '⏳'}
                     </span>
@@ -182,12 +186,12 @@ export default function SyncsTab({ syncs }: Props) {
                   </div>
                 </td>
                 <td style={{ padding: '12px' }}>
-                  <span style={{ fontWeight: 500, color: 'var(--tn-text)' }}>
+                  <span data-ai-id={`syncs-tab-sync-project-${idx}`} style={{ fontWeight: 500, color: 'var(--tn-text)' }}>
                     {sync.project}
                   </span>
                 </td>
                 <td style={{ padding: '12px' }}>
-                  <div style={{
+                  <div data-ai-id={`syncs-tab-sync-integration-badge-${idx}`} style={{
                     display: 'inline-flex',
                     padding: '4px 8px',
                     background: sync.integration === 'vercel' ? 'var(--tn-blue-bg, #e3f2fd)' : 'var(--tn-purple-bg, #f3e5f5)',
@@ -201,12 +205,12 @@ export default function SyncsTab({ syncs }: Props) {
                   </div>
                 </td>
                 <td style={{ padding: '12px' }}>
-                  <span style={{ color: 'var(--tn-text-muted)', fontSize: 10 }}>
+                  <span data-ai-id={`syncs-tab-sync-last-sync-${idx}`} style={{ color: 'var(--tn-text-muted)', fontSize: 10 }}>
                     {new Date(sync.lastSync).toLocaleString()}
                   </span>
                 </td>
                 <td style={{ padding: '12px', textAlign: 'center' }}>
-                  <span style={{ fontSize: 14 }}>
+                  <span data-ai-id={`syncs-tab-sync-auto-sync-${idx}`} style={{ fontSize: 14 }}>
                     {sync.autoSync ? '✓' : '✗'}
                   </span>
                 </td>

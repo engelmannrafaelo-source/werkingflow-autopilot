@@ -35,7 +35,7 @@ export default function WerkingReportAdmin() {
   useEffect(() => {
     const loadEnv = () => {
       if ((window as any).__cuiServerAlive === false) return;
-      fetch('/api/admin/wr/env', { signal: AbortSignal.timeout(8000) })
+      fetch('/api/admin/wr/env', { signal: AbortSignal.timeout(20000) })
         .then(r => {
           if (!r.ok) throw new Error(`[WRAdmin] loadEnv failed: HTTP ${r.status}`);
           return r.json();
@@ -87,7 +87,7 @@ export default function WerkingReportAdmin() {
   useEffect(() => {
     const checkHealth = () => {
       if ((window as any).__cuiServerAlive === false) return;
-      fetch('/api/admin/wr/system-health', { signal: AbortSignal.timeout(8000) })
+      fetch('/api/admin/wr/system-health', { signal: AbortSignal.timeout(20000) })
         .then(r => {
           if (!r.ok) throw new Error(`[WRAdmin] checkHealth failed: HTTP ${r.status}`);
           return r.json();
@@ -182,7 +182,7 @@ export default function WerkingReportAdmin() {
                   data-active={envMode === mode}
                   onClick={() => { if (!envLoading && envMode !== mode) switchEnv(mode); }}
                   disabled={envLoading}
-                  title={mode === 'production' ? 'Live production (main branch)' : mode === 'staging' ? 'Staging preview (develop branch)' : 'Local development (localhost:3008)'}
+                  title={mode === 'production' ? 'Live production (main branch)' : mode === 'staging' ? 'Staging preview (develop branch)' : 'Local development server'}
                   style={{
                     padding: '3px 8px',
                     fontSize: 10,

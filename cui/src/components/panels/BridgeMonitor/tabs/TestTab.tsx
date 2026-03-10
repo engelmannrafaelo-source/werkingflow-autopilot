@@ -52,7 +52,7 @@ export default function TestTab() {
     setPingResult(null);
     const t0 = Date.now();
     try {
-      const res = await fetch(`${BRIDGE_URL}/health`, { signal: AbortSignal.timeout(8000) });
+      const res = await fetch(`${BRIDGE_URL}/health`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const latency = Date.now() - t0;
@@ -117,7 +117,7 @@ export default function TestTab() {
     setPingResult(null);
     const t0 = Date.now();
     try {
-      const res = await fetch(`${BRIDGE_URL}/v1/privacy/status`, { signal: AbortSignal.timeout(8000) });
+      const res = await fetch(`${BRIDGE_URL}/v1/privacy/status`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const latency = Date.now() - t0;
@@ -140,7 +140,7 @@ export default function TestTab() {
     setPingResult(null);
     const t0 = Date.now();
     try {
-      const res = await fetch(`${BRIDGE_URL}/lb-status`, { signal: AbortSignal.timeout(8000) });
+      const res = await fetch(`${BRIDGE_URL}/lb-status`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const latency = Date.now() - t0;

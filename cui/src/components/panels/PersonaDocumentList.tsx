@@ -39,7 +39,7 @@ export default function PersonaDocumentList({ personaId, personaName }: PersonaD
     if ((window as any).__cuiServerAlive === false) return;
     try {
       setLoading(true);
-      const response = await fetch(`/api/team/knowledge/persona/${personaId}`, { signal: AbortSignal.timeout(8000) });
+      const response = await fetch(`/api/team/knowledge/persona/${personaId}`, { signal: AbortSignal.timeout(20000) });
 
       if (!response.ok) throw new Error(`[PersonaDocs] load documents failed: HTTP ${response.status}`);
 

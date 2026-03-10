@@ -97,6 +97,7 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.cjs'),
+      additionalArguments: ['--cui-mode=' + (isDevMode ? 'dev' : isLocalMode ? 'local' : 'remote')],
     },
   });
 
@@ -108,11 +109,12 @@ function createWindow() {
   const LOCAL_URL = 'http://localhost:4005';
   const DEV_URL = 'http://localhost:5173';
 
-  const targetURL = isDevMode ? DEV_URL : isLocalMode ? LOCAL_URL : REMOTE_URL;
+  const baseURL = isDevMode ? DEV_URL : isLocalMode ? LOCAL_URL : REMOTE_URL;
   const modeLabel = isDevMode ? 'Dev' : isLocalMode ? 'Local' : 'Remote';
+  const targetURL = `${baseURL}?mode=${modeLabel.toLowerCase()}`;
 
   mainWindow.setTitle(`CUI Workspace [${modeLabel}]`);
-  console.log(`[Electron] Mode: ${modeLabel} → ${targetURL}`);
+  console.log(`[Electron] Mode: ${modeLabel} → ${baseURL}`);
 
   if (isDevMode) {
     mainWindow.webContents.openDevTools({ mode: 'detach' });

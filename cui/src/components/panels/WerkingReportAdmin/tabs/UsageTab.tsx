@@ -52,9 +52,9 @@ export default function UsageTab({ envMode }: { envMode?: string }) {
     setError('');
     try {
       const [statsRes, trendRes, activityRes] = await Promise.all([
-        fetch('/api/admin/wr/usage/stats?period=month', { signal: AbortSignal.timeout(8000) }),
-        fetch('/api/admin/wr/usage/trend', { signal: AbortSignal.timeout(8000) }),
-        fetch('/api/admin/wr/usage/activity', { signal: AbortSignal.timeout(8000) }),
+        fetch('/api/admin/wr/usage/stats?period=month', { signal: AbortSignal.timeout(20000) }),
+        fetch('/api/admin/wr/usage/trend', { signal: AbortSignal.timeout(20000) }),
+        fetch('/api/admin/wr/usage/activity', { signal: AbortSignal.timeout(20000) }),
       ]);
       if (!statsRes.ok) throw new Error(await statsRes.text());
       const [statsData, trendData, activityData] = await Promise.all([
@@ -243,7 +243,7 @@ export default function UsageTab({ envMode }: { envMode?: string }) {
                         onClick={async () => {
                           if ((window as any).__cuiServerAlive === false) return;
                           try {
-                            const res = await fetch(`/api/admin/wr/usage/activity/users?tenantId=${t.tenantId}`, { signal: AbortSignal.timeout(8000) });
+                            const res = await fetch(`/api/admin/wr/usage/activity/users?tenantId=${t.tenantId}`, { signal: AbortSignal.timeout(20000) });
                             if (!res.ok) throw new Error(`HTTP ${res.status}`);
                             const data = await res.json();
                             alert(`Users (${data.totalUsers}):\n\n` + data.users.map((u: any) =>

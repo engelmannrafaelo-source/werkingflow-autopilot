@@ -32,7 +32,7 @@ export default function PersonaChat({ personaId, personaName }: PersonaChatProps
   async function loadHistory() {
     if ((window as any).__cuiServerAlive === false) return;
     try {
-      const response = await fetch(`${API}/team/chat/${personaId}/history`, { signal: AbortSignal.timeout(8000) });
+      const response = await fetch(`${API}/team/chat/${personaId}/history`, { signal: AbortSignal.timeout(20000) });
       if (!response.ok) {
         console.warn(`[PersonaChat] History not available: HTTP ${response.status}`);
         return;

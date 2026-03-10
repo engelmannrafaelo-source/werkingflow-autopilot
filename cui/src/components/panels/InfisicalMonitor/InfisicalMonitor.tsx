@@ -6,11 +6,13 @@
  */
 
 import { useState, useEffect } from 'react';
+import ErrorBoundary from '../../ErrorBoundary';
 import OverviewTab from './tabs/OverviewTab';
 import ProjectsTab from './tabs/ProjectsTab';
 import SyncsTab from './tabs/SyncsTab';
 import HealthTab from './tabs/HealthTab';
 import SettingsTab from './tabs/SettingsTab';
+import EnvironmentTab from './tabs/EnvironmentTab';
 
 const API = '/api';
 
@@ -54,7 +56,7 @@ export interface InfisicalData {
 }
 
 export default function InfisicalMonitor() {
-  const [activeTab, setActiveTab] = useState<'overview' | 'projects' | 'syncs' | 'health' | 'settings'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'projects' | 'syncs' | 'health' | 'environment' | 'settings'>('overview');
   const [data, setData] = useState<InfisicalData>({
     serverInfo: null,
     projects: [],
@@ -111,7 +113,7 @@ export default function InfisicalMonitor() {
   if (loading) {
     return (
       <div
-        data-test-id="loading-indicator"
+        data-ai-id="infisical-monitor-loading"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -128,7 +130,7 @@ export default function InfisicalMonitor() {
   if (error) {
     return (
       <div
-        data-test-id="error-state"
+        data-ai-id="infisical-monitor-error-state"
         style={{
           display: 'flex',
           flexDirection: 'column',
@@ -139,12 +141,12 @@ export default function InfisicalMonitor() {
           padding: '1rem',
         }}>
         <div
-          data-test-id="error-message"
+          data-ai-id="infisical-monitor-error-message"
           style={{ color: 'var(--tn-red)', fontSize: 14 }}>
           Error: {error}
         </div>
         <button
-          data-test-id="retry-button"
+          data-ai-id="infisical-monitor-retry-button"
           onClick={fetchAllData}
           style={{
             padding: '6px 12px',
@@ -167,13 +169,14 @@ export default function InfisicalMonitor() {
     { id: 'projects' as const, label: '📁 Projects' },
     { id: 'syncs' as const, label: '🔄 Syncs' },
     { id: 'health' as const, label: '❤️ Health' },
+    { id: 'environment' as const, label: '🖥️ Environment' },
     { id: 'settings' as const, label: '⚙️ Settings' },
   ];
 
   return (
     <div
       className="infisical-monitor"
-      data-test-id="administration-panel"
+      data-ai-id="infisical-monitor-panel"
       data-panel-id="infisical"
       data-component="InfisicalMonitor"
       style={{
@@ -204,7 +207,7 @@ export default function InfisicalMonitor() {
               Infisical Monitor
             </h3>
             <div
-              data-test-id="infisical-status"
+              data-ai-id="infisical-monitor-status-dot"
               style={{
                 fontSize: 10,
                 color: 'var(--tn-text-muted)',
@@ -214,7 +217,7 @@ export default function InfisicalMonitor() {
             </div>
           </div>
           <button
-            data-test-id="refresh-button"
+            data-ai-id="infisical-monitor-refresh-button"
             onClick={fetchAllData}
             style={{
               padding: '4px 8px',
@@ -241,7 +244,7 @@ export default function InfisicalMonitor() {
           {tabs.map(tab => (
             <button
               key={tab.id}
-              data-test-id={`tab-${tab.id}`}
+              data-ai-id={`infisical-monitor-tab-${tab.id}`}
               onClick={() => setActiveTab(tab.id)}
               style={{
                 padding: '8px 12px',
@@ -262,15 +265,18 @@ export default function InfisicalMonitor() {
       </div>
 
       {/* Tab Content */}
-      <div style={{
-        flex: 1,
-        overflow: 'auto',
-        padding: '16px',
-      }}>
+      <div
+        data-ai-id={`infisical-monitor-content-${activeTab}`}
+        style={{
+          flex: 1,
+          overflow: 'auto',
+          padding: '16px',
+        }}>
         {activeTab === 'overview' && <OverviewTab data={data} onRefresh={fetchAllData} />}
         {activeTab === 'projects' && <ProjectsTab projects={data.projects} onRefresh={fetchAllData} />}
         {activeTab === 'syncs' && <SyncsTab syncs={data.syncs} onRefresh={fetchAllData} />}
         {activeTab === 'health' && <HealthTab health={data.health} onRefresh={fetchAllData} />}
+        {activeTab === 'environment' && <EnvironmentTab />}
         {activeTab === 'settings' && <SettingsTab serverInfo={data.serverInfo} />}
       </div>
     </div>

@@ -19,6 +19,7 @@ interface Message {
   role: 'user' | 'assistant' | 'system' | 'rate_limit' | 'api_error';
   content: string | ContentBlock[];
   timestamp?: string;
+  _streaming?: boolean;
 }
 
 interface Permission {
@@ -38,6 +39,7 @@ interface CuiLitePanelProps {
   onRouteChange?: (route: string) => void;
   initialSessionId?: string;
   onLoadFailed?: (sessionId: string) => void;
+  onFinish?: (sessionId: string) => void;
 }
 
 // --- Markdown Components (Tokyo Night) ---
@@ -75,38 +77,62 @@ const markdownComponents = {
 };
 
 // --- Tool Use Block (interactive) ---
-function ToolUseBlock({ block, onRespond, workDir }: { block: ContentBlock; onRespond?: (text: string) => void; workDir?: string }) {
+function ToolUseBlock({ block, onRespond, workDir, serverPlanText, sessionCwd }: { block: ContentBlock; onRespond?: (text: string) => void; workDir?: string; serverPlanText?: string; sessionCwd?: string }) {
   const [planText, setPlanText] = useState<string | null>(null);
   const [planLoading, setPlanLoading] = useState(false);
   const [responded, setResponded] = useState(false);
 
-  // Load plan text: prefer inline from tool input, fall back to file
+  // Load plan text: prefer server-provided, then inline input, then file fallback
   useEffect(() => {
     if (block.name !== 'ExitPlanMode' || planText !== null) return;
-    // Plan content is included directly in ExitPlanMode tool_use input
+    // 1. Server already read the plan file for us
+    if (serverPlanText && serverPlanText.trim()) {
+      setPlanText(serverPlanText);
+      return;
+    }
+    // 2. Plan content in tool_use input (future-proof)
     const inlinePlan = block.input?.plan as string | undefined;
     if (inlinePlan && inlinePlan.trim()) {
       setPlanText(inlinePlan);
       return;
     }
-    // Fallback: load from file
-    if (!workDir) { setPlanText(''); return; }
+    // 3. Fallback: load from file using sessionCwd (actual session CWD) or workDir (project prop)
+    const effectiveDir = sessionCwd || workDir;
+    if (!effectiveDir) { setPlanText(''); return; }
     setPlanLoading(true);
     if ((window as any).__cuiServerAlive === false) { setPlanLoading(false); return; }
-    fetch(`/api/file-read?path=${encodeURIComponent(workDir + '/.claude/plan.md')}`, { signal: AbortSignal.timeout(5000) })
+    fetch(`/api/file-read?path=${encodeURIComponent(effectiveDir + '/.claude/plan.md')}`, { signal: AbortSignal.timeout(5000) })
       .then(r => r.ok ? r.text() : Promise.reject('not found'))
       .then(text => setPlanText(text))
       .catch((err) => { if (err !== 'not found') console.warn('[CuiLite] Load plan error:', err); setPlanText(''); })
       .finally(() => setPlanLoading(false));
-  }, [block.name, workDir, planText]);
+  }, [block.name, workDir, sessionCwd, serverPlanText, planText]);
 
-  if (block.name === 'AskUserQuestion' && block.input?.questions) {
-    const questions = block.input.questions as Array<{
+  if (block.name === 'AskUserQuestion') {
+    const questions = (block.input?.questions || []) as Array<{
       question: string;
       header?: string;
       options?: Array<{ label: string; description?: string }>;
       multiSelect?: boolean;
     }>;
+    // Fallback: if questions array is empty/missing, show raw input as debug + text input
+    if (questions.length === 0) {
+      const rawText = block.input ? JSON.stringify(block.input, null, 2) : 'Frage ohne Inhalt';
+      return (
+        <div style={{ margin: '8px 0', padding: '10px 14px', background: 'rgba(59,130,246,0.08)', borderRadius: 6, border: '1px solid rgba(59,130,246,0.2)' }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#3B82F6', marginBottom: 8 }}>Frage von Claude</div>
+          <pre style={{ fontSize: 11, color: 'var(--tn-text)', whiteSpace: 'pre-wrap', marginBottom: 8, background: 'var(--tn-bg)', padding: 8, borderRadius: 4 }}>{rawText}</pre>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input
+              type="text"
+              placeholder="Antwort eingeben..."
+              style={{ flex: 1, padding: '6px 10px', fontSize: 12, background: 'var(--tn-bg)', border: '1px solid var(--tn-border)', borderRadius: 4, color: 'var(--tn-text)' }}
+              onKeyDown={(e) => { if (e.key === 'Enter') { onRespond?.((e.target as HTMLInputElement).value); } }}
+            />
+          </div>
+        </div>
+      );
+    }
     return (
       <div style={{ margin: '8px 0', padding: '10px 14px', background: 'rgba(59,130,246,0.08)', borderRadius: 6, border: '1px solid rgba(59,130,246,0.2)' }}>
         {questions.map((q, qi) => (
@@ -256,7 +282,7 @@ function ToolUseBlock({ block, onRespond, workDir }: { block: ContentBlock; onRe
 }
 
 // --- Message Row (memoized: prevents re-rendering 200+ ReactMarkdown instances on poll) ---
-const MessageRow = memo(function MessageRow({ msg, onRespond, isLast, workDir }: { msg: Message; onRespond?: (text: string) => void; isLast: boolean; workDir?: string }) {
+const MessageRow = memo(function MessageRow({ msg, onRespond, isLast, workDir, selectedId, serverPlanText, sessionCwd }: { msg: Message; onRespond?: (text: string) => void; isLast: boolean; workDir?: string; selectedId?: string; serverPlanText?: string; sessionCwd?: string }) {
   const blocks: ContentBlock[] = typeof msg.content === 'string'
     ? [{ type: 'text', text: msg.content }]
     : Array.isArray(msg.content) ? msg.content : [];
@@ -275,6 +301,23 @@ const MessageRow = memo(function MessageRow({ msg, onRespond, isLast, workDir }:
 
   const text = textBlocks.map(b => b.text || '').join('\n');
   if (!text.trim() && toolUseBlocks.length === 0) return null;
+
+  // Streaming partial — render as plain text with pulsing cursor (no Markdown for perf)
+  if (msg._streaming) {
+    const streamText = typeof msg.content === 'string' ? msg.content : '';
+    return (
+      <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--tn-border)' }}>
+        <pre style={{
+          fontFamily: "'JetBrains Mono', monospace", fontSize: 12,
+          color: 'var(--tn-text-subtle)', lineHeight: 1.6,
+          whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0,
+        }}>
+          {streamText}
+          <span style={{ animation: 'pulse 1s ease-in-out infinite', color: '#A855F7' }}>|</span>
+        </pre>
+      </div>
+    );
+  }
 
   // Rate limit and API error messages get special styling
   if (msg.role === 'rate_limit' || msg.role === 'api_error') {
@@ -304,7 +347,7 @@ const MessageRow = memo(function MessageRow({ msg, onRespond, isLast, workDir }:
           fontSize: 11, fontWeight: 600, textTransform: 'uppercase',
           color: msg.role === 'assistant' ? 'var(--tn-green)' : msg.role === 'system' ? 'var(--tn-orange)' : 'var(--tn-blue)',
         }}>
-          {msg.role === 'assistant' ? 'Claude' : msg.role === 'system' ? 'System' : 'User'}
+          {msg.role === 'assistant' ? (selectedId === 'gemini' ? 'Gemini' : 'Claude') : msg.role === 'system' ? 'System' : 'User'}
         </span>
         {msg.timestamp && (
           <span style={{ fontSize: 10, color: 'var(--tn-text-muted)' }}>
@@ -344,7 +387,7 @@ const MessageRow = memo(function MessageRow({ msg, onRespond, isLast, workDir }:
       )}
       {/* Interactive tool_use blocks (last assistant message only) */}
       {interactiveBlocks.map((block, i) => (
-        <ToolUseBlock key={i} block={block} onRespond={onRespond} workDir={workDir} />
+        <ToolUseBlock key={i} block={block} onRespond={onRespond} workDir={workDir} serverPlanText={serverPlanText} sessionCwd={sessionCwd} />
       ))}
     </div>
   );
@@ -372,7 +415,7 @@ function LoadingConversation({ sessionId, onBack, onRetry, onLoadFailed }: { ses
     }
   });
   useEffect(() => {
-    if (elapsed >= 12 && !failedRef.current && onLoadFailed && sessionId) {
+    if (elapsed >= 20 && !failedRef.current && onLoadFailed && sessionId) {
       failedRef.current = true;
       onLoadFailed(sessionId);
     }
@@ -382,7 +425,7 @@ function LoadingConversation({ sessionId, onBack, onRetry, onLoadFailed }: { ses
     <div style={{ textAlign: 'center', color: 'var(--tn-text-muted)', marginTop: 40, fontSize: 13 }}>
       {serverDown ? (
         'Server startet neu...'
-      ) : elapsed < 8 ? (
+      ) : elapsed < 15 ? (
         'Lade Konversation...'
       ) : (
         <>
@@ -405,7 +448,7 @@ function LoadingConversation({ sessionId, onBack, onRetry, onLoadFailed }: { ses
 }
 
 // --- Main Component ---
-export default function CuiLitePanel({ accountId, projectId, workDir, panelId, isTabVisible = true, onRouteChange, initialSessionId, onLoadFailed }: CuiLitePanelProps) {
+export default function CuiLitePanel({ accountId, projectId, workDir, panelId, isTabVisible = true, onRouteChange, initialSessionId, onLoadFailed, onFinish }: CuiLitePanelProps) {
   const storageKey = `cui-lite-account-${panelId || projectId || 'default'}`;
   const persistSession = !initialSessionId; // Don't persist to localStorage for AllChats panels
 
@@ -437,6 +480,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   const [queueRefresh, setQueueRefresh] = useState(0);
   const [attention, setAttention] = useState<'idle' | 'working' | 'needs_attention'>('idle');
   const [attentionReason, setAttentionReason] = useState<string | undefined>();
+  const [currentTool, setCurrentTool] = useState<{ toolName: string; toolDetail?: string; startedAt: number } | null>(null);
   const [permissions, setPermissions] = useState<Permission[]>([]);
   const [rateLimitMessage, setRateLimitMessage] = useState<string | null>(null);
   const [convName, setConvName] = useState('');
@@ -444,6 +488,10 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   const [liveMode, setLiveMode] = useState(false);
   const [isAgentDone, setIsAgentDone] = useState(false);
   const [showAllMessages, setShowAllMessages] = useState(false);
+  const [serverPlanText, setServerPlanText] = useState<string | undefined>();
+  const [sessionCwd, setSessionCwd] = useState<string | undefined>();
+  // Persistent system messages (errors, warnings) — survive poll overwrites
+  const pendingSystemMsgsRef = useRef<Message[]>([]);
 
   // --- Prompt Templates ---
   interface PromptTemplate { id: string; label: string; message: string; category: "reply" | "start"; subject?: string; order: number; createdAt: string; }
@@ -467,11 +515,13 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollFailCountRef = useRef(0);
   const circuitOpenRef = useRef(false); // Circuit breaker: stops polling after persistent failures
+  const panelWsRef = useRef<WebSocket | null>(null);
+  const sessionIdRef = useRef<string | null>(sessionId);
   // Track last poll data to skip redundant setState (avoids re-render + LCP shift)
   const lastPollHashRef = useRef('');
 
   const account = ACCOUNTS.find(a => a.id === selectedId) || ACCOUNTS[0];
-  const pollInterval = liveMode ? 2000 : 15000;
+  const pollInterval = liveMode ? 3000 : 0; // STATIC=0 (no polling, WS only), LIVE=3s fallback
 
   // --- Polling (conversation only — states come via WebSocket) ---
   const pollNow = useCallback(async () => {
@@ -481,7 +531,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     // Skip if circuit breaker is open (persistent 502s for this conversation)
     if (circuitOpenRef.current) return;
     try {
-      const convResp = await fetch(`/api/mission/conversation/${selectedId}/${sessionId}?tail=50`, { signal: AbortSignal.timeout(8000) });
+      const convResp = await fetch(`/api/mission/conversation/${selectedId}/${sessionId}?tail=50`, { signal: AbortSignal.timeout(15000) });
       if (convResp.ok) {
         const data = await convResp.json().catch(() => null);
         if (!data) { console.warn('[CuiLite] Poll: invalid JSON response'); return; }
@@ -495,13 +545,19 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         const hash = `${newMsgs.length}|${lastTs}|${newStatus}|${newPerms.length}|${newName}|${newDone}|${data.rateLimited || ''}`;
         if (hash !== lastPollHashRef.current) {
           lastPollHashRef.current = hash;
-          setMessages(newMsgs);
+          // Append any pending system messages (errors, warnings) that were added between polls
+          const pending = pendingSystemMsgsRef.current;
+          const merged = pending.length > 0 ? [...newMsgs, ...pending] : newMsgs;
+          pendingSystemMsgsRef.current = []; // Clear after merge
+          setMessages(merged);
           // Cache messages for instant load on next visit
           try { localStorage.setItem(`cui-msgs-${sessionId}`, JSON.stringify(newMsgs)); } catch {}
           setConvStatus(newStatus as 'ongoing' | 'completed');
           setPermissions(newPerms);
           setConvName(newName);
           setIsAgentDone(newDone);
+          if (data.planText) setServerPlanText(data.planText);
+          if (data.sessionCwd) setSessionCwd(data.sessionCwd);
           if (data.rateLimited) {
             setAttention('needs_attention');
             setAttentionReason('rate_limit');
@@ -534,7 +590,10 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       .then(r => r.ok ? r.json() : null)
       .then(states => {
         if (!states) return;
-        const myState = states[selectedId];
+        // States are keyed by sessionId, not accountId — look up by current session or find by account
+        const sid = sessionIdRef.current;
+        const myState = sid ? states[sid]
+          : Object.values(states).find((s: any) => s.accountId === selectedId && s.state === 'working') as any;
         if (myState) {
           setAttention(myState.state || 'idle');
           setAttentionReason(myState.reason);
@@ -546,7 +605,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   // Adaptive polling with recursive setTimeout (interval adjusts to failure count)
   useEffect(() => {
     if (!sessionId || !isTabVisible) {
-      if (!isTabVisible && liveMode) setLiveMode(false);
+      if (!isTabVisible) { /* paused: tab not visible */ }
       return;
     }
     let cancelled = false;
@@ -555,9 +614,10 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       // Adaptive delay: backs off on failures, pauses when circuit is open
       const fails = pollFailCountRef.current;
       const delay = circuitOpenRef.current ? 0 // stop scheduling (WS will re-trigger)
+        : pollInterval === 0 ? 0 // STATIC mode — no scheduled polling
         : fails >= 5 ? 60000 // 1 min after 5+ fails
         : fails >= 3 ? 30000 // 30s after 3 fails
-        : pollInterval; // normal: 2s (live) or 15s
+        : pollInterval; // LIVE=3s fallback
       if (delay === 0) return; // circuit open — stop polling
       pollTimerRef.current = setTimeout(async () => {
         if (cancelled) return;
@@ -590,6 +650,16 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     loadTemplates();
   }, [loadTemplates]);
 
+  // Keep sessionIdRef in sync (avoids WS reconnection on every session change)
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+    // Report visibility change to server (session exclusivity)
+    const ws = panelWsRef.current;
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'panel-visibility', panelId, projectId, accountId: selectedId, sessionId: sessionId || '', route: sessionId ? `/c/${sessionId}` : '' }));
+    }
+  }, [sessionId, selectedId, panelId, projectId]);
+
   // --- WS for realtime attention events (auto-reconnect) ---
   useEffect(() => {
     if (!isTabVisible) return;
@@ -606,6 +676,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       }
       const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
       const ws = new WebSocket(`${protocol}://${window.location.host}/ws`);
+      panelWsRef.current = ws;
       ws.onerror = () => {}; // Suppress console noise during server restarts
 
       ws.onopen = () => {
@@ -614,9 +685,33 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         // Server is back — reset circuit breaker and poll immediately
         circuitOpenRef.current = false;
         pollFailCountRef.current = 0;
-        if (sessionId) setTimeout(pollNow, 300);
+        const sid = sessionIdRef.current;
+        if (sid) setTimeout(pollNow, 300);
         // Re-fetch templates (may have failed during server restart)
         loadTemplates();
+        // Report panel visibility to server (session exclusivity)
+        ws.send(JSON.stringify({ type: 'panel-visibility', panelId, projectId, accountId: selectedId, sessionId: sid || '', route: sid ? `/c/${sid}` : '' }));
+        // Re-sync state from server (handles server restarts where in-memory states are lost)
+        if (sid) {
+          fetch('/api/mission/states').then(r => r.ok ? r.json() : null).then(states => {
+            if (!states || disposed) return;
+            const serverState = states[sid];
+            if (!serverState) {
+              // Server doesn't know this session — stale state from before restart
+              console.log(`[CuiLite WS] Session ${sid.slice(0, 8)} not in server states — resetting to idle`);
+              setAttention('idle');
+              setAttentionReason('done');
+            } else if (serverState.state === 'working') {
+              setAttention('working');
+            } else if (serverState.state === 'needs_attention') {
+              setAttention('needs_attention');
+              setAttentionReason(serverState.reason);
+            } else if (serverState.state === 'idle') {
+              setAttention(prev => prev === 'needs_attention' ? prev : 'idle');
+              setAttentionReason(serverState.reason || 'done');
+            }
+          }).catch(() => {}); // ignore network errors during reconnect
+        }
       };
       ws.onclose = () => {
         if (!disposed) {
@@ -631,19 +726,53 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       ws.onmessage = (e) => {
         try {
           const raw = e.data as string;
-          if (!raw.includes(selectedId)) return;
+          // Session exclusivity: check BEFORE accountId filter (message contains claiming panel's account, not ours)
+          const currentSid = sessionIdRef.current;
+          if (raw.includes('session-claimed') && currentSid) {
+            const claimMsg = JSON.parse(raw);
+            if (claimMsg.type === 'session-claimed' && claimMsg.evictPanelId === panelId && claimMsg.sessionId === currentSid) {
+              console.log(`[CuiLite] Session ${currentSid.slice(0, 8)} claimed by ${claimMsg.claimedByPanelId} — closing chat`);
+              setSessionId(null);
+              setShowQueue(true);
+              setMessages([]);
+              setPermissions([]);
+              setConvName('');
+              setAttention('idle');
+              setAttentionReason(undefined);
+              setRateLimitMessage(null);
+              setLiveMode(false);
+              if (persistSession) try { localStorage.removeItem(getSessionKey(selectedId)); } catch {}
+              onRouteChange?.('');
+              return;
+            }
+          }
+          // Navigate to conversation: handle before accountId filter (message may not contain our accountId)
+          if (raw.includes('cui-navigate-conversation') && panelId) {
+            const navMsg = JSON.parse(raw);
+            if (navMsg.type === 'control:cui-navigate-conversation' && navMsg.panelId === panelId) {
+              console.log(`[CuiLite] Navigate to session ${navMsg.sessionId?.slice(0, 8)} (panel=${panelId})`);
+              setSessionId(navMsg.sessionId);
+              circuitOpenRef.current = false;
+              pollFailCountRef.current = 0;
+              setTimeout(pollNow, 300);
+              return;
+            }
+          }
+          // Allow messages for selected account OR for the current session (cross-account visibility)
+          const currentSid2 = sessionIdRef.current;
+          if (!raw.includes(selectedId) && !(currentSid2 && raw.includes(currentSid2))) return;
           const msg = JSON.parse(raw);
-          if (msg.type === 'conv-attention' && (msg.accountId === selectedId || msg.key === selectedId)) {
+          if (msg.type === 'conv-attention' && (msg.accountId === selectedId || msg.key === selectedId || msg.sessionId === currentSid2)) {
             setAttention(msg.state);
             setAttentionReason(msg.reason);
-            if (msg.state === 'needs_attention' && sessionId) {
+            if (msg.state === 'needs_attention' && sessionIdRef.current) {
               // Reset circuit breaker + poll immediately on attention change
               circuitOpenRef.current = false;
               pollFailCountRef.current = 0;
               setTimeout(pollNow, 500);
             }
           }
-          if (msg.type === 'cui-state' && msg.cuiId === selectedId) {
+          if (msg.type === 'cui-state' && (msg.cuiId === selectedId || msg.sessionId === currentSid2)) {
             // Any state change from WS means binary is alive — reset circuit breaker
             circuitOpenRef.current = false;
             pollFailCountRef.current = 0;
@@ -656,7 +785,11 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
               // Don't overwrite rate_limit state — user needs to see it
               setAttention(prev => prev === 'needs_attention' ? prev : 'idle');
               setAttentionReason(prev => prev === 'rate_limit' ? prev : 'done');
-              if (sessionId) {
+              setCurrentTool(null);
+              // Agent finished → scroll to show new output
+              userScrolledUpRef.current = false;
+              if (liveMode) setLiveMode(false); // Auto-exit LIVE when done
+              if (sessionIdRef.current) {
                 setTimeout(pollNow, 500);
               }
             }
@@ -665,11 +798,51 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
               const isRateLimit = msg.message.toLowerCase().includes('rate limit') || msg.message.toLowerCase().includes('nutzungslimit');
               setAttentionReason(isRateLimit ? "rate_limit" : "error");
               setRateLimitMessage(msg.message);
-              if (sessionId) setTimeout(pollNow, 1000);
+              if (sessionIdRef.current) setTimeout(pollNow, 1000);
             }
           }
+          // Tool execution tracking
+          if (msg.type === 'tool-executing' && msg.sessionId === currentSid2) {
+            setCurrentTool({ toolName: msg.toolName, toolDetail: msg.toolDetail, startedAt: msg.startedAt });
+          }
+          if (msg.type === 'tool-done' && msg.sessionId === currentSid2) {
+            setCurrentTool(null);
+          }
+          if (msg.type === 'tool-heartbeat' && msg.sessionId === currentSid2) {
+            setCurrentTool(prev => prev || { toolName: msg.toolName, toolDetail: msg.toolDetail, startedAt: Date.now() - (msg.elapsedMs || 0) });
+          }
+          // Live character streaming (LIVE mode only)
+          if (msg.type === 'cli-partial' && msg.sessionId === sessionIdRef.current && liveMode) {
+            setMessages(prev => {
+              const last = prev[prev.length - 1];
+              if (last?.role === 'assistant' && last._streaming) {
+                return [...prev.slice(0, -1), { ...last, content: msg.content }];
+              }
+              return [...prev, { role: 'assistant' as const, content: msg.content, _streaming: true, timestamp: new Date().toISOString() }];
+            });
+            userScrolledUpRef.current = false;
+          }
+          // Per-turn streaming: assistant message arrived via WS (real-time, no polling needed)
+          if (msg.type === 'turn-update' && msg.sessionId === sessionIdRef.current) {
+            setMessages(prev => {
+              const last = prev[prev.length - 1];
+              // Replace streaming partial with final turn
+              if (last?._streaming) {
+                return [...prev.slice(0, -1), msg.message];
+              }
+              // Dedup: skip if last message has identical content (poll may have already added it)
+              if (last?.role === 'assistant') {
+                const lastContent = typeof last.content === 'string' ? last.content : JSON.stringify(last.content);
+                const newContent = typeof msg.message.content === 'string' ? msg.message.content : JSON.stringify(msg.message.content);
+                if (lastContent === newContent) return prev;
+              }
+              return [...prev, msg.message];
+            });
+            userScrolledUpRef.current = false;
+            lastPollHashRef.current = ''; // Invalidate so next poll re-applies ground truth
+          }
           // Queue refresh on state changes
-          if ((msg.type === 'cui-state' || msg.type === 'cui-response-ready') && msg.cuiId === selectedId) {
+          if ((msg.type === 'cui-state' || msg.type === 'cui-response-ready' || msg.type === 'turn-update') && (msg.cuiId === selectedId || msg.accountId === selectedId || msg.sessionId === currentSid2)) {
             setQueueRefresh(n => n + 1);
           }
         } catch (err) {
@@ -681,9 +854,13 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     connect();
     return () => {
       disposed = true;
+      // CRITICAL: close the WebSocket to prevent connection leak
+      const ws = panelWsRef.current;
+      if (ws) { ws.onclose = null; ws.close(); }
+      panelWsRef.current = null;
       if (reconnectTimer) clearTimeout(reconnectTimer);
     };
-  }, [selectedId, isTabVisible, sessionId, pollNow, loadTemplates]);
+  }, [selectedId, isTabVisible]); // sessionId via ref (no reconnection on navigate), pollNow/loadTemplates are stable callbacks
 
   // Auto-scroll only when user is near bottom (not scrolled up reading)
   useEffect(() => {
@@ -696,7 +873,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (detail?.live !== undefined) setLiveMode(detail.live);
+      if (detail?.live !== undefined) { setLiveMode(detail.live); }
     };
     window.addEventListener('cui-all-live', handler);
     return () => window.removeEventListener('cui-all-live', handler);
@@ -706,24 +883,22 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
 
   // --- Auto-Inject (Loop) Sync ---
   const syncLoopState = useCallback(async () => {
-    if ((window as any).__cuiServerAlive !== true) return;
+    if ((window as any).__cuiServerAlive !== true || !sessionId) return;
     try {
-      const r = await fetch("/api/auto-inject", { signal: AbortSignal.timeout(10000) });
+      const r = await fetch(`/api/auto-inject/session/${sessionId}`, { signal: AbortSignal.timeout(10000) });
       if (!r.ok) return;
-      const state = await r.json().catch(() => null);
-      if (!state) return;
-      const cfg = state.configs?.[selectedId || ""];
-      if (cfg) {
-        setLoopEnabled(cfg.enabled);
-        setLoopIntervalMin(Math.round(cfg.intervalMs / 60000));
-        setLoopMessage(cfg.message);
+      const data = await r.json().catch(() => null);
+      if (!data) return;
+      if (data.config) {
+        setLoopEnabled(data.config.enabled);
+        setLoopIntervalMin(Math.round(data.config.intervalMs / 60000));
+        setLoopMessage(data.config.message);
       } else {
         setLoopEnabled(false);
       }
-      const lastTs = state.lastInject?.[selectedId || ""];
-      setLastInjectTime(lastTs || null);
+      setLastInjectTime(data.lastInject || null);
     } catch { /* timeout expected on slow connections */ }
-  }, [selectedId]);
+  }, [sessionId]);
 
   useEffect(() => { syncLoopState(); }, [syncLoopState]);
 
@@ -738,7 +913,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         await fetch("/api/auto-inject", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          signal: AbortSignal.timeout(8000),
+          signal: AbortSignal.timeout(20000),
           body: JSON.stringify({
             accountId: selectedId,
             sessionId,
@@ -752,8 +927,8 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         await fetch("/api/auto-inject", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          signal: AbortSignal.timeout(8000),
-          body: JSON.stringify({ accountId: selectedId, enabled: false }),
+          signal: AbortSignal.timeout(20000),
+          body: JSON.stringify({ accountId: selectedId, sessionId, enabled: false }),
         });
       }
       setLoopEnabled(enable);
@@ -771,7 +946,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       await fetch("/api/auto-inject", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(8000),
+        signal: AbortSignal.timeout(20000),
         body: JSON.stringify({
           accountId: selectedId,
           sessionId,
@@ -798,7 +973,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ label: newTplLabel, message: newTplMessage }),
-          signal: AbortSignal.timeout(8000),
+          signal: AbortSignal.timeout(20000),
         });
         if (resp.ok) {
           const data = await resp.json().catch(() => null);
@@ -809,7 +984,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ label: newTplLabel, message: newTplMessage, category: 'reply' }),
-          signal: AbortSignal.timeout(8000),
+          signal: AbortSignal.timeout(20000),
         });
         if (resp.ok) {
           const data = await resp.json().catch(() => null);
@@ -829,7 +1004,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       return;
     }
     try {
-      const resp = await fetch(`/api/prompt-templates/${id}`, { method: 'DELETE', signal: AbortSignal.timeout(8000) });
+      const resp = await fetch(`/api/prompt-templates/${id}`, { method: 'DELETE', signal: AbortSignal.timeout(20000) });
       if (resp.ok) setReplyTemplates(prev => prev.filter(t => t.id !== id));
     } catch (err) { console.warn('[CuiLite] Delete template error:', (err as Error).message); }
   }, []);
@@ -846,6 +1021,9 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     if (!overrideMessage) setInput('');
     if (!overrideMessage && planMode) setPlanMode(false);
     setMessages(prev => [...prev, { role: 'user', content: msg, timestamp: new Date().toISOString() }]);
+    // User action → always scroll to bottom
+    userScrolledUpRef.current = false;
+    setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
     setIsAgentDone(false);
     setAttentionReason(undefined);
             setRateLimitMessage(null);
@@ -858,7 +1036,9 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       });
       if (!resp.ok) {
         const errData = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
-        setMessages(prev => [...prev, { role: 'system', content: `Fehler: ${errData.error || 'Senden fehlgeschlagen'}`, timestamp: new Date().toISOString() }]);
+        const errMsg: Message = { role: 'system', content: `Fehler: ${errData.error || 'Senden fehlgeschlagen'}`, timestamp: new Date().toISOString() };
+        pendingSystemMsgsRef.current.push(errMsg); // Survives poll overwrites
+        setMessages(prev => [...prev, errMsg]);
       } else {
         const data = await resp.json().catch(() => ({}));
         // Server auto-recovered from broken resume → switch to new session
@@ -872,14 +1052,17 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       }
     } catch (err) {
       console.error('[CuiLite] Send error:', err);
-      const errMsg = err instanceof DOMException && err.name === 'TimeoutError' ? 'Timeout — Server antwortet nicht' : String(err);
-      setMessages(prev => [...prev, { role: 'system', content: `Netzwerkfehler: ${errMsg}`, timestamp: new Date().toISOString() }]);
+      const errText = err instanceof DOMException && err.name === 'TimeoutError' ? 'Timeout — Server antwortet nicht' : String(err);
+      const errMsg: Message = { role: 'system', content: `Netzwerkfehler: ${errText}`, timestamp: new Date().toISOString() };
+      pendingSystemMsgsRef.current.push(errMsg);
+      setMessages(prev => [...prev, errMsg]);
     }
     setIsLoading(false);
     // Invalidate hash so next poll always applies state (user just sent a message)
     lastPollHashRef.current = '';
-    // Single delayed poll — WS will handle the rest via cui-state/done events
-    setTimeout(pollNow, 2000);
+    // Mark as working immediately (WS turn-update will deliver content in real-time)
+    setAttention('working');
+    setTimeout(pollNow, 1000);
   }, [input, sessionId, selectedId, workDir, planMode, pollNow, onRouteChange]);
 
   // Respond to tool_use blocks (AskUserQuestion, ExitPlanMode, EnterPlanMode)
@@ -907,10 +1090,16 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
           onRouteChange?.(`/c/${data.sessionId}`);
         }
       } else {
-        console.warn('[CuiLite] Respond HTTP error:', resp.status);
+        const errData = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+        const errMsg: Message = { role: 'system', content: `Fehler: ${errData.error || 'Antwort fehlgeschlagen'}`, timestamp: new Date().toISOString() };
+        pendingSystemMsgsRef.current.push(errMsg);
+        setMessages(prev => [...prev, errMsg]);
       }
     } catch (err) {
       console.error('[CuiLite] Respond error:', err);
+      const errMsg: Message = { role: 'system', content: `Netzwerkfehler: ${err instanceof Error ? err.message : String(err)}`, timestamp: new Date().toISOString() };
+      pendingSystemMsgsRef.current.push(errMsg);
+      setMessages(prev => [...prev, errMsg]);
     }
     setIsLoading(false);
     lastPollHashRef.current = '';
@@ -1004,27 +1193,33 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     }
   }, [selectedId, workDir, onRouteChange, persistSession]);
 
-  const handleBack = useCallback(() => {
-    setSessionId(null);
-    setShowQueue(true);
-    setMessages([]);
-    setPermissions([]);
-    setConvName('');
-    setAttention('idle');
-    setAttentionReason(undefined);
-            setRateLimitMessage(null);
-    setLiveMode(false);
-    if (persistSession) try { localStorage.removeItem(getSessionKey(selectedId)); } catch {}
-    onRouteChange?.('');
-  }, [onRouteChange, persistSession]);
+  // handleBack removed — conversations stay mounted until Finish
+
+  const handleFinish = useCallback(async () => {
+    if (!sessionId) return;
+    try {
+      await fetch(`/api/mission/conversation/${sessionId}/finish`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ finished: true }),
+        signal: AbortSignal.timeout(20000),
+      });
+      // Server broadcasts control:conversation-finished -> LayoutManager deleteTab
+      // onFinish as immediate local fallback
+      onFinish?.(sessionId);
+    } catch (e) { console.warn('[CuiLite] Finish error:', e); }
+  }, [sessionId, onFinish]);
 
   // --- Render ---
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--tn-surface)', overflow: 'hidden' }}>
+    <div
+      className={attention === 'working' ? 'cui-panel-border--working' : attention === 'needs_attention' ? 'cui-panel-border--attention' : ''}
+      style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--tn-surface)', overflow: 'hidden' }}
+    >
       {/* Header */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8, padding: '4px 8px',
-        background: 'var(--tn-bg-dark)', borderBottom: '1px solid var(--tn-border)',
+        background: (attention === 'working' && sessionId) ? '#1e3a5f' : (attention === 'needs_attention' && sessionId) ? (attentionReason === 'rate_limit' ? '#4a1515' : '#4a3215') : (attention === 'idle' && attentionReason === 'done' && sessionId) ? '#1a332a' : 'var(--tn-bg-dark)', borderBottom: (attention === 'working' && sessionId) ? '2px solid #3B82F6' : (attention === 'needs_attention' && sessionId) ? (attentionReason === 'rate_limit' ? '2px solid #EF4444' : '2px solid #F59E0B') : (attention === 'idle' && attentionReason === 'done' && sessionId) ? '2px solid #10B981' : '1px solid var(--tn-border)',
         height: 30, flexShrink: 0,
       }}>
         <div style={{
@@ -1050,7 +1245,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ accountId: newAcct }),
-                  signal: AbortSignal.timeout(8000),
+                  signal: AbortSignal.timeout(20000),
                 }).catch((err) => { console.warn('[CuiLite] Assign conversation error:', err); });
               }
               // Save session for BOTH old and new account
@@ -1093,59 +1288,65 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
 
         {/* Status badge */}
         {attention === 'working' && sessionId && (
-          <span style={{ fontSize: 9, color: '#3B82F6', fontWeight: 600, opacity: 0.8, display: 'flex', alignItems: 'center', gap: 3 }}>
-            <span style={{ display: 'inline-block', width: 5, height: 5, borderRadius: '50%', background: '#3B82F6', animation: 'q-pulse 1s ease-in-out infinite' }} />
-            arbeitet
+          <span style={{ fontSize: 9, color: '#3B82F6', fontWeight: 600, opacity: 0.8, display: 'flex', alignItems: 'center', gap: 3, overflow: 'hidden', maxWidth: 220 }}>
+            <span style={{ display: 'inline-block', width: 5, height: 5, borderRadius: '50%', background: '#3B82F6', animation: 'q-pulse 1s ease-in-out infinite', flexShrink: 0 }} />
+            {currentTool ? (
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={currentTool.toolDetail || currentTool.toolName}>
+                {currentTool.toolName}{currentTool.toolDetail ? `: ${currentTool.toolDetail}` : ''}
+              </span>
+            ) : 'arbeitet'}
           </span>
         )}
         {attention === 'idle' && isAgentDone && sessionId && attentionReason === 'done' && (
-          <span style={{ fontSize: 9, color: '#9ece6a', fontWeight: 600 }}>Fertig</span>
+          <span style={{ fontSize: 9, color: '#9ece6a', fontWeight: 600 }}>Wartet</span>
         )}
         {attention === 'needs_attention' && sessionId && (
           <span style={{ fontSize: 9, color: '#F59E0B', fontWeight: 600 }}>
-            {attentionReason === 'plan' ? 'Plan' : attentionReason === 'question' ? 'Frage' : attentionReason === 'rate_limit' ? 'Rate Limit' : attentionReason === 'error' || attentionReason === 'send_failed' ? 'Fehler' : attentionReason === 'done' ? 'Fertig' : 'Aktion'}
+            {attentionReason === 'plan' ? 'Plan' : attentionReason === 'question' ? 'Frage' : attentionReason === 'context_overflow' ? 'Zu lang' : attentionReason === 'rate_limit' ? 'Rate Limit' : attentionReason === 'error' || attentionReason === 'send_failed' ? 'Fehler' : attentionReason === 'done' ? 'Wartet' : 'Aktion'}
           </span>
         )}
 
-        {/* Back to queue - prominent */}
-        {sessionId && (
-          <button onClick={handleBack} title="Zurück zur Konversationsliste" style={{
-            background: 'var(--tn-bg)', color: 'var(--tn-text)',
-            border: '1px solid var(--tn-border)', borderRadius: 4,
-            padding: '1px 6px', fontSize: 12, cursor: 'pointer', fontWeight: 600,
-          }}>
-            &larr;
-          </button>
-        )}
+
 
         {/* Spacer - title moved below header */}
         <span style={{ flex: 1 }} />
 
-        {/* Live toggle */}
+        {/* Live mode toggle */}
         {sessionId && (
-          <button
-            onClick={() => setLiveMode(!liveMode)}
-            title={liveMode ? 'Live-Modus aus (zurueck zu 15s)' : 'Live-Modus an (2s Polling)'}
-            style={{
-              background: liveMode ? 'rgba(239,68,68,0.15)' : 'var(--tn-bg)',
-              color: liveMode ? '#EF4444' : 'var(--tn-text-muted)',
-              border: `1px solid ${liveMode ? '#EF4444' : 'var(--tn-border)'}`,
-              borderRadius: 4, padding: '1px 8px', fontSize: 10, cursor: 'pointer',
-              fontWeight: liveMode ? 700 : 400,
-            }}
-          >
-            {liveMode ? 'Live' : 'Live'}
+          <button onClick={() => setLiveMode(prev => !prev)} style={{
+            background: liveMode ? 'rgba(168,85,247,0.15)' : 'none',
+            border: `1px solid ${liveMode ? '#A855F7' : 'var(--tn-border)'}`,
+            color: liveMode ? '#A855F7' : 'var(--tn-text-muted)',
+            borderRadius: 4, padding: '1px 8px', fontSize: 10,
+            cursor: 'pointer', fontWeight: liveMode ? 700 : 400,
+            transition: 'all 0.2s',
+            animation: liveMode ? 'live-pulse 2s ease-in-out infinite' : undefined,
+            boxShadow: liveMode ? '0 0 8px rgba(168,85,247,0.3)' : 'none',
+          }}>
+            {liveMode ? '\u25CF Live' : '\u23F8 Static'}
           </button>
         )}
 
         {/* Manual refresh */}
-        {sessionId && !liveMode && (
+        {sessionId && (
           <button onClick={() => { lastPollHashRef.current = ''; pollNow(); }} style={{
             background: 'var(--tn-bg)', color: 'var(--tn-text-muted)',
             border: '1px solid var(--tn-border)', borderRadius: 4,
             padding: '1px 8px', fontSize: 10, cursor: 'pointer',
           }}>
             Refresh
+          </button>
+        )}
+
+        {/* Finish button — persistent close */}
+        {sessionId && (
+          <button onClick={handleFinish} title="Konversation abschließen"
+            style={{
+              background: 'transparent', color: '#EF4444',
+              border: '1px solid #EF4444', borderRadius: 4,
+              padding: '1px 6px', fontSize: 10, cursor: 'pointer', fontWeight: 600,
+            }}>
+            Finish
           </button>
         )}
 
@@ -1178,6 +1379,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
           background: attentionReason === 'plan' ? 'rgba(245,158,11,0.12)'
             : attentionReason === 'question' ? 'rgba(59,130,246,0.12)'
             : attentionReason === 'rate_limit' ? 'rgba(239,68,68,0.08)'
+            : attentionReason === 'context_overflow' ? 'rgba(224,175,104,0.12)'
             : 'rgba(239,68,68,0.12)',
           borderBottom: '1px solid var(--tn-border)',
           display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0,
@@ -1186,11 +1388,13 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
             fontSize: 12, fontWeight: 700,
             color: attentionReason === 'plan' ? '#F59E0B'
               : attentionReason === 'question' ? '#3B82F6'
+              : attentionReason === 'context_overflow' ? '#e0af68'
               : attentionReason === 'rate_limit' ? '#EF4444'
               : '#EF4444',
           }}>
             {attentionReason === 'plan' ? 'Plan wartet auf Freigabe'
-              : attentionReason === 'question' ? 'Claude hat eine Frage'
+              : attentionReason === 'question' ? `${selectedId === 'gemini' ? 'Gemini' : 'Claude'} hat eine Frage`
+              : attentionReason === 'context_overflow' ? 'Kontext zu lang — Nachricht erneut senden, wird automatisch kompaktiert.'
               : attentionReason === 'rate_limit' ? 'Rate Limit — Account hat das Nutzungslimit erreicht. Anderen Account verwenden!'
               : (attentionReason === 'error' || attentionReason === 'send_failed') ? (rateLimitMessage || 'Nachricht konnte nicht zugestellt werden. Bitte erneut versuchen.')
               : 'Aktion erforderlich'}
@@ -1276,13 +1480,13 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
             onScroll={() => {
               const el = scrollContainerRef.current;
               if (!el) return;
-              // "Near bottom" = within 80px of the end
-              userScrolledUpRef.current = el.scrollTop + el.clientHeight < el.scrollHeight - 80;
+              // "Near bottom" = within 150px of the end (80px was too tight, missed scroll)
+              userScrolledUpRef.current = el.scrollTop + el.clientHeight < el.scrollHeight - 150;
             }}
             style={{ flex: 1, overflow: 'auto', minHeight: 0 }}
           >
             {messages.length === 0 && (
-              <LoadingConversation sessionId={sessionId} onBack={() => { setSessionId(null); setShowQueue(true); }} onRetry={pollNow} onLoadFailed={onLoadFailed} />
+              <LoadingConversation sessionId={sessionId} onBack={() => { if (sessionId) onLoadFailed?.(sessionId); }} onRetry={pollNow} onLoadFailed={onLoadFailed} />
             )}
             {messages.length > 15 && !showAllMessages && (
               <button onClick={() => setShowAllMessages(true)} style={{
@@ -1293,7 +1497,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
               </button>
             )}
             {(showAllMessages ? messages : messages.slice(-15)).map((msg, i, arr) => (
-              <MessageRow key={msg.timestamp || i} msg={msg} onRespond={handleRespond} isLast={i === arr.length - 1} workDir={workDir} />
+              <MessageRow key={msg.timestamp || i} msg={msg} onRespond={handleRespond} isLast={i === arr.length - 1} workDir={workDir} selectedId={selectedId} serverPlanText={serverPlanText} sessionCwd={sessionCwd} />
             ))}
             <div ref={messagesEndRef} />
           </div>
@@ -1303,9 +1507,81 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
             padding: '8px 12px', borderTop: '1px solid var(--tn-border)',
             background: 'var(--tn-bg-dark)', flexShrink: 0,
           }}>
-            {planMode && (
-              <div style={{ fontSize: 11, color: '#F59E0B', marginBottom: 4, fontWeight: 600 }}>
-                Plan-Modus aktiv — Claude plant zuerst
+            {/* Action Buttons Row - Plan, Loop, Stop, ... */}
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 4 }}>
+              <button
+                onClick={() => setPlanMode(!planMode)}
+                title={`Plan-Modus: ${selectedId === 'gemini' ? 'Gemini' : 'Claude'} plant zuerst`}
+                style={{
+                  padding: '4px 8px', borderRadius: 4, cursor: 'pointer', flexShrink: 0,
+                  background: planMode ? 'rgba(245,158,11,0.15)' : 'var(--tn-bg)',
+                  border: `1px solid ${planMode ? '#F59E0B' : 'var(--tn-border)'}`,
+                  color: planMode ? '#F59E0B' : 'var(--tn-text-muted)',
+                  fontSize: 11, fontWeight: planMode ? 700 : 400,
+                }}
+              >
+                Plan
+              </button>
+              <button
+                onClick={() => { if (loopEnabled) { toggleLoop(false); } else { toggleLoop(true); } }}
+                onContextMenu={(e) => { e.preventDefault(); setShowLoopConfig(!showLoopConfig); }}
+                title={loopEnabled ? "Loop stoppen (Klick)" : "Loop starten (Klick) | Config (Rechtsklick)"}
+                style={{
+                  padding: "4px 8px", borderRadius: 4, cursor: "pointer", flexShrink: 0,
+                  background: loopEnabled ? "rgba(16,185,129,0.15)" : "var(--tn-bg)",
+                  border: `1px solid ${loopEnabled ? "#10B981" : "var(--tn-border)"}`,
+                  color: loopEnabled ? "#10B981" : "var(--tn-text-muted)",
+                  fontSize: 11, fontWeight: loopEnabled ? 700 : 400,
+                }}
+              >
+                {loopEnabled ? "Loop u25CF" : "Loop"}
+              </button>
+              <button
+                onClick={handleStop}
+                title="Konversation stoppen"
+                style={{
+                  padding: '4px 8px', borderRadius: 4, fontSize: 11, cursor: 'pointer', flexShrink: 0,
+                  background: (convStatus === 'ongoing' || attention === 'working') ? '#EF4444' : 'var(--tn-bg)',
+                  border: `1px solid ${(convStatus === 'ongoing' || attention === 'working') ? '#EF4444' : 'var(--tn-border)'}`,
+                  color: (convStatus === 'ongoing' || attention === 'working') ? '#fff' : 'var(--tn-text-muted)',
+                  fontWeight: 600,
+                }}
+              >
+                Stop
+              </button>
+              <button
+                onClick={() => { setShowTemplateForm(true); setEditingTemplate(null); setNewTplLabel(''); setNewTplMessage(''); }}
+                title="Neues Template erstellen"
+                style={{ padding: '4px 8px', borderRadius: 4, fontSize: 11, cursor: 'pointer', background: 'transparent', border: '1px dashed var(--tn-border)', color: 'var(--tn-text-muted)', opacity: 0.6 }}
+              >
+                ...
+              </button>
+              {planMode && (
+                <span style={{ fontSize: 10, color: '#F59E0B', fontWeight: 600, marginLeft: 4 }}>
+                  Plan-Modus
+                </span>
+              )}
+            </div>
+            {/* Loop Config Panel */}
+            {showLoopConfig && (
+              <div style={{ marginBottom: 4, padding: 6, background: "var(--tn-bg)", border: "1px solid #10B981", borderRadius: 4 }}>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4 }}>
+                  <span style={{ fontSize: 10, color: "#10B981", fontWeight: 600 }}>Loop Config</span>
+                  <label style={{ fontSize: 10, color: "var(--tn-text-muted)" }}>Interval:</label>
+                  <select value={loopIntervalMin} onChange={e => setLoopIntervalMin(Number(e.target.value))} style={{ padding: "2px 4px", fontSize: 10, background: "var(--tn-bg-dark)", color: "var(--tn-text)", border: "1px solid var(--tn-border)", borderRadius: 3 }}>
+                    <option value={1}>1 min</option>
+                    <option value={2}>2 min</option>
+                    <option value={3}>3 min</option>
+                    <option value={5}>5 min</option>
+                    <option value={10}>10 min</option>
+                    <option value={15}>15 min</option>
+                  </select>
+                  <div style={{ flex: 1 }} />
+                  <button onClick={() => { toggleLoop(true); setShowLoopConfig(false); }} style={{ padding: "3px 10px", borderRadius: 3, fontSize: 10, cursor: "pointer", background: "#10B981", border: "none", color: "#fff", fontWeight: 600 }}>Start</button>
+                  <button onClick={() => setShowLoopConfig(false)} style={{ padding: "3px 6px", borderRadius: 3, fontSize: 10, cursor: "pointer", background: "transparent", border: "1px solid var(--tn-border)", color: "var(--tn-text-muted)" }}>X</button>
+                </div>
+                <textarea value={loopMessage} onChange={e => setLoopMessage(e.target.value)} placeholder="Auto-Inject Nachricht..." rows={2} style={{ width: "100%", padding: "4px 6px", fontSize: 10, background: "var(--tn-bg-dark)", color: "var(--tn-text)", border: "1px solid var(--tn-border)", borderRadius: 3, fontFamily: "inherit", resize: "vertical", minHeight: 36, boxSizing: "border-box", lineHeight: "1.3" }} />
+                {lastInjectTime && <div style={{ fontSize: 9, color: "var(--tn-text-muted)", marginTop: 2 }}>Letzter Inject: {new Date(lastInjectTime).toLocaleTimeString("de-DE")}</div>}
               </div>
             )}
             {/* Prompt Template Cards */}
@@ -1330,15 +1606,9 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
                     </button>
                   </div>
                 ))}
-                <button
-                  onClick={() => { setShowTemplateForm(true); setEditingTemplate(null); setNewTplLabel(''); setNewTplMessage(''); }}
-                  title="Neues Template erstellen"
-                  style={{ padding: '4px 10px', borderRadius: 4, fontSize: 11, cursor: 'pointer', background: 'transparent', border: '1px dashed var(--tn-border)', color: 'var(--tn-text-muted)', opacity: 0.6, alignSelf: 'stretch', display: 'flex', alignItems: 'center' }}
-                >
-                  + Neu
-                </button>
               </div>
             )}
+            {/* Template Form */}
             {showTemplateForm && (
               <div style={{ marginBottom: 4, padding: 6, background: 'var(--tn-bg)', border: '1px solid var(--tn-blue)', borderRadius: 4 }}>
                 <div style={{ display: 'flex', gap: 4, marginBottom: 4 }}>
@@ -1351,54 +1621,8 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
                 <textarea value={newTplMessage} onChange={e => setNewTplMessage(e.target.value)} placeholder="Prompt-Text eingeben..." rows={3} onKeyDown={e => { if (e.key === 'Escape') { setShowTemplateForm(false); setEditingTemplate(null); } }} style={{ width: '100%', padding: '4px 6px', fontSize: 11, background: 'var(--tn-bg-dark)', color: 'var(--tn-text)', border: '1px solid var(--tn-border)', borderRadius: 3, fontFamily: 'inherit', resize: 'vertical', minHeight: 50, boxSizing: 'border-box', lineHeight: '1.4' }} />
               </div>
             )}
-            {showLoopConfig && (
-              <div style={{ marginBottom: 4, padding: 6, background: "var(--tn-bg)", border: "1px solid #10B981", borderRadius: 4 }}>
-                <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4 }}>
-                  <span style={{ fontSize: 10, color: "#10B981", fontWeight: 600 }}>Loop Config</span>
-                  <label style={{ fontSize: 10, color: "var(--tn-text-muted)" }}>Interval:</label>
-                  <select value={loopIntervalMin} onChange={e => setLoopIntervalMin(Number(e.target.value))} style={{ padding: "2px 4px", fontSize: 10, background: "var(--tn-bg-dark)", color: "var(--tn-text)", border: "1px solid var(--tn-border)", borderRadius: 3 }}>
-                    <option value={1}>1 min</option>
-                    <option value={2}>2 min</option>
-                    <option value={3}>3 min</option>
-                    <option value={5}>5 min</option>
-                    <option value={10}>10 min</option>
-                    <option value={15}>15 min</option>
-                  </select>
-                  <div style={{ flex: 1 }} />
-                  <button onClick={() => { toggleLoop(true); setShowLoopConfig(false); }} style={{ padding: "3px 10px", borderRadius: 3, fontSize: 10, cursor: "pointer", background: "#10B981", border: "none", color: "#fff", fontWeight: 600 }}>Start</button>
-                  <button onClick={() => setShowLoopConfig(false)} style={{ padding: "3px 6px", borderRadius: 3, fontSize: 10, cursor: "pointer", background: "transparent", border: "1px solid var(--tn-border)", color: "var(--tn-text-muted)" }}>X</button>
-                </div>
-                <textarea value={loopMessage} onChange={e => setLoopMessage(e.target.value)} placeholder="Auto-Inject Nachricht..." rows={2} style={{ width: "100%", padding: "4px 6px", fontSize: 10, background: "var(--tn-bg-dark)", color: "var(--tn-text)", border: "1px solid var(--tn-border)", borderRadius: 3, fontFamily: "inherit", resize: "vertical", minHeight: 36, boxSizing: "border-box", lineHeight: "1.3" }} />
-                {lastInjectTime && <div style={{ fontSize: 9, color: "var(--tn-text-muted)", marginTop: 2 }}>Letzter Inject: {new Date(lastInjectTime).toLocaleTimeString("de-DE")}</div>}
-              </div>
-            )}
+            {/* Input Row - Textarea + Send */}
             <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
-              <button
-                onClick={() => setPlanMode(!planMode)}
-                title="Plan-Modus: Claude plant zuerst"
-                style={{
-                  padding: '6px 8px', borderRadius: 4, cursor: 'pointer', flexShrink: 0,
-                  background: planMode ? 'rgba(245,158,11,0.15)' : 'var(--tn-bg)',
-                  border: `1px solid ${planMode ? '#F59E0B' : 'var(--tn-border)'}`,
-                  color: planMode ? '#F59E0B' : 'var(--tn-text-muted)',
-                  fontSize: 11, fontWeight: planMode ? 700 : 400,
-                }}
-              >
-                Plan
-              </button>
-              <button
-                onClick={() => { if (loopEnabled) { toggleLoop(false); } else { setShowLoopConfig(!showLoopConfig); } }}
-                title={loopEnabled ? "Loop stoppen" : "Auto-Inject Loop konfigurieren"}
-                style={{
-                  padding: "6px 8px", borderRadius: 4, cursor: "pointer", flexShrink: 0,
-                  background: loopEnabled ? "rgba(16,185,129,0.15)" : "var(--tn-bg)",
-                  border: `1px solid ${loopEnabled ? "#10B981" : "var(--tn-border)"}`,
-                  color: loopEnabled ? "#10B981" : "var(--tn-text-muted)",
-                  fontSize: 11, fontWeight: loopEnabled ? 700 : 400,
-                }}
-              >
-                {loopEnabled ? "Loop u25CF" : "Loop"}
-              </button>
               <textarea
                 ref={textareaRef}
                 value={input}
@@ -1410,27 +1634,14 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
                   }
                 }}
                 placeholder={planMode ? 'Aufgabe beschreiben... (Plan-Modus)' : 'Nachricht... (Enter = Senden)'}
-                rows={1}
+                rows={2}
                 style={{
-                  flex: 1, resize: 'none', padding: '6px 10px', fontSize: 13,
+                  flex: 1, resize: 'vertical', padding: '6px 10px', fontSize: 13,
                   background: 'var(--tn-bg)', color: 'var(--tn-text)',
                   border: `1px solid ${planMode ? '#F59E0B' : 'var(--tn-border)'}`, borderRadius: 4,
-                  fontFamily: 'inherit', maxHeight: 120, minHeight: 32,
+                  fontFamily: 'inherit', maxHeight: 120, minHeight: 48,
                 }}
               />
-              <button
-                onClick={handleStop}
-                title="Konversation stoppen"
-                style={{
-                  padding: '6px 8px', borderRadius: 4, fontSize: 12, cursor: 'pointer', flexShrink: 0,
-                  background: (convStatus === 'ongoing' || attention === 'working') ? '#EF4444' : 'var(--tn-bg)',
-                  border: `1px solid ${(convStatus === 'ongoing' || attention === 'working') ? '#EF4444' : 'var(--tn-border)'}`,
-                  color: (convStatus === 'ongoing' || attention === 'working') ? '#fff' : 'var(--tn-text-muted)',
-                  fontWeight: 600,
-                }}
-              >
-                Stop
-              </button>
               <button
                 onClick={() => handleSend()}
                 disabled={!input.trim() || isLoading}
@@ -1439,6 +1650,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
                   background: input.trim() && !isLoading ? (planMode ? '#F59E0B' : '#3B82F6') : 'var(--tn-border)',
                   border: 'none', color: '#fff', fontWeight: 600,
                   opacity: input.trim() && !isLoading ? 1 : 0.5,
+                  alignSelf: 'stretch',
                 }}
               >
                 {isLoading ? '...' : planMode ? 'Planen' : 'Senden'}

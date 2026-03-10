@@ -43,7 +43,7 @@ export default function NotificationBell({ envMode }: NotificationBellProps) {
   const fetchNotifications = async () => {
     if ((window as any).__cuiServerAlive === false) return;
     try {
-      const res = await fetch('/api/admin/wr/notifications', { signal: AbortSignal.timeout(8000) });
+      const res = await fetch('/api/admin/wr/notifications', { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setNotifications(data.notifications || []);

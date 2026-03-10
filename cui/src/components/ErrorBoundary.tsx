@@ -58,6 +58,22 @@ export default class ErrorBoundary extends Component<Props, State> {
       errorInfo.componentStack,
     );
     this.setState({ componentStack: errorInfo.componentStack ?? null });
+
+    // Auto-reload on stale chunk errors (after rebuild, old hashes become 404)
+    const isChunkError = error.message?.includes('Failed to fetch dynamically imported module')
+      || error.message?.includes('Loading chunk')
+      || error.message?.includes('Loading CSS chunk');
+    if (isChunkError) {
+      const reloadKey = 'cui-chunk-reload';
+      const lastReload = sessionStorage.getItem(reloadKey);
+      const now = Date.now();
+      // Only auto-reload once per 30 seconds to prevent reload loops
+      if (!lastReload || now - parseInt(lastReload, 10) > 30000) {
+        console.warn(`[ErrorBoundary] Stale chunk detected for "${label}", reloading page...`);
+        sessionStorage.setItem(reloadKey, String(now));
+        window.location.reload();
+      }
+    }
   }
 
   private handleReset = () => {

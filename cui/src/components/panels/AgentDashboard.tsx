@@ -81,7 +81,7 @@ function MemoryLog({ personaId }: { personaId: string }) {
 
   useEffect(() => {
     if ((window as any).__cuiServerAlive === false) return;
-    fetch(`${API}/agents/memory/${personaId}?n=10`, { signal: AbortSignal.timeout(8000) })
+    fetch(`${API}/agents/memory/${personaId}?n=10`, { signal: AbortSignal.timeout(20000) })
       .then(r => {
         if (!r.ok) throw new Error(`memory fetch failed: ${r.status} ${r.statusText}`);
         return r.json();
@@ -126,7 +126,7 @@ function InboxView({ personaId }: { personaId: string }) {
 
   useEffect(() => {
     if ((window as any).__cuiServerAlive === false) return;
-    fetch(`${API}/agents/inbox/${personaId}`, { signal: AbortSignal.timeout(8000) })
+    fetch(`${API}/agents/inbox/${personaId}`, { signal: AbortSignal.timeout(20000) })
       .then(r => {
         if (!r.ok) throw new Error(`inbox fetch failed: ${r.status} ${r.statusText}`);
         return r.json();
@@ -160,7 +160,7 @@ function ApprovalsView({ onApproved }: { onApproved: () => void }) {
 
   const load = useCallback(() => {
     if ((window as any).__cuiServerAlive === false) return;
-    fetch(`${API}/agents/approvals`, { signal: AbortSignal.timeout(8000) })
+    fetch(`${API}/agents/approvals`, { signal: AbortSignal.timeout(20000) })
       .then(r => {
         if (!r.ok) throw new Error(`approvals fetch failed: ${r.status} ${r.statusText}`);
         return r.json();
@@ -234,7 +234,7 @@ function BriefView({ personaId }: { personaId: string }) {
 
   useEffect(() => {
     if ((window as any).__cuiServerAlive === false) return;
-    fetch(`${API}/agents/briefs`, { signal: AbortSignal.timeout(8000) })
+    fetch(`${API}/agents/briefs`, { signal: AbortSignal.timeout(20000) })
       .then(r => {
         if (!r.ok) throw new Error(`briefs list fetch failed: ${r.status} ${r.statusText}`);
         return r.json();
@@ -252,7 +252,7 @@ function BriefView({ personaId }: { personaId: string }) {
     if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     setSelectedBrief(name);
-    fetch(`${API}/agents/brief/${name}`, { signal: AbortSignal.timeout(8000) })
+    fetch(`${API}/agents/brief/${name}`, { signal: AbortSignal.timeout(20000) })
       .then(r => {
         if (!r.ok) throw new Error(`brief fetch failed: ${r.status} ${r.statusText}`);
         return r.text();
@@ -430,7 +430,7 @@ export default function AgentDashboard() {
   const loadStatus = useCallback(async () => {
     if ((window as any).__cuiServerAlive === false) return;
     try {
-      const res = await fetch(`${API}/agents/status`, { signal: AbortSignal.timeout(8000) });
+      const res = await fetch(`${API}/agents/status`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`status fetch failed: ${res.status} ${res.statusText}`);
       const data = await res.json();
       setAgents(data.agents ?? []);

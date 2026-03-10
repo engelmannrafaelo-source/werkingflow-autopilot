@@ -55,7 +55,7 @@ export default function ReviewQueue() {
     if ((window as any).__cuiServerAlive === false) return;
     try {
       setLoading(true);
-      const response = await fetch(`${API}/team/reviews`, { signal: AbortSignal.timeout(8000) });
+      const response = await fetch(`${API}/team/reviews`, { signal: AbortSignal.timeout(20000) });
       if (!response.ok) throw new Error('Failed to load reviews');
       const data = await response.json();
       setReviews(data);

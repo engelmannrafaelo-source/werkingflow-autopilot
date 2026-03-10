@@ -14,7 +14,7 @@ export default function LinkedInPanel() {
     setError(null);
     (async () => {
       try {
-        const res = await fetch(`${API}/file?path=${encodeURIComponent(LINKEDIN_FILE)}`, { signal: AbortSignal.timeout(8000) });
+        const res = await fetch(`${API}/file?path=${encodeURIComponent(LINKEDIN_FILE)}`, { signal: AbortSignal.timeout(20000) });
         if (!res.ok) throw new Error(`[LinkedInPanel] load file failed: HTTP ${res.status}`);
         const data = await res.json();
         if (data.error) throw new Error(data.error);

@@ -117,7 +117,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/admin/wr/billing/overview', { signal: AbortSignal.timeout(8000) });
+      const res = await fetch('/api/admin/wr/billing/overview', { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(await res.text());
       const result = await res.json();
       setData(result);
@@ -133,7 +133,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
     if ((window as any).__cuiServerAlive === false) return;
     setLoadingInvoices(true);
     try {
-      const res = await fetch('/api/admin/wr/billing/invoices', { signal: AbortSignal.timeout(8000) });
+      const res = await fetch('/api/admin/wr/billing/invoices', { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(await res.text());
       const result = await res.json();
       setInvoices(result.invoices || []);
@@ -149,8 +149,8 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
     setLoadingUsage(true);
     try {
       const [statsRes, activityRes] = await Promise.all([
-        fetch('/api/admin/wr/usage/stats', { signal: AbortSignal.timeout(8000) }),
-        fetch('/api/admin/wr/usage/activity', { signal: AbortSignal.timeout(8000) }),
+        fetch('/api/admin/wr/usage/stats', { signal: AbortSignal.timeout(20000) }),
+        fetch('/api/admin/wr/usage/activity', { signal: AbortSignal.timeout(20000) }),
       ]);
 
       if (!statsRes.ok) throw new Error(`stats HTTP ${statsRes.status}`);
@@ -172,7 +172,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
     if ((window as any).__cuiServerAlive === false) return;
     setLoadingEvents(true);
     try {
-      const res = await fetch(`/api/admin/wr/billing/events/${tenantId}`, { signal: AbortSignal.timeout(8000) });
+      const res = await fetch(`/api/admin/wr/billing/events/${tenantId}`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(await res.text());
       const result = await res.json();
       setEvents(result.events || []);

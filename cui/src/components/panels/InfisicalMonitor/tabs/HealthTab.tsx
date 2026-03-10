@@ -8,7 +8,7 @@ interface Props {
 export default function HealthTab({ health, onRefresh }: Props) {
   if (!health) {
     return (
-      <div style={{
+      <div data-ai-id="health-tab-empty-state" style={{
         textAlign: 'center',
         padding: '40px 20px',
         color: 'var(--tn-text-muted)',
@@ -22,19 +22,19 @@ export default function HealthTab({ health, onRefresh }: Props) {
   const isHealthy = health.status === 'healthy';
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+    <div data-ai-id="health-tab-container" data-health-status={health.status} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
       {/* Status Card */}
-      <div style={{
+      <div data-ai-id="health-tab-status-card" style={{
         padding: '24px',
         background: isHealthy ? 'var(--tn-green-bg, #e8f5e9)' : 'var(--tn-red-bg, #ffebee)',
         border: `2px solid ${isHealthy ? 'var(--tn-green, #2e7d32)' : 'var(--tn-red, #c62828)'}`,
         borderRadius: 8,
         textAlign: 'center',
       }}>
-        <div style={{ fontSize: 48, marginBottom: 12 }}>
+        <div data-ai-id="health-tab-status-icon" style={{ fontSize: 48, marginBottom: 12 }}>
           {isHealthy ? '✓' : '✗'}
         </div>
-        <div style={{
+        <div data-ai-id="health-tab-status-text" style={{
           fontSize: 24,
           fontWeight: 700,
           color: isHealthy ? 'var(--tn-green, #2e7d32)' : 'var(--tn-red, #c62828)',
@@ -43,7 +43,7 @@ export default function HealthTab({ health, onRefresh }: Props) {
         }}>
           {health.status}
         </div>
-        <div style={{
+        <div data-ai-id="health-tab-server-url" style={{
           fontSize: 11,
           color: 'var(--tn-text-muted)',
           fontFamily: 'monospace',
@@ -54,7 +54,7 @@ export default function HealthTab({ health, onRefresh }: Props) {
 
       {/* Error Details (if unhealthy) */}
       {!isHealthy && health.error && (
-        <div style={{
+        <div data-ai-id="health-tab-error-details" style={{
           padding: '16px',
           background: 'var(--tn-surface)',
           border: '1px solid var(--tn-red)',
@@ -68,7 +68,7 @@ export default function HealthTab({ health, onRefresh }: Props) {
           }}>
             Error Details
           </h4>
-          <pre style={{
+          <pre data-ai-id="health-tab-error-message" style={{
             margin: 0,
             fontSize: 10,
             color: 'var(--tn-text)',
@@ -83,7 +83,7 @@ export default function HealthTab({ health, onRefresh }: Props) {
 
       {/* Response Data (if healthy) */}
       {isHealthy && health.response && (
-        <div style={{
+        <div data-ai-id="health-tab-response-details" style={{
           padding: '16px',
           background: 'var(--tn-surface)',
           border: '1px solid var(--tn-border)',
@@ -97,7 +97,7 @@ export default function HealthTab({ health, onRefresh }: Props) {
           }}>
             Server Response
           </h4>
-          <pre style={{
+          <pre data-ai-id="health-tab-response-data" style={{
             margin: 0,
             fontSize: 10,
             color: 'var(--tn-text-muted)',
@@ -113,7 +113,7 @@ export default function HealthTab({ health, onRefresh }: Props) {
       )}
 
       {/* Timestamp */}
-      <div style={{
+      <div data-ai-id="health-tab-timestamp-section" style={{
         padding: '12px 16px',
         background: 'var(--tn-surface)',
         border: '1px solid var(--tn-border)',
@@ -130,7 +130,7 @@ export default function HealthTab({ health, onRefresh }: Props) {
         }}>
           Last Check
         </span>
-        <span style={{
+        <span data-ai-id="health-tab-last-check-time" style={{
           fontSize: 11,
           color: 'var(--tn-text)',
           fontFamily: 'monospace',
@@ -141,6 +141,7 @@ export default function HealthTab({ health, onRefresh }: Props) {
 
       {/* Manual Refresh */}
       <button
+        data-ai-id="health-tab-refresh-button"
         onClick={onRefresh}
         style={{
           padding: '12px',

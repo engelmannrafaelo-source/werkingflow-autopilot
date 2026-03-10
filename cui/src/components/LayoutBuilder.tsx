@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, type JSX } from 'react';
 import type { IJsonModel } from 'flexlayout-react';
-const ACCOUNT_LABELS: Record<string, string> = { rafael: "Engelmann", engelmann: "Gmail", office: "Office", local: "Lokal" };
+const ACCOUNT_LABELS: Record<string, string> = { rafael: "Engelmann", engelmann: "Gmail", office: "Office", local: "Lokal", gemini: "Gemini" };
 
 // --- Panel options for cell assignment ---
 const PANEL_OPTIONS = [
@@ -8,10 +8,12 @@ const PANEL_OPTIONS = [
   { value: 'cui:engelmann', label: 'CUI: Gmail' },
   { value: 'cui:office', label: 'CUI: Office' },
   { value: 'cui:local', label: 'CUI: Local' },
+  { value: 'cui:gemini', label: 'CUI: Gemini' },
   { value: 'chat:rafael', label: 'Chat: Engelmann 🖼️' },
   { value: 'chat:engelmann', label: 'Chat: Gmail 🖼️' },
   { value: 'chat:office', label: 'Chat: Office 🖼️' },
   { value: 'chat:local', label: 'Chat: Local 🖼️' },
+  { value: 'chat:gemini', label: 'Chat: Gemini 🖼️' },
   { value: 'images', label: 'Images' },
   { value: 'browser', label: 'Browser' },
   { value: 'preview', label: 'File Preview' },

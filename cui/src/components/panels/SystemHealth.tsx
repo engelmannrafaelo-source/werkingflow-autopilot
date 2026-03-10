@@ -70,8 +70,8 @@ export default function SystemHealth() {
     setError('');
     try {
       const [hRes, dRes] = await Promise.all([
-        fetch('/api/admin/wr/system-health', { signal: AbortSignal.timeout(8000) }),
-        fetch('/api/ops/deployments', { signal: AbortSignal.timeout(8000) }),
+        fetch('/api/admin/wr/system-health', { signal: AbortSignal.timeout(20000) }),
+        fetch('/api/ops/deployments', { signal: AbortSignal.timeout(20000) }),
       ]);
       if (!hRes.ok) {
         setError(`[SystemHealth] Health: HTTP ${hRes.status}`);

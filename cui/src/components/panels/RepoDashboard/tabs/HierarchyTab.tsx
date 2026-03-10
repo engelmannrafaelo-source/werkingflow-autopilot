@@ -43,7 +43,7 @@ export default function HierarchyTab() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/repo-dashboard/hierarchy', { signal: AbortSignal.timeout(8000) });
+      const res = await fetch('/api/repo-dashboard/hierarchy', { signal: AbortSignal.timeout(15000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       setData(json);

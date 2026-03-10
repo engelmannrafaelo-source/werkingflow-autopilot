@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { resolve, extname, join, basename } from 'path';
 import { readFileSync, readdirSync, statSync, existsSync, mkdirSync, renameSync, copyFileSync } from 'fs';
-import { homedir } from 'os';
+import { homedir, platform } from 'os';
 import mime from 'mime-types';
 
 interface FilesDeps {
@@ -23,10 +23,13 @@ export default function createFilesRouter(deps: FilesDeps): Router {
   // Allowed filesystem bases — all path access must resolve within one of these
   const ALLOWED_PATH_BASES = [
     '/root/projekte',
+    '/root/orchestrator',
     '/home/claude-user',
     '/tmp',
     DATA_DIR,
     ACTIVE_DIR,
+    // Local mode (Mac): allow user home directory
+    ...(platform() === 'darwin' ? [homedir()] : []),
   ];
 
   /** Returns true if resolved path is within an allowed base directory */

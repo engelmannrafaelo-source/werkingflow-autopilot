@@ -5,7 +5,7 @@
 // ./routes/*.ts — this file only does wiring + startup.
 
 // ─── Section 1: ENV Loading ─────────────────────────────────────────────────
-import { readFileSync as _readEnvFile, existsSync as _envExists, readFileSync } from 'fs';
+import { readFileSync as _readEnvFile, existsSync as _envExists } from 'fs';
 import { resolve as _resolvePath } from 'path';
 
 const _envPath = _resolvePath(import.meta.dirname ?? '.', '..', '.env');
@@ -21,24 +21,41 @@ if (_envExists(_envPath)) {
     if (!process.env[_key]) process.env[_key] = _val;
   }
 }
-console.log('[.env] WERKING_REPORT_ADMIN_SECRET:', process.env.WERKING_REPORT_ADMIN_SECRET ? `set (${process.env.WERKING_REPORT_ADMIN_SECRET.length} chars)` : 'MISSING');
+
+// ─── Section 1b: Env Validation ─────────────────────────────────────────────
+{
+  const _required: [string, string][] = [
+    ["WERKING_REPORT_ADMIN_SECRET", "WR Admin panel auth"],
+    ["AI_BRIDGE_API_KEY", "Bridge Monitor API access"],
+  ];
+  const _recommended: [string, string][] = [
+    ["AI_BRIDGE_URL", "Bridge Monitor URL (fallback: 49.12.72.66:8000)"],
+    ["VERCEL_TOKEN", "Deployment panel"],
+    ["SYNCTHING_API_KEY", "Syncthing panel"],
+    ["CUI_REBUILD_TOKEN", "Rebuild auth token"],
+  ];
+  for (const [k, desc] of _required) {
+    if (!process.env[k]) console.error(`[ENV] MISSING REQUIRED: ${k} \u2014 ${desc} will NOT work`);
+  }
+  for (const [k, desc] of _recommended) {
+    if (!process.env[k]) console.warn(`[ENV] missing recommended: ${k} \u2014 ${desc}`);
+  }
+}
 
 // ─── Section 2: Core Imports ────────────────────────────────────────────────
 import express from 'express';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { resolve, join } from 'path';
-import { readFileSync, readdirSync, existsSync, writeFileSync } from 'fs';
+import { readFileSync, readdirSync, existsSync, writeFileSync, statSync, renameSync } from 'fs';
 import documentManager from './document-manager.js';
 import * as metricsDb from './metrics-db.js';
 
 // ─── Section 3: Module Imports ──────────────────────────────────────────────
 import {
   sessionStates,
-  activeStreams,
   setSessionState,
   getSessionStates,
-  detectAttentionMarkers,
   broadcast,
   clients,
   initWebSocket,
@@ -55,10 +72,11 @@ import {
 } from './routes/state.js';
 
 import {
-  CUI_PROXIES,
-  setupCuiProxies,
-  monitorStream,
-} from './routes/proxy.js';
+  initClaudeCli,
+  ACCOUNT_CONFIG,
+  stopAll as stopAllCli,
+  getActiveProcesses as getActiveCliProcesses,
+} from './routes/claude-cli.js';
 
 import missionRouter, { initMissionRouter } from './routes/mission.js';
 import type { MissionDeps } from './routes/mission.js';
@@ -70,7 +88,9 @@ import templatesRouter, { initTemplatesRouter } from './routes/templates.js';
 import createAutoInjectRouter, { startAutoInjectTimer, stopAutoInjectTimer } from './routes/autoinject.js';
 import agentsRouter from './routes/agents.js';
 import bridgeRouter from './routes/bridge.js';
+import qaRouter from './routes/qa.js';
 import repoDashboardRouter from './routes/repo-dashboard.js';
+import maintenanceRouter from './routes/maintenance.js';
 import createInfrastructureRouter from './routes/infrastructure.js';
 import createTeamRouter from './routes/team.js';
 import createAdminRouter from './routes/admin.js';
@@ -79,6 +99,13 @@ import createControlRouter, { getCpuProfileResolver } from './routes/control.js'
 // External route modules (pre-existing, not part of the extraction)
 import knowledgeRegistryRouter from './knowledge-registry.js';
 import infisicalRoutes from './routes/infisical-routes.js';
+
+// Peer Awareness (cross-session work visibility)
+import { initPeerAwareness, startPeerAwarenessTimer, stopPeerAwarenessTimer, createPeerAwarenessRouter } from './routes/peer-awareness.js';
+
+// Background Ops (event buffer for system monitoring panel)
+import { createSynchroniseRouter } from './routes/synchronise.js';
+import { createBackgroundOpsRouter } from './routes/background-ops.js';
 
 // ─── Section 4: Constants ───────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT ?? '4005', 10);
@@ -115,118 +142,22 @@ app.use((_req, res, next) => {
 // ─── Section 7: WebSocket Initialization ────────────────────────────────────
 initWebSocket(wss, getCpuProfileResolver);
 
-// ─── Section 8: Proxy Setup ────────────────────────────────────────────────
+// ─── Section 8: Claude CLI Initialization ─────────────────────────────────
 
-// findJsonlPath: searches CUI account project dirs for JSONL session files
-function findJsonlPath(sessionId: string): string | null {
-  if (!sessionId) return null;
-  const accountDirs = [
-    '/home/claude-user/.cui-account1/.claude/projects',
-    '/home/claude-user/.cui-account2/.claude/projects',
-    '/home/claude-user/.cui-account3/.claude/projects',
-  ];
-  for (const accDir of accountDirs) {
-    try {
-      const workspaces = readdirSync(accDir);
-      for (const ws of workspaces) {
-        const wsPath = join(accDir, ws);
-        try {
-          const files = readdirSync(wsPath);
-          const match = files.find(f => f.startsWith(sessionId) && f.endsWith('.jsonl'));
-          if (match) return join(wsPath, match);
-        } catch (err) { console.warn('[Index] Unreadable dir in findJsonlPath:', err instanceof Error ? err.message : err); }
-      }
-    } catch (err) { console.warn('[Index] Account dir not found:', err instanceof Error ? err.message : err); }
-  }
-  return null;
-}
-
-// setLastPrompt: tracks when the last prompt was sent per session
-const LAST_PROMPT_FILE = join(DATA_DIR, 'conv-last-prompt.json');
-function setLastPrompt(sessionId: string) {
-  try {
-    let data: Record<string, string> = {};
-    if (existsSync(LAST_PROMPT_FILE)) {
-      try { data = JSON.parse(readFileSync(LAST_PROMPT_FILE, 'utf8')); } catch (err) { console.warn('[Index] Failed to parse last-prompt file:', err instanceof Error ? err.message : err); }
-    }
-    data[sessionId] = new Date().toISOString();
-    writeFileSync(LAST_PROMPT_FILE, JSON.stringify(data, null, 2));
-  } catch (err) { console.warn('[Index] Failed to write last-prompt:', err instanceof Error ? err.message : err); }
-}
-
-setupCuiProxies({
+// Initialize Claude CLI direct spawn (replaces cui-server entirely)
+initClaudeCli({
   broadcast,
   setSessionState,
   sessionStates,
-  detectAttentionMarkers,
-  findJsonlPath,
-  setLastPrompt,
 });
 
-// ─── Section 9: cuiFetch + unstickConversation ──────────────────────────────
-// Shared by autoinject (injection into CUI binaries) and mission (conversation control)
 
-async function cuiFetch(proxyPort: number, path: string, options?: { method?: string; body?: string; timeoutMs?: number }): Promise<{ data: any; ok: boolean; status: number; error?: string }> {
-  const url = `http://localhost:${proxyPort}${path}`;
-  const controller = new AbortController();
-  const ms = options?.timeoutMs ?? 8000;
-  const timeout = setTimeout(() => controller.abort(), ms);
-  try {
-    const res = await fetch(url, {
-      method: options?.method || 'GET',
-      headers: options?.body ? { 'Content-Type': 'application/json' } : {},
-      body: options?.body,
-      signal: controller.signal,
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      const errMsg = data?.error?.message || data?.error?.code || data?.message || data?.error || `HTTP ${res.status}`;
-      return { data, ok: false, status: res.status, error: String(errMsg) };
-    }
-    return { data, ok: true, status: res.status };
-  } catch (err: any) {
-    const msg = err?.name === 'AbortError' ? `timeout (${ms / 1000}s)` : (err?.cause?.code === 'ECONNREFUSED' ? 'connection refused' : (err?.message || 'network error'));
-    return { data: null, ok: false, status: 0, error: msg };
-  } finally {
-    clearTimeout(timeout);
-  }
-}
 
-function unstickConversation(sessionId: string): number {
-  const jsonlPath = findJsonlPath(sessionId);
-  if (!jsonlPath || !existsSync(jsonlPath)) return 0;
-  try {
-    const content = readFileSync(jsonlPath, 'utf8');
-    const lines = content.split('\n').filter(Boolean);
-    let removed = 0;
-    while (lines.length > 0) {
-      const lastLine = lines[lines.length - 1];
-      try {
-        const entry = JSON.parse(lastLine);
-        if (entry.isApiErrorMessage && entry.error === 'rate_limit') {
-          lines.pop();
-          removed++;
-          continue;
-        }
-      } catch { /* not JSON, stop */ }
-      break;
-    }
-    if (removed > 0) {
-      writeFileSync(jsonlPath, lines.join('\n') + '\n');
-      console.log(`[Unstick] Removed ${removed} rate_limit entries from ${sessionId}`);
-    }
-    return removed;
-  } catch (err) {
-    console.warn(`[Unstick] Error processing ${sessionId}:`, err);
-    return 0;
-  }
-}
 
 // ─── Section 10: Route Mounting ─────────────────────────────────────────────
 
 // --- Initialize factory-based modules ---
 initMissionRouter({
-  CUI_PROXIES,
   broadcast,
   sessionStates,
   setSessionState,
@@ -234,8 +165,6 @@ initMissionRouter({
   DATA_DIR,
   PROJECTS_DIR,
   PORT,
-  monitorStream,
-  activeStreams,
   visibilityRegistry,
   getVisibleSessionIds,
 } satisfies MissionDeps);
@@ -259,18 +188,13 @@ const controlRouter = createControlRouter({
   PROJECTS_DIR,
   LAYOUTS_DIR,
   startTime: Date.now(),
-  CUI_PROXIES,
+  ACCOUNT_CONFIG,
 });
 const autoInjectRouter = createAutoInjectRouter({
-  cuiFetch,
   sessionStates,
   setSessionState,
   broadcast,
-  CUI_PROXIES,
   DATA_DIR,
-  activeStreams,
-  monitorStream,
-  unstickConversation,
 });
 
 // --- Mount all routers ---
@@ -282,7 +206,9 @@ app.use('/api/prompt-templates', templatesRouter);   // /api/prompt-templates (G
 app.use(autoInjectRouter);                               // /api/auto-inject (GET/POST/DELETE) — full paths in module
 app.use(agentsRouter);                               // /api/agents/* (full paths in module)
 app.use(bridgeRouter);                               // /api/claude-code/*, /api/bridge/* (full paths in module)
-app.use('/api/repo', repoDashboardRouter);           // /api/repo/repositories, /pipeline, /structure, /hierarchy
+app.use(qaRouter);                                   // /api/qa/* (QA Dashboard - Unified-Tester integration)
+app.use('/api/repo-dashboard', repoDashboardRouter);  // /api/repo-dashboard/repositories, /pipeline, /structure, /hierarchy
+app.use('/api/maintenance', maintenanceRouter);       // /api/maintenance/status, /refresh, /run
 app.use(infrastructureRouter);                       // /watchdog/*, /api/rebuild, /api/panel-health, /api/bridge-db/*, /api/infrastructure/*
 app.use('/api/team', teamRouter);                    // /api/team/personas, /worklist, /tasks, /events, /reviews, /task-board, /chat
 app.use('/api', adminRouter);                        // /api/admin/wr/*, /api/ops/deployments
@@ -292,6 +218,13 @@ app.use('/api', controlRouter);                      // /api/control/*, /api/cui
 app.use('/api/team/knowledge', knowledgeRegistryRouter);
 app.use('/api/infisical', infisicalRoutes);
 
+// --- Peer Awareness API ---
+app.use(createPeerAwarenessRouter());                // /api/peer-awareness (GET + POST /refresh)
+
+// --- Background Ops API ---
+app.use(createSynchroniseRouter({ broadcast, sessionStates, setSessionState }));
+  app.use(createBackgroundOpsRouter());                // /api/background-ops (GET)
+
 // --- Document Manager (Phase 3) ---
 app.use('/api/team', documentManager);
 
@@ -300,10 +233,11 @@ app.use('/api/team', documentManager);
   const distPath = resolve(import.meta.dirname ?? '.', '..', 'dist');
   if (existsSync(distPath)) {
     app.use('/assets', express.static(join(distPath, 'assets'), { maxAge: '1y', immutable: true }));
-    app.use(express.static(distPath, { etag: false, lastModified: false, setHeaders: (res, filePath) => {
+    // Serve static files EXCEPT index.html (which needs token injection)
+    app.use(express.static(distPath, { etag: false, lastModified: false, index: false, setHeaders: (res, filePath) => {
       if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     }}));
-    // SPA fallback - inject security token into HTML
+    // ALL HTML responses (root + SPA fallback) get token injection
     app.use((_req, res) => {
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
 
@@ -312,7 +246,9 @@ app.use('/api/team', documentManager);
       let html = readFileSync(indexPath, 'utf-8');
 
       const rebuildToken = process.env.CUI_REBUILD_TOKEN || '';
-      const tokenScript = `<script>window.CUI_REBUILD_TOKEN = ${JSON.stringify(rebuildToken)};</script>`;
+      const bridgeApiKey = process.env.AI_BRIDGE_API_KEY || '';
+      const bridgeUrl = process.env.AI_BRIDGE_URL || 'http://49.12.72.66:8000';
+      const tokenScript = `<script>window.CUI_REBUILD_TOKEN = ${JSON.stringify(rebuildToken)};window.__CUI_BRIDGE_API_KEY__ = ${JSON.stringify(bridgeApiKey)};window.__CUI_BRIDGE_URL__ = ${JSON.stringify(bridgeUrl)};</script>`;
 
       // Inject before closing </head> tag
       html = html.replace('</head>', `${tokenScript}\n</head>`);
@@ -337,11 +273,17 @@ knowledgeWatcher.start();
 // Auto-Inject Timer
 startAutoInjectTimer();
 
+// Peer Awareness Timer (cross-session visibility, 5min interval)
+initPeerAwareness({ getSessionStates, DATA_DIR });
+startPeerAwarenessTimer();
+
 // Graceful Shutdown
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
   console.log('[Process] SIGTERM received, shutting down gracefully');
   knowledgeWatcher.stop();
   stopAutoInjectTimer();
+  stopPeerAwarenessTimer();
+  await stopAllCli();
   cleanupState();
   process.exit(0);
 });

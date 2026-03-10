@@ -156,7 +156,7 @@ function AgentDetailSection({ agent }: { agent: AgentStatus }) {
 
   useEffect(() => {
     if ((window as any).__cuiServerAlive === false) return;
-    fetch(`${API}/agents/memory/${agent.persona_id}?n=5`, { signal: AbortSignal.timeout(8000) })
+    fetch(`${API}/agents/memory/${agent.persona_id}?n=5`, { signal: AbortSignal.timeout(20000) })
       .then(r => {
         if (!r.ok) throw new Error(`memory fetch failed: ${r.status}`);
         return r.json();
@@ -194,7 +194,7 @@ function BriefSection({ agentPersonaId }: { agentPersonaId: string }) {
 
   useEffect(() => {
     if ((window as any).__cuiServerAlive === false) return;
-    fetch(`${API}/agents/briefs`, { signal: AbortSignal.timeout(8000) })
+    fetch(`${API}/agents/briefs`, { signal: AbortSignal.timeout(20000) })
       .then(r => {
         if (!r.ok) throw new Error(`briefs list failed: ${r.status}`);
         return r.json();
@@ -203,7 +203,7 @@ function BriefSection({ agentPersonaId }: { agentPersonaId: string }) {
         const briefs = d.briefs ?? [];
         if (briefs.length > 0) {
           setBriefName(briefs[0].name);
-          return fetch(`${API}/agents/brief/${briefs[0].name}`, { signal: AbortSignal.timeout(8000) })
+          return fetch(`${API}/agents/brief/${briefs[0].name}`, { signal: AbortSignal.timeout(20000) })
             .then(r => {
               if (!r.ok) throw new Error(`brief content failed: ${r.status}`);
               return r.text();
@@ -245,7 +245,7 @@ function InboxSection({ agents }: { agents: AgentStatus[] }) {
     const personasToCheck = ['birgit-bauer', 'vera-vertrieb', 'mira-marketing', 'max-weber', 'otto-operations'];
     Promise.all(
       personasToCheck.map(id =>
-        fetch(`${API}/agents/inbox/${id}`, { signal: AbortSignal.timeout(8000) })
+        fetch(`${API}/agents/inbox/${id}`, { signal: AbortSignal.timeout(20000) })
           .then(r => {
             if (!r.ok) throw new Error(`inbox ${id} failed: ${r.status}`);
             return r.json();
@@ -420,7 +420,7 @@ function PlanReviewModal({ planFile, personaName, personaId, task, onApprove, on
 
   useEffect(() => {
     if ((window as any).__cuiServerAlive === false) return;
-    fetch(`${API}/agents/claude/plan/${planFile}`, { signal: AbortSignal.timeout(8000) })
+    fetch(`${API}/agents/claude/plan/${planFile}`, { signal: AbortSignal.timeout(20000) })
       .then(r => {
         if (!r.ok) throw new Error(`plan fetch failed: ${r.status}`);
         return r.text();
@@ -467,7 +467,7 @@ function PersonaTaggingPanel() {
   async function loadStatus() {
     if ((window as any).__cuiServerAlive === false) return;
     try {
-      const res = await fetch(`${API}/persona-tags/status`, { signal: AbortSignal.timeout(8000) });
+      const res = await fetch(`${API}/persona-tags/status`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`persona-tags status failed: ${res.status}`);
       const data = await res.json();
       setAppStatus(data);
@@ -501,7 +501,7 @@ function PersonaTaggingPanel() {
         const pollInterval = setInterval(async () => {
           if ((window as any).__cuiServerAlive === false) return;
           try {
-            const statusRes = await fetch(`${API}/persona-tags/status`, { signal: AbortSignal.timeout(8000) });
+            const statusRes = await fetch(`${API}/persona-tags/status`, { signal: AbortSignal.timeout(20000) });
             if (!statusRes.ok) throw new Error(`persona-tags poll failed: ${statusRes.status}`);
             const statusData = await statusRes.json();
             const taggedApps = Object.values(statusData).filter((app: any) => app.has_tags).length;
@@ -597,7 +597,7 @@ function ClaudeAgentsPanel() {
   const load = useCallback(async () => {
     if ((window as any).__cuiServerAlive === false) return;
     try {
-      const r = await fetch(`${API}/agents/claude/status`, { signal: AbortSignal.timeout(8000) });
+      const r = await fetch(`${API}/agents/claude/status`, { signal: AbortSignal.timeout(20000) });
       if (!r.ok) throw new Error(`claude/status failed: ${r.status}`);
       const d = await r.json();
       setAgents(d.agents ?? []);
@@ -631,7 +631,7 @@ function ClaudeAgentsPanel() {
           const checkComplete = setInterval(async () => {
             if ((window as any).__cuiServerAlive === false) return;
             try {
-              const logRes = await fetch(`${API}/agents/claude/log/${r.task_id}`, { signal: AbortSignal.timeout(8000) });
+              const logRes = await fetch(`${API}/agents/claude/log/${r.task_id}`, { signal: AbortSignal.timeout(20000) });
               if (!logRes.ok) throw new Error(`claude/log poll failed: ${logRes.status}`);
               // Simplified: just read last 200 chars from log endpoint (we can't parse SSE easily here)
             } catch (err) {
@@ -748,11 +748,11 @@ export default function CommandSidebar({ onPersonaAgentSelect }: CommandSidebarP
     if ((window as any).__cuiServerAlive === false) return;
     try {
       const [statusRes, approvalsRes] = await Promise.all([
-        fetch(`${API}/agents/status`, { signal: AbortSignal.timeout(8000) }).then(r => {
+        fetch(`${API}/agents/status`, { signal: AbortSignal.timeout(20000) }).then(r => {
           if (!r.ok) throw new Error(`agents/status failed: ${r.status}`);
           return r.json();
         }),
-        fetch(`${API}/agents/approvals`, { signal: AbortSignal.timeout(8000) }).then(r => {
+        fetch(`${API}/agents/approvals`, { signal: AbortSignal.timeout(20000) }).then(r => {
           if (!r.ok) throw new Error(`agents/approvals failed: ${r.status}`);
           return r.json();
         }),
@@ -768,7 +768,7 @@ export default function CommandSidebar({ onPersonaAgentSelect }: CommandSidebarP
     loadStatus();
     // Also load business pending count
     if ((window as any).__cuiServerAlive !== false) {
-      fetch(`${API}/agents/business/pending`, { signal: AbortSignal.timeout(8000) })
+      fetch(`${API}/agents/business/pending`, { signal: AbortSignal.timeout(20000) })
         .then(r => {
           if (!r.ok) throw new Error(`business/pending failed: ${r.status}`);
           return r.json();
@@ -779,7 +779,7 @@ export default function CommandSidebar({ onPersonaAgentSelect }: CommandSidebarP
     const iv = setInterval(() => {
       if ((window as any).__cuiServerAlive === false) return;
       loadStatus();
-      fetch(`${API}/agents/business/pending`, { signal: AbortSignal.timeout(8000) })
+      fetch(`${API}/agents/business/pending`, { signal: AbortSignal.timeout(20000) })
         .then(r => {
           if (!r.ok) throw new Error(`business/pending poll failed: ${r.status}`);
           return r.json();

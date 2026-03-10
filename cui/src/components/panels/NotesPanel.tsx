@@ -15,42 +15,49 @@ export default function NotesPanel({ projectId }: NotesPanelProps) {
   const commonTimer = useRef<ReturnType<typeof setTimeout>>(null);
   const projectTimer = useRef<ReturnType<typeof setTimeout>>(null);
 
-  // Load notes on mount / project change
-  useEffect(() => {
-    if ((window as any).__cuiServerAlive === false) return;
-    (async () => {
+  // Robust fetch with retry (3 attempts, exponential backoff)
+  const fetchWithRetry = useCallback(async (url: string, maxRetries = 3): Promise<string> => {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        const r = await fetch(`${API}/common-notes`, { signal: AbortSignal.timeout(8000) });
-        if (!r.ok) throw new Error(`[NotesPanel] common-notes failed: HTTP ${r.status}`);
+        if ((window as any).__cuiServerAlive === false) return '';
+        const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const d = await r.json();
-        setCommonNotes(d.content ?? '');
+        return d.content ?? '';
       } catch (err) {
-        console.warn('[NotesPanel] load common-notes error:', err);
+        console.warn(`[NotesPanel] ${url} attempt ${attempt}/${maxRetries} failed:`, err);
+        if (attempt < maxRetries) {
+          await new Promise(res => setTimeout(res, 1000 * attempt)); // 1s, 2s backoff
+        }
       }
-      try {
-        const r = await fetch(`${API}/shared-notes`, { signal: AbortSignal.timeout(8000) });
-        if (!r.ok) throw new Error(`[NotesPanel] shared-notes failed: HTTP ${r.status}`);
-        const d = await r.json();
-        setSharedNotes(d.content ?? '');
-      } catch (err) {
-        console.warn('[NotesPanel] load shared-notes error:', err);
-      }
-    })();
+    }
+    return '';
   }, []);
 
+  // Load common + shared notes on mount AND on page visibility change (tab switch back)
+  const loadGlobalNotes = useCallback(async () => {
+    const [common, shared] = await Promise.all([
+      fetchWithRetry(`${API}/common-notes`),
+      fetchWithRetry(`${API}/shared-notes`),
+    ]);
+    if (common) setCommonNotes(common);
+    if (shared) setSharedNotes(shared);
+  }, [fetchWithRetry]);
+
   useEffect(() => {
-    if ((window as any).__cuiServerAlive === false) return;
-    (async () => {
-      try {
-        const r = await fetch(`${API}/notes/${projectId}`, { signal: AbortSignal.timeout(8000) });
-        if (!r.ok) throw new Error(`[NotesPanel] project-notes failed: HTTP ${r.status}`);
-        const d = await r.json();
-        setProjectNotes(d.content ?? '');
-      } catch (err) {
-        console.warn('[NotesPanel] load project-notes error:', err);
-      }
-    })();
-  }, [projectId]);
+    loadGlobalNotes();
+
+    // Re-fetch when user switches back to this browser tab
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') loadGlobalNotes();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [loadGlobalNotes]);
+
+  useEffect(() => {
+    fetchWithRetry(`${API}/notes/${projectId}`).then(c => { if (c) setProjectNotes(c); });
+  }, [projectId, fetchWithRetry]);
 
   const saveCommon = useCallback((text: string) => {
     if (commonTimer.current) clearTimeout(commonTimer.current);
@@ -196,7 +203,7 @@ export default function NotesPanel({ projectId }: NotesPanelProps) {
                   const refreshRes = await fetch(`${API}/shared-notes/refresh`, { method: 'POST', signal: AbortSignal.timeout(15000) });
                   if (!refreshRes.ok) throw new Error(`[NotesPanel] refresh failed: HTTP ${refreshRes.status}`);
                   await refreshRes.json();
-                  const loadRes = await fetch(`${API}/shared-notes`, { signal: AbortSignal.timeout(8000) });
+                  const loadRes = await fetch(`${API}/shared-notes`, { signal: AbortSignal.timeout(20000) });
                   if (!loadRes.ok) throw new Error(`[NotesPanel] reload shared-notes failed: HTTP ${loadRes.status}`);
                   const d = await loadRes.json();
                   setSharedNotes(d.content ?? '');

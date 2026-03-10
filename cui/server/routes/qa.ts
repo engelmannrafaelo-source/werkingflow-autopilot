@@ -7,14 +7,14 @@ const router = Router();
 // ========================================
 // QA Dashboard API — Registry-Based (v4)
 // ========================================
-// Source of Truth: coverage/apps/{app}/registry.json
+// Source of Truth: scenario_registry.json + features/scenarios/{app}/layer-X/
 // Scenario-Layer Pyramid (Mental Model):
 //   Layer 0: Preflight + Contract Scanners (Supabase, API, Frontend)
 //   Layer 1: Backend (API-only Mental-Model Tests)
 //   Layer 2: Components (UI Hybrid + UX Scoring)
 //   Layer 3: Workflows (Persona Journeys)
 //   Layer 4: Golden (Complete E2E Happy Path)
-// Report Reader: Reads .md reports from registry paths
+// Report Reader: Reads .md reports from report paths
 
 const UNIFIED_TESTER_ROOT = '/root/projekte/werkingflow/tests/unified-tester';
 const COVERAGE_DIR = join(UNIFIED_TESTER_ROOT, 'coverage/apps');
@@ -37,13 +37,14 @@ const PORT_TO_APP: Record<number, string> = {
   3007: 'werking-energy',
   3008: 'werking-report',
   3009: 'engelmann',
+  3011: 'acro-community',
 };
 
 // Scenario registry (test results from test-runner.sh)
 // scenario_registry.json tracks PASS/FAIL/PENDING per scenario
 
 // App ID mapping (coverage dir name → display name)
-const APP_IDS = ['engelmann', 'werking-report', 'werking-energy', 'werking-safety', 'werking-noise', 'platform', 'cui', 'energy-report'] as const;
+const APP_IDS = ['engelmann', 'werking-report', 'werking-energy', 'werking-safety', 'werking-noise', 'platform', 'cui', 'energy-report', 'acro-community'] as const;
 
 function readJSON(path: string): any | null {
   try {
@@ -55,66 +56,35 @@ function readJSON(path: string): any | null {
 }
 
 // ========================================
-// Registry-based App Statistics
+// Scenario-Registry-based App Statistics
 // ========================================
+// Source of Truth: scenario_registry.json + pyramid layer data
 
-function getAppStatsFromRegistry(appId: string) {
-  const registry = readRegistry(appId);
-  if (!registry) return null;
+function getAppStatsFromScenarios(appId: string) {
+  const pyramid = getPyramidData(appId);
+  if (!pyramid || pyramid.layers.length === 0) return null;
 
-  const features = Object.values(registry.features);
-  const totalFeatures = features.length;
+  // Count all scenarios across all layers
+  const allTests = pyramid.layers.flatMap(l => l.tests);
+  const totalScenarios = allTests.length;
+  const testedScenarios = allTests.filter(t => t.status === 'PASS' || t.status === 'PARTIAL').length;
+  const failedScenarios = allTests.filter(t => t.status === 'FAIL' || t.status === 'ERROR').length;
 
-  // Count tested features (any mode has a score)
-  const testedFeatures = features.filter(f => {
-    const local = f.tests?.local;
-    return local?.backend?.score != null || local?.frontend?.score != null || local?.visual?.score != null;
-  }).length;
+  // Scores from all tests that have been scored
+  const scores = allTests.map(t => t.score).filter(s => s != null && s > 0) as number[];
+  const avgScore = scores.length > 0 ? scores.reduce((s, v) => s + v, 0) / scores.length : 0;
 
-  // Collect scores per mode
-  const beScores: number[] = [];
-  const feScores: number[] = [];
-  const visScores: number[] = [];
+  // Coverage = tested / total scenarios
+  const coveragePercent = totalScenarios > 0 ? (testedScenarios / totalScenarios) * 100 : 0;
+
+  // Last tested date
   let lastTested: string | null = null;
-  let issueCount = 0;
-
-  for (const f of features) {
-    const local = f.tests?.local;
-    if (local?.backend?.score != null) {
-      beScores.push(local.backend.score);
-      if (local.backend.issues?.length) issueCount += local.backend.issues.length;
-      if (!lastTested || local.backend.tested_at > lastTested) lastTested = local.backend.tested_at;
-    }
-    if (local?.frontend?.score != null) {
-      feScores.push(local.frontend.score);
-      if (local.frontend.issues?.length) issueCount += local.frontend.issues.length;
-      if (!lastTested || local.frontend.tested_at > lastTested) lastTested = local.frontend.tested_at;
-    }
-    if (local?.visual?.score != null) {
-      visScores.push(local.visual.score);
-      if (local.visual.issues?.length) issueCount += local.visual.issues.length;
-      if (!lastTested || local.visual.tested_at > lastTested) lastTested = local.visual.tested_at;
-    }
+  for (const t of allTests) {
+    if (t.lastRun && (!lastTested || t.lastRun > lastTested)) lastTested = t.lastRun;
   }
 
-  // Add global issues
-  issueCount += registry.issues?.length ?? 0;
-
-  const avg = (arr: number[]) => arr.length > 0 ? arr.reduce((s, v) => s + v, 0) / arr.length : null;
-  const avgBackend = avg(beScores);
-  const avgFrontend = avg(feScores);
-  const avgVisual = avg(visScores);
-
-  // Overall average from combined_score
-  const allCombined = features.map(f => f.combined_score).filter(s => s != null && s > 0);
-  const avgScore = allCombined.length > 0
-    ? allCombined.reduce((s, v) => s + v, 0) / allCombined.length
-    : 0;
-
-  const coveragePercent = totalFeatures > 0 ? (testedFeatures / totalFeatures) * 100 : 0;
-
   let status = 'untested';
-  if (testedFeatures > 0) {
+  if (testedScenarios > 0) {
     if (avgScore >= 8) status = 'tested';
     else if (avgScore >= 5) status = 'partial';
     else status = 'failing';
@@ -122,18 +92,21 @@ function getAppStatsFromRegistry(appId: string) {
 
   return {
     id: appId,
-    totalFeatures,
-    testedFeatures,
+    totalScenarios,
+    testedScenarios,
     coveragePercent,
     avgScore,
     status,
-    issues: issueCount,
-    scores: {
-      backend: avgBackend,
-      frontend: avgFrontend,
-      visual: avgVisual,
-    },
+    issues: failedScenarios,
     lastTested,
+    layers: pyramid.layers.filter(l => l.id >= 0).map(l => ({
+      id: l.id,
+      name: l.name,
+      passed: l.passed,
+      total: l.totalTests,
+      avgScore: l.avgScore,
+      status: l.status,
+    })),
   };
 }
 
@@ -157,12 +130,12 @@ const LAYER_PATTERNS: Record<number, string[]> = {
   4: ['layer-4', 'layer-4-golden', 'layer-4-backend'],
 };
 
-const LAYER_META: Record<number, { name: string; description: string; threshold: number }> = {
-  0: { name: 'Architecture & Contracts', description: 'Pre-flight: Schema, Zod, data-ai-id', threshold: 0 },
-  1: { name: 'Backend', description: 'API-only Mental-Model Tests', threshold: 8.0 },
-  2: { name: 'Components', description: 'UI Hybrid Tests + UX Scoring', threshold: 8.0 },
-  3: { name: 'Workflows', description: 'Persona Journeys (Full)', threshold: 7.5 },
-  4: { name: 'Golden', description: 'Complete E2E Happy Path', threshold: 9.0 },
+const LAYER_META: Record<number, { name: string; description: string }> = {
+  0: { name: 'Architecture & Contracts', description: 'Pre-flight: Schema, Zod, data-ai-id' },
+  1: { name: 'Backend', description: 'API-only Mental-Model Tests' },
+  2: { name: 'Components', description: 'UI Hybrid Tests + UX Scoring' },
+  3: { name: 'Workflows', description: 'Persona Journeys (Full)' },
+  4: { name: 'Golden', description: 'Complete E2E Happy Path' },
 };
 
 // ========================================
@@ -298,7 +271,7 @@ function scanLayerScenarios(layerDir: string): Array<{ id: string; file: string;
         const data = readJSON(join(layerDir, file));
         if (!data) continue;
         scenarios.push({
-          id: data.id || file.replace('.json', ''),
+          id: data.id || data.scenario_id || file.replace('.json', ''),
           file: join(layerDir, file),
           layer: data.layer ?? 0,
         });
@@ -322,7 +295,7 @@ function getPyramidData(appId: string) {
     for (const file of readdirSync(appScenarioDir)) {
       if (!file.endsWith('.json')) continue;
       const data = readJSON(join(appScenarioDir, file));
-      if (data) flatScenarios.push({ id: data.id || file.replace('.json', ''), file: join(appScenarioDir, file) });
+      if (data) flatScenarios.push({ id: data.id || data.scenario_id || file.replace('.json', ''), file: join(appScenarioDir, file) });
     }
   } catch { /* */ }
 
@@ -336,7 +309,7 @@ function getPyramidData(appId: string) {
           if (statSync(full).isDirectory()) { scanRecursive(full); continue; }
           if (!entry.endsWith('.json')) continue;
           const data = readJSON(full);
-          if (data) flatScenarios.push({ id: data.id || entry.replace('.json', ''), file: full });
+          if (data) flatScenarios.push({ id: data.id || data.scenario_id || entry.replace('.json', ''), file: full });
         }
       } catch { /* */ }
     };
@@ -345,7 +318,7 @@ function getPyramidData(appId: string) {
 
   // Build layers
   const layers: Array<{
-    id: number; name: string; description: string; threshold: number;
+    id: number; name: string; description: string;
     totalTests: number; passed: number; failed: number; pending: number;
     avgScore: number; status: string;
     tests: Array<{ id: string; status: string; score: number | null; lastRun: string | null; reportPath: string | null }>;
@@ -404,7 +377,6 @@ function getPyramidData(appId: string) {
           id: 0,
           name: meta.name,
           description: desc,
-          threshold: meta.threshold,
           totalTests: allTests.length,
           passed: totalPassed, failed: totalFailed, pending: totalPending,
           avgScore,
@@ -452,7 +424,6 @@ function getPyramidData(appId: string) {
       id: layerNum,
       name: meta.name,
       description: meta.description,
-      threshold: meta.threshold,
       totalTests: tests.length,
       passed, failed, pending,
       avgScore,
@@ -484,7 +455,6 @@ function getPyramidData(appId: string) {
       id: -1,
       name: 'Scenarios',
       description: 'Flat scenarios (not yet layered)',
-      threshold: 7.5,
       totalTests: tests.length,
       passed, failed, pending,
       avgScore,
@@ -663,7 +633,7 @@ function discoverScenarios() {
           } else if (entry.endsWith('.json') && entry !== 'ACCOUNTS.md') {
             const data = readJSON(fullPath);
             if (!data) return;
-            const scenarioId = data.id || entry.replace('.json', '');
+            const scenarioId = data.id || data.scenario_id || entry.replace('.json', '');
             const regEntry = registryScenarios[scenarioId];
 
             scenarios.push({
@@ -711,16 +681,16 @@ function readReportContent(reportPath: string): string | null {
 // API Routes
 // ========================================
 
-// GET /api/qa/overview — Registry-based overview
+// GET /api/qa/overview — Scenario-registry-based overview
 router.get('/api/qa/overview', async (_req, res) => {
   try {
     const appStats = APP_IDS
-      .map(appId => getAppStatsFromRegistry(appId))
+      .map(appId => getAppStatsFromScenarios(appId))
       .filter(s => s !== null);
 
     const totals = {
-      features: appStats.reduce((sum, a) => sum + a!.totalFeatures, 0),
-      tested: appStats.reduce((sum, a) => sum + a!.testedFeatures, 0),
+      features: appStats.reduce((sum, a) => sum + a!.totalScenarios, 0),
+      tested: appStats.reduce((sum, a) => sum + a!.testedScenarios, 0),
       coverage: appStats.length > 0
         ? appStats.reduce((sum, a) => sum + a!.coveragePercent, 0) / appStats.length
         : 0,
@@ -752,45 +722,48 @@ router.get('/api/qa/runs', async (_req, res) => {
   }
 });
 
-// GET /api/qa/app/:appId — Registry-based feature detail
+// GET /api/qa/app/:appId — Scenario-based detail (per layer)
 router.get('/api/qa/app/:appId', async (req, res) => {
   try {
     const { appId } = req.params;
-    const registry = readRegistry(appId);
-    if (!registry) {
-      return res.status(404).json({ error: `No registry found for ${appId}` });
+    const pyramid = getPyramidData(appId);
+    if (!pyramid || pyramid.layers.length === 0) {
+      return res.status(404).json({ error: `No scenario data for ${appId}` });
     }
 
-    const features = Object.entries(registry.features).map(([id, f]) => ({
-      id,
-      name: f.name,
-      status: f.status,
-      combinedScore: f.combined_score,
-      tests: f.tests,
-      surfaces: f.surfaces,
-      issues: [
-        ...(f.tests?.local?.backend?.issues ?? []),
-        ...(f.tests?.local?.frontend?.issues ?? []),
-        ...(f.tests?.local?.visual?.issues ?? []),
-      ],
-    }));
+    // Build scenario list with layer info — replaces old feature list
+    const scenarios = pyramid.layers.flatMap(l =>
+      l.tests.map(t => ({
+        id: t.id,
+        name: t.id,
+        layer: l.id,
+        layerName: l.name,
+        status: t.status,
+        score: t.score,
+        lastRun: t.lastRun,
+        reportPath: t.reportPath,
+      }))
+    );
 
-    const testedCount = features.filter(f => f.combinedScore != null && f.combinedScore > 0).length;
-    const scores = features.map(f => f.combinedScore).filter(s => s != null && s > 0) as number[];
+    const testedCount = scenarios.filter(s => s.status === 'PASS' || s.status === 'PARTIAL').length;
+    const scores = scenarios.map(s => s.score).filter(s => s != null && s > 0) as number[];
 
     res.json({
       appId,
-      features,
+      scenarios,
       statistics: {
-        totalFeatures: features.length,
+        totalScenarios: scenarios.length,
         testedCount,
         avgScore: scores.length > 0 ? scores.reduce((s, v) => s + v, 0) / scores.length : 0,
-        lowestScore: scores.length > 0
-          ? features.reduce((min, f) => (f.combinedScore != null && f.combinedScore > 0 && (min === null || f.combinedScore < min.combinedScore!))
-            ? f : min, null as any)
-          : null,
-        untestedFeatures: features.filter(f => f.status === 'untested').map(f => f.name),
+        untestedScenarios: scenarios.filter(s => s.status === 'PENDING').map(s => s.id),
       },
+      layers: pyramid.layers.filter(l => l.id >= 0).map(l => ({
+        id: l.id,
+        name: l.name,
+        passed: l.passed,
+        total: l.totalTests,
+        avgScore: l.avgScore,
+      })),
       timestamp: new Date().toISOString(),
     });
   } catch (err: any) {
@@ -810,19 +783,6 @@ router.get('/api/qa/pyramid/:appId', async (req, res) => {
     res.json(data);
   } catch (err: any) {
     console.error(`[QA] Pyramid error for ${req.params.appId}:`, err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// GET /api/qa/pyramid — Overview pyramid for all apps
-router.get('/api/qa/pyramid', async (_req, res) => {
-  try {
-    const pyramids = APP_IDS
-      .map(appId => getPyramidData(appId))
-      .filter(p => p !== null);
-    res.json({ apps: pyramids, timestamp: new Date().toISOString() });
-  } catch (err: any) {
-    console.error('[QA] Pyramid overview error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -863,7 +823,7 @@ router.get('/api/qa/report', async (req, res) => {
 // Generated by: coverage_gap_analyzer.py via run_autonomous.py
 // Contains: API endpoint gaps + UI element gaps
 
-const VALID_APP_IDS = new Set(APP_IDS);
+const VALID_APP_IDS = new Set<string>(APP_IDS);
 
 function readCoverageGaps(appId: string): {
   api: { status: string; total: number; covered: number; gaps: number; pct: number; gap_details: any[]; method_gaps?: any[] };
@@ -918,29 +878,6 @@ router.get('/api/qa/coverage-gaps/:appId', async (req, res) => {
     });
   } catch (err: any) {
     console.error(`[QA] Coverage gaps error for ${req.params.appId}:`, err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// GET /api/qa/coverage-gaps — Coverage gap summary for all apps
-router.get('/api/qa/coverage-gaps', async (_req, res) => {
-  try {
-    const summaries = APP_IDS
-      .map(appId => {
-        const gaps = readCoverageGaps(appId);
-        if (!gaps) return null;
-        return {
-          app: appId,
-          api: { total: gaps.api.total, covered: gaps.api.covered, gaps: gaps.api.gaps, pct: gaps.api.pct, status: gaps.api.status },
-          ui: { total: gaps.ui.total, covered: gaps.ui.covered, gaps: gaps.ui.gaps, pct: gaps.ui.pct, status: gaps.ui.status },
-          timestamp: gaps.timestamp,
-        };
-      })
-      .filter(s => s !== null);
-
-    res.json({ apps: summaries, timestamp: new Date().toISOString() });
-  } catch (err: any) {
-    console.error('[QA] Coverage gaps overview error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

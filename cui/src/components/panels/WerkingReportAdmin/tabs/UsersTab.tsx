@@ -50,7 +50,7 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
         offset: offset.toString(),
         limit: limit.toString(),
       });
-      const res = await fetch(`/api/admin/wr/users?${params}`, { signal: AbortSignal.timeout(8000) });
+      const res = await fetch(`/api/admin/wr/users?${params}`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setUsers(data.users || []);

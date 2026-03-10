@@ -1,7 +1,10 @@
 import { Router } from 'express';
 import { readdirSync, statSync, existsSync } from 'fs';
 import { join } from 'path';
-import { execFileSync } from 'child_process';
+import { execFile, execFileSync } from 'child_process';
+import { promisify } from 'util';
+
+const execFileAsync = promisify(execFile);
 
 // Simple cache (60 seconds TTL)
 let repoCache: { data: any; timestamp: number } | null = null;
@@ -16,7 +19,27 @@ const router = Router();
 function execFileSafe(file: string, args: string[], opts: { cwd?: string; timeout?: number } = {}): string {
   try {
     return execFileSync(file, args, { encoding: 'utf8', timeout: opts.timeout ?? 10000, cwd: opts.cwd }).trim();
-  } catch {
+  } catch (err: any) {
+    if (err.killed || err.signal === 'SIGTERM') {
+      console.warn(`[execFileSafe] Timeout: ${file} ${args.join(' ')} (${opts.timeout || 10000}ms)`);
+    }
+    return '';
+  }
+}
+
+/** Async safe wrapper around execFile */
+async function execFileAsyncSafe(file: string, args: string[], opts: { cwd?: string; timeout?: number } = {}): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync(file, args, {
+      encoding: 'utf8',
+      timeout: opts.timeout ?? 10000,
+      cwd: opts.cwd,
+    });
+    return stdout.trim();
+  } catch (err: any) {
+    if (err.killed || err.signal === 'SIGTERM') {
+      console.warn(`[execFileAsyncSafe] Timeout: ${file} ${args.join(' ')} (${opts.timeout || 10000}ms)`);
+    }
     return '';
   }
 }
@@ -36,34 +59,33 @@ router.get('/repositories', async (_req, res) => {
     const findResult = execFileSafe('find', [projectsRoot, '-type', 'd', '-name', '.git']);
     const gitDirs = findResult.split('\n').filter(Boolean);
 
-    for (const gitDir of gitDirs) {
+    // PARALLEL: Process all repos concurrently (much faster!)
+    const repoPromises = gitDirs.map(async (gitDir) => {
       const repoPath = gitDir.replace('/.git', '');
       const repoName = repoPath.split('/').pop() || 'unknown';
 
       try {
-        // Git status — all using execFileSync with cwd (no shell interpolation)
+        // Git commands (fast, keep sync)
         const branch = execFileSafe('git', ['branch', '--show-current'], { cwd: repoPath }) || 'detached';
-
         const statusOutput = execFileSafe('git', ['status', '--porcelain'], { cwd: repoPath });
         const uncommitted = statusOutput ? statusOutput.split('\n').filter(Boolean).length : 0;
-
         const lastCommitRaw = execFileSafe('git', ['log', '-1', '--format=%H|%an|%s|%ci'], { cwd: repoPath }) || '|||';
         const [hash, author, message, date] = lastCommitRaw.split('|');
+        const remoteUrl = execFileSafe('git', ['config', '--get', 'remote.origin.url'], { cwd: repoPath });
 
-        // Disk size — using execFileSync with argument array
-        const duBytesOutput = execFileSafe('du', ['-sb', repoPath]);
+        // Disk size — ASYNC (slow I/O, parallelize!)
+        const [duBytesOutput, duHumanOutput] = await Promise.all([
+          execFileAsyncSafe('du', ['-sb', repoPath]),
+          execFileAsyncSafe('du', ['-sh', repoPath]),
+        ]);
         const sizeBytes = parseInt(duBytesOutput.split(/\s/)[0] || '0');
-        const duHumanOutput = execFileSafe('du', ['-sh', repoPath]);
         const sizeHuman = duHumanOutput.split(/\s/)[0] || '0';
 
         // Last modified
         const stat = statSync(repoPath);
         const lastModified = stat.mtime.toISOString();
 
-        // Remote URL
-        const remoteUrl = execFileSafe('git', ['config', '--get', 'remote.origin.url'], { cwd: repoPath });
-
-        repos.push({
+        return {
           name: repoName,
           path: repoPath,
           branch,
@@ -81,11 +103,15 @@ router.get('/repositories', async (_req, res) => {
           lastModified,
           remoteUrl,
           status: uncommitted > 0 ? 'dirty' : 'clean',
-        });
+        };
       } catch (err: any) {
         console.error(`[Repo Dashboard] Error scanning ${repoPath}:`, err.message);
+        return null;
       }
-    }
+    });
+
+    const repoResults = await Promise.all(repoPromises);
+    repos.push(...repoResults.filter((r): r is NonNullable<typeof r> => r !== null));
 
     // Sort by size (largest first)
     repos.sort((a, b) => b.diskSize.bytes - a.diskSize.bytes);

@@ -13,15 +13,15 @@ export default function OverviewTab({ data }: Props) {
   const healthStatus = health?.status || 'unknown';
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+    <div data-ai-id="overview-tab-container" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
       {/* Status Cards */}
-      <div style={{
+      <div data-ai-id="overview-status-cards" style={{
         display: 'grid',
         gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
         gap: '12px',
       }}>
         {/* Health Card */}
-        <div style={{
+        <div data-ai-id="overview-status-card-health" data-health-status={healthStatus} style={{
           padding: '16px',
           background: 'var(--tn-surface)',
           border: '1px solid var(--tn-border)',
@@ -41,10 +41,10 @@ export default function OverviewTab({ data }: Props) {
             alignItems: 'center',
             gap: 8,
           }}>
-            <span style={{ fontSize: 24 }}>
+            <span data-ai-id="overview-health-icon" style={{ fontSize: 24 }}>
               {healthStatus === 'healthy' ? '🟢' : '🔴'}
             </span>
-            <span style={{
+            <span data-ai-id="overview-health-text" style={{
               fontSize: 18,
               fontWeight: 600,
               color: 'var(--tn-text)',
@@ -56,7 +56,7 @@ export default function OverviewTab({ data }: Props) {
         </div>
 
         {/* Projects Card */}
-        <div style={{
+        <div data-ai-id="overview-status-card-projects" data-projects-count={projects.length} style={{
           padding: '16px',
           background: 'var(--tn-surface)',
           border: '1px solid var(--tn-border)',
@@ -71,14 +71,14 @@ export default function OverviewTab({ data }: Props) {
           }}>
             Projects
           </div>
-          <div style={{
+          <div data-ai-id="overview-projects-count" style={{
             fontSize: 32,
             fontWeight: 700,
             color: 'var(--tn-text)',
           }}>
             {projects.length}
           </div>
-          <div style={{
+          <div data-ai-id="overview-projects-production-count" style={{
             fontSize: 10,
             color: 'var(--tn-text-muted)',
             marginTop: 4,
@@ -88,7 +88,7 @@ export default function OverviewTab({ data }: Props) {
         </div>
 
         {/* Syncs Card */}
-        <div style={{
+        <div data-ai-id="overview-status-card-syncs" data-syncs-total={syncs.length} data-syncs-succeeded={succeededSyncs} data-syncs-failed={failedSyncs} style={{
           padding: '16px',
           background: 'var(--tn-surface)',
           border: '1px solid var(--tn-border)',
@@ -103,14 +103,14 @@ export default function OverviewTab({ data }: Props) {
           }}>
             Auto-Syncs
           </div>
-          <div style={{
+          <div data-ai-id="overview-syncs-ratio" style={{
             fontSize: 32,
             fontWeight: 700,
             color: 'var(--tn-text)',
           }}>
             {succeededSyncs}/{syncs.length}
           </div>
-          <div style={{
+          <div data-ai-id="overview-syncs-status" style={{
             fontSize: 10,
             color: failedSyncs > 0 ? 'var(--tn-red)' : 'var(--tn-green)',
             marginTop: 4,
@@ -121,7 +121,7 @@ export default function OverviewTab({ data }: Props) {
       </div>
 
       {/* Recent Syncs */}
-      <div style={{
+      <div data-ai-id="overview-recent-syncs" style={{
         background: 'var(--tn-surface)',
         border: '1px solid var(--tn-border)',
         borderRadius: 8,
@@ -143,6 +143,10 @@ export default function OverviewTab({ data }: Props) {
           {syncs.slice(0, 5).map((sync, idx) => (
             <div
               key={idx}
+              data-ai-id={`overview-sync-item-${idx}`}
+              data-sync-project={sync.project}
+              data-sync-status={sync.status}
+              data-sync-integration={sync.integration}
               style={{
                 display: 'flex',
                 justifyContent: 'space-between',
@@ -154,13 +158,13 @@ export default function OverviewTab({ data }: Props) {
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 14 }}>
+                <span data-ai-id={`overview-sync-status-icon-${idx}`} style={{ fontSize: 14 }}>
                   {sync.status === 'succeeded' ? '✅' : '❌'}
                 </span>
-                <span style={{ fontWeight: 500, color: 'var(--tn-text)' }}>
+                <span data-ai-id={`overview-sync-project-${idx}`} style={{ fontWeight: 500, color: 'var(--tn-text)' }}>
                   {sync.project}
                 </span>
-                <span style={{
+                <span data-ai-id={`overview-sync-integration-badge-${idx}`} style={{
                   fontSize: 9,
                   padding: '2px 6px',
                   background: sync.integration === 'vercel' ? 'var(--tn-blue-bg, #e3f2fd)' : 'var(--tn-purple-bg, #f3e5f5)',
@@ -172,7 +176,7 @@ export default function OverviewTab({ data }: Props) {
                   {sync.integration}
                 </span>
               </div>
-              <span style={{ fontSize: 10, color: 'var(--tn-text-muted)' }}>
+              <span data-ai-id={`overview-sync-time-${idx}`} style={{ fontSize: 10, color: 'var(--tn-text-muted)' }}>
                 {new Date(sync.lastSync).toLocaleTimeString()}
               </span>
             </div>
@@ -182,7 +186,7 @@ export default function OverviewTab({ data }: Props) {
 
       {/* Server Info */}
       {data.serverInfo && (
-        <div style={{
+        <div data-ai-id="overview-server-info" style={{
           background: 'var(--tn-surface)',
           border: '1px solid var(--tn-border)',
           borderRadius: 8,
@@ -203,13 +207,14 @@ export default function OverviewTab({ data }: Props) {
             fontSize: 11,
           }}>
             <span style={{ color: 'var(--tn-text-muted)', fontWeight: 500 }}>Tailscale IP:</span>
-            <span style={{ color: 'var(--tn-text)', fontFamily: 'monospace' }}>{data.serverInfo.tailscaleIP}</span>
+            <span data-ai-id="overview-server-tailscale-ip" style={{ color: 'var(--tn-text)', fontFamily: 'monospace' }}>{data.serverInfo.tailscaleIP}</span>
 
             <span style={{ color: 'var(--tn-text-muted)', fontWeight: 500 }}>Public IP:</span>
-            <span style={{ color: 'var(--tn-text)', fontFamily: 'monospace' }}>{data.serverInfo.publicIP}</span>
+            <span data-ai-id="overview-server-public-ip" style={{ color: 'var(--tn-text)', fontFamily: 'monospace' }}>{data.serverInfo.publicIP}</span>
 
             <span style={{ color: 'var(--tn-text-muted)', fontWeight: 500 }}>Web UI:</span>
             <a
+              data-ai-id="overview-server-web-ui-link"
               href={data.serverInfo.webUI}
               target="_blank"
               rel="noopener noreferrer"
@@ -219,7 +224,7 @@ export default function OverviewTab({ data }: Props) {
             </a>
 
             <span style={{ color: 'var(--tn-text-muted)', fontWeight: 500 }}>Documentation:</span>
-            <span style={{ color: 'var(--tn-text)', fontFamily: 'monospace', fontSize: 10 }}>
+            <span data-ai-id="overview-server-docs-path" style={{ color: 'var(--tn-text)', fontFamily: 'monospace', fontSize: 10 }}>
               {data.serverInfo.docs}
             </span>
           </div>

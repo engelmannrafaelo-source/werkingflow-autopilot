@@ -53,7 +53,7 @@ export default function RepositoriesTab() {
     if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     try {
-      const res = await fetch('/api/repo-dashboard/repositories', { signal: AbortSignal.timeout(8000) });
+      const res = await fetch('/api/repo-dashboard/repositories', { signal: AbortSignal.timeout(30000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setRepos(data.repos);

@@ -1,14 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import type { TestRunsData } from '../types';
+import { resilientFetch } from '../../../../utils/resilientFetch';
 
 export default function TestRunsTab() {
   const [data, setData] = useState<TestRunsData | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     if ((window as any).__cuiServerAlive === false) return;
     try {
-      const res = await fetch('/api/qa/runs', { signal: AbortSignal.timeout(8000) });
+      const res = await resilientFetch('/api/qa/runs');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       setData(json);
@@ -17,13 +18,15 @@ export default function TestRunsTab() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 10000); // 10s für Live-Tests
-    return () => clearInterval(interval);
-  }, []);
+    const interval = setInterval(fetchData, 10000);
+    const onReconnect = () => fetchData();
+    window.addEventListener('cui-reconnected', onReconnect);
+    return () => { clearInterval(interval); window.removeEventListener('cui-reconnected', onReconnect); };
+  }, [fetchData]);
 
   if (loading) {
     return (
@@ -35,15 +38,20 @@ export default function TestRunsTab() {
 
   if (!data) return null;
 
+  // Defensive: API may not return all fields
+  const running = data.running ?? [];
+  const checkpoints = data.checkpoints ?? [];
+  const recentRuns = data.recentRuns ?? [];
+
   return (
     <div style={{ padding: 16, overflow: 'auto' }}>
       {/* Running Tests */}
-      <Section title={`🟢 Running Tests (${data.running.length})`}>
-        {data.running.length === 0 ? (
+      <Section title={`🟢 Running Tests (${running.length})`}>
+        {running.length === 0 ? (
           <EmptyState>No tests currently running</EmptyState>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {data.running.map(test => (
+            {running.map(test => (
               <div
                 key={test.pid}
                 style={{
@@ -120,12 +128,12 @@ export default function TestRunsTab() {
       </Section>
 
       {/* Checkpoints */}
-      <Section title={`💾 Checkpoints (${data.checkpoints.length})`}>
-        {data.checkpoints.length === 0 ? (
+      <Section title={`💾 Checkpoints (${checkpoints.length})`}>
+        {checkpoints.length === 0 ? (
           <EmptyState>No checkpoints available</EmptyState>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 10 }}>
-            {data.checkpoints.map(cp => (
+            {checkpoints.map(cp => (
               <div
                 key={cp.scenario}
                 style={{
@@ -176,8 +184,8 @@ export default function TestRunsTab() {
       </Section>
 
       {/* Recent Reports */}
-      <Section title={`📋 Recent Reports (${data.recentRuns.length})`}>
-        {data.recentRuns.length === 0 ? (
+      <Section title={`📋 Recent Reports (${recentRuns.length})`}>
+        {recentRuns.length === 0 ? (
           <EmptyState>No recent reports</EmptyState>
         ) : (
           <div style={{
@@ -209,7 +217,7 @@ export default function TestRunsTab() {
 
             {/* Table Rows */}
             <div style={{ maxHeight: 400, overflow: 'auto' }}>
-              {data.recentRuns.map((run, idx) => (
+              {recentRuns.map((run, idx) => (
                 <div
                   key={idx}
                   style={{

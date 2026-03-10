@@ -55,7 +55,7 @@ export default function AuditTab({ envMode }: { envMode?: string }) {
       params.set('limit', String(limit));
       params.set('offset', String((page - 1) * limit));
 
-      const res = await fetch(`/api/admin/wr/audit?${params}`, { signal: AbortSignal.timeout(8000) });
+      const res = await fetch(`/api/admin/wr/audit?${params}`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setLogs(data.logs || data.entries || data || []);

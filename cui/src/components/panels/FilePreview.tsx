@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { resilientFetch } from '../../utils/resilientFetch';
 
 interface FileEntry {
   name: string;
@@ -37,7 +38,7 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
   const loadDir = useCallback(async (dirPath: string) => {
     if ((window as any).__cuiServerAlive === false) return;
     try {
-      const res = await fetch(`${API}/files?path=${encodeURIComponent(dirPath)}`, { signal: AbortSignal.timeout(8000) });
+      const res = await resilientFetch(`${API}/files?path=${encodeURIComponent(dirPath)}`);
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setEntries(data.entries);
@@ -76,7 +77,7 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
     }
 
     try {
-      const res = await fetch(`${API}/file?path=${encodeURIComponent(filePath)}`, { signal: AbortSignal.timeout(8000) });
+      const res = await resilientFetch(`${API}/file?path=${encodeURIComponent(filePath)}`);
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setSelectedFile(data);
@@ -88,6 +89,10 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
 
   useEffect(() => {
     if (currentDir) loadDir(currentDir);
+    // Retry on WS reconnect (clears stale "signal timed out" errors)
+    const onReconnect = () => { if (currentDir) loadDir(currentDir); };
+    window.addEventListener('cui-reconnected', onReconnect);
+    return () => window.removeEventListener('cui-reconnected', onReconnect);
   }, []);
 
   function navigate() {
@@ -121,7 +126,7 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
           targetDir: stageDir,
           operation: 'copy',
         }),
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(25000),
       });
 
       if (!res.ok) {

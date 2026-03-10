@@ -47,5 +47,13 @@
     "subject": "Test Run",
     "order": 1,
     "createdAt": "2026-03-01T00:00:00Z"
+  },
+  {
+    "id": "tpl_1773047422040_s1cc2q",
+    "label": "Weitermachen ?",
+    "message": "wie würdest du aus deiner sicht weitermachen ?",
+    "category": "reply",
+    "order": 6,
+    "createdAt": "2026-03-09T09:10:22.040Z"
   }
 ]

@@ -54,7 +54,7 @@ export default function OfficePanel({ projectId, workDir }: OfficePanelProps) {
     try {
       setLoading(true);
       setError(null);
-      const res = await fetch(`${API}/team/personas`, { signal: AbortSignal.timeout(8000) });
+      const res = await fetch(`${API}/team/personas`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`[OfficePanel] load personas failed: HTTP ${res.status}`);
       setPersonas(await res.json());
     } catch (err: any) {

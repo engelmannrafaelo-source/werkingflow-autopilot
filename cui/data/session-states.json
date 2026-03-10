@@ -1,20 +1,80 @@
 {
-  "engelmann": {
+  "5f77d36d-3633-426e-b8d6-8878f62fd4f0": {
     "state": "idle",
     "reason": "done",
-    "since": 1772477043868,
-    "accountId": "engelmann"
+    "since": 1773145151345,
+    "accountId": "office",
+    "sessionId": "5f77d36d-3633-426e-b8d6-8878f62fd4f0"
   },
-  "rafael": {
-    "state": "idle",
-    "reason": "done",
-    "since": 1772475583614,
-    "accountId": "rafael"
+  "87025140-c602-444f-8c8f-2e7d990c9adb": {
+    "state": "working",
+    "since": 1773143929058,
+    "accountId": "office",
+    "sessionId": "87025140-c602-444f-8c8f-2e7d990c9adb"
   },
-  "office": {
+  "f5e598fd-666e-4543-aa68-32b3f5910761": {
+    "state": "working",
+    "since": 1773145251537,
+    "accountId": "office",
+    "sessionId": "f5e598fd-666e-4543-aa68-32b3f5910761"
+  },
+  "2c13a93c-e041-4404-b281-02e890403c01": {
     "state": "idle",
     "reason": "done",
-    "since": 1772477133860,
-    "accountId": "office"
+    "since": 1773145280524,
+    "accountId": "office",
+    "sessionId": "2c13a93c-e041-4404-b281-02e890403c01"
+  },
+  "bebe4a9a-a2b6-44ea-b505-ef4aaa4ee009": {
+    "state": "working",
+    "since": 1773145160022,
+    "accountId": "office",
+    "sessionId": "bebe4a9a-a2b6-44ea-b505-ef4aaa4ee009"
+  },
+  "6bdbb410-b44e-4beb-8016-68c9e0de45ca": {
+    "state": "idle",
+    "reason": "done",
+    "since": 1773144900697,
+    "accountId": "engelmann",
+    "sessionId": "6bdbb410-b44e-4beb-8016-68c9e0de45ca"
+  },
+  "1b0c9ce4-2b85-4dfd-bcfa-504064315c91": {
+    "state": "working",
+    "since": 1773145286451,
+    "accountId": "rafael",
+    "sessionId": "1b0c9ce4-2b85-4dfd-bcfa-504064315c91"
+  },
+  "45998f4b-1d41-40ba-8d49-2018c8804f4f": {
+    "state": "working",
+    "since": 1773143929040,
+    "accountId": "office",
+    "sessionId": "45998f4b-1d41-40ba-8d49-2018c8804f4f"
+  },
+  "eccf9edb-70fe-4427-9a69-9bec09480a64": {
+    "state": "working",
+    "since": 1773143929071,
+    "accountId": "office",
+    "sessionId": "eccf9edb-70fe-4427-9a69-9bec09480a64"
+  },
+  "ae890610-57d1-4a21-9bfe-2f7586732ae2": {
+    "state": "idle",
+    "reason": "done",
+    "since": 1773145371506,
+    "accountId": "office",
+    "sessionId": "ae890610-57d1-4a21-9bfe-2f7586732ae2"
+  },
+  "130509aa-8af1-485e-a685-abe8f697e2d2": {
+    "state": "idle",
+    "reason": "done",
+    "since": 1773145349373,
+    "accountId": "rafael",
+    "sessionId": "130509aa-8af1-485e-a685-abe8f697e2d2"
+  },
+  "b74f06dc-7121-420b-8034-f23dfcca3d91": {
+    "state": "idle",
+    "reason": "done",
+    "since": 1773145286318,
+    "accountId": "rafael",
+    "sessionId": "b74f06dc-7121-420b-8034-f23dfcca3d91"
   }
 }

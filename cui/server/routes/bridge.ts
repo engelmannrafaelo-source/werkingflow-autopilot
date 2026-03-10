@@ -1,15 +1,13 @@
 import { Router } from 'express';
 import { resolve, join } from 'path';
 import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
+import { ACCOUNT_CONFIG } from './claude-cli.js';
 
 const router = Router();
 
 // --- Claude Code Usage Stats (CC-Usage) ---
-const CC_ACCOUNTS = [
-  { id: "engelmann", displayName: "Engelmann", homeDir: "/home/claude-user/.cui-account2" },
-  { id: "rafael", displayName: "Gmail", homeDir: "/home/claude-user/.cui-account1" },
-  { id: "office", displayName: "Office", homeDir: "/home/claude-user/.cui-account3" },
-];
+// Account config from single source of truth (claude-cli.ts)
+const CC_ACCOUNTS = ACCOUNT_CONFIG.map(a => ({ id: a.id, displayName: a.label, homeDir: a.home }));
 const SCRAPED_FILE = resolve(import.meta.dirname ?? ".", "..", "claude-usage-scraped.json");
 const WEEKLY_LIMIT_ESTIMATE = 45_000_000; // Conservative Pro plan estimate
 
@@ -266,95 +264,150 @@ router.post("/api/claude-code/scrape-now", async (req, res) => {
 // Bridge Monitor API Endpoints
 // ========================================
 
-const BRIDGE_URL = 'http://49.12.72.66:8000';
+const BRIDGE_URL = process.env.AI_BRIDGE_URL || 'http://49.12.72.66:8000';
 const BRIDGE_API_KEY = process.env.AI_BRIDGE_API_KEY || '';
 
-let _bridgeFailCount = 0;
-let _bridgeCircuitOpenUntil = 0;
-
 async function bridgeFetch(path: string, options: any = {}) {
-  // Circuit breaker: skip requests when bridge is known-down
-  if (_bridgeCircuitOpenUntil > Date.now()) {
-    throw new Error('Bridge circuit breaker open — skipping request');
-  }
   const headers = {
     'Authorization': `Bearer ${BRIDGE_API_KEY}`,
     ...options.headers,
   };
-  try {
-    const response = await fetch(`${BRIDGE_URL}${path}`, { ...options, headers, signal: AbortSignal.timeout(5000) });
-    if (!response.ok) throw new Error(`Bridge API error: ${response.status}`);
-    _bridgeFailCount = 0; // Reset on success
-    return response.json();
-  } catch (err) {
-    _bridgeFailCount++;
-    if (_bridgeFailCount >= 3) {
-      _bridgeCircuitOpenUntil = Date.now() + 60000; // Open circuit for 60s
-      console.warn(`[Bridge] Circuit breaker OPEN after ${_bridgeFailCount} failures — pausing 60s`);
-      _bridgeFailCount = 0;
+
+  // Simple retry logic: 2 attempts, 1s delay between (skip retry on 404 — endpoint doesn't exist)
+  let lastError: any;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const response = await fetch(`${BRIDGE_URL}${path}`, {
+        ...options,
+        headers,
+        signal: AbortSignal.timeout(8000)
+      });
+      if (!response.ok) {
+        const err = new Error(`Bridge API error: ${response.status}`);
+        (err as any).status = response.status;
+        throw err;
+      }
+      return response.json();
+    } catch (err: any) {
+      lastError = err;
+      // Don't retry on 404 (endpoint doesn't exist) or 401 (auth error)
+      if (err.status === 404 || err.status === 401) break;
+      if (attempt < 2) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
     }
-    throw err;
   }
+  throw lastError;
 }
 
 // Overview: Quick stats + Sankey data
 // Simple proxy endpoints to new Bridge metrics API
 
+// Helper: bridge metric endpoint with empty-data fallback on error
+function bridgeMetricHandler(name: string, path: string | ((req: any) => string), emptyData: any = {}) {
+  return async (req: any, res: any) => {
+    try {
+      const p = typeof path === 'function' ? path(req) : path;
+      const data = await bridgeFetch(p);
+      res.json(data);
+    } catch (err: any) {
+      // Downgrade to warn — these are expected when Bridge endpoints are unavailable
+      console.warn(`[Bridge] ${name}: ${err.message}`);
+      res.json({ ...emptyData, _error: err.message, _note: 'Bridge endpoint not available' });
+    }
+  };
+}
+
+// Overview: Composite from /stats + /health + /v1/sessions/stats + /rate-limits
 router.get('/api/bridge/metrics/overview', async (_req, res) => {
   try {
-    const data = await bridgeFetch('/metrics/overview');
-    res.json(data);
-  } catch (err: any) {
-    console.error('[Bridge] Overview error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-router.get('/api/bridge/metrics/usage', async (req, res) => {
-  try {
-    const limit = req.query.limit ? `?limit=${req.query.limit}` : '';
-    const data = await bridgeFetch(`/metrics/usage${limit}`);
-    res.json(data);
-  } catch (err: any) {
-    console.error('[Bridge] Usage error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-router.get('/api/bridge/metrics/cost', async (_req, res) => {
-  try {
-    const data = await bridgeFetch('/metrics/cost');
-    res.json(data);
-  } catch (err: any) {
-    console.error('[Bridge] Cost error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-router.get('/api/bridge/metrics/limits', async (_req, res) => {
-  try {
-    const data = await bridgeFetch('/metrics/limits');
-    res.json(data);
-  } catch (err: any) {
-    console.error('[Bridge] Limits error:', err.message);
-    // Fallback: Return empty data if endpoint doesn't exist (404)
+    const [stats, health, sessions, rateLimits] = await Promise.all([
+      bridgeFetch('/stats').catch(() => null),
+      bridgeFetch('/health').catch(() => null),
+      bridgeFetch('/v1/sessions/stats').catch(() => null),
+      bridgeFetch('/rate-limits').catch(() => null),
+    ]);
+    console.log('[Bridge] Overview: stats=%s health=%s sessions=%s limits=%s',
+      stats ? 'ok' : 'fail', health ? 'ok' : 'fail', sessions ? 'ok' : 'fail', rateLimits ? 'ok' : 'fail');
     res.json({
-      providers: [],
-      history: [],
-      lastUpdated: new Date().toISOString(),
-      _note: 'Bridge endpoint not available - showing empty state',
+      health: health?.status ?? stats?.status ?? 'unknown',
+      worker: rateLimits?.current_worker ?? health?.worker_instance ?? '-',
+      uptime_hours: 0,
+      total_requests: stats?.request_limiting?.total_requests ?? 0,
+      avg_response_time: 0,
+      success_rate: stats?.request_limiting?.rejected_requests === 0 ? 100 : 99,
+      active_sessions: sessions?.session_stats?.active_sessions ?? 0,
+      active_requests: stats?.request_limiting?.active_requests ?? 0,
+      max_concurrent: stats?.request_limiting?.max_concurrent ?? 0,
+      memory_usage_percent: stats?.request_limiting?.memory_usage_percent ?? 0,
+      memory_used_gb: stats?.request_limiting?.memory_used_gb ?? 0,
+      can_accept_requests: stats?.can_accept_requests ?? false,
+      rate_limited: rateLimits?.current_worker_rate_limited ?? false,
+      timestamp: new Date().toISOString(),
     });
+  } catch (err: any) {
+    console.warn('[Bridge] Overview error:', err.message);
+    res.json({ _error: err.message, _note: 'Bridge not reachable' });
   }
 });
+router.get('/api/bridge/metrics/usage', bridgeMetricHandler('Usage', '/v1/sessions/stats', { session_stats: {} }));
+router.get('/api/bridge/metrics/cost', bridgeMetricHandler('Cost', '/v1/metrics', { metrics: {} }));
+router.get('/api/bridge/metrics/limits', bridgeMetricHandler('Limits', '/rate-limits', { current_worker: 'unknown', all_rate_limits: {} }));
+router.get('/api/bridge/metrics/activity', bridgeMetricHandler('Activity', (req) => `/v1/sessions${req.query.limit ? `?limit=${req.query.limit}` : ''}`, { sessions: [], total: 0 }));
 
-router.get('/api/bridge/metrics/activity', async (req, res) => {
+// Persistent metrics from PostgreSQL (survives worker restarts)
+router.get("/api/bridge/metrics/persistent", bridgeMetricHandler("Persistent", "/v1/metrics/persistent", { source: "postgresql", realtime: {}, daily: [], endpoints: [], models: [], apps: [] }));
+
+// Per-app metrics breakdown (connected frontend apps)
+router.get("/api/bridge/metrics/apps", bridgeMetricHandler("Apps", "/v1/metrics/apps", { source: "postgresql", apps_period: [], apps_realtime: [] }));
+
+
+// ── Generic Bridge Proxy ────────────────────────────────────────────────────
+// Forwards any request from /api/bridge-proxy/* to the Bridge server.
+// This allows the frontend to call Bridge API endpoints through the CUI server
+// (required when browser can't reach Bridge IP directly, e.g., Mac → Hetzner).
+router.use('/api/bridge-proxy', async (req: any, res: any) => {
+  const bridgePath = req.path || '/';
+  const qs = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+    const url = `${BRIDGE_URL}${bridgePath}${qs}`;
   try {
-    const limit = req.query.limit ? `?limit=${req.query.limit}` : '';
-    const data = await bridgeFetch(`/metrics/activity${limit}`);
-    res.json(data);
+    const headers: Record<string, string> = {
+      'Authorization': `Bearer ${BRIDGE_API_KEY}`,
+    };
+    if (req.headers['content-type']) headers['Content-Type'] = req.headers['content-type'] as string;
+
+    const fetchOpts: RequestInit = {
+      method: req.method,
+      headers,
+      signal: AbortSignal.timeout(30000),
+    };
+    if (req.method !== 'GET' && req.method !== 'HEAD' && req.body) {
+      fetchOpts.body = JSON.stringify(req.body);
+    }
+
+    const response = await fetch(url, fetchOpts);
+    const contentType = response.headers.get('content-type') || '';
+
+    // Stream the response
+    res.status(response.status);
+    if (contentType) res.setHeader('Content-Type', contentType);
+
+    // HEAD requests: just return status, no body
+    if (req.method === 'HEAD') {
+      res.status(response.status).end();
+      return;
+    }
+
+    if (contentType.includes('json')) {
+      const data = await response.json();
+      res.json(data);
+    } else {
+      const text = await response.text();
+      res.send(text);
+    }
   } catch (err: any) {
-    console.error('[Bridge] Activity error:', err.message);
-    res.status(500).json({ error: err.message });
+    console.warn(`[Bridge-Proxy] ${req.method} ${bridgePath}: ${err.message}`);
+    res.status(502).json({ error: `Bridge proxy error: ${err.message}`, path: bridgePath });
   }
 });
 

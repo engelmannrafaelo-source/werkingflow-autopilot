@@ -41,7 +41,7 @@ export default function KnowledgeGraphView({
   async function loadKnowledgeData() {
     if ((window as any).__cuiServerAlive === false) return;
     try {
-      const response = await fetch('/api/team/knowledge/registry', { signal: AbortSignal.timeout(8000) });
+      const response = await fetch('/api/team/knowledge/registry', { signal: AbortSignal.timeout(20000) });
       if (!response.ok) throw new Error('Failed to load registry');
 
       const registry = await response.json();

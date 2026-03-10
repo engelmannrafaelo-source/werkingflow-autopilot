@@ -41,7 +41,7 @@ export default function MeetingRoomView({ personas, onSelectPersona, selected }:
     async function fetchAgentStatus() {
       if ((window as any).__cuiServerAlive === false) return;
       try {
-        const r = await fetch('/api/agents/status', { signal: AbortSignal.timeout(8000) });
+        const r = await fetch('/api/agents/status', { signal: AbortSignal.timeout(20000) });
         if (!r.ok) throw new Error(`[MeetingRoom] agents/status failed: HTTP ${r.status}`);
         const d = await r.json();
         const map: Record<string, AgentInfo> = {};

@@ -42,7 +42,7 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
   const fetchTenants = useCallback(async () => {
     if ((window as any).__cuiServerAlive === false) return;
     try {
-      const res = await fetch('/api/admin/wr/tenants?limit=1000', { signal: AbortSignal.timeout(8000) });
+      const res = await fetch('/api/admin/wr/tenants?limit=1000', { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setTenants(data.tenants || []);
@@ -56,7 +56,7 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/admin/wr/developer-tokens', { signal: AbortSignal.timeout(8000) });
+      const res = await fetch('/api/admin/wr/developer-tokens', { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setTokens(data.tokens || data || []);

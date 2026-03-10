@@ -51,7 +51,7 @@ export default function PipelineTab({ envMode }: { envMode?: string }) {
   const fetchEnvConfigs = useCallback(async () => {
     if ((window as any).__cuiServerAlive === false) return;
     try {
-      const res = await fetch('/api/admin/wr/environments', { signal: AbortSignal.timeout(8000) });
+      const res = await fetch('/api/admin/wr/environments', { signal: AbortSignal.timeout(20000) });
       if (!res.ok) {
         throw new Error('Failed to fetch environment configs');
       }
@@ -59,12 +59,13 @@ export default function PipelineTab({ envMode }: { envMode?: string }) {
       setEnvConfigs(data.environments || []);
     } catch (err: any) {
       console.warn('[WRPipeline] fetchEnvConfigs:', err);
-      // Fallback to hardcoded defaults
+      // Fallback: show unavailable, don't hardcode URLs
       setEnvConfigs([
-        { name: 'Local', url: 'http://localhost:3008', branch: 'develop' },
-        { name: 'Staging', url: 'https://werkingflow-platform-git-develop-rafael-engelmanns-projects.vercel.app', branch: 'develop' },
-        { name: 'Production', url: 'https://werkingflow-platform.vercel.app', branch: 'main' },
+        { name: 'Local', url: '(unavailable)', branch: 'develop' },
+        { name: 'Staging', url: '(unavailable)', branch: 'develop' },
+        { name: 'Production', url: '(unavailable)', branch: 'main' },
       ]);
+      console.warn('[WRPipeline] Could not load env configs from server');
     }
   }, []);
 

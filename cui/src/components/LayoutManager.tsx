@@ -2,7 +2,7 @@ import { useCallback, useRef, useState, useEffect, useMemo, lazy, Suspense } fro
 import { Layout, Model, TabNode, TabSetNode, BorderNode, IJsonModel, ITabSetRenderValues, ITabRenderValues, Actions, DockLocation, Rect } from 'flexlayout-react';
 import type { CuiStates } from '../types';
 import { copyToClipboard } from '../utils/clipboard';
-const ACCOUNT_LABELS: Record<string, string> = { rafael: "Engelmann", engelmann: "Gmail", office: "Office", local: "Lokal" };
+const ACCOUNT_LABELS: Record<string, string> = { rafael: "Engelmann", engelmann: "Gmail", office: "Office", local: "Lokal", gemini: "Gemini" };
 
 // --- flexlayout-react CPU fix ---
 // flexlayout's internal useLayoutEffect hooks (no dep arrays) call getBoundingClientRect
@@ -66,8 +66,11 @@ const QADashboard = lazy(() => import('./panels/QADashboard/QADashboard'));
 const RepoDashboard = lazy(() => import('./panels/RepoDashboard/RepoDashboard'));
 const SystemHealth = lazy(() => import('./panels/SystemHealth'));
 const WatchdogPanel = lazy(() => import('./panels/WatchdogPanel'));
-const InfrastructurePanel = lazy(() => import('./panels/InfrastructurePanel'));
 const LayoutBuilder = lazy(() => import('./LayoutBuilder'));
+const PeerAwarenessPanel = lazy(() => import('./panels/PeerAwarenessPanel'));
+const BackgroundOpsPanel = lazy(() => import('./panels/BackgroundOpsPanel'));
+const ConversationQueuePanel = lazy(() => import("./panels/ConversationQueuePanel"));
+const MaintenancePanel = lazy(() => import('./panels/MaintenancePanel/MaintenancePanel'));
 
 import '../styles/office.css';
 
@@ -178,10 +181,10 @@ interface LayoutManagerProps {
   projectId: string;
   workDir: string;
   cuiStates?: CuiStates;
-  onAttentionChange?: (needsAttention: boolean) => void;
+  onAttentionChange?: (needsAttention: boolean, state?: 'working' | 'needs_attention') => void;
   onCuiStateReset?: (cuiId: string) => void;
   pendingActivation?: ActivationPlan[] | null;
-  onActivationProcessed?: () => void;
+  onActivationProcessed?: (projectId?: string) => void;
 }
 
 export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAttentionChange, onCuiStateReset, pendingActivation, onActivationProcessed }: LayoutManagerProps) {
@@ -194,11 +197,18 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     return null;
   });
   const [showBuilder, setShowBuilder] = useState(false);
+  const [attentionVersion, setAttentionVersion] = useState(0); // triggers re-evaluation of attention state
   const templateRef = useRef<IJsonModel | null>(null);
   const layoutRef = useRef<Layout>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(null);
   const activeDirRef = useRef<string>(workDir);
   const controlWsRef = useRef<WebSocket | null>(null);
+
+  // Per-session state tracking for tab indicators (updated via WS conv-attention events)
+  // Key: sessionId, Value: { state, reason }
+  const sessionStatesRef = useRef<Map<string, { state: string; reason?: string }>>(new Map());
+  // Force tab re-render counter (bumped when session states change)
+  const [tabRenderTick, setTabRenderTick] = useState(0);
 
   // Refs for stable Layout callback props (prevent Layout re-render → revision++ → ALL tab content re-render)
   const cuiStatesRef = useRef(cuiStates);
@@ -303,14 +313,24 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       case 'cui':
       case 'cui-lite':
         return wrapPanel('CUI', <CuiLitePanel accountId={config.accountId} projectId={projectId} workDir={workDir} panelId={nodeId} isTabVisible={node.isVisible()}
-          onRouteChange={(route) => updateNodeConfig(nodeId, { _route: route })} />);
+          initialRoute={config._route}
+          initialSessionId={config.initialSessionId}
+          onRouteChange={(route) => updateNodeConfig(nodeId, { _route: route })}
+          onStateChange={(state) => { updateNodeConfig(nodeId, { _attention: state }); setAttentionVersion(v => v + 1); }}
+          onFinish={(sid) => {
+            const m = modelRef.current;
+            if (m) {
+              try { m.doAction(Actions.deleteTab(nodeId)); saveLayoutRef.current(m); } catch (e) { console.warn('[LM] Finish deleteTab:', e); }
+            }
+          }} />);
       case 'chat': {
         const accountId = config.accountId || 'rafael';
         const PROXY_PORTS: Record<string, number> = {
           rafael: 5001,
           engelmann: 5002,
           office: 5003,
-          local: 5004
+          local: 5004,
+          gemini: 5005
         };
         return wrapPanel('NativeChat', <NativeChat accountId={accountId} proxyPort={PROXY_PORTS[accountId] || 5001} />);
       }
@@ -337,9 +357,8 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         return wrapPanel('LinkedInPanel',
           <PanelConnectivityGuard
             panelName="Platform"
-            checkUrl="http://localhost:3004/api/version"
-            port={3004}
-            startCommand="cd /root/projekte/werkingflow/platform && npm run build:local"
+            checkUrl="/api/panel-health"
+            startCommand="# Platform managed by dev-servers CLI"
           >
             {withSuspense(<LinkedInPanel />)}
           </PanelConnectivityGuard>
@@ -347,17 +366,8 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       case 'qa-dashboard':
         return wrapPanel('QADashboard', withSuspense(<QADashboard />));
       case 'bridge-monitor':
-        return wrapPanel('BridgeMonitor',
-          <PanelConnectivityGuard
-            panelName="Bridge (Hetzner)"
-            checkUrl="http://49.12.72.66:8000/health"
-            startCommand="# Bridge runs on Hetzner (49.12.72.66:8000)
-ssh root@49.12.72.66 'docker ps | grep ai-bridge'
-ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
-          >
-            {withSuspense(<BridgeMonitor />)}
-          </PanelConnectivityGuard>
-        );
+        // No connectivity guard needed — all calls go through CUI server proxy
+        return wrapPanel('BridgeMonitor', withSuspense(<BridgeMonitor />));
       case 'infisical-monitor':
         // Using mock data in development - no connectivity check needed
         return wrapPanel('InfisicalMonitor', withSuspense(<InfisicalMonitor />));
@@ -366,9 +376,16 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
       case 'system-health':
         return wrapPanel('SystemHealth', withSuspense(<SystemHealth />));
       case 'watchdog':
+      case 'infrastructure': // Alias: both point to Watchdog (iframe on :9090)
         return wrapPanel('WatchdogPanel', withSuspense(<WatchdogPanel />));
-      case 'infrastructure':
-        return wrapPanel('InfrastructurePanel', withSuspense(<InfrastructurePanel />));
+      case 'background-ops':
+        return wrapPanel('BackgroundOps', withSuspense(<BackgroundOpsPanel />));
+      case 'peer-awareness':
+        return wrapPanel('PeerAwareness', withSuspense(<PeerAwarenessPanel />));
+      case 'conversation-queue':
+        return wrapPanel('ConversationQueue', withSuspense(<ConversationQueuePanel projectId={projectId} />));
+      case 'maintenance':
+        return wrapPanel('MaintenancePanel', withSuspense(<MaintenancePanel />));
       default:
         return wrapPanel(`Unknown:${component}`,
           <div style={{ padding: 20, color: 'var(--tn-text-muted)' }}>
@@ -433,7 +450,13 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
     } catch (err) { console.warn('[LayoutManager] handleResetLayout Model.fromJson failed:', err); }
   }, [workDir, saveLayout]);
 
-  const addTab = useCallback((type: 'cui' | 'cui-lite' | 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'repo-dashboard' | 'watchdog' | 'infrastructure', config: Record<string, string>, targetId: string) => {
+  // Stable refs for WS effect (prevent reconnect on model/callback changes)
+  const handleResetLayoutRef = useRef(handleResetLayout);
+  handleResetLayoutRef.current = handleResetLayout;
+  const saveLayoutRef = useRef(saveLayout);
+  saveLayoutRef.current = saveLayout;
+
+  const addTab = useCallback((type: 'cui' | 'cui-lite' | 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'repo-dashboard' | 'watchdog' | 'background-ops' | 'conversation-queue' | 'maintenance' | 'qa-dashboard' | 'peer-awareness' | 'infisical-monitor', config: Record<string, string>, targetId: string) => {
     const m = modelRef.current;
     if (!m) return;
     const names: Record<string, string> = {
@@ -451,7 +474,12 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
       'bridge-monitor': 'Bridge Monitor',
       'repo-dashboard': 'Git & Pipeline Monitor',
       watchdog: 'Dev Server Watchdog',
-      infrastructure: 'Infrastructure',
+      'background-ops': 'Background Ops',
+      'conversation-queue': 'Conversation Queue',
+      maintenance: 'Maintenance',
+      'qa-dashboard': 'QA Dashboard',
+      'peer-awareness': 'Peer Awareness',
+      'infisical-monitor': 'Infisical Monitor',
     };
     if (type === 'preview' && !config.watchPath) {
       config.watchPath = activeDirRef.current || workDir;
@@ -481,7 +509,7 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
           if (val === 'cui') {
             addTab('cui', {}, node.getId());
           } else {
-            addTab(val as 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'repo-dashboard' | 'watchdog' | 'infrastructure', {}, node.getId());
+            addTab(val as 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'repo-dashboard' | 'watchdog' | 'background-ops' | 'conversation-queue' | 'maintenance' | 'qa-dashboard' | 'peer-awareness' | 'infisical-monitor', {}, node.getId());
           }
           e.target.value = '';
         }}
@@ -505,14 +533,19 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
         <option value="notes">Notes</option>
         <option value="images">Images</option>
         <option value="mission">Mission Control</option>
-        <option value="office">Virtual Office 👥</option>
+        <option value="office">Virtual Office</option>
+        <option value="qa-dashboard">QA Dashboard</option>
         <option value="admin-wr">Werking Report Admin</option>
         <option value="system-health">System Health</option>
         <option value="watchdog">Dev Server Watchdog</option>
-        <option value="linkedin">LinkedIn Marketing 🔗</option>
+        <option value="linkedin">LinkedIn Marketing</option>
+        <option value="peer-awareness">Peer Awareness</option>
+        <option value="background-ops">Background Ops</option>
+        <option value="conversation-queue">Conversation Queue</option>
         <option value="bridge-monitor">Bridge Monitor (Old)</option>
         <option value="repo-dashboard">Git & Pipeline Monitor</option>
-        <option value="infrastructure">Infrastructure</option>
+        <option value="infisical-monitor">Infisical Monitor</option>
+        <option value="maintenance">Maintenance</option>
       </select>
     );
   }, [addTab]);
@@ -567,10 +600,6 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
     return action;
   }, []);
 
-  // CUI state indicators on tabs (stable JSX refs to avoid per-render allocation)
-  const processingDot = <span key="dot" style={{ width: 7, height: 7, borderRadius: '50%', background: '#9ece6a', display: 'inline-block', marginRight: 4, flexShrink: 0 }} />;
-  const doneDot = <span key="dot" style={{ width: 7, height: 7, borderRadius: '50%', background: '#e0af68', display: 'inline-block', marginRight: 4, flexShrink: 0 }} />;
-
   const onRenderTab = useCallback((node: TabNode, renderValues: ITabRenderValues) => {
     // Show node ID badge on every tab — clickable to copy full ID
     const fullId = node.getId().replace(/^#/, '');
@@ -596,18 +625,38 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
       >{shortId}</span>
     );
 
-    if (node.getComponent() !== 'cui') return;
-    const cuiId = node.getConfig()?.accountId;
-    if (!cuiId) return;
-    const state = cuiStatesRef.current[cuiId];
-    if (state === 'processing') {
-      renderValues.leading = processingDot;
-    } else if (state === 'done') {
-      renderValues.leading = doneDot;
+    if (node.getComponent() !== 'cui' && node.getComponent() !== 'cui-lite') return;
+
+    // Primary: panel-reported attention state (from CuiLitePanel onStateChange callback)
+    const panelState = node.getConfig()?._attention as string | undefined;
+
+    // Fallback: per-session WS state or per-account legacy state
+    let sessionState = panelState || 'idle';
+    if (sessionState === 'idle') {
+      const route = node.getConfig()?._route as string | undefined;
+      const sessionId = route?.startsWith('/c/') ? route.slice(3) : null;
+      if (sessionId) {
+        const ss = sessionStatesRef.current.get(sessionId);
+        if (ss && ss.state !== 'idle') sessionState = ss.state;
+      }
     }
-  }, []);
+
+    // State indicators: working (green pulse), needs_attention (red pulse), idle (dim)
+    if (sessionState === 'working') {
+      renderValues.leading = <span key="dot" className="cui-tab-dot cui-tab-dot--working" />;
+    } else if (sessionState === 'needs_attention') {
+      const attentionReason = node.getConfig()?._attentionReason;
+      const label = attentionReason === 'permission' ? '⚡' : attentionReason === 'error' ? '⚠' : '●';
+      renderValues.leading = <span key="dot" className="cui-tab-dot cui-tab-dot--attention" title={attentionReason || 'Needs input'}>{label}</span>;
+    } else if (node.getConfig()?._route) {
+      // Has a conversation open but idle
+      renderValues.leading = <span key="dot" className="cui-tab-dot cui-tab-dot--idle" />;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabRenderTick]);
 
   // Control API: listen for panel/layout commands + report panel state (auto-reconnect)
+  // IMPORTANT: No model/callback dependencies — uses refs to prevent WS reconnect on every model change
   useEffect(() => {
     let disposed = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -615,39 +664,39 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
 
     const connect = () => {
       if (disposed) return;
-      // Don't hammer WS when server is down — wait for App WS to restore __cuiServerAlive
       if ((window as any).__cuiServerAlive === false) {
         reconnectTimer = setTimeout(connect, Math.min(backoff, 10000));
         return;
       }
       const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
       const ws = new WebSocket(`${protocol}://${window.location.host}/ws`);
-      ws.onerror = () => {}; // Suppress console noise during server restarts
+      ws.onerror = () => {};
       controlWsRef.current = ws;
 
       function reportPanels() {
-        if (!model || ws.readyState !== WebSocket.OPEN) return;
+        const m = modelRef.current;
+        if (!m || ws.readyState !== WebSocket.OPEN) return;
         try {
           const panels: Array<{ id: string; component: string; config: Record<string, unknown>; name: string }> = [];
-          model.visitNodes((node) => {
+          m.visitNodes((node) => {
             if (node.getType() === 'tab') {
               const tab = node as TabNode;
               panels.push({ id: tab.getId(), component: tab.getComponent() ?? 'unknown', config: tab.getConfig() ?? {}, name: tab.getName() });
             }
           });
-          ws.send(JSON.stringify({ type: 'state-report', panels }));
+          ws.send(JSON.stringify({ type: 'state-report', panels, projectId }));
         } catch (err) { console.warn('[LayoutManager] reportPanels failed:', err); }
       }
 
       ws.onopen = () => {
-        backoff = 1000; // reset backoff on successful connection
-        console.log('[LayoutManager WS] Connected');
+        backoff = 1000;
         reportPanels();
+        // Re-sync conversations on reconnect
+        setTimeout(() => syncNowRef.current?.(), 1500);
       };
       ws.onclose = () => {
         if (controlWsRef.current === ws) controlWsRef.current = null;
         if (!disposed) {
-          if (backoff <= 1000) console.log('[LayoutManager WS] Disconnected, reconnecting...');
           reconnectTimer = setTimeout(() => {
             backoff = Math.min(backoff * 2, 30000);
             connect();
@@ -655,14 +704,15 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
         }
       };
       ws.onmessage = (e) => {
+      const m = modelRef.current;
       try {
         const msg = JSON.parse(e.data);
-        if (msg.type === 'control:panel-add' && model) {
+        if (msg.type === 'control:panel-add' && m) {
           let targetId = '';
-          model.visitNodes((node) => { if (!targetId && node.getType() === 'tabset') targetId = node.getId(); });
+          m.visitNodes((node) => { if (!targetId && node.getType() === 'tabset') targetId = node.getId(); });
           if (targetId) {
             try {
-              model.doAction(Actions.addNode(
+              m.doAction(Actions.addNode(
                 { type: 'tab', name: msg.name || msg.component, component: msg.component, config: msg.config || {} },
                 targetId, DockLocation.CENTER, -1
               ));
@@ -670,32 +720,34 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
             } catch (err) { console.warn('[LayoutManager] panel-add doAction failed:', err); }
           }
         }
-        if (msg.type === 'control:panel-remove' && msg.nodeId && model) {
+        if (msg.type === 'control:panel-remove' && msg.nodeId && m) {
           try {
-            model.doAction(Actions.deleteTab(msg.nodeId));
+            m.doAction(Actions.deleteTab(msg.nodeId));
             reportPanels();
           } catch (err) { console.warn('[LayoutManager] panel-remove doAction failed:', err); }
         }
-        // Close panels when a conversation is finished or deleted via Mission Control
-        if ((msg.type === 'control:conversation-finished' || msg.type === 'control:conversation-deleted') && msg.panelsToClose && model) {
+        if ((msg.type === 'control:conversation-finished' || msg.type === 'control:conversation-deleted') && msg.panelsToClose && m) {
           const myPanels = (msg.panelsToClose as Array<{ panelId: string; projectId: string }>)
             .filter(p => p.projectId === projectId);
           for (const p of myPanels) {
-            try { model.doAction(Actions.deleteTab(p.panelId)); } catch (err) { console.warn('[LayoutManager] deleteTab failed for panel', p.panelId, ':', err); }
+            try { m.doAction(Actions.deleteTab(p.panelId)); } catch (err) { console.warn('[LayoutManager] deleteTab failed for panel', p.panelId, ':', err); }
           }
           if (myPanels.length > 0) {
             reportPanels();
-            saveLayout(model);
+            saveLayoutRef.current(m);
           }
         }
+        if (msg.type === 'control:conversation-started' && msg.workDir === workDir) {
+          // New conversation for our project — delay to let panel update its config first
+          setTimeout(() => syncNowRef.current?.(), 5000);
+        }
         if (msg.type === 'control:layout-reset') {
-          handleResetLayout();
+          handleResetLayoutRef.current();
           setTimeout(reportPanels, 200);
         }
-        // Select/activate a tab by nodeId or component name (e.g. "admin-wr")
-        if (msg.type === 'control:select-tab' && model && msg.target) {
+        if (msg.type === 'control:select-tab' && m && msg.target) {
           let foundId = '';
-          model.visitNodes((node) => {
+          m.visitNodes((node) => {
             if (foundId) return;
             if (node.getType() === 'tab') {
               const tab = node as TabNode;
@@ -706,17 +758,16 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
           });
           if (foundId) {
             try {
-              model.doAction(Actions.selectTab(foundId));
+              m.doAction(Actions.selectTab(foundId));
               ws.send(JSON.stringify({ type: 'tab-selected', nodeId: foundId, target: msg.target }));
             } catch (err) { console.warn('[LayoutManager] select-tab doAction failed:', err); }
           } else {
             ws.send(JSON.stringify({ type: 'tab-select-failed', target: msg.target, error: 'not found' }));
           }
         }
-        // Ensure a panel exists and is visible: find by component, add if missing, select if hidden
-        if (msg.type === 'control:ensure-panel' && model && msg.component) {
+        if (msg.type === 'control:ensure-panel' && m && msg.component) {
           let foundId = '';
-          model.visitNodes((node) => {
+          m.visitNodes((node) => {
             if (foundId) return;
             if (node.getType() === 'tab') {
               const tab = node as TabNode;
@@ -724,19 +775,17 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
             }
           });
           if (!foundId) {
-            // Panel doesn't exist — add it
             let targetId = '';
-            model.visitNodes((node) => { if (!targetId && node.getType() === 'tabset') targetId = node.getId(); });
+            m.visitNodes((node) => { if (!targetId && node.getType() === 'tabset') targetId = node.getId(); });
             if (targetId) {
               const nameMap: Record<string, string> = { 'admin-wr': 'Werking Report Admin', 'browser': 'Browser', 'images': 'Images', 'notes': 'Notes' };
               try {
-                model.doAction(Actions.addNode(
+                m.doAction(Actions.addNode(
                   { type: 'tab', name: nameMap[msg.component] || msg.component, component: msg.component, config: msg.config || {} },
                   targetId, DockLocation.CENTER, -1
                 ));
               } catch (err) { console.warn('[LayoutManager] ensure-panel addNode failed:', err); }
-              // Find the newly added tab
-              model.visitNodes((node) => {
+              m.visitNodes((node) => {
                 if (node.getType() === 'tab') {
                   const tab = node as TabNode;
                   if (tab.getComponent() === msg.component) foundId = tab.getId();
@@ -746,7 +795,7 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
           }
           if (foundId) {
             try {
-              model.doAction(Actions.selectTab(foundId));
+              m.doAction(Actions.selectTab(foundId));
             } catch (err) { console.warn('[LayoutManager] ensure-panel selectTab failed:', err); }
             reportPanels();
             ws.send(JSON.stringify({ type: 'panel-ensured', nodeId: foundId, component: msg.component }));
@@ -754,15 +803,13 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
             ws.send(JSON.stringify({ type: 'panel-ensure-failed', component: msg.component, error: 'could not add' }));
           }
         }
-        // --- Conversation Activation: open CUI panels for selected conversations ---
-        if (msg.type === 'control:activate-conversations' && model && msg.plan) {
+        if (msg.type === 'control:activate-conversations' && m && msg.plan) {
           const myPlan = (msg.plan as Array<{ projectId: string; conversations: Array<{ sessionId: string; accountId: string }> }>)
             .find(p => p.projectId === projectId);
           if (!myPlan) return;
 
-          // 1. Inventory existing CUI panels (generic, no account binding)
           const existingPanels: string[] = [];
-          model.visitNodes((node) => {
+          m.visitNodes((node) => {
             if (node.getType() === 'tab') {
               const tab = node as TabNode;
               if (tab.getComponent() === 'cui' || tab.getComponent() === 'cui-lite') {
@@ -771,7 +818,6 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
             }
           });
 
-          // 2. Match conversations to available panels (round-robin)
           const assignments: Array<{ panelId: string; sessionId: string }> = [];
           const usedPanels = new Set<string>();
           const unmatched: Array<{ sessionId: string; accountId: string }> = [];
@@ -786,14 +832,13 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
             }
           }
 
-          // 3. Create new CUI panels for unmatched conversations (auto-split)
           let tabsetCount = 0;
-          model.visitNodes((node) => { if (node.getType() === 'tabset') tabsetCount++; });
+          m.visitNodes((node) => { if (node.getType() === 'tabset') tabsetCount++; });
 
           for (const conv of unmatched) {
             let targetId = '';
             let minTabs = Infinity;
-            model.visitNodes((node) => {
+            m.visitNodes((node) => {
               if (node.getType() === 'tabset') {
                 const ts = node as TabSetNode;
                 const count = ts.getChildren().length;
@@ -807,16 +852,15 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
               : DockLocation.CENTER;
 
             try {
-              model.doAction(Actions.addNode(
+              m.doAction(Actions.addNode(
                 { type: 'tab', name: 'CUI', component: 'cui', config: {} },
                 targetId, dockLocation, -1
               ));
             } catch (err) { console.warn('[LayoutManager] activate-conversations addNode failed:', err); continue; }
             tabsetCount++;
 
-            // Find the new node
             let newPanelId = '';
-            model.visitNodes((node) => {
+            m.visitNodes((node) => {
               if (node.getType() === 'tab') {
                 const tab = node as TabNode;
                 if ((tab.getComponent() === 'cui' || tab.getComponent() === 'cui-lite')
@@ -831,7 +875,6 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
             }
           }
 
-          // 4. Send navigate commands (staggered to avoid iframe race conditions)
           assignments.forEach((a, i) => {
             setTimeout(() => {
               if (ws.readyState === WebSocket.OPEN) {
@@ -840,9 +883,26 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
             }, i * 300);
           });
 
-          // Save layout after modifications
-          saveLayout(model);
+          saveLayoutRef.current(m);
           reportPanels();
+        }
+        // Track per-session states for tab indicators
+        if (msg.type === 'conv-attention' && msg.sessionId) {
+          const prev = sessionStatesRef.current.get(msg.sessionId);
+          const newState = msg.state || 'idle';
+          const newReason = msg.reason;
+          if (!prev || prev.state !== newState || prev.reason !== newReason) {
+            sessionStatesRef.current.set(msg.sessionId, { state: newState, reason: newReason });
+            setTabRenderTick(t => t + 1);
+          }
+        }
+        if (msg.type === 'cui-state' && msg.sessionId) {
+          const mapped = msg.state === 'processing' ? 'working' : msg.state === 'done' ? 'idle' : msg.state;
+          const prev = sessionStatesRef.current.get(msg.sessionId);
+          if (!prev || prev.state !== mapped) {
+            sessionStatesRef.current.set(msg.sessionId, { state: mapped, reason: prev?.reason });
+            setTabRenderTick(t => t + 1);
+          }
         }
       } catch (err) { console.warn('[LayoutManager] WS message handler error:', err); }
     };
@@ -856,7 +916,7 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
       controlWsRef.current = null;
       ws?.close();
     };
-  }, [model, handleResetLayout]);
+  }, [projectId]); // Only reconnect when project changes, not on every model update
 
   // Process pending activation plan (from prop, e.g. after project switch)
   useEffect(() => {
@@ -950,27 +1010,172 @@ ssh root@49.12.72.66 'docker logs ai-bridge --tail 50'"
       });
 
       saveLayout(model);
-      onActivationProcessed?.();
+      onActivationProcessed?.(projectId);
     };
 
     tryProcess();
   }, [pendingActivation, model, projectId, onActivationProcessed, saveLayout]);
 
-  // Report attention state to parent (any CUI tab in 'done' state)
+  // Auto-mount ongoing (non-finished) conversations for this project as tabs
+  // Continuous auto-sync: periodically mount missing conversations, close finished ones
+  const syncNowRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    if (!model || !workDir) return;
+    let disposed = false;
+
+    const syncConversations = async () => {
+      const m = modelRef.current;
+      const ws = controlWsRef.current;
+      if (!m || disposed || (window as any).__cuiServerAlive === false) return;
+
+      try {
+        const res = await fetch(`/api/mission/conversations?project=${encodeURIComponent(workDir)}`,
+          { signal: AbortSignal.timeout(10000) });
+        if (!res.ok || disposed) return;
+        const data = await res.json();
+        const conversations: any[] = data.conversations || [];
+
+        // Inventory mounted CUI tabs
+        const mountedSessions = new Map<string, string>(); // sessionId -> nodeId
+        const emptyPanels: string[] = [];
+        m.visitNodes((node) => {
+          if (node.getType() === 'tab') {
+            const tab = node as TabNode;
+            const comp = tab.getComponent?.();
+            if (comp !== 'cui' && comp !== 'cui-lite') return;
+            const route = tab.getConfig()?._route || '';
+            const cfgSid = tab.getConfig()?.initialSessionId || '';
+            const sid = route.startsWith('/c/') ? route.slice(3) : cfgSid || '';
+            if (sid) {
+              mountedSessions.set(sid, tab.getId());
+            } else {
+              emptyPanels.push(tab.getId());
+            }
+          }
+        });
+
+        // Determine which conversations should be active (ongoing OR recent 48h, not finished)
+        const cutoff48h = Date.now() - 48 * 60 * 60 * 1000;
+        const active = conversations.filter((c: any) =>
+          !c.manualFinished &&
+          (c.status === 'ongoing' || new Date(c.updatedAt || 0).getTime() > cutoff48h)
+        );
+        const activeSessionIds = new Set(active.map((c: any) => c.sessionId));
+
+        // Close panels whose sessions are NOT in the active set (finished, old, or unknown)
+        let closedCount = 0;
+        for (const [sid, nodeId] of mountedSessions) {
+          if (!activeSessionIds.has(sid)) {
+            try { m.doAction(Actions.deleteTab(nodeId)); closedCount++; } catch {}
+          }
+        }
+        // Skip sessions that are already visible (mounted in a panel, even if config not yet updated)
+        const missing = active.filter((c: any) => !mountedSessions.has(c.sessionId) && !c.isVisible);
+        if (missing.length === 0 && closedCount === 0) return;
+
+        const assignments: Array<{ panelId: string; sessionId: string }> = [];
+        let emptyIdx = 0;
+
+        for (const conv of missing) {
+          if (emptyIdx < emptyPanels.length) {
+            assignments.push({ panelId: emptyPanels[emptyIdx], sessionId: conv.sessionId });
+            emptyIdx++;
+          } else {
+            // Only mount into tabsets that contain CUI panels (never web/preview/browser)
+            let targetTabsetId = '';
+            let bestScore = -1;
+            m.visitNodes((node) => {
+              if (node.getType() === 'tabset') {
+                const ts = node as TabSetNode;
+                const children = ts.getChildren();
+                let cuiCount = 0;
+                for (const child of children) {
+                  const comp = (child as TabNode).getComponent?.();
+                  if (comp === 'cui' || comp === 'cui-lite') cuiCount++;
+                }
+                if (cuiCount === 0) return; // Skip non-CUI tabsets entirely
+                // Pure CUI tabsets get priority; fewer tabs = better
+                const isPure = cuiCount === children.length;
+                const score = (isPure ? 1000 : 0) + (100 - Math.min(children.length, 100));
+                if (score > bestScore) { bestScore = score; targetTabsetId = ts.getId(); }
+              }
+            });
+            if (!targetTabsetId) continue;
+            try {
+              m.doAction(Actions.addNode(
+                { type: 'tab', name: (conv as any).customName || (conv as any).summary?.slice(0, 30) || 'CUI',
+                  component: 'cui', config: { initialSessionId: conv.sessionId, accountId: conv.accountId } },
+                targetTabsetId, DockLocation.CENTER, -1
+              ));
+              m.visitNodes((node) => {
+                if (node.getType() === 'tab') {
+                  const tab = node as TabNode;
+                  if (tab.getConfig()?.initialSessionId === conv.sessionId) {
+                    assignments.push({ panelId: tab.getId(), sessionId: conv.sessionId });
+                  }
+                }
+              });
+            } catch (err) { console.warn('[LM] auto-sync addNode failed:', err); }
+          }
+        }
+
+        // Navigate assigned panels
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          assignments.forEach((a, i) => {
+            setTimeout(() => {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'navigate-request', panelId: a.panelId, sessionId: a.sessionId, projectId }));
+              }
+            }, i * 300);
+          });
+        }
+
+        if (assignments.length > 0 || closedCount > 0) {
+          saveLayout(m);
+          if (assignments.length > 0) console.log(`[LM] Auto-sync: mounted ${assignments.length} conversations`);
+          if (closedCount > 0) console.log(`[LM] Auto-sync: closed ${closedCount} finished conversations`);
+        }
+      } catch (err) { console.warn('[LM] auto-sync error:', err); }
+    };
+
+    syncNowRef.current = syncConversations;
+
+    // Initial sync after 2s (let layout settle)
+    const initialTimer = setTimeout(() => { if (!disposed) syncConversations(); }, 2000);
+    // Periodic sync every 30s
+    const interval = setInterval(() => { if (!disposed) syncConversations(); }, 30000);
+
+    return () => {
+      disposed = true;
+      syncNowRef.current = null;
+      clearTimeout(initialTimer);
+      clearInterval(interval);
+    };
+  }, [model, workDir, projectId, saveLayout]);
+
+  // Report attention state to parent (any CUI panel working or needs_attention)
   useEffect(() => {
     if (!model || !onAttentionChange) return;
     let hasAttention = false;
+    let highestState: 'working' | 'needs_attention' | undefined;
     model.visitNodes((node) => {
       if (node.getType() === 'tab') {
         const tab = node as TabNode;
-        if (tab.getComponent() === 'cui') {
-          const cuiId = tab.getConfig()?.accountId;
-          if (cuiId && cuiStates[cuiId] === 'done') hasAttention = true;
+        const comp = tab.getComponent();
+        if (comp === 'cui' || comp === 'cui-lite') {
+          const panelState = tab.getConfig()?._attention as string | undefined;
+          if (panelState === 'needs_attention') {
+            hasAttention = true;
+            highestState = 'needs_attention'; // highest priority
+          } else if (panelState === 'working' && highestState !== 'needs_attention') {
+            hasAttention = true;
+            highestState = 'working';
+          }
         }
       }
     });
-    onAttentionChange(hasAttention);
-  }, [model, cuiStates, onAttentionChange]);
+    onAttentionChange(hasAttention, highestState);
+  }, [model, cuiStates, onAttentionChange, attentionVersion]);
 
   // Patch flexlayout's redrawInternal to prevent continuous render loop
   useEffect(() => {

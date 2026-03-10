@@ -8,7 +8,7 @@ interface Props {
 export default function ProjectsTab({ projects }: Props) {
   if (projects.length === 0) {
     return (
-      <div style={{
+      <div data-ai-id="projects-tab-empty-state" style={{
         textAlign: 'center',
         padding: '40px 20px',
         color: 'var(--tn-text-muted)',
@@ -20,10 +20,13 @@ export default function ProjectsTab({ projects }: Props) {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+    <div data-ai-id="projects-tab-container" data-projects-count={projects.length} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
       {projects.map((project, idx) => (
         <div
           key={idx}
+          data-ai-id={`projects-tab-project-${project.name}`}
+          data-project-index={idx}
+          data-project-environment={project.environment}
           style={{
             padding: '16px',
             background: 'var(--tn-surface)',
@@ -45,7 +48,7 @@ export default function ProjectsTab({ projects }: Props) {
             marginBottom: 12,
           }}>
             <div>
-              <h4 style={{
+              <h4 data-ai-id={`projects-tab-project-name-${idx}`} style={{
                 margin: 0,
                 fontSize: 14,
                 fontWeight: 600,
@@ -53,7 +56,7 @@ export default function ProjectsTab({ projects }: Props) {
               }}>
                 {project.name}
               </h4>
-              <div style={{
+              <div data-ai-id={`projects-tab-project-sync-target-${idx}`} style={{
                 fontSize: 10,
                 color: 'var(--tn-text-muted)',
                 marginTop: 4,
@@ -61,7 +64,7 @@ export default function ProjectsTab({ projects }: Props) {
                 {project.syncTarget}
               </div>
             </div>
-            <div style={{
+            <div data-ai-id={`projects-tab-project-environment-badge-${idx}`} style={{
               padding: '4px 8px',
               background: project.environment === 'production'
                 ? 'var(--tn-red-bg, #ffebee)'
@@ -85,12 +88,12 @@ export default function ProjectsTab({ projects }: Props) {
             fontSize: 11,
           }}>
             <span style={{ color: 'var(--tn-text-muted)' }}>Sync Target:</span>
-            <span style={{ color: 'var(--tn-text)', fontWeight: 500 }}>
+            <span data-ai-id={`projects-tab-sync-target-value-${idx}`} style={{ color: 'var(--tn-text)', fontWeight: 500 }}>
               {project.syncTarget.split(':')[1]?.trim() || project.syncTarget}
             </span>
 
             <span style={{ color: 'var(--tn-text-muted)' }}>Platform:</span>
-            <span style={{ color: 'var(--tn-text)', fontWeight: 500 }}>
+            <span data-ai-id={`projects-tab-platform-${idx}`} style={{ color: 'var(--tn-text)', fontWeight: 500 }}>
               {project.syncTarget.toLowerCase().includes('vercel') ? 'Vercel' :
                project.syncTarget.toLowerCase().includes('railway') ? 'Railway' : 'Unknown'}
             </span>

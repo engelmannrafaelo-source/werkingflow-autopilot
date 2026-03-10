@@ -115,7 +115,7 @@ export default function NativeChat({ accountId, proxyPort }: NativeChatProps) {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'claude-3-5-sonnet-20241022',
+          model: 'claude-sonnet-4-5-20250929',
           messages: [
             ...messages.map(m => ({
               role: m.role,

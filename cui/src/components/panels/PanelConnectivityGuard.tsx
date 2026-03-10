@@ -1,4 +1,4 @@
-import { useState, useEffect, ReactNode } from 'react';
+import { useState, useEffect, useRef, ReactNode } from 'react';
 
 interface PanelConnectivityGuardProps {
   children: ReactNode;
@@ -7,6 +7,8 @@ interface PanelConnectivityGuardProps {
   port?: number; // Optional for remote services
   startCommand: string;
 }
+
+const CONSECUTIVE_FAILURES_THRESHOLD = 3;
 
 export default function PanelConnectivityGuard({
   children,
@@ -17,6 +19,7 @@ export default function PanelConnectivityGuard({
 }: PanelConnectivityGuardProps) {
   const [isOnline, setIsOnline] = useState<boolean | null>(null); // null = checking
   const [lastCheck, setLastCheck] = useState<Date>(new Date());
+  const failCountRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -45,13 +48,24 @@ export default function PanelConnectivityGuard({
         }
 
         if (!cancelled) {
-          setIsOnline(response.ok);
+          if (response.ok) {
+            failCountRef.current = 0;
+            setIsOnline(true);
+          } else {
+            failCountRef.current++;
+            if (failCountRef.current >= CONSECUTIVE_FAILURES_THRESHOLD) {
+              setIsOnline(false);
+            }
+            // else: keep previous state (don't flicker to offline on single failure)
+          }
           setLastCheck(new Date());
         }
       } catch (err) {
-        // Silent: connectivity guard visually shows offline state
         if (!cancelled) {
-          setIsOnline(false);
+          failCountRef.current++;
+          if (failCountRef.current >= CONSECUTIVE_FAILURES_THRESHOLD) {
+            setIsOnline(false);
+          }
           setLastCheck(new Date());
         }
       }
@@ -161,6 +175,7 @@ export default function PanelConnectivityGuard({
 
         <button
           onClick={() => {
+            failCountRef.current = 0;
             setIsOnline(null);
             setLastCheck(new Date());
           }}

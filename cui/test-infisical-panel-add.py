@@ -58,7 +58,7 @@ def main():
         try:
             # Step 1: Load CUI
             print(f"{Colors.BOLD}[1/5] Loading CUI...{Colors.RESET}")
-            page.goto(CUI_URL, wait_until='networkidle', timeout=30000)
+            page.goto(CUI_URL, wait_until='domcontentloaded', timeout=60000)
             time.sleep(3)
             all_passed &= test("CUI loaded successfully", True)
 

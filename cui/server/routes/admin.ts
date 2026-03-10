@@ -14,7 +14,9 @@ const WR_ADMIN_SECRET = process.env.WERKING_REPORT_ADMIN_SECRET ?? process.env.A
 
 // Runtime-switchable env mode (persists across restarts via file)
 type WrEnvMode = 'production' | 'staging' | 'local';
-const WR_ENV_MODE_FILE = '/tmp/cui-wr-env-mode.json';
+const WR_ENV_MODE_FILE = process.env.CUI_DATA_DIR
+  ? `${process.env.CUI_DATA_DIR}/cui-wr-env-mode.json`
+  : '/root/projekte/werkingflow/autopilot/cui/data/cui-wr-env-mode.json';
 
 /**
  * Auto-detect WR mode based on environment.

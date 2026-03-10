@@ -1,71 +1,71 @@
 [
   {
     "account": "rafael",
-    "timestamp": "2026-03-02T16:00:28.525Z",
-    "plan": "unknown",
+    "timestamp": "2026-03-10T12:00:03.105Z",
+    "plan": "Max",
     "currentSession": {
-      "percent": 0,
-      "resetIn": ""
+      "percent": 20,
+      "resetIn": "resets in 2h 59m"
     },
     "weeklyAllModels": {
-      "percent": 0,
-      "resetDate": ""
+      "percent": 63,
+      "resetDate": "resets in 2d 18h"
     },
     "weeklySonnet": {
-      "percent": 0,
-      "resetDate": ""
+      "percent": 7,
+      "resetDate": "resets in 2d 18h"
     },
     "extraUsage": {
-      "percent": 0,
-      "spent": "",
-      "limit": "",
-      "balance": ""
+      "percent": 100,
+      "spent": "22.92 EUR",
+      "limit": "20.00 EUR",
+      "balance": "-2.92 EUR"
     }
   },
   {
     "account": "office",
-    "timestamp": "2026-03-02T16:00:53.269Z",
-    "plan": "unknown",
+    "timestamp": "2026-03-10T12:00:04.065Z",
+    "plan": "Max",
     "currentSession": {
       "percent": 0,
       "resetIn": ""
     },
     "weeklyAllModels": {
-      "percent": 0,
-      "resetDate": ""
+      "percent": 40,
+      "resetDate": "resets in 2d 18h"
     },
     "weeklySonnet": {
-      "percent": 0,
-      "resetDate": ""
+      "percent": 28,
+      "resetDate": "resets in 2d 18h"
     },
     "extraUsage": {
       "percent": 0,
-      "spent": "",
-      "limit": "",
-      "balance": ""
+      "spent": "0.00 EUR",
+      "limit": "42.50 EUR",
+      "balance": "42.50 EUR"
     }
   },
   {
     "account": "engelmann",
-    "timestamp": "2026-03-02T16:01:17.695Z",
-    "plan": "unknown",
+    "timestamp": "2026-03-10T12:00:05.065Z",
+    "plan": "Max",
     "currentSession": {
       "percent": 0,
-      "resetIn": ""
+      "resetIn": "resets in 4h 59m"
     },
     "weeklyAllModels": {
-      "percent": 0,
-      "resetDate": ""
+      "percent": 44,
+      "resetDate": "resets in 2d 18h"
     },
     "weeklySonnet": {
-      "percent": 0,
-      "resetDate": ""
+      "percent": 26,
+      "resetDate": "resets in 2d 18h"
     },
     "extraUsage": {
       "percent": 0,
-      "spent": "",
-      "limit": "",
-      "balance": ""
+      "spent": "0.00 EUR",
+      "limit": "42.50 EUR",
+      "balance": "42.50 EUR"
     }
   }
 ]

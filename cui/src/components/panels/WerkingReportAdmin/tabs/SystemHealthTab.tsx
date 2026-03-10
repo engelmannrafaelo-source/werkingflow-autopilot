@@ -73,7 +73,7 @@ export default function SystemHealthTab({ envMode }: { envMode?: string }) {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/admin/wr/system-health', { signal: AbortSignal.timeout(8000) });
+      const res = await fetch('/api/admin/wr/system-health', { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: SystemHealthResponse = await res.json();
       setHealth(data);

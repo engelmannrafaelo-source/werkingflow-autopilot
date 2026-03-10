@@ -1,15 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import type { ScenariosData } from '../types';
+import { resilientFetch } from '../../../../utils/resilientFetch';
 
 export default function ScenariosTab() {
   const [data, setData] = useState<ScenariosData | null>(null);
   const [loading, setLoading] = useState(true);
   const [filterApp, setFilterApp] = useState<string>('all');
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     if ((window as any).__cuiServerAlive === false) return;
     try {
-      const res = await fetch('/api/qa/scenarios', { signal: AbortSignal.timeout(8000) });
+      const res = await resilientFetch('/api/qa/scenarios');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       setData(json);
@@ -18,11 +19,14 @@ export default function ScenariosTab() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchData();
-  }, []);
+    const onReconnect = () => fetchData();
+    window.addEventListener('cui-reconnected', onReconnect);
+    return () => window.removeEventListener('cui-reconnected', onReconnect);
+  }, [fetchData]);
 
   if (loading) {
     return (

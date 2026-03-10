@@ -69,7 +69,7 @@ export default function AgentDetailModal({ agent, onClose, onRunAgent, onOpenCha
   async function loadPersonaData() {
     if ((window as any).__cuiServerAlive === false) return;
     try {
-      const res = await fetch(`${API}/agents/persona/${agent.persona_id}`, { signal: AbortSignal.timeout(8000) });
+      const res = await fetch(`${API}/agents/persona/${agent.persona_id}`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error('Failed to load persona');
       setPersona(await res.json());
     } catch (err) {
@@ -82,7 +82,7 @@ export default function AgentDetailModal({ agent, onClose, onRunAgent, onOpenCha
   async function loadMemory() {
     if ((window as any).__cuiServerAlive === false) return;
     try {
-      const res = await fetch(`${API}/agents/claude/memory/${agent.persona_id}`, { signal: AbortSignal.timeout(8000) });
+      const res = await fetch(`${API}/agents/claude/memory/${agent.persona_id}`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error('Failed to load memory');
       const data = await res.json();
       setMemory(data.memory || []);
@@ -94,7 +94,7 @@ export default function AgentDetailModal({ agent, onClose, onRunAgent, onOpenCha
   async function loadInbox() {
     if ((window as any).__cuiServerAlive === false) return;
     try {
-      const res = await fetch(`${API}/agents/inbox/${agent.persona_id}`, { signal: AbortSignal.timeout(8000) });
+      const res = await fetch(`${API}/agents/inbox/${agent.persona_id}`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error('Failed to load inbox');
       const data = await res.json();
       setInbox(data.messages || []);
@@ -106,7 +106,7 @@ export default function AgentDetailModal({ agent, onClose, onRunAgent, onOpenCha
   async function loadApprovals() {
     if ((window as any).__cuiServerAlive === false) return;
     try {
-      const res = await fetch(`${API}/agents/approvals/${agent.persona_id}`, { signal: AbortSignal.timeout(8000) });
+      const res = await fetch(`${API}/agents/approvals/${agent.persona_id}`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error('Failed to load approvals');
       const data = await res.json();
       setApprovals(data.approvals || []);

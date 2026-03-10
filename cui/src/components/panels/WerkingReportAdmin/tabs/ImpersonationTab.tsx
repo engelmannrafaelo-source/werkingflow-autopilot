@@ -24,7 +24,7 @@ export default function ImpersonationTab({ envMode }: { envMode?: string }) {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/admin/wr/impersonation', { signal: AbortSignal.timeout(8000) });
+      const res = await fetch('/api/admin/wr/impersonation', { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setSessions(data.sessions || []);

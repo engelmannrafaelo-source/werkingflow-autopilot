@@ -183,7 +183,7 @@ export default function createInfrastructureRouter(deps: InfrastructureDeps): Ro
 
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3000);
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
 
       const response = await fetch(targetUrl, {
         method: 'GET',

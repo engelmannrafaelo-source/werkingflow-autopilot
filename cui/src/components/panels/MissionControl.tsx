@@ -26,6 +26,7 @@ interface Conversation {
   lastPromptAt?: string;
   attentionState?: AttentionState;
   attentionReason?: AttentionReason;
+  toolInfo?: { toolName: string; toolDetail?: string; startedAt: number };
   isVisible?: boolean;
   manualFinished?: boolean;
 }
@@ -110,11 +111,12 @@ function groupByProject(conversations: Conversation[]): ProjectGroup[] {
     if (!group.lastActivity || c.updatedAt > group.lastActivity) group.lastActivity = c.updatedAt;
   }
   return Array.from(map.values()).sort((a, b) => {
-    // Attention first, then working, then active
+    // Attention first, then working, then active — stable tiebreaker by name
     if (a.attentionCount !== b.attentionCount) return b.attentionCount - a.attentionCount;
     if (a.workingCount !== b.workingCount) return b.workingCount - a.workingCount;
     if (a.activeCount !== b.activeCount) return b.activeCount - a.activeCount;
-    return new Date(b.lastActivity).getTime() - new Date(a.lastActivity).getTime();
+    // Stable: sort by name instead of lastActivity to prevent jumping
+    return a.name.localeCompare(b.name);
   });
 }
 
@@ -158,9 +160,21 @@ function StatusDot({ conv }: { conv: Conversation }) {
     );
   }
 
-  // Working: blue pulsing dot, no text
+  // Working: blue pulsing dot + optional tool label
   if (isStreaming || (attn === 'working')) {
-    return <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#3B82F6', display: 'inline-block', animation: 'mc-pulse 1.5s ease-in-out infinite' }} />;
+    const toolTip = conv.toolInfo
+      ? `${conv.toolInfo.toolName}${conv.toolInfo.toolDetail ? ': ' + conv.toolInfo.toolDetail : ''}`
+      : 'Arbeitet...';
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <span title={toolTip} style={{ width: 8, height: 8, borderRadius: '50%', background: '#3B82F6', display: 'inline-block', animation: 'mc-pulse 1.5s ease-in-out infinite' }} />
+        {conv.toolInfo && (
+          <span style={{ fontSize: 8, color: '#3B82F6', opacity: 0.7, maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {conv.toolInfo.toolName}
+          </span>
+        )}
+      </span>
+    );
   }
 
   // Ongoing but not streaming
@@ -328,7 +342,7 @@ function PreviewPanel({ conv, onSend, onStop, onNameChange, onPermission }: {
     if ((window as any).__cuiServerAlive === false) { setLoading(false); return; }
     setLoading(true);
     setDetail(null);
-    fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}?tail=100`, { signal: AbortSignal.timeout(8000) })
+    fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}?tail=100`, { signal: AbortSignal.timeout(20000) })
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then(data => { setDetail(data); setLoading(false); })
       .catch((err) => { console.warn('[MissionControl] PreviewPanel fetch detail failed:', err); setLoading(false); });
@@ -339,7 +353,7 @@ function PreviewPanel({ conv, onSend, onStop, onNameChange, onPermission }: {
     if (conv.status !== 'ongoing') return;
     if ((window as any).__cuiServerAlive === false) return;
     // Single refresh when attention state changes to show latest messages
-    fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}?tail=100`, { signal: AbortSignal.timeout(8000) })
+    fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}?tail=100`, { signal: AbortSignal.timeout(20000) })
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then(data => setDetail(data))
       .catch((err) => { console.warn('[MissionControl] PreviewPanel attention-refresh failed:', err); });
@@ -639,12 +653,8 @@ export default function MissionControl({ projectId }: MissionControlProps) {
   const [syncEnabled, setSyncEnabled] = useState(() => {
     try { return localStorage.getItem('mc-sync') !== 'off'; } catch (err) { console.warn('[MissionControl] syncEnabled localStorage read failed:', err); return true; }
   });
-  const [hiddenProjects, setHiddenProjects] = useState<Set<string>>(() => {
-    try {
-      const stored = localStorage.getItem('mc-hidden-projects');
-      return stored ? new Set(JSON.parse(stored)) : new Set();
-    } catch (err) { console.warn('[MissionControl] hiddenProjects localStorage read failed:', err); return new Set(); }
-  });
+  // hiddenProjects removed — AC always shows ALL projects (Rafael's management dashboard)
+  const hiddenProjects = useMemo(() => new Set<string>(), []);
   const pollRef = useRef<ReturnType<typeof setInterval>>(null);
   const [visibleSessionIds, setVisibleSessionIds] = useState<Set<string>>(new Set());
   const [panelMap, setPanelMap] = useState<Map<string, string>>(new Map()); // sessionId → panel label
@@ -653,7 +663,11 @@ export default function MissionControl({ projectId }: MissionControlProps) {
   });
   const [snippets, setSnippets] = useState<Map<string, string>>(new Map());
 
-  useEffect(() => { ensureStyles(); }, []);
+  useEffect(() => {
+    ensureStyles();
+    // Clean up legacy hiddenProjects setting
+    try { localStorage.removeItem('mc-hidden-projects'); } catch {}
+  }, []);
   useEffect(() => {
     if ((window as any).__cuiServerAlive === false) return;
     fetch(`${API}/projects`, { signal: AbortSignal.timeout(5000) })
@@ -661,14 +675,7 @@ export default function MissionControl({ projectId }: MissionControlProps) {
       .then(setProjects)
       .catch((err) => { console.warn('[MissionControl] projects fetch failed:', err); });
   }, []);
-  const toggleProjectVisibility = useCallback((projectName: string) => {
-    setHiddenProjects(prev => {
-      const next = new Set(prev);
-      if (next.has(projectName)) next.delete(projectName); else next.add(projectName);
-      try { localStorage.setItem('mc-hidden-projects', JSON.stringify([...next])); } catch (err) { console.warn('[MissionControl] toggleProjectVisibility localStorage write failed:', err); }
-      return next;
-    });
-  }, []);
+  // toggleProjectVisibility removed — AC always shows all projects
 
   const fetchConversations = useCallback(() => {
     if ((window as any).__cuiServerAlive === false) { setLoading(false); return; }
@@ -732,26 +739,74 @@ export default function MissionControl({ projectId }: MissionControlProps) {
       : enrichedConversations;
   }, [enrichedConversations, selectedProject]);
 
-  const sortByPriority = (list: Conversation[]) => [...list].sort((a, b) => {
-    const scoreOf = (c: Conversation) => {
-      if (c.attentionState === 'needs_attention') return 4;
-      if (c.streamingId || c.attentionState === 'working') return 3;
-      if (c.status === 'ongoing') return 2;
-      return 1;
-    };
-    const diff = scoreOf(b) - scoreOf(a);
-    if (diff !== 0) return diff;
-    return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
-  });
+  // Priority score for conversations (higher = more important)
+  const scoreOf = useCallback((c: Conversation) => {
+    if (c.attentionState === 'needs_attention') return 4;
+    if (c.streamingId || c.attentionState === 'working') return 3;
+    if (c.status === 'ongoing') return 2;
+    return 1;
+  }, []);
 
-  const displayedConvs = useMemo(() =>
-    sortByPriority(projectFiltered.filter(c => !c.manualFinished)),
-    [projectFiltered]);
+  // Stable sort: preserve existing order when only updatedAt changes.
+  // Only re-sort when conversations are added/removed or change priority score.
+  const prevOrderRef = useRef<string[]>([]);
+  const prevScoresRef = useRef<Map<string, number>>(new Map());
 
-  const finishedConvs = useMemo(() =>
-    projectFiltered.filter(c => c.manualFinished)
-      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()),
-    [projectFiltered]);
+  const displayedConvs = useMemo(() => {
+    const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
+    const active = projectFiltered.filter(c =>
+      // manualFinished always wins — Rafael's explicit close
+      !c.manualFinished &&
+      // Show if ongoing OR recent 24h
+      (c.status === 'ongoing' || new Date(c.updatedAt).getTime() > cutoff24h)
+    );
+    const prevOrder = prevOrderRef.current;
+    const prevScores = prevScoresRef.current;
+
+    // Build current score map
+    const currentScores = new Map<string, number>();
+    for (const c of active) currentScores.set(c.sessionId, scoreOf(c));
+
+    // Check if we need a full re-sort:
+    // - First render (no previous order)
+    // - Conversations added or removed
+    // - Any conversation changed priority score
+    const currentIds = new Set(active.map(c => c.sessionId));
+    const prevIds = new Set(prevOrder);
+    const needsResort = prevOrder.length === 0
+      || currentIds.size !== prevIds.size
+      || [...currentIds].some(id => !prevIds.has(id))
+      || [...currentScores].some(([id, score]) => prevScores.get(id) !== score);
+
+    let sorted: Conversation[];
+    if (needsResort) {
+      // Full sort: by priority score, then updatedAt, then sessionId for stability
+      sorted = [...active].sort((a, b) => {
+        const diff = (currentScores.get(b.sessionId) || 0) - (currentScores.get(a.sessionId) || 0);
+        if (diff !== 0) return diff;
+        const timeDiff = new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+        if (timeDiff !== 0) return timeDiff;
+        return a.sessionId.localeCompare(b.sessionId);
+      });
+    } else {
+      // Stable update: keep previous order, just update conversation data in-place
+      const byId = new Map(active.map(c => [c.sessionId, c]));
+      sorted = prevOrder
+        .filter(id => byId.has(id))
+        .map(id => byId.get(id)!);
+    }
+
+    // Remember current order for next render
+    prevOrderRef.current = sorted.map(c => c.sessionId);
+    prevScoresRef.current = currentScores;
+    return sorted;
+  }, [projectFiltered, scoreOf]);
+
+  const finishedConvs = useMemo(() => {
+    const cutoff48h = Date.now() - 48 * 60 * 60 * 1000;
+    return projectFiltered.filter(c => c.manualFinished && new Date(c.updatedAt).getTime() > cutoff48h)
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  }, [projectFiltered]);
 
   // Fetch snippets (last lines of conversation) when previews are expanded
   useEffect(() => {
@@ -759,12 +814,13 @@ export default function MissionControl({ projectId }: MissionControlProps) {
     if (displayedConvs.length === 0) return;
     if ((window as any).__cuiServerAlive === false) return;
 
-    const toFetch = displayedConvs.slice(0, 30);
+    // Only fetch snippets for top 10 active conversations (not 30)
+    const toFetch = displayedConvs.filter(c => c.status === 'ongoing' || !snippets.has(c.sessionId)).slice(0, 10);
     let cancelled = false;
 
     Promise.allSettled(
       toFetch.map(conv =>
-        fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}?tail=3`, { signal: AbortSignal.timeout(8000) })
+        fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}?tail=3`, { signal: AbortSignal.timeout(20000) })
           .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
           .then((data: ConversationDetail) => {
             const msgs = data.messages || [];
@@ -1137,7 +1193,7 @@ export default function MissionControl({ projectId }: MissionControlProps) {
           <div style={{ padding: '6px 10px', borderBottom: '1px solid var(--tn-border)', display: 'flex', alignItems: 'center', gap: 4 }}>
             <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--tn-text-muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Projekte</span>
             <span style={{ fontSize: 9, color: 'var(--tn-text-subtle)' }}>({groups.length})</span>
-            {hiddenProjects.size > 0 && <span style={{ fontSize: 9, color: '#F59E0B' }}>+{hiddenProjects.size} hidden</span>}
+
           </div>
 
           {/* All projects button */}
@@ -1178,21 +1234,7 @@ export default function MissionControl({ projectId }: MissionControlProps) {
               </div>
             ))}
 
-            {/* Hidden projects section */}
-            {allGroups.filter(g => hiddenProjects.has(g.name)).length > 0 && (
-              <>
-                <div style={{ padding: '6px 10px', fontSize: 9, color: 'var(--tn-text-subtle)', borderTop: '1px solid var(--tn-border)', marginTop: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                  Ausgeblendet
-                </div>
-                {allGroups.filter(g => hiddenProjects.has(g.name)).map(g => (
-                  <div key={g.name} className="mc-sidebar-item"
-                    onClick={() => toggleProjectVisibility(g.name)}
-                    style={{ padding: '4px 10px', cursor: 'pointer', opacity: 0.4 }}>
-                    <span style={{ fontSize: 10, color: 'var(--tn-text-muted)' }}>{g.name}</span>
-                  </div>
-                ))}
-              </>
-            )}
+
           </div>
 
           {/* Sidebar footer: Sync status */}
@@ -1270,7 +1312,8 @@ export default function MissionControl({ projectId }: MissionControlProps) {
             <>
               {groups.map(group => {
                 const groupActive = group.conversations.filter(c => !c.manualFinished);
-                const groupFinished = group.conversations.filter(c => c.manualFinished);
+                const cutoff48hGroup = Date.now() - 48 * 60 * 60 * 1000;
+                const groupFinished = group.conversations.filter(c => c.manualFinished && new Date(c.updatedAt).getTime() > cutoff48hGroup);
                 const sortedActive = sortByPriority(groupActive);
                 return (
                   <div key={group.name} style={{ marginBottom: 4 }}>
