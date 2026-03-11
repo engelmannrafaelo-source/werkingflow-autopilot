@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { resolve, join } from 'path';
 import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
+import { execFile } from 'child_process';
 import { ACCOUNT_CONFIG } from './claude-cli.js';
 
 const router = Router();
@@ -8,12 +9,125 @@ const router = Router();
 // --- Claude Code Usage Stats (CC-Usage) ---
 // Account config from single source of truth (claude-cli.ts)
 const CC_ACCOUNTS = ACCOUNT_CONFIG.map(a => ({ id: a.id, displayName: a.label, homeDir: a.home }));
-const SCRAPED_FILE = resolve(import.meta.dirname ?? ".", "..", "claude-usage-scraped.json");
+// bridge.ts lives in server/routes/ → go up 2 levels to reach cui/ where scraped file lives
+const SCRAPED_FILE = resolve(import.meta.dirname ?? ".", "..", "..", "claude-usage-scraped.json");
 const WEEKLY_LIMIT_ESTIMATE = 45_000_000; // Conservative Pro plan estimate
+
+// --- JSONL Background Cache ---
+// All accounts share the same projects dir via symlink, so we only parse once.
+// Parsing runs in a child process to avoid blocking the event loop (2.6GB+ of JSONL).
+interface JsonlCache {
+  data: JsonlStats | null;
+  computedAt: number;
+  computing: boolean;
+}
+
+interface JsonlStats {
+  totalSessions: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCacheCreation: number;
+  totalCacheRead: number;
+  totalTokens: number;
+  models: Record<string, number>;
+  burnRatePerHour: number;
+  storageBytes: number;
+  lastActivity: string | null;
+  workspaceCount: number;
+}
+
+const JSONL_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+const jsonlCache: JsonlCache = { data: null, computedAt: 0, computing: false };
+
+function triggerJsonlCompute(): void {
+  if (jsonlCache.computing) return;
+  jsonlCache.computing = true;
+
+  // Use 'du' for storage size (fast, kernel-level) instead of iterating files
+  const projectsDir = join(CC_ACCOUNTS[0]?.homeDir ?? "", ".claude", "projects");
+  if (!existsSync(projectsDir)) {
+    jsonlCache.computing = false;
+    return;
+  }
+
+  // Run JSONL parsing in a subprocess to not block the event loop.
+  // The script reads all JSONL files, aggregates token stats, and outputs JSON to stdout.
+  const script = `
+    const { readdirSync, readFileSync, statSync } = require('fs');
+    const { join } = require('path');
+    const dir = ${JSON.stringify(projectsDir)};
+    const now = Date.now();
+    const ONE_DAY = 86400000;
+    let totalSessions = 0, totalInput = 0, totalOutput = 0, totalCacheCreate = 0, totalCacheRead = 0;
+    let lastActivity = null, recentTokens = 0, storageBytes = 0;
+    const models = {};
+    let workspaceCount = 0;
+    try {
+      const wsDirs = readdirSync(dir).filter(d => { try { return statSync(join(dir, d)).isDirectory(); } catch { return false; } });
+      workspaceCount = wsDirs.length;
+      for (const ws of wsDirs) {
+        const wsDir = join(dir, ws);
+        let files;
+        try { files = readdirSync(wsDir).filter(f => f.endsWith('.jsonl') && /^[0-9a-f]{8}-/.test(f)); } catch { continue; }
+        totalSessions += files.length;
+        for (const f of files) {
+          const fp = join(wsDir, f);
+          try { storageBytes += statSync(fp).size; } catch { continue; }
+          let content;
+          try { content = readFileSync(fp, 'utf-8'); } catch { continue; }
+          const lines = content.split('\\n');
+          for (const line of lines) {
+            if (!line) continue;
+            let entry;
+            try { entry = JSON.parse(line); } catch { continue; }
+            if (entry.type !== 'assistant' || !entry.message?.usage) continue;
+            const u = entry.message.usage;
+            const inp = u.input_tokens || 0;
+            const out = u.output_tokens || 0;
+            totalInput += inp;
+            totalOutput += out;
+            totalCacheCreate += u.cache_creation_input_tokens || 0;
+            totalCacheRead += u.cache_read_input_tokens || 0;
+            const model = entry.message.model || 'unknown';
+            models[model] = (models[model] || 0) + inp + out;
+            if (entry.timestamp && (!lastActivity || entry.timestamp > lastActivity)) lastActivity = entry.timestamp;
+            const ts = entry.timestamp ? new Date(entry.timestamp).getTime() : 0;
+            if (ts > now - ONE_DAY) recentTokens += inp + out;
+          }
+        }
+      }
+    } catch (e) { process.stderr.write('JSONL parse error: ' + e.message + '\\n'); }
+    const burnRate = recentTokens > 0 ? Math.round(recentTokens / 24) : 0;
+    process.stdout.write(JSON.stringify({
+      totalSessions, totalInputTokens: totalInput, totalOutputTokens: totalOutput,
+      totalCacheCreation: totalCacheCreate, totalCacheRead: totalCacheRead,
+      totalTokens: totalInput + totalOutput, models, burnRatePerHour: burnRate,
+      storageBytes, lastActivity, workspaceCount
+    }));
+  `;
+
+  execFile('node', ['-e', script], { timeout: 120_000, maxBuffer: 5 * 1024 * 1024 }, (err, stdout, stderr) => {
+    jsonlCache.computing = false;
+    if (err) {
+      console.error("[CC-Usage] JSONL background compute failed:", err.message, stderr);
+      return;
+    }
+    try {
+      jsonlCache.data = JSON.parse(stdout);
+      jsonlCache.computedAt = Date.now();
+      console.log("[CC-Usage] JSONL cache refreshed:", jsonlCache.data?.totalSessions, "sessions,", jsonlCache.data?.totalTokens, "tokens");
+    } catch (parseErr: any) {
+      console.error("[CC-Usage] JSONL parse failed:", parseErr.message);
+    }
+  });
+}
+
+// Kick off initial JSONL computation on startup
+setTimeout(triggerJsonlCompute, 5000);
 
 router.get("/api/claude-code/stats-v2", async (_req, res) => {
   try {
-    // Load scraped data if available
+    // Load scraped data (source of truth for usage %, small file, instant)
     let scrapedMap: Record<string, any> = {};
     try {
       if (existsSync(SCRAPED_FILE)) {
@@ -25,197 +139,73 @@ router.get("/api/claude-code/stats-v2", async (_req, res) => {
       }
     } catch { /* scraped data optional */ }
 
-    const now = Date.now();
-    const ONE_HOUR = 3600_000;
-    const ONE_DAY = 86400_000;
-    const ONE_WEEK = 7 * ONE_DAY;
+    // Refresh JSONL cache if stale
+    if (Date.now() - jsonlCache.computedAt > JSONL_CACHE_TTL) {
+      triggerJsonlCompute();
+    }
+
     const accounts: any[] = [];
     const alerts: any[] = [];
 
     for (const acc of CC_ACCOUNTS) {
-      const projectsDir = join(acc.homeDir, ".claude", "projects");
-      let workspaces: string[] = [];
-      let totalSessions = 0;
-      let totalInputTokens = 0;
-      let totalOutputTokens = 0;
-      let totalCacheCreation = 0;
-      let totalCacheRead = 0;
-      let lastActivity: string | null = null;
-      let models: Record<string, number> = {};
-      let recentTokens = 0; // last 24h
-      let windowTokens = 0; // last 5h
-      let lastWindowMsg: string | null = null;
-
-      try {
-        if (existsSync(projectsDir)) {
-          workspaces = readdirSync(projectsDir).filter(d => {
-            try { return statSync(join(projectsDir, d)).isDirectory(); } catch { return false; }
-          });
-
-          for (const ws of workspaces) {
-            const wsDir = join(projectsDir, ws);
-            let jsonlFiles: string[] = [];
-            try {
-              jsonlFiles = readdirSync(wsDir).filter(f => f.endsWith(".jsonl") && /^[0-9a-f]{8}-/.test(f));
-            } catch { continue; }
-
-            totalSessions += jsonlFiles.length;
-
-            for (const file of jsonlFiles) {
-              try {
-                const content = readFileSync(join(wsDir, file), "utf-8");
-                const lines = content.split("\n").filter(Boolean);
-
-                for (const line of lines) {
-                  try {
-                    const entry = JSON.parse(line);
-                    if (entry.type !== "assistant" || !entry.message?.usage) continue;
-
-                    const usage = entry.message.usage;
-                    const model = entry.message.model || "unknown";
-                    const ts = entry.timestamp ? new Date(entry.timestamp).getTime() : 0;
-
-                    const input = (usage.input_tokens || 0);
-                    const output = (usage.output_tokens || 0);
-                    const cacheCreate = (usage.cache_creation_input_tokens || 0);
-                    const cacheRead = (usage.cache_read_input_tokens || 0);
-
-                    totalInputTokens += input;
-                    totalOutputTokens += output;
-                    totalCacheCreation += cacheCreate;
-                    totalCacheRead += cacheRead;
-
-                    models[model] = (models[model] || 0) + input + output;
-
-                    if (entry.timestamp && (!lastActivity || entry.timestamp > lastActivity)) {
-                      lastActivity = entry.timestamp;
-                    }
-
-                    // Recent activity tracking
-                    if (ts > now - ONE_DAY) {
-                      recentTokens += input + output;
-                    }
-                    if (ts > now - 5 * ONE_HOUR) {
-                      windowTokens += input + output;
-                      if (!lastWindowMsg || (entry.timestamp && entry.timestamp > lastWindowMsg)) {
-                        lastWindowMsg = entry.timestamp;
-                      }
-                    }
-                  } catch { /* skip malformed lines */ }
-                }
-              } catch { /* skip unreadable files */ }
-            }
-          }
-        }
-      } catch { /* account dir issues */ }
-
-      const totalTokens = totalInputTokens + totalOutputTokens;
-      const burnRatePerHour = recentTokens > 0 ? recentTokens / 24 : 0;
-      const weeklyProjection = burnRatePerHour * 24 * 7;
-
-      // Merge with scraped data
       const scraped = scrapedMap[acc.id];
-      let weeklyLimitPercent = weeklyProjection > 0 ? (weeklyProjection / WEEKLY_LIMIT_ESTIMATE) * 100 : 0;
-      let weeklyLimitActual = 0;
-      let dataSource: string = "jsonl-estimated";
-      let scrapedTimestamp: string | null = null;
-      let nextWindowReset: string | null = null;
+      const scrapedTimestamp = scraped?.timestamp || null;
 
-      if (scraped) {
-        weeklyLimitPercent = scraped.weeklyAllModels?.percent ?? weeklyLimitPercent;
-        weeklyLimitActual = scraped.weeklyAllModels?.percent ? Math.round(WEEKLY_LIMIT_ESTIMATE * scraped.weeklyAllModels.percent / 100) : 0;
-        dataSource = totalTokens > 0 ? "hybrid" : "scraped";
-        scrapedTimestamp = scraped.timestamp || null;
-      }
-
-      // Calculate 5h window reset
-      if (lastWindowMsg) {
-        const windowStart = new Date(lastWindowMsg).getTime();
-        nextWindowReset = new Date(windowStart + 5 * ONE_HOUR).toISOString();
-      }
+      // Weekly limit — scraped data is authoritative
+      let weeklyLimitPercent = scraped?.weeklyAllModels?.percent ?? 0;
+      const dataSource = scraped ? (jsonlCache.data ? "hybrid" : "scraped") : (jsonlCache.data ? "jsonl-estimated" : "none");
 
       // Status determination
       let status: string = "safe";
-      if (weeklyLimitPercent >= 80) { status = "critical"; }
-      else if (weeklyLimitPercent >= 50) { status = "warning"; }
-      // Also check extra usage budget exhaustion
-      if (scraped?.extraUsage?.balance === "0.00 EUR" && (scraped?.extraUsage?.percent ?? 0) >= 100) {
+      if (weeklyLimitPercent >= 80) status = "critical";
+      else if (weeklyLimitPercent >= 50) status = "warning";
+      // Extra usage budget exhaustion overrides
+      const extraPct = scraped?.extraUsage?.percent ?? 0;
+      const extraBalance = scraped?.extraUsage?.balance;
+      if (extraPct >= 100 && extraBalance && parseFloat(extraBalance) <= 0) {
         status = "critical";
       }
 
       // Generate alerts
       if (status === "critical") {
-        const isExtraBudgetDepleted = scraped?.extraUsage?.balance === "0.00 EUR" && (scraped?.extraUsage?.percent ?? 0) >= 100;
+        const isExtraBudgetDepleted = extraPct >= 100 && extraBalance && parseFloat(extraBalance) <= 0;
         const isWeeklyFull = weeklyLimitPercent >= 80;
         const reason = isExtraBudgetDepleted && !isWeeklyFull
           ? `Extra-Budget aufgebraucht (${scraped?.extraUsage?.spent} / ${scraped?.extraUsage?.limit}). Account blockiert!`
           : isExtraBudgetDepleted && isWeeklyFull
           ? `Weekly ${weeklyLimitPercent.toFixed(0)}% + Extra-Budget aufgebraucht. Account blockiert!`
           : `Weekly usage at ${weeklyLimitPercent.toFixed(0)}%. Consider switching workload.`;
-        alerts.push({
-          severity: "critical",
-          title: `${acc.displayName}: Limit erreicht`,
-          description: reason,
-          accountName: acc.displayName,
-        });
+        alerts.push({ severity: "critical", title: `${acc.displayName}: Limit erreicht`, description: reason });
       }
-
-      // Calculate storage
-      let storageBytes = 0;
-      try {
-        if (existsSync(projectsDir)) {
-          const dirs = readdirSync(projectsDir);
-          for (const d of dirs) {
-            try {
-              const files = readdirSync(join(projectsDir, d));
-              for (const f of files) {
-                try { storageBytes += statSync(join(projectsDir, d, f)).size; } catch (err) { /* stat error, skip */ }
-              }
-            } catch (err) { /* dir read error, skip */ }
-          }
-        }
-      } catch (err) { /* storage calc error, skip */ }
 
       accounts.push({
         accountId: acc.id,
         accountName: acc.displayName,
-        workspaces,
-        totalTokens,
-        totalSessions,
-        totalInputTokens,
-        totalOutputTokens,
-        totalCacheCreation,
-        totalCacheRead,
-        lastActivity,
-        models,
-        storageBytes,
-        burnRatePerHour: Math.round(burnRatePerHour),
-        weeklyProjection: Math.round(weeklyProjection),
+        workspaces: [],
+        totalTokens: jsonlCache.data?.totalTokens ?? 0,
+        totalSessions: jsonlCache.data?.totalSessions ?? 0,
+        totalInputTokens: jsonlCache.data?.totalInputTokens ?? 0,
+        totalOutputTokens: jsonlCache.data?.totalOutputTokens ?? 0,
+        totalCacheCreation: jsonlCache.data?.totalCacheCreation ?? 0,
+        totalCacheRead: jsonlCache.data?.totalCacheRead ?? 0,
+        lastActivity: jsonlCache.data?.lastActivity ?? null,
+        models: jsonlCache.data?.models ?? {},
+        storageBytes: jsonlCache.data?.storageBytes ?? 0,
+        burnRatePerHour: jsonlCache.data?.burnRatePerHour ?? 0,
+        weeklyProjection: 0,
         weeklyLimitPercent: Math.round(weeklyLimitPercent * 10) / 10,
-        weeklyLimitActual,
+        weeklyLimitActual: 0,
         status,
-        nextWindowReset,
-        currentWindowTokens: windowTokens,
+        nextWindowReset: null,
+        currentWindowTokens: 0,
         dataSource,
         scrapedTimestamp,
         scraped: scraped ? { plan: scraped.plan, currentSession: scraped.currentSession, weeklyAllModels: scraped.weeklyAllModels, weeklySonnet: scraped.weeklySonnet, extraUsage: scraped.extraUsage } : null,
       });
     }
-    // Combined JSONL stats (all accounts share the same projects dir via symlink)
-    const first = accounts[0];
-    const combinedJsonl = first ? {
-      totalTokens: first.totalTokens,
-      totalSessions: first.totalSessions,
-      totalInputTokens: first.totalInputTokens,
-      totalOutputTokens: first.totalOutputTokens,
-      totalCacheCreation: first.totalCacheCreation,
-      totalCacheRead: first.totalCacheRead,
-      burnRatePerHour: first.burnRatePerHour,
-      models: first.models,
-      storageBytes: first.storageBytes,
-      lastActivity: first.lastActivity,
-      workspaceCount: first.workspaces.length,
-    } : null;
+
+    // Combined JSONL stats (shared across all accounts via symlink)
+    const combinedJsonl = jsonlCache.data ?? null;
 
     res.json({
       accounts,
