@@ -110,27 +110,26 @@ export default function CCUsageTab() {
       // Trigger scraping if requested
       if (triggerScrape) {
         try {
-          const scrapeRes = await fetch("/api/claude-code/scrape-now", { method: "POST", signal: AbortSignal.timeout(10000) });
+          const scrapeRes = await fetch("/api/claude-code/scrape-now", { method: "POST", signal: AbortSignal.timeout(30000) });
           if (!scrapeRes.ok) {
-            // Scrape may not be available — non-critical
             setError(`Scrape failed: HTTP ${scrapeRes.status}`);
           }
-          // Wait a bit for scrape to complete
           await new Promise(resolve => setTimeout(resolve, 2000));
         } catch (scrapeErr: any) {
-          // Scrape endpoint may be down — non-critical
+          const msg = scrapeErr.name === "TimeoutError" ? "Scrape timeout (30s)" : `Scrape error: ${scrapeErr.message}`;
+          setError(msg);
         }
       }
 
-      const res = await fetch("/api/claude-code/stats-v2", { signal: AbortSignal.timeout(10000) });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const res = await fetch("/api/claude-code/stats-v2", { signal: AbortSignal.timeout(15000) });
+      if (!res.ok) throw new Error(`Stats API HTTP ${res.status}`);
       const data = await res.json();
-      if (data.error) setError(data.error);
-      else setStats(data);
+      if (data.error) throw new Error(data.error);
+      setStats(data);
       setLastRefresh(new Date());
     } catch (err: any) {
-      // Error state shown in UI via setError
-      setError(err.message);
+      const msg = err.name === "TimeoutError" ? "CUI Server nicht erreichbar (stats-v2 timeout 15s)" : err.message;
+      setError(msg);
     } finally {
       setLoading(false);
     }
