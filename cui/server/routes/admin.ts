@@ -332,6 +332,43 @@ export default function createAdminRouter(deps: AdminDeps): Router {
     catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
 
+  // Pipeline Health Check - server-side proxy to avoid CORS issues
+  // The browser can't directly fetch /api/version from Vercel domains (CORS)
+  // and localhost isn't reachable from the browser when WR isn't running locally.
+  // This endpoint checks all environments server-side and returns the results.
+  router.get('/admin/wr/pipeline-health', async (_req: Request, res: Response) => {
+    const environments = [
+      { name: 'Local', url: WR_LOCAL_URL, branch: 'develop' },
+      { name: 'Staging', url: WR_STAGING_URL, branch: 'develop' },
+      { name: 'Production', url: WR_PROD_URL, branch: 'main' },
+    ];
+
+    const results = await Promise.all(environments.map(async (env) => {
+      try {
+        const response = await fetch(`${env.url}/api/version`, {
+          signal: AbortSignal.timeout(5000),
+          headers: { 'Accept': 'application/json' },
+        });
+        if (!response.ok) {
+          return { name: env.name, url: env.url, status: 'down' as const, branch: env.branch };
+        }
+        const data = await response.json();
+        return {
+          name: env.name,
+          url: env.url,
+          status: 'healthy' as const,
+          branch: env.branch || data.branch,
+          lastDeploy: data.buildTime,
+          version: data.version,
+        };
+      } catch {
+        return { name: env.name, url: env.url, status: 'down' as const, branch: env.branch };
+      }
+    }));
+
+    res.json({ environments: results, checkedAt: new Date().toISOString() });
+  });
+
   // AI Usage
   router.get('/admin/wr/ai-usage', async (_req: Request, res: Response) => {
     try { const r = await wrProxy(`${wrBase()}/api/admin/ai-usage`); res.status(r.status).json(r.body); }

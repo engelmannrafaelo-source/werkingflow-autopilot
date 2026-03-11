@@ -9,65 +9,10 @@ interface EnvironmentHealth {
   version?: string;
 }
 
-interface EnvironmentConfig {
-  name: string;
-  url: string;
-  branch: string;
-}
-
 export default function PipelineTab({ envMode }: { envMode?: string }) {
   const [loading, setLoading] = useState(true);
   const [environments, setEnvironments] = useState<EnvironmentHealth[]>([]);
   const [error, setError] = useState('');
-  const [envConfigs, setEnvConfigs] = useState<EnvironmentConfig[]>([]);
-
-  const checkEnvironment = async (name: string, url: string, branch?: string): Promise<EnvironmentHealth> => {
-    if ((window as any).__cuiServerAlive === false) return { name, url, status: 'down', branch };
-    try {
-      const res = await fetch(`${url}/api/version`, {
-        signal: AbortSignal.timeout(5000),
-      }).catch(() => null);
-
-      if (!res || !res.ok) {
-        return { name, url, status: 'down', branch };
-      }
-
-      const data = await res.json();
-      return {
-        name,
-        url,
-        status: 'healthy',
-        branch: branch || data.branch,
-        lastDeploy: data.buildTime,
-        version: data.version,
-      };
-    } catch (err) {
-      console.warn('[WRPipeline] checkEnvironment:', name, err);
-      return { name, url, status: 'down', branch };
-    }
-  };
-
-  // Fetch environment configurations from backend
-  const fetchEnvConfigs = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
-    try {
-      const res = await fetch('/api/admin/wr/environments', { signal: AbortSignal.timeout(20000) });
-      if (!res.ok) {
-        throw new Error('Failed to fetch environment configs');
-      }
-      const data = await res.json();
-      setEnvConfigs(data.environments || []);
-    } catch (err: any) {
-      console.warn('[WRPipeline] fetchEnvConfigs:', err);
-      // Fallback: show unavailable, don't hardcode URLs
-      setEnvConfigs([
-        { name: 'Local', url: '(unavailable)', branch: 'develop' },
-        { name: 'Staging', url: '(unavailable)', branch: 'develop' },
-        { name: 'Production', url: '(unavailable)', branch: 'main' },
-      ]);
-      console.warn('[WRPipeline] Could not load env configs from server');
-    }
-  }, []);
 
   const fetchAll = useCallback(async () => {
     if ((window as any).__cuiServerAlive === false) return;
@@ -75,33 +20,26 @@ export default function PipelineTab({ envMode }: { envMode?: string }) {
     setError('');
 
     try {
-      // Use envConfigs if available, otherwise wait for them to load
-      if (envConfigs.length === 0) {
-        return;
+      // Use server-side proxy to avoid CORS issues.
+      // The CUI server checks each environment's /api/version endpoint
+      // and returns the aggregated results.
+      const res = await fetch('/api/admin/wr/pipeline-health', {
+        signal: AbortSignal.timeout(20000),
+      });
+      if (!res.ok) {
+        throw new Error(`Health check failed: HTTP ${res.status}`);
       }
-
-      const checks = await Promise.all(
-        envConfigs.map(env => checkEnvironment(env.name, env.url, env.branch))
-      );
-
-      setEnvironments(checks);
+      const data = await res.json();
+      setEnvironments(data.environments || []);
     } catch (err: any) {
       console.warn('[WRPipeline] fetchAll:', err);
       setError(err.message);
     } finally {
       setLoading(false);
     }
-  }, [envConfigs]);
+  }, []);
 
-  // Fetch configs on mount
-  useEffect(() => { fetchEnvConfigs(); }, [fetchEnvConfigs]);
-
-  // Fetch health checks when configs are loaded or envMode changes
-  useEffect(() => {
-    if (envConfigs.length > 0) {
-      fetchAll();
-    }
-  }, [envConfigs, envMode, fetchAll]);
+  useEffect(() => { fetchAll(); }, [fetchAll, envMode]);
 
   const statusColors = {
     healthy: 'var(--tn-green)',
