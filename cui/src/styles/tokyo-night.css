@@ -194,6 +194,8 @@ body {
   -webkit-tap-highlight-color: transparent;
   user-select: none;
   -webkit-user-select: none;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 .mobile-mode input,
@@ -225,7 +227,7 @@ body {
   top: 0;
   left: 0;
   right: 0;
-  bottom: 120px;
+  bottom: calc(60px + env(safe-area-inset-bottom, 0px));
   overflow: hidden;
 }
 
@@ -239,7 +241,7 @@ body {
   top: 0;
   left: 0;
   right: 0;
-  bottom: 120px;
+  bottom: calc(60px + env(safe-area-inset-bottom, 0px));
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -292,13 +294,13 @@ body {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 44px;
+  bottom: env(safe-area-inset-bottom, 0px);
   display: flex;
   align-items: stretch;
   background: var(--tn-bg-dark);
   border-top: 2px solid var(--tn-blue);
   border-bottom: 1px solid var(--tn-border);
-  height: 76px;
+  height: 60px;
   z-index: 100;
   border-radius: 12px 12px 0 0;
 }
@@ -309,15 +311,15 @@ body {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  gap: 2px;
   background: none;
   border: none;
   color: var(--tn-text-muted);
   cursor: pointer;
   position: relative;
   transition: color 0.15s;
-  padding: 8px 0;
-  min-height: 60px !important;
+  padding: 4px 2px;
+  min-height: 44px !important;
   min-width: 0 !important;
 }
 
@@ -326,9 +328,13 @@ body {
 }
 
 .mobile-tab-label {
-  font-size: 13px;
+  font-size: 10px;
   font-weight: 500;
   line-height: 1;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mobile-tab-btn.active .mobile-tab-label {
@@ -355,8 +361,10 @@ body {
   background: var(--tn-green);
 }
 
-/* iOS safe area for mobile mode body */
+/* iOS safe area for mobile mode body — horizontal insets */
 .mobile-mode {
   padding-left: env(safe-area-inset-left, 0px);
   padding-right: env(safe-area-inset-right, 0px);
 }
+
+/* Viewport meta for safe area: requires viewport-fit=cover in HTML meta tag */

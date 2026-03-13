@@ -416,15 +416,28 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
           display: 'flex',
           alignItems: 'center',
           gap: 8,
-          padding: '0 12px',
+          padding: '6px 12px',
           background: 'var(--tn-bg-dark)',
-          borderTop: `2px solid ${MODE_COLORS[CUI_MODE]}`,
           borderBottom: '1px solid var(--tn-border)',
-          height: 44,
+          minHeight: 40,
           flexShrink: 0,
         }}
       >
-        <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--tn-blue)' }}>CUI</span>
+        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--tn-blue)' }}>CUI</span>
+        <span
+          style={{
+            fontSize: 8,
+            fontWeight: 700,
+            color: '#1a1b26',
+            background: MODE_COLORS[CUI_MODE],
+            padding: '1px 5px',
+            borderRadius: 3,
+            textTransform: 'uppercase',
+            letterSpacing: '0.5px',
+          }}
+        >
+          {CUI_MODE}
+        </span>
         <select
           value={activeId}
           onChange={(e) => onSelect(e.target.value)}
@@ -434,9 +447,9 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
             color: 'var(--tn-text)',
             border: '1px solid var(--tn-border)',
             borderRadius: 6,
-            padding: '6px 10px',
-            fontSize: 14,
-            minHeight: 36,
+            padding: '5px 8px',
+            fontSize: 13,
+            minHeight: 32,
           }}
         >
           {projects.map(p => (

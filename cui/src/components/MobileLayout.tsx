@@ -7,6 +7,7 @@ import BrowserPanel from './panels/BrowserPanel';
 import ImageDrop from './panels/ImageDrop';
 import ErrorBoundary from './ErrorBoundary';
 import { useSessionStore } from '../contexts/SessionStore';
+import { ACCOUNTS } from '../types';
 
 interface MobileLayoutProps {
   projectId: string;
@@ -44,6 +45,26 @@ function extractTabs(node: any): MobileTab[] {
   return tabs;
 }
 
+/** Get short label for a chat tab: account short name or first 6 chars of tab name */
+function chatTabLabel(tab: MobileTab): string {
+  const accountId = tab.config?.accountId as string;
+  if (accountId) {
+    const acct = ACCOUNTS.find(a => a.id === accountId);
+    if (acct) return acct.label.slice(0, 6);
+  }
+  // Fallback: use tab name or generic "Chat"
+  return tab.name?.slice(0, 6) || 'Chat';
+}
+
+/** Get account color for a chat tab */
+function chatTabColor(tab: MobileTab): string | undefined {
+  const accountId = tab.config?.accountId as string;
+  if (accountId) {
+    return ACCOUNTS.find(a => a.id === accountId)?.color;
+  }
+  return undefined;
+}
+
 export default function MobileLayout({ projectId, workDir }: MobileLayoutProps) {
   const { cuiStates } = useSessionStore();
   const [activeIdx, setActiveIdx] = useState(0);
@@ -67,6 +88,7 @@ export default function MobileLayout({ projectId, workDir }: MobileLayoutProps) 
         if (!layout) { setTabs(fallback); return; }
         const all = extractTabs(layout);
         const mobile = all.filter(t => t.component in MOBILE_PANELS);
+        // Deduplicate: keep each unique chat account + each non-chat panel type once
         const seen = new Set<string>();
         const deduped = mobile.filter(t => {
           const key = isChatTab(t.component)
@@ -120,7 +142,7 @@ export default function MobileLayout({ projectId, workDir }: MobileLayoutProps) 
     };
   }, []);
 
-  const renderPanel = (tab: MobileTab) => {
+  const renderPanel = (tab: MobileTab, idx: number) => {
     switch (tab.component) {
       case 'cui': case 'cui-lite':
         return (
@@ -128,8 +150,8 @@ export default function MobileLayout({ projectId, workDir }: MobileLayoutProps) 
             accountId={tab.config?.accountId as string}
             projectId={projectId}
             workDir={workDir}
-            panelId={`mobile-${tab.component}`}
-            isTabVisible={true}
+            panelId={`mobile-${tab.component}-${idx}`}
+            isTabVisible={idx === activeIdx}
           />
         );
       case 'preview':
@@ -152,56 +174,75 @@ export default function MobileLayout({ projectId, workDir }: MobileLayoutProps) 
 
   const activeTab = tabs[activeIdx];
   const isChat = activeTab && isChatTab(activeTab.component);
-  const chatTabIdx = tabs.findIndex(t => isChatTab(t.component));
-  const chatTab = chatTabIdx >= 0 ? tabs[chatTabIdx] : null;
 
-  // Non-chat tabs for the bottom split area
+  // Chat tabs and non-chat tabs
+  const chatTabs = tabs.map((t, i) => ({ tab: t, idx: i })).filter(x => isChatTab(x.tab.component));
   const nonChatTabs = tabs.map((t, i) => ({ tab: t, idx: i })).filter(x => !isChatTab(x.tab.component));
+
+  // Find the "first" chat tab for the always-mounted split-top (when a non-chat tab is active)
+  const firstChatIdx = chatTabs.length > 0 ? chatTabs[0].idx : -1;
+  const firstChatTab = firstChatIdx >= 0 ? tabs[firstChatIdx] : null;
 
   return (
     <div className="mobile-layout">
       <div className="mobile-split-wrapper">
-        {/* Chat panel: always mounted, fullscreen when Chat tab active */}
-        <div
-          className="mobile-split-top"
-          style={{ height: isChat ? '100%' : `${splitPct}%` }}
-        >
-          {chatTab && (
-            <ErrorBoundary componentName={chatTab.component}>
-              {renderPanel(chatTab)}
-            </ErrorBoundary>
-          )}
-        </div>
-
-        {/* Draggable divider: only visible in split mode */}
-        {!isChat && (
-          <div
-            ref={splitRef}
-            className="mobile-split-divider"
-            onTouchStart={onDividerTouchStart}
-          />
+        {/* When a chat tab is active: show that chat fullscreen */}
+        {isChat && (
+          <div style={{ height: '100%', overflow: 'hidden' }}>
+            {chatTabs.map(({ tab, idx }) => {
+              if (!visited.has(idx)) return null;
+              return (
+                <div
+                  key={`chat-${idx}`}
+                  style={{ display: idx === activeIdx ? 'block' : 'none', height: '100%' }}
+                >
+                  <ErrorBoundary componentName={tab.component}>
+                    {renderPanel(tab, idx)}
+                  </ErrorBoundary>
+                </div>
+              );
+            })}
+          </div>
         )}
 
-        {/* Bottom panel area: hidden in chat mode, shows active non-chat panel */}
-        <div
-          className="mobile-split-bottom"
-          style={{ display: isChat ? 'none' : undefined }}
-        >
-          {nonChatTabs.map(({ tab, idx }) => {
-            if (!visited.has(idx)) return null;
-            const isActive = idx === activeIdx;
-            return (
-              <div
-                key={`panel-${tab.component}-${idx}`}
-                style={{ display: isActive ? 'block' : 'none', height: '100%' }}
-              >
-                <ErrorBoundary componentName={tab.component}>
-                  {renderPanel(tab)}
+        {/* When a non-chat tab is active: split view (chat top, other bottom) */}
+        {!isChat && (
+          <>
+            <div
+              className="mobile-split-top"
+              style={{ height: `${splitPct}%` }}
+            >
+              {firstChatTab && (
+                <ErrorBoundary componentName={firstChatTab.component}>
+                  {renderPanel(firstChatTab, firstChatIdx)}
                 </ErrorBoundary>
-              </div>
-            );
-          })}
-        </div>
+              )}
+            </div>
+
+            <div
+              ref={splitRef}
+              className="mobile-split-divider"
+              onTouchStart={onDividerTouchStart}
+            />
+
+            <div className="mobile-split-bottom">
+              {nonChatTabs.map(({ tab, idx }) => {
+                if (!visited.has(idx)) return null;
+                const isActive = idx === activeIdx;
+                return (
+                  <div
+                    key={`panel-${tab.component}-${idx}`}
+                    style={{ display: isActive ? 'block' : 'none', height: '100%' }}
+                  >
+                    <ErrorBoundary componentName={tab.component}>
+                      {renderPanel(tab, idx)}
+                    </ErrorBoundary>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
       </div>
 
       {/* Bottom tab bar */}
@@ -210,20 +251,31 @@ export default function MobileLayout({ projectId, workDir }: MobileLayoutProps) 
           const isActive = i === activeIdx;
           const info = MOBILE_PANELS[tab.component];
           if (!info) return null;
-          const { Icon, label } = info;
+          const { Icon } = info;
+          const isTabChat = isChatTab(tab.component);
           const cuiId = tab.config?.accountId as string;
           const state = cuiId ? cuiStates[cuiId] : undefined;
+          const acctColor = isTabChat ? chatTabColor(tab) : undefined;
+
+          // For chat tabs: show account label. For others: show panel label.
+          const label = isTabChat ? chatTabLabel(tab) : info.label;
 
           return (
             <button
               key={`${tab.component}-${i}`}
               className={`mobile-tab-btn ${isActive ? 'active' : ''}`}
               onClick={() => setActiveIdx(i)}
+              style={isActive && acctColor ? { color: acctColor } : undefined}
             >
               {state === 'processing' && <span className="mobile-state-dot processing" />}
               {state === 'done' && <span className="mobile-state-dot done" />}
-              <Icon size={28} />
-              <span className="mobile-tab-label">{label}</span>
+              <Icon size={22} />
+              <span
+                className="mobile-tab-label"
+                style={isActive && acctColor ? { color: acctColor } : undefined}
+              >
+                {label}
+              </span>
             </button>
           );
         })}

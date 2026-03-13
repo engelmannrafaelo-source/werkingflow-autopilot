@@ -258,12 +258,12 @@ export default function App() {
   // Control API message handler (via shared SessionStore WebSocket)
   useEffect(() => {
     return addMessageHandler((msg: any) => {
-      // Control API: switch project
-      if (msg.type === 'control:project-switch' && msg.projectId) {
+      // Control API: switch project (skip on mobile — disruptive auto-navigation)
+      if (msg.type === 'control:project-switch' && msg.projectId && !IS_MOBILE) {
         setActiveId(msg.projectId);
       }
-      // Activation: switch to target project, hide MC, pass plan as prop
-      if (msg.type === 'control:activate-conversations' && msg.plan?.length > 0) {
+      // Activation: switch to target project, hide MC, pass plan as prop (skip on mobile)
+      if (msg.type === 'control:activate-conversations' && msg.plan?.length > 0 && !IS_MOBILE) {
         const firstProjectId = msg.plan[0].projectId;
         if (firstProjectId) {
           setPendingActivation(msg.plan);
