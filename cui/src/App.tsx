@@ -7,18 +7,9 @@ const MobileLayout = lazy(() => import('./components/MobileLayout'));
 import AllChatsView from './components/AllChatsView';
 import type { Project } from './types';
 import { useSessionStore } from './contexts/SessionStore';
+import { IS_LOCAL, IS_MOBILE } from './env';
 
 const API = '/api';
-const IS_LOCAL = new URLSearchParams(window.location.search).get('mode') === 'local';
-const IS_TOUCH_DEVICE = typeof window !== "undefined" && "ontouchstart" in window && window.innerWidth < 1200;
-const IS_MOBILE = new URLSearchParams(window.location.search).has("mobile") || new URLSearchParams(window.location.search).get("mode") === "mobile";
-
-// Auto-redirect touch devices to mobile mode (unless explicitly opted out with ?desktop)
-if (IS_TOUCH_DEVICE && !IS_MOBILE && !new URLSearchParams(window.location.search).has("desktop")) {
-  const url = new URL(window.location.href);
-  url.searchParams.set("mobile", "");
-  window.location.replace(url.toString());
-}
 
 const DEFAULT_PROJECTS: Project[] = [];
 
@@ -663,6 +654,7 @@ export default function App() {
                 workDir={p.workDir}
                 onAttentionChange={(needs, state) => handleAttentionChange(p.id, needs, state)}
                 pendingActivation={pendingActivation}
+                isActive={p.id === activeId}
                 onActivationProcessed={handleActivationProcessed}
               />
             )}
