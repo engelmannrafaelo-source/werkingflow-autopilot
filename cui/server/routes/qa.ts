@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { join } from 'path';
 import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
+import { execSync } from 'child_process';
 
 const router = Router();
 
@@ -28,6 +29,9 @@ const SCENARIO_REGISTRY = '/root/projekte/orchestrator/data/scenario_registry.js
 const TESTS_ROOT = '/root/projekte/werkingflow/tests';
 const API_SCANNER_SNAPSHOTS = join(TESTS_ROOT, 'api-contract-scanner/snapshots');
 const FRONTEND_SCANNER_RESULTS = join(TESTS_ROOT, 'frontend-contract-scanner/results');
+
+// Arch-test results (persistent JSON from arch-test.py)
+const ARCH_TEST_RESULTS_DIR = '/root/projekte/orchestrator/data/arch-test-results';
 
 // Port → App mapping for identifying frontend scanner results
 const PORT_TO_APP: Record<number, string> = {
@@ -123,7 +127,7 @@ function getAppStatsFromScenarios(appId: string) {
 
 // Layer naming patterns per app (different naming conventions)
 const LAYER_PATTERNS: Record<number, string[]> = {
-  0: ['layer-0', 'layer-0-contract'],
+  0: ['layer-0', 'layer-0-contract', 'layer-0-contracts'],
   1: ['layer-1', 'layer-1-backend'],
   2: ['layer-2', 'layer-2-components', 'layer-2-frontend'],
   3: ['layer-3', 'layer-3-workflows'],
@@ -241,6 +245,46 @@ function getLayer0Data(appId: string): {
   // --- Layer 0 Scenario Tests (from layer-0-contract/ dirs) ---
   // These are already picked up by the main layer scanner, so skip here
 
+  // --- Arch-Test Results (all structural checks from arch-test.py) ---
+  try {
+    const archTestFile = join(ARCH_TEST_RESULTS_DIR, `${appId}.json`);
+    if (existsSync(archTestFile)) {
+      const archData = readJSON(archTestFile);
+      if (archData?.tiers) {
+        const testedAt = archData.timestamp?.split('T')[0] ?? null;
+        for (const [tierNum, tierData] of Object.entries(archData.tiers) as [string, any][]) {
+          if (!tierData?.checks) continue;
+          for (const check of tierData.checks) {
+            if (!check.name || check.name.startsWith('(skipped')) continue;
+            // Skip frontend-routes and api-contracts — already added above from scanner files
+            const checkId = `${appId}.arch.t${tierNum}.${check.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+            if (tests.some(t => t.id === checkId)) continue;
+
+            const status = check.status === 'PASS' ? 'PASS'
+              : check.status === 'FAIL' || check.status === 'ERROR' ? 'FAIL'
+              : check.status === 'WARN' ? 'PASS' // WARN = not blocking
+              : 'PENDING';
+            const detail = check.metric
+              ? `${check.name}: ${check.metric}`
+              : `${check.name} (${check.duration_ms ?? 0}ms)`;
+
+            tests.push({
+              id: checkId,
+              status,
+              score: status === 'PASS' ? 10 : status === 'FAIL' ? 0 : 5,
+              lastRun: testedAt,
+              reportPath: null,
+              detail,
+            });
+            if (status === 'PASS') passed++;
+            else if (status === 'FAIL') failed++;
+            else pending++;
+          }
+        }
+      }
+    }
+  } catch { /* */ }
+
   if (tests.length === 0) return null;
 
   const scores = tests.map(t => t.score).filter(s => s != null && s > 0) as number[];
@@ -253,39 +297,183 @@ function getLayer0Data(appId: string): {
   return { tests, passed, failed, pending, avgScore, status, description };
 }
 
-function findLayerDir(appScenarioDir: string, layerNum: number): string | null {
+// ========================================
+// Pyramid Cache — Single Source of Truth
+// ========================================
+// Written by pyramid_status.py --write-cache
+// Contains threshold-aware effective_status per scenario
+// NO FALLBACK — if cache is missing, status is UNKNOWN (fail loud)
+
+const PYRAMID_CACHE_DIR = '/root/projekte/orchestrator/data/pyramid_cache';
+
+interface PyramidCacheScenario {
+  effective_status: string;
+  raw_status: string;
+  score: number | null;
+  tested_at: string | null;
+  optional: boolean;
+  stale: boolean;
+  report_path: string | null;
+}
+
+interface PyramidCacheLayer {
+  total: number;
+  pass: number;
+  fail: number;
+  pending: number;
+  stale: number;
+  status: string;
+  avg_score: number;
+  scenarios: Record<string, PyramidCacheScenario>;
+}
+
+interface PyramidCache {
+  app: string;
+  layers: Record<string, PyramidCacheLayer>;
+  totals: { total: number; pass: number; fail: number; pending: number; stale: number };
+  cache_written_at: string;
+}
+
+function loadPyramidCache(appId: string): PyramidCache {
+  const cachePath = join(PYRAMID_CACHE_DIR, `${appId}.json`);
+  if (!existsSync(cachePath)) {
+    throw new Error(`[QA] Pyramid cache missing for ${appId}. Run: python3 pyramid_status.py --app ${appId} --write-cache`);
+  }
+  const data = JSON.parse(readFileSync(cachePath, 'utf-8'));
+  if (!data.cache_written_at || !data.layers) {
+    throw new Error(`[QA] Pyramid cache corrupt for ${appId}: missing cache_written_at or layers`);
+  }
+  return data as PyramidCache;
+}
+
+function resolveStatusFromCache(scenarioId: string, cache: PyramidCache): string {
+  for (const layerData of Object.values(cache.layers)) {
+    const cached = layerData.scenarios?.[scenarioId];
+    if (cached) return cached.effective_status;
+  }
+  // Scenario exists on filesystem but not in cache → PENDING (new scenario, cache not refreshed yet)
+  return 'PENDING';
+}
+
+// Returns ALL matching layer dirs (multiple patterns may exist, e.g. layer-4-golden + layer-4-backend)
+function findLayerDirs(appScenarioDir: string, layerNum: number): string[] {
   const patterns = LAYER_PATTERNS[layerNum] ?? [];
+  const dirs: string[] = [];
   for (const p of patterns) {
     const dir = join(appScenarioDir, p);
-    if (existsSync(dir)) return dir;
+    if (existsSync(dir)) dirs.push(dir);
   }
-  return null;
+  return dirs;
 }
 
 function scanLayerScenarios(layerDir: string): Array<{ id: string; file: string; layer: number }> {
   const scenarios: Array<{ id: string; file: string; layer: number }> = [];
+  const scanRecursive = (dir: string) => {
+    try {
+      for (const entry of readdirSync(dir)) {
+        const full = join(dir, entry);
+        try {
+          if (statSync(full).isDirectory()) { scanRecursive(full); continue; }
+        } catch { continue; }
+        if (!entry.endsWith('.json')) continue;
+        try {
+          const data = readJSON(full);
+          if (!data) continue;
+          scenarios.push({
+            id: data.id || data.scenario_id || entry.replace('.json', ''),
+            file: full,
+            layer: data.layer ?? 0,
+          });
+        } catch { /* */ }
+      }
+    } catch { /* */ }
+  };
+  scanRecursive(layerDir);
+  return scenarios;
+}
+
+// Extract compact scenario details from scenario JSON + report markdown
+function getScenarioSummary(scenarioFile: string, reportPath: string | null): {
+  description: string | null;
+  stepsPreview: string | null;
+  criteriaPreview: string | null;
+  reviewExcerpt: string | null;
+} {
+  let description: string | null = null;
+  let stepsPreview: string | null = null;
+  let criteriaPreview: string | null = null;
+  let reviewExcerpt: string | null = null;
+
+  // Read scenario JSON
   try {
-    for (const file of readdirSync(layerDir)) {
-      if (!file.endsWith('.json')) continue;
-      try {
-        const data = readJSON(join(layerDir, file));
-        if (!data) continue;
-        scenarios.push({
-          id: data.id || data.scenario_id || file.replace('.json', ''),
-          file: join(layerDir, file),
-          layer: data.layer ?? 0,
-        });
-      } catch { /* */ }
+    const data = readJSON(scenarioFile);
+    if (data) {
+      description = data.description || null;
+
+      // Steps: compact summary
+      const steps = data.steps ?? [];
+      if (steps.length > 0) {
+        const stepTexts = steps
+          .filter((s: any) => typeof s === 'string' ? !s.startsWith('Speichere:') : !s?.action?.startsWith('screenshot'))
+          .map((s: any) => typeof s === 'string' ? s : (s.description || s.instruction || s.action || ''))
+          .filter((s: string) => s.length > 0)
+          .slice(0, 5);
+        stepsPreview = stepTexts.map((s: string, i: number) => `${i + 1}. ${s.length > 80 ? s.slice(0, 77) + '...' : s}`).join('\n');
+        if (steps.length > 5) stepsPreview += `\n... +${steps.length - 5} more`;
+      }
+
+      // Criteria
+      const criteria = data.success_criteria ?? data.criteria ?? [];
+      if (criteria.length > 0) {
+        const critTexts = criteria.map((c: any) =>
+          typeof c === 'string' ? c : (c.description || c.criterion || JSON.stringify(c))
+        ).slice(0, 5);
+        criteriaPreview = critTexts.map((c: string) => `• ${c.length > 80 ? c.slice(0, 77) + '...' : c}`).join('\n');
+        if (criteria.length > 5) criteriaPreview += `\n... +${criteria.length - 5} more`;
+      }
     }
   } catch { /* */ }
-  return scenarios;
+
+  // Read report excerpt (## AI Report section or ## Bewertung)
+  if (reportPath) {
+    try {
+      if (existsSync(reportPath)) {
+        const content = readFileSync(reportPath, 'utf-8');
+        // Extract rating line
+        const ratingMatch = content.match(/## Rating:.*$/m);
+        const rating = ratingMatch?.[0] ?? '';
+
+        // Extract Journey + Bewertung section (compact)
+        const journeyMatch = content.match(/## Journey\n([\s\S]*?)(?=\n## |$)/);
+        const journey = journeyMatch?.[1]?.trim().slice(0, 200) ?? '';
+
+        // Extract problems summary
+        const problemMatch = content.match(/## Gefundene Probleme\n([\s\S]*?)(?=\n## |$)/);
+        let problems = '';
+        if (problemMatch) {
+          const lines = problemMatch[1].trim().split('\n').filter(l => l.startsWith('- ') || l.startsWith('**')).slice(0, 4);
+          problems = lines.join('\n');
+        }
+
+        if (rating || journey) {
+          reviewExcerpt = [rating, journey, problems].filter(Boolean).join('\n\n');
+          if (reviewExcerpt.length > 500) reviewExcerpt = reviewExcerpt.slice(0, 497) + '...';
+        }
+      }
+    } catch { /* */ }
+  }
+
+  return { description, stepsPreview, criteriaPreview, reviewExcerpt };
 }
 
 function getPyramidData(appId: string) {
   const appScenarioDir = join(SCENARIOS_DIR, appId);
   if (!existsSync(appScenarioDir)) return null;
 
-  // Load scenario registry for result statuses
+  // Load pyramid cache (Single Source of Truth for status logic)
+  const pyramidCache = loadPyramidCache(appId);
+
+  // Load scenario registry for metadata (score, tested_at, report_path)
   const scenarioRegistry = readJSON(SCENARIO_REGISTRY);
   const regScenarios = scenarioRegistry?.scenarios ?? {};
 
@@ -327,22 +515,24 @@ function getPyramidData(appId: string) {
   for (let layerNum = 0; layerNum <= 4; layerNum++) {
     if (layerNum === 0) {
       // Layer 0: Combine scenario-based layer-0 tests + contract scanner results
-      const layerDir = findLayerDir(appScenarioDir, 0);
+      const layerDirs = findLayerDirs(appScenarioDir, 0);
       const scenarioTests: Array<{ id: string; status: string; score: number | null; lastRun: string | null; reportPath: string | null }> = [];
       let sPassed = 0, sFailed = 0, sPending = 0;
       const sScores: number[] = [];
 
-      if (layerDir) {
+      for (const layerDir of layerDirs) {
         const scenarios = scanLayerScenarios(layerDir);
         for (const s of scenarios) {
           const reg = regScenarios[s.id];
-          const status = reg?.status ?? 'PENDING';
+          const status = resolveStatusFromCache(s.id, pyramidCache);
           const score = reg?.score ?? null;
           if (status === 'PASS') sPassed++;
-          else if (status === 'FAIL' || status === 'PARTIAL') sFailed++;
-          else sPending++;
+          else if (status === 'FAIL' || status === 'ERROR') sFailed++;
+          else if (status === 'PENDING') sPending++;
+          else sFailed++; // PARTIAL without threshold pass = fail
           if (score != null && score > 0) sScores.push(score);
-          scenarioTests.push({ id: s.id, status, score, lastRun: reg?.tested_at ?? null, reportPath: reg?.report_path ?? null });
+          const summary = getScenarioSummary(s.file, reg?.report_path ?? null);
+          scenarioTests.push({ id: s.id, status, score, lastRun: reg?.tested_at ?? null, reportPath: reg?.report_path ?? null, ...summary });
         }
       }
 
@@ -387,10 +577,10 @@ function getPyramidData(appId: string) {
       continue;
     }
 
-    const layerDir = findLayerDir(appScenarioDir, layerNum);
-    if (!layerDir) continue;
+    const layerDirs = findLayerDirs(appScenarioDir, layerNum);
+    if (layerDirs.length === 0) continue;
 
-    const scenarios = scanLayerScenarios(layerDir);
+    const scenarios = layerDirs.flatMap(d => scanLayerScenarios(d));
     if (scenarios.length === 0) continue;
 
     const meta = LAYER_META[layerNum];
@@ -399,18 +589,21 @@ function getPyramidData(appId: string) {
 
     const tests = scenarios.map(s => {
       const reg = regScenarios[s.id];
-      const status = reg?.status ?? 'PENDING';
+      const status = resolveStatusFromCache(s.id, pyramidCache);
       const score = reg?.score ?? null;
       const lastRun = reg?.tested_at ?? null;
       const reportPath = reg?.report_path ?? null;
+      const summary = getScenarioSummary(s.file, reportPath);
 
       if (status === 'PASS') passed++;
-      else if (status === 'FAIL' || status === 'PARTIAL') failed++;
-      else pending++;
+      else if (status === 'FAIL' || status === 'ERROR') failed++;
+      else if (status === 'PENDING') pending++;
+      else failed++; // PARTIAL without threshold pass = fail
 
       if (score != null && score > 0) scores.push(score);
 
-      return { id: s.id, status, score, lastRun, reportPath };
+      const outputQualityScore = reg?.output_quality_score ?? null;
+      return { id: s.id, status, score, lastRun, reportPath, outputQualityScore, ...summary };
     });
 
     const avgScore = scores.length > 0 ? scores.reduce((s, v) => s + v, 0) / scores.length : 0;
@@ -441,13 +634,15 @@ function getPyramidData(appId: string) {
     const scores: number[] = [];
     const tests = ungrouped.map(s => {
       const reg = regScenarios[s.id];
-      const status = reg?.status ?? 'PENDING';
+      const status = resolveStatusFromCache(s.id, pyramidCache);
       const score = reg?.score ?? null;
       if (status === 'PASS') passed++;
-      else if (status === 'FAIL' || status === 'PARTIAL') failed++;
-      else pending++;
+      else if (status === 'FAIL' || status === 'ERROR') failed++;
+      else if (status === 'PENDING') pending++;
+      else failed++;
       if (score != null && score > 0) scores.push(score);
-      return { id: s.id, status, score, lastRun: reg?.tested_at ?? null, reportPath: reg?.report_path ?? null };
+      const summary = getScenarioSummary(s.file, reg?.report_path ?? null);
+      return { id: s.id, status, score, lastRun: reg?.tested_at ?? null, reportPath: reg?.report_path ?? null, ...summary };
     });
     const avgScore = scores.length > 0 ? scores.reduce((s, v) => s + v, 0) / scores.length : 0;
 
@@ -463,9 +658,22 @@ function getPyramidData(appId: string) {
     });
   }
 
+  // Load coverage gap data to attach to pyramid response
+  const coveragePath = join(COVERAGE_DIR, appId, 'gap-report.json');
+  const coverageData = readJSON(coveragePath);
+  const coverage = coverageData ? {
+    api: { pct: coverageData.api?.pct ?? 0, total: coverageData.api?.total ?? 0, covered: coverageData.api?.covered ?? 0 },
+    ui: { pct: coverageData.ui?.pct ?? 0, total: coverageData.ui?.total ?? 0, covered: coverageData.ui?.covered ?? 0 },
+    combined: coverageData.api?.status === 'ok' && coverageData.ui?.status === 'ok'
+      ? Math.round(((coverageData.api.pct + coverageData.ui.pct) / 2) * 10) / 10
+      : Math.round((coverageData.api?.pct ?? coverageData.ui?.pct ?? 0) * 10) / 10,
+    timestamp: coverageData.timestamp ?? null,
+  } : null;
+
   return {
     app: appId,
     layers,
+    coverage,
     timestamp: new Date().toISOString(),
   };
 }
@@ -615,50 +823,74 @@ function getRecentRuns(limit: number = 50): Array<{ file: string; persona: strin
 function discoverScenarios() {
   const scenarios: Array<{ id: string; app: string; name: string; status: string; lastRun: string | null; score: number | null }> = [];
 
-  // Load scenario registry for status info
+  // Load scenario registry for metadata (tested_at, score)
   const scenarioRegistry = readJSON(SCENARIO_REGISTRY);
   const registryScenarios = scenarioRegistry?.scenarios ?? {};
 
-  try {
-    if (!existsSync(SCENARIOS_DIR)) return scenarios;
+  // Pyramid caches per app — loaded on demand
+  const cachesByApp: Record<string, PyramidCache | undefined> = {};
 
-    const scanDir = (dir: string, app: string, prefix: string) => {
-      if (!existsSync(dir)) return;
-      for (const entry of readdirSync(dir)) {
-        if (entry.startsWith('_') && entry !== '_demos' && entry !== '_neukunde') continue;
-        const fullPath = join(dir, entry);
+  if (!existsSync(SCENARIOS_DIR)) return scenarios;
+
+  const scanDir = (dir: string, app: string, prefix: string) => {
+    if (!existsSync(dir)) return;
+    // Lazy-load cache for this app (may not exist for all apps)
+    if (!(app in cachesByApp)) {
+      const cachePath = join(PYRAMID_CACHE_DIR, `${app}.json`);
+      if (existsSync(cachePath)) {
         try {
-          if (statSync(fullPath).isDirectory()) {
-            scanDir(fullPath, app, prefix ? `${prefix}/${entry}` : entry);
-          } else if (entry.endsWith('.json') && entry !== 'ACCOUNTS.md') {
-            const data = readJSON(fullPath);
-            if (!data) return;
-            const scenarioId = data.id || data.scenario_id || entry.replace('.json', '');
-            const regEntry = registryScenarios[scenarioId];
-
-            scenarios.push({
-              id: scenarioId,
-              app,
-              name: data.name || data.ziel || scenarioId,
-              status: regEntry?.status ?? 'PENDING',
-              lastRun: regEntry?.tested_at ?? null,
-              score: regEntry?.score ?? null,
-            });
-          }
-        } catch { /* */ }
-      }
-    };
-
-    for (const app of readdirSync(SCENARIOS_DIR)) {
-      if (app.startsWith('.') || app.startsWith('_')) continue;
-      try {
-        if (statSync(join(SCENARIOS_DIR, app)).isDirectory()) {
-          scanDir(join(SCENARIOS_DIR, app), app, '');
+          cachesByApp[app] = JSON.parse(readFileSync(cachePath, 'utf-8')) as PyramidCache;
+        } catch {
+          console.warn(`[QA] Corrupt pyramid cache for ${app}, treating all scenarios as PENDING`);
+          cachesByApp[app] = undefined;
         }
-      } catch { /* */ }
+      } else {
+        cachesByApp[app] = undefined;
+      }
     }
-  } catch (err) {
-    console.warn('[QA] Failed to discover scenarios:', err);
+    const cache = cachesByApp[app];
+
+    for (const entry of readdirSync(dir)) {
+      if (entry.startsWith('_') && entry !== '_demos' && entry !== '_neukunde') continue;
+      const fullPath = join(dir, entry);
+      try {
+        if (statSync(fullPath).isDirectory()) {
+          scanDir(fullPath, app, prefix ? `${prefix}/${entry}` : entry);
+        } else if (entry.endsWith('.json') && entry !== 'ACCOUNTS.md') {
+          const data = readJSON(fullPath);
+          if (!data) return;
+          const scenarioId = data.id || data.scenario_id || entry.replace('.json', '');
+          const regEntry = registryScenarios[scenarioId];
+
+          // Status from cache if available, otherwise PENDING (no silent guessing)
+          let status = 'PENDING';
+          if (cache) {
+            for (const layerData of Object.values(cache.layers)) {
+              const cached = layerData.scenarios?.[scenarioId];
+              if (cached) { status = cached.effective_status; break; }
+            }
+          }
+
+          scenarios.push({
+            id: scenarioId,
+            app,
+            name: data.name || data.ziel || scenarioId,
+            status,
+            lastRun: regEntry?.tested_at ?? null,
+            score: regEntry?.score ?? null,
+          });
+        }
+      } catch { /* individual file read error — skip file */ }
+    }
+  };
+
+  for (const app of readdirSync(SCENARIOS_DIR)) {
+    if (app.startsWith('.') || app.startsWith('_')) continue;
+    try {
+      if (statSync(join(SCENARIOS_DIR, app)).isDirectory()) {
+        scanDir(join(SCENARIOS_DIR, app), app, '');
+      }
+    } catch { /* app dir stat error — skip app */ }
   }
 
   return scenarios;
@@ -860,7 +1092,7 @@ router.get('/api/qa/coverage-gaps/:appId', async (req, res) => {
     const { appId } = req.params;
 
     if (!VALID_APP_IDS.has(appId)) {
-      return res.status(400).json({ error: `Unknown app: ${appId}. Valid: ${[...VALID_APP_IDS].join(', ')}` });
+      return res.status(400).json({ error: `Unknown app: ${appId}. Valid: ${Array.from(VALID_APP_IDS).join(', ')}` });
     }
 
     const gaps = readCoverageGaps(appId);
@@ -882,6 +1114,44 @@ router.get('/api/qa/coverage-gaps/:appId', async (req, res) => {
   }
 });
 
+// POST /api/qa/coverage-gaps/:appId/refresh — Re-run coverage gap analyzer
+router.post('/api/qa/coverage-gaps/:appId/refresh', async (req, res) => {
+  const { appId } = req.params;
+
+  if (!VALID_APP_IDS.has(appId)) {
+    return res.status(400).json({ error: `Unknown app: ${appId}` });
+  }
+
+  try {
+    const analyzerPath = join(UNIFIED_TESTER_ROOT, 'tools/coverage_gap_analyzer.py');
+
+    if (!existsSync(analyzerPath)) {
+      return res.status(500).json({ error: 'coverage_gap_analyzer.py not found' });
+    }
+
+    // Run analyzer twice: save JSON + MD reports (typically 10-30s each)
+    execSync(
+      `python3 "${analyzerPath}" --app "${appId}" --format json --save`,
+      { cwd: UNIFIED_TESTER_ROOT, timeout: 60000, stdio: 'pipe' }
+    );
+    execSync(
+      `python3 "${analyzerPath}" --app "${appId}" --format markdown --save`,
+      { cwd: UNIFIED_TESTER_ROOT, timeout: 60000, stdio: 'pipe' }
+    );
+
+    // Read freshly generated report
+    const gaps = readCoverageGaps(appId);
+    if (!gaps) {
+      return res.status(500).json({ error: 'Analyzer ran but no report generated' });
+    }
+
+    res.json({ app: appId, ...gaps, refreshed: true, generated: new Date().toISOString() });
+  } catch (err: any) {
+    console.error(`[QA] Coverage refresh error for ${appId}:`, err.message);
+    res.status(500).json({ error: `Analyzer failed: ${err.message?.slice(0, 200)}` });
+  }
+});
+
 // GET /api/qa/scenarios — All scenarios from filesystem + registry
 router.get('/api/qa/scenarios', async (_req, res) => {
   try {
@@ -890,6 +1160,165 @@ router.get('/api/qa/scenarios', async (_req, res) => {
   } catch (err: any) {
     console.error('[QA] Scenarios error:', err.message);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ========================================
+// Change Impact / Staleness Detection
+// ========================================
+// Source: change_impact_analyzer.py → orchestrator/data/staleness/{appId}.json
+// Detects which tests are "stale" (code changed since last test run)
+
+const STALENESS_DIR = '/root/projekte/orchestrator/data/staleness';
+const CHANGE_IMPACT_ANALYZER = join(UNIFIED_TESTER_ROOT, 'tools/change_impact_analyzer.py');
+
+interface StaleScenario {
+  scenario_id: string;
+  layer: number | null;
+  status: string;
+  score: number | null;
+  tested_at: string | null;
+  latest_change: string | null;
+  staleness_reason: string;
+  reasons: string[];
+  changed_files: string[];
+}
+
+function readStalenessData(appId: string): {
+  stale_scenarios: StaleScenario[];
+  per_layer: Record<number, StaleScenario[]>;
+  summary: { total_stale: number; total_scenarios: number; stale_by_layer: Record<number, number> };
+  changed_files_count: number;
+  head_commit: string | null;
+  timestamp: string;
+} | null {
+  const stalenessFile = join(STALENESS_DIR, `${appId}.json`);
+  if (!existsSync(stalenessFile)) return null;
+
+  try {
+    const raw = readFileSync(stalenessFile, 'utf-8');
+    const data = JSON.parse(raw);
+    if (!data || !data.app) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+// GET /api/qa/staleness/:appId — Read cached staleness report
+router.get('/api/qa/staleness/:appId', async (req, res) => {
+  try {
+    const { appId } = req.params;
+
+    if (!VALID_APP_IDS.has(appId)) {
+      return res.status(400).json({ error: `Unknown app: ${appId}. Valid: ${Array.from(VALID_APP_IDS).join(', ')}` });
+    }
+
+    const data = readStalenessData(appId);
+    if (!data) {
+      return res.status(404).json({
+        error: `No staleness data for ${appId}. Run: python3 change_impact_analyzer.py --app ${appId} --save`,
+        app: appId,
+      });
+    }
+
+    res.json({ app: appId, ...data });
+  } catch (err: any) {
+    console.error(`[QA] Staleness error for ${req.params.appId}:`, err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/qa/staleness/:appId/refresh — Re-run change impact analyzer
+router.post('/api/qa/staleness/:appId/refresh', async (req, res) => {
+  const { appId } = req.params;
+
+  if (!VALID_APP_IDS.has(appId)) {
+    return res.status(400).json({ error: `Unknown app: ${appId}` });
+  }
+
+  try {
+    if (!existsSync(CHANGE_IMPACT_ANALYZER)) {
+      return res.status(500).json({ error: 'change_impact_analyzer.py not found' });
+    }
+
+    execSync(
+      `python3 "${CHANGE_IMPACT_ANALYZER}" --app "${appId}" --save`,
+      { cwd: UNIFIED_TESTER_ROOT, timeout: 120000, stdio: 'pipe' }
+    );
+
+    const data = readStalenessData(appId);
+    if (!data) {
+      return res.status(500).json({ error: 'Analyzer ran but no report generated' });
+    }
+
+    res.json({ app: appId, ...data, refreshed: true });
+  } catch (err: any) {
+    console.error(`[QA] Staleness refresh error for ${appId}:`, err.message);
+    res.status(500).json({ error: `Analyzer failed: ${err.message?.slice(0, 200)}` });
+  }
+});
+
+// POST /api/qa/staleness/:appId/retest — Trigger re-test of stale scenarios
+router.post('/api/qa/staleness/:appId/retest', async (req, res) => {
+  const { appId } = req.params;
+  const { scenarioId, layer } = req.body ?? {};
+
+  if (!VALID_APP_IDS.has(appId)) {
+    return res.status(400).json({ error: `Unknown app: ${appId}` });
+  }
+
+  try {
+    const runAutonomous = join(UNIFIED_TESTER_ROOT, 'run_autonomous.py');
+    if (!existsSync(runAutonomous)) {
+      return res.status(500).json({ error: 'run_autonomous.py not found' });
+    }
+
+    let cmd: string;
+    let logSuffix: string;
+
+    if (scenarioId) {
+      // Re-test single scenario
+      cmd = `python3 "${runAutonomous}" --scenario "${scenarioId}"`;
+      logSuffix = scenarioId.replace(/\./g, '_');
+    } else if (layer !== undefined) {
+      // Re-test all stale scenarios in a layer — run the first stale one
+      const staleness = readStalenessData(appId);
+      const layerStale = staleness?.per_layer?.[layer];
+      if (!layerStale || layerStale.length === 0) {
+        return res.json({ message: `No stale scenarios in layer ${layer}`, triggered: 0 });
+      }
+      // Trigger first stale scenario (sequential, to avoid overload)
+      const first = layerStale[0];
+      cmd = `python3 "${runAutonomous}" --scenario "${first.scenario_id}"`;
+      logSuffix = `layer${layer}_${first.scenario_id.replace(/\./g, '_')}`;
+    } else {
+      return res.status(400).json({ error: 'Provide scenarioId or layer in request body' });
+    }
+
+    // Run in background with nohup
+    const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15);
+    const logFile = `/tmp/retest-${logSuffix}-${timestamp}.log`;
+    const bgCmd = `nohup ${cmd} > "${logFile}" 2>&1 & echo $!`;
+
+    const pidOutput = execSync(bgCmd, {
+      cwd: UNIFIED_TESTER_ROOT,
+      timeout: 10000,
+      shell: '/bin/bash',
+    }).toString().trim();
+
+    const pid = parseInt(pidOutput, 10);
+
+    res.json({
+      message: `Re-test triggered`,
+      pid: isNaN(pid) ? null : pid,
+      logFile,
+      command: cmd,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    console.error(`[QA] Retest error for ${appId}:`, err.message);
+    res.status(500).json({ error: `Retest failed: ${err.message?.slice(0, 200)}` });
   }
 });
 
