@@ -9,16 +9,23 @@ export default function LinkedInPanel() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     setError(null);
-    fetch(`${API}/file?path=${encodeURIComponent(LINKEDIN_FILE)}`)
-      .then(r => r.json())
-      .then(data => {
+    (async () => {
+      try {
+        const res = await fetch(`${API}/file?path=${encodeURIComponent(LINKEDIN_FILE)}`, { signal: AbortSignal.timeout(20000) });
+        if (!res.ok) throw new Error(`[LinkedInPanel] load file failed: HTTP ${res.status}`);
+        const data = await res.json();
         if (data.error) throw new Error(data.error);
         setHtml(data.content);
-      })
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false));
+      } catch (err: any) {
+        console.warn('[LinkedInPanel] load error:', err);
+        setError(err.message);
+      } finally {
+        setLoading(false);
+      }
+    })();
   }, []);
 
   if (loading) {

@@ -1,71 +1,71 @@
 [
   {
     "account": "rafael",
-    "timestamp": "2026-02-26T12:00:19.425Z",
+    "timestamp": "2026-03-10T12:00:03.105Z",
     "plan": "Max",
     "currentSession": {
-      "percent": 25,
-      "resetIn": "Resets in 2 hr 59 min"
+      "percent": 20,
+      "resetIn": "resets in 2h 59m"
     },
     "weeklyAllModels": {
-      "percent": 4,
-      "resetDate": "Resets Thu 10:00 AM"
+      "percent": 63,
+      "resetDate": "resets in 2d 18h"
     },
     "weeklySonnet": {
-      "percent": 25,
-      "resetDate": "Resets Tue 10:00 AM"
+      "percent": 7,
+      "resetDate": "resets in 2d 18h"
     },
     "extraUsage": {
-      "percent": 112,
-      "spent": "22.36 EUR",
-      "limit": "20 EUR",
-      "balance": "20.13 EUR"
+      "percent": 100,
+      "spent": "22.92 EUR",
+      "limit": "20.00 EUR",
+      "balance": "-2.92 EUR"
     }
   },
   {
     "account": "office",
-    "timestamp": "2026-02-26T12:00:34.979Z",
+    "timestamp": "2026-03-10T12:00:04.065Z",
     "plan": "Max",
     "currentSession": {
-      "percent": 9,
-      "resetIn": "Zurücksetzung in 2 Std. 59 Min."
+      "percent": 0,
+      "resetIn": ""
     },
     "weeklyAllModels": {
-      "percent": 52,
-      "resetDate": "Zurücksetzung Sa., 09:00"
+      "percent": 40,
+      "resetDate": "resets in 2d 18h"
     },
     "weeklySonnet": {
-      "percent": 73,
-      "resetDate": "Zurücksetzung Sa., 09:59"
+      "percent": 28,
+      "resetDate": "resets in 2d 18h"
     },
     "extraUsage": {
-      "percent": 100,
-      "spent": "42.67 EUR",
-      "limit": "43 EUR",
-      "balance": "0.00 EUR"
+      "percent": 0,
+      "spent": "0.00 EUR",
+      "limit": "42.50 EUR",
+      "balance": "42.50 EUR"
     }
   },
   {
     "account": "engelmann",
-    "timestamp": "2026-02-26T12:00:50.634Z",
+    "timestamp": "2026-03-10T12:00:05.065Z",
     "plan": "Max",
     "currentSession": {
-      "percent": 8,
-      "resetIn": "Zurücksetzung in 2 Std. 59 Min."
+      "percent": 0,
+      "resetIn": "resets in 4h 59m"
     },
     "weeklyAllModels": {
-      "percent": 2,
-      "resetDate": "Zurücksetzung Do., 09:00"
+      "percent": 44,
+      "resetDate": "resets in 2d 18h"
     },
     "weeklySonnet": {
-      "percent": 58,
-      "resetDate": "Zurücksetzung Sa., 10:00"
+      "percent": 26,
+      "resetDate": "resets in 2d 18h"
     },
     "extraUsage": {
-      "percent": 101,
-      "spent": "42.84 EUR",
-      "limit": "43 EUR",
-      "balance": "0.00 EUR"
+      "percent": 0,
+      "spent": "0.00 EUR",
+      "limit": "42.50 EUR",
+      "balance": "42.50 EUR"
     }
   }
 ]

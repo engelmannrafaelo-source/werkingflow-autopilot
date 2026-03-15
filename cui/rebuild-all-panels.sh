@@ -73,7 +73,14 @@ echo -e "${BLUE}[2/3]${NC} Rebuilding CUI Frontend..."
 echo "--------------------------------------------------------------------"
 
 cd "$SCRIPT_DIR"
-"$SCRIPT_DIR/build-with-restart.sh" 2>&1 | grep -E "===|✓|✗|Started" || true
+# Use cui-rebuild (systemd-managed) instead of obsolete build-with-restart.sh
+if command -v cui-rebuild >/dev/null 2>&1; then
+    cui-rebuild 2>&1 | grep -E "===|✓|✗|Started|Build|Restart" || true
+else
+    echo "Running: npx vite build && systemctl restart cui-workspace"
+    npx vite build 2>&1 | tail -3
+    systemctl restart cui-workspace
+fi
 
 echo ""
 echo -e "${BLUE}[3/3]${NC} Health Check..."

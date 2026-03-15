@@ -83,7 +83,7 @@ export default function SessionsTab() {
   }, [fetchAll]);
 
   return (
-    <div style={{ padding: 12 }}>
+    <div data-ai-id="sessions-tab-content" style={{ padding: 12 }}>
       <Toolbar lastRefresh={lastRefresh} loading={loading} onRefresh={fetchAll} autoRefresh={15} />
       {error && <ErrorBanner message={error} />}
 
@@ -91,17 +91,18 @@ export default function SessionsTab() {
       {cliStats && (
         <SectionFlat title="CLI-Sessions (Research-Tasks)">
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-            <StatCard label="Gesamt" value={String(cliStats.total)} />
-            <StatCard label="Laufend" value={String(cliStats.running)} color={cliStats.running > 0 ? 'var(--tn-blue)' : 'var(--tn-text-muted)'} />
-            <StatCard label="Abgeschlossen" value={String(cliStats.completed)} color="var(--tn-green)" />
-            <StatCard label="Fehlgeschlagen" value={String(cliStats.failed)} color={cliStats.failed > 0 ? 'var(--tn-red)' : 'var(--tn-text-muted)'} />
+            <StatCard label="Gesamt" value={String(cliStats.total)} aiId="sessions-cli-total-stat" />
+            <StatCard label="Laufend" value={String(cliStats.running)} color={cliStats.running > 0 ? 'var(--tn-blue)' : 'var(--tn-text-muted)'} aiId="sessions-cli-running-stat" />
+            <StatCard label="Abgeschlossen" value={String(cliStats.completed)} color="var(--tn-green)" aiId="sessions-cli-completed-stat" />
+            <StatCard label="Fehlgeschlagen" value={String(cliStats.failed)} color={cliStats.failed > 0 ? 'var(--tn-red)' : 'var(--tn-text-muted)'} aiId="sessions-cli-failed-stat" />
           </div>
 
           {/* Filter */}
-          <div style={{ display: 'flex', gap: 4, marginBottom: 10 }}>
+          <div data-ai-id="sessions-filters" style={{ display: 'flex', gap: 4, marginBottom: 10 }}>
             {(['all', 'running', 'completed', 'failed'] as const).map(f => (
               <button
                 key={f}
+                data-ai-id={`sessions-filter-${f}`}
                 onClick={() => setFilter(f)}
                 style={{
                   padding: '3px 10px', borderRadius: 3, fontSize: 10, fontWeight: 600,
@@ -117,7 +118,7 @@ export default function SessionsTab() {
 
           {/* CLI Session List */}
           {cliSessions.length > 0 ? (
-            <div style={{ background: 'var(--tn-bg-dark)', borderRadius: 5, overflow: 'hidden' }}>
+            <div data-ai-id="sessions-cli-table" style={{ background: 'var(--tn-bg-dark)', borderRadius: 5, overflow: 'hidden' }}>
               {/* Header */}
               <div style={{
                 display: 'grid', gridTemplateColumns: '80px 1fr 90px 70px 70px',
@@ -190,7 +191,7 @@ export default function SessionsTab() {
           </div>
 
           {convSessions.length > 0 && (
-            <div style={{ background: 'var(--tn-bg-dark)', borderRadius: 5, overflow: 'hidden' }}>
+            <div data-ai-id="sessions-conversation-table" style={{ background: 'var(--tn-bg-dark)', borderRadius: 5, overflow: 'hidden' }}>
               <div style={{
                 display: 'grid', gridTemplateColumns: '120px 1fr 90px',
                 gap: 8, padding: '5px 10px', fontSize: 9, fontWeight: 700,

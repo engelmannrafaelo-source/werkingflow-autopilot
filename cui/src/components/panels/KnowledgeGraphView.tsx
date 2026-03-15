@@ -39,14 +39,15 @@ export default function KnowledgeGraphView({
   }, []);
 
   async function loadKnowledgeData() {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
-      const response = await fetch('/api/team/knowledge/registry');
+      const response = await fetch('/api/team/knowledge/registry', { signal: AbortSignal.timeout(20000) });
       if (!response.ok) throw new Error('Failed to load registry');
 
       const registry = await response.json();
       setKnowledgeData(registry.personas);
     } catch (err: any) {
-      console.error('[KnowledgeGraph] Load error:', err);
+      console.warn('[KnowledgeGraph] load registry:', err);
       setError(err.message);
     } finally {
       setLoading(false);
@@ -100,10 +101,10 @@ export default function KnowledgeGraphView({
         // Color-coded badge: Green (>5), Yellow (1-5), Gray (0)
         const badgeColor =
           docCount > 5
-            ? { bg: 'rgba(16,185,129,0.15)', border: '#10b981', text: '#10b981' }
+            ? { bg: 'rgba(16,185,129,0.15)', border: 'var(--tn-green)', text: 'var(--tn-green)' }
             : docCount > 0
-            ? { bg: 'rgba(245,158,11,0.15)', border: '#f59e0b', text: '#f59e0b' }
-            : { bg: 'rgba(107,114,128,0.15)', border: '#6b7280', text: '#6b7280' };
+            ? { bg: 'rgba(245,158,11,0.15)', border: 'var(--tn-orange)', text: 'var(--tn-orange)' }
+            : { bg: 'rgba(107,114,128,0.15)', border: 'var(--tn-status-idle)', text: 'var(--tn-status-idle)' };
 
         return (
           <div

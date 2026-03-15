@@ -97,9 +97,89 @@ body {
   50% { opacity: 0.3; }
 }
 
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+@keyframes pulse-attention {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.8); }
+}
+
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+/* CUI tab state dots */
+.cui-tab-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 5px;
+  flex-shrink: 0;
+}
+
+.cui-tab-dot--working {
+  background: #9ece6a;
+  box-shadow: 0 0 6px #9ece6a88;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.cui-tab-dot--attention {
+  background: #f7768e;
+  box-shadow: 0 0 8px #f7768eaa;
+  animation: pulse-attention 0.8s ease-in-out infinite;
+  font-size: 10px;
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  color: #f7768e;
+  text-shadow: 0 0 6px #f7768eaa;
+  font-weight: bold;
+}
+
+.cui-tab-dot--idle {
+  background: #565f89;
+  width: 6px;
+  height: 6px;
+}
+
+/* Attention tab highlight — make the whole tab glow when needs_attention */
+.flexlayout__tab_button:has(.cui-tab-dot--attention) {
+  background: rgba(247, 118, 142, 0.1) !important;
+  border-bottom: 2px solid #f7768e !important;
+}
+
+.flexlayout__tab_button:has(.cui-tab-dot--working) {
+  border-bottom: 2px solid #9ece6a !important;
+}
+
+/* Panel border indicators — full visible border around CUI panels */
+.cui-panel-border--working {
+  border: 2px solid rgba(158, 206, 106, 0.6);
+  border-radius: 4px;
+  box-shadow: inset 0 0 20px -6px rgba(158, 206, 106, 0.15), 0 0 8px -2px rgba(158, 206, 106, 0.2);
+  background: rgba(158, 206, 106, 0.03);
+}
+
+.cui-panel-border--attention {
+  border: 2px solid rgba(247, 118, 142, 0.7);
+  border-radius: 4px;
+  box-shadow: inset 0 0 24px -6px rgba(247, 118, 142, 0.2), 0 0 12px -2px rgba(247, 118, 142, 0.3);
+  background: rgba(247, 118, 142, 0.04);
+  animation: panel-glow-attention 2s ease-in-out infinite;
+}
+
+@keyframes panel-glow-attention {
+  0%, 100% { box-shadow: inset 0 0 24px -6px rgba(247, 118, 142, 0.2), 0 0 12px -2px rgba(247, 118, 142, 0.3); }
+  50% { box-shadow: inset 0 0 30px -4px rgba(247, 118, 142, 0.3), 0 0 18px -2px rgba(247, 118, 142, 0.4); }
+}
+
+.cui-panel-border--idle {
+  border: 1px solid transparent;
 }
 
 /* Scrollbar */
@@ -107,3 +187,184 @@ body {
 ::-webkit-scrollbar-track { background: var(--tn-bg); }
 ::-webkit-scrollbar-thumb { background: var(--tn-border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--tn-text-muted); }
+
+/* ===== Mobile Mode ===== */
+.mobile-mode {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.mobile-mode input,
+.mobile-mode textarea,
+.mobile-mode select {
+  font-size: 16px !important; /* prevents iOS auto-zoom on focus */
+}
+
+.mobile-mode button {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+.mobile-mode ::-webkit-scrollbar { width: 10px; height: 10px; }
+
+/* Mobile layout structure */
+.mobile-layout {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+}
+
+/* Fullscreen panel (Chat tab) */
+.mobile-panel-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: calc(60px + env(safe-area-inset-bottom, 0px));
+  overflow: hidden;
+}
+
+.mobile-panel-container > * {
+  height: 100%;
+}
+
+/* Split view wrapper (Files/Notes/Browse tabs) */
+.mobile-split-wrapper {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: calc(60px + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.mobile-split-top {
+  height: 40%;
+  min-height: 160px;
+  overflow: hidden;
+}
+
+.mobile-split-top > * {
+  height: 100%;
+}
+
+.mobile-split-divider {
+  height: 12px;
+  background: var(--tn-bg-dark);
+  border-top: 2px solid var(--tn-blue);
+  border-bottom: 2px solid var(--tn-blue);
+  flex-shrink: 0;
+  cursor: row-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+}
+
+.mobile-split-divider::after {
+  content: '';
+  width: 40px;
+  height: 4px;
+  background: var(--tn-text-muted);
+  border-radius: 2px;
+  opacity: 0.5;
+}
+
+.mobile-split-bottom {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.mobile-split-bottom > * {
+  height: 100%;
+}
+
+/* Bottom tab bar — absolute, well above Safari home indicator */
+.mobile-tab-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: env(safe-area-inset-bottom, 0px);
+  display: flex;
+  align-items: stretch;
+  background: var(--tn-bg-dark);
+  border-top: 2px solid var(--tn-blue);
+  border-bottom: 1px solid var(--tn-border);
+  height: 60px;
+  z-index: 100;
+  border-radius: 12px 12px 0 0;
+}
+
+.mobile-tab-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  background: none;
+  border: none;
+  color: var(--tn-text-muted);
+  cursor: pointer;
+  position: relative;
+  transition: color 0.15s;
+  padding: 4px 2px;
+  min-height: 44px !important;
+  min-width: 0 !important;
+}
+
+.mobile-tab-btn.active {
+  color: var(--tn-blue);
+}
+
+.mobile-tab-label {
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-tab-btn.active .mobile-tab-label {
+  font-weight: 700;
+  color: var(--tn-blue);
+}
+
+/* State dots on mobile tabs */
+.mobile-state-dot {
+  position: absolute;
+  top: 4px;
+  right: calc(50% - 14px);
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.mobile-state-dot.processing {
+  background: var(--tn-blue);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.mobile-state-dot.done {
+  background: var(--tn-green);
+}
+
+/* iOS safe area for mobile mode body — horizontal insets */
+.mobile-mode {
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+/* Viewport meta for safe area: requires viewport-fit=cover in HTML meta tag */

@@ -18,6 +18,7 @@ export default function ScanDocumentsButton() {
   const [error, setError] = useState<string | null>(null);
 
   async function triggerScan() {
+    if ((window as any).__cuiServerAlive === false) return;
     setScanning(true);
     setResult(null);
     setError(null);
@@ -30,11 +31,12 @@ export default function ScanDocumentsButton() {
           mode: 'full',
           auto_assign: true,
         }),
+        signal: AbortSignal.timeout(15000),
       });
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || 'Scan failed');
+        throw new Error(errorData.error || `[ScanDocs] scan failed: HTTP ${response.status}`);
       }
 
       const data = await response.json();
@@ -43,7 +45,7 @@ export default function ScanDocumentsButton() {
       // Refresh knowledge data after scan
       window.dispatchEvent(new Event('knowledge-updated'));
     } catch (err: any) {
-      console.error('[ScanButton] Error:', err);
+      console.warn('[ScanDocs] scan error:', err);
       setError(err.message);
     } finally {
       setScanning(false);
