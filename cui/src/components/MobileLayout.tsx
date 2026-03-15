@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState, useEffect, useMemo, lazy, Suspense } from 'react';
 import { Layout, Model, TabNode, TabSetNode, BorderNode, IJsonModel, ITabSetRenderValues, Actions, DockLocation } from 'flexlayout-react';
 import CuiLitePanel from './panels/CuiLitePanel';
+import NativeChat from './panels/NativeChat';
 import FilePreview from './panels/FilePreview';
 import NotesPanel from './panels/NotesPanel';
 import BrowserPanel from './panels/BrowserPanel';
@@ -137,6 +138,13 @@ export default function MobileLayout({ projectId, workDir }: MobileLayoutProps) 
         return wrapPanel('ImageDrop', <ImageDrop />);
       case 'mission':
         return wrapPanel('MissionControl', S(<MissionControl projectId={projectId} workDir={workDir} />));
+      case 'mission-chat':
+        return wrapPanel('MissionChat', <CuiLitePanel accountId={config.accountId || 'rafael'} projectId="mission-chat" workDir="/root/orchestrator/workspaces/mission-chat" panelId={nodeId} isTabVisible={node.isVisible()} />);
+      case 'chat': {
+        const accountId = config.accountId || 'rafael';
+        const PROXY_PORTS: Record<string, number> = { rafael: 5001, engelmann: 5002, office: 5003, local: 5004, gemini: 5005 };
+        return wrapPanel('NativeChat', <NativeChat accountId={accountId} proxyPort={PROXY_PORTS[accountId] || 5001} />);
+      }
       case 'office': case 'virtual-office':
         return wrapPanel('OfficePanel', S(<OfficePanel projectId={projectId} workDir={workDir} />));
       case 'knowledge': case 'knowledge-fullscreen':
@@ -191,8 +199,9 @@ export default function MobileLayout({ projectId, workDir }: MobileLayoutProps) 
     const m = modelRef.current;
     if (!m) return;
     const names: Record<string, string> = {
-      cui: 'CUI', 'cui-lite': 'CUI', browser: 'Browser', preview: 'Files',
+      cui: 'CUI', 'cui-lite': 'CUI', chat: 'Native Chat', browser: 'Browser', preview: 'Files',
       notes: 'Notes', images: 'Images', mission: 'Mission Control',
+      'mission-chat': 'Mission Chat',
       office: 'Virtual Office', 'admin-wr': 'WR Admin', linkedin: 'LinkedIn',
       'system-health': 'System Health', 'bridge-monitor': 'Bridge Monitor',
       'repo-dashboard': 'Git & Pipeline', watchdog: 'Watchdog',
@@ -233,11 +242,13 @@ export default function MobileLayout({ projectId, workDir }: MobileLayoutProps) 
       >
         <option value="">+</option>
         <option value="cui">CUI</option>
+        <option value="chat">Native Chat</option>
         <option value="browser">Browser</option>
         <option value="preview">Files</option>
         <option value="notes">Notes</option>
         <option value="images">Images</option>
         <option value="mission">Mission Control</option>
+        <option value="mission-chat">Mission Chat</option>
         <option value="office">Virtual Office</option>
         <option value="knowledge">Knowledge</option>
         <option value="qa-dashboard">QA Dashboard</option>
