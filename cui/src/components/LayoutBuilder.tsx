@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, type JSX } from 'react';
 import type { IJsonModel } from 'flexlayout-react';
-const ACCOUNT_LABELS: Record<string, string> = { rafael: "Engelmann", engelmann: "Gmail", office: "Office", local: "Lokal" };
+const ACCOUNT_LABELS: Record<string, string> = { rafael: "Engelmann", engelmann: "Gmail", office: "Office", local: "Lokal", gemini: "Gemini" };
 
 // --- Panel options for cell assignment ---
 const PANEL_OPTIONS = [
@@ -8,10 +8,12 @@ const PANEL_OPTIONS = [
   { value: 'cui:engelmann', label: 'CUI: Gmail' },
   { value: 'cui:office', label: 'CUI: Office' },
   { value: 'cui:local', label: 'CUI: Local' },
+  { value: 'cui:gemini', label: 'CUI: Gemini' },
   { value: 'chat:rafael', label: 'Chat: Engelmann 🖼️' },
   { value: 'chat:engelmann', label: 'Chat: Gmail 🖼️' },
   { value: 'chat:office', label: 'Chat: Office 🖼️' },
   { value: 'chat:local', label: 'Chat: Local 🖼️' },
+  { value: 'chat:gemini', label: 'Chat: Gemini 🖼️' },
   { value: 'images', label: 'Images' },
   { value: 'browser', label: 'Browser' },
   { value: 'preview', label: 'File Preview' },
@@ -20,7 +22,10 @@ const PANEL_OPTIONS = [
   { value: 'office', label: 'Virtual Office 👥' },
   { value: 'admin-wr', label: 'Werking Report Admin' },
   { value: 'linkedin', label: 'LinkedIn Marketing 🔗' },
-  { value: 'bridge-monitor', label: 'Bridge Monitor (Old)' },
+  { value: 'bridge-monitor', label: 'Bridge Monitor' },
+  { value: 'infisical-monitor', label: 'Infisical Monitor 🔐' },
+  { value: 'qa-dashboard', label: 'QA Dashboard 📊' },
+  { value: 'administration', label: 'Administration 🔧' },
 ];
 
 const CELL_DEFAULTS = [
@@ -103,6 +108,8 @@ function panelFromValue(value: string, workDir: string): PanelConfig {
     case 'admin-wr': return { component: 'admin-wr', name: 'Werking Report Admin', config: {} };
     case 'linkedin':                return { component: 'linkedin', name: 'LinkedIn Marketing 🔗', config: {} };
     case 'bridge-monitor':          return { component: 'bridge-monitor', name: 'Bridge Monitor', config: {} };
+    case 'infisical-monitor':       return { component: 'infisical-monitor', name: 'Infisical Monitor 🔐', config: {} };
+    case 'administration':          return { component: 'administration', name: 'Administration 🔧', config: {} };
     default:                        throw new Error(`Unknown panel type: ${value}`);
   }
 }

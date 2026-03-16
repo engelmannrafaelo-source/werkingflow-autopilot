@@ -24,8 +24,11 @@ export default function BusinessApprovalPanel() {
   const [processing, setProcessing] = useState<number | null>(null);
 
   const load = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
-      const d = await fetch(`${API}/agents/business/pending`).then(r => r.json());
+      const resp = await fetch(`${API}/agents/business/pending`, { signal: AbortSignal.timeout(20000) });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const d = await resp.json();
       const entries = (d.pending ?? []).map((entry: any) => {
         const ageMs = Date.now() - new Date(entry.timestamp).getTime();
         const ageDays = Math.floor(ageMs / 86400000);
@@ -38,7 +41,7 @@ export default function BusinessApprovalPanel() {
         return { ...entry, ageDays, stage };
       });
       setPending(entries);
-    } catch { /**/ }
+    } catch (err) { console.warn('[BusinessApproval] load pending:', err); }
   }, []);
 
   useEffect(() => {
@@ -48,42 +51,57 @@ export default function BusinessApprovalPanel() {
   }, [load]);
 
   async function selectEntry(entry: PendingEntry) {
+    if ((window as any).__cuiServerAlive === false) return;
     setSelected(entry);
     setDiff(null);
     try {
       const filePath = entry.file.replace('/root/projekte/werkingflow/business/', '');
-      const d = await fetch(`${API}/agents/business/diff/${filePath}`).then(r => r.json());
-      setDiff(d);
-    } catch { setDiff({ pending: 'Fehler beim Laden', final: '' }); }
+      const resp = await fetch(`${API}/agents/business/diff/${filePath}`, { signal: AbortSignal.timeout(20000) });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      setDiff(await resp.json());
+    } catch (err) {
+      console.warn('[BusinessApproval] load diff:', err);
+      setDiff({ pending: 'Fehler beim Laden', final: '' });
+    }
   }
 
   async function approve(index: number) {
+    if ((window as any).__cuiServerAlive === false) return;
     setProcessing(index);
     try {
-      await fetch(`${API}/agents/business/approve`, {
+      const resp = await fetch(`${API}/agents/business/approve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ index }),
+        signal: AbortSignal.timeout(15000),
       });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       await load();
       setSelected(null);
       setDiff(null);
+    } catch (err) {
+      console.warn('[BusinessApproval] approve:', err);
     } finally {
       setProcessing(null);
     }
   }
 
   async function reject(index: number) {
+    if ((window as any).__cuiServerAlive === false) return;
     setProcessing(index);
     try {
-      await fetch(`${API}/agents/business/reject`, {
+      const resp = await fetch(`${API}/agents/business/reject`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ index }),
+        signal: AbortSignal.timeout(15000),
       });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       await load();
       setSelected(null);
       setDiff(null);
+    } catch (err) {
+      console.warn('[BusinessApproval] reject:', err);
     } finally {
       setProcessing(null);
     }
@@ -135,7 +153,7 @@ export default function BusinessApprovalPanel() {
           <PipelineStage
             label="Approval"
             count={byStage.approval.length}
-            color="#f59e0b"
+            color="var(--tn-orange)"
             icon="⚠️"
           />
           <div style={{ width: 20, height: 2, background: 'var(--tn-border)' }} />
@@ -144,7 +162,7 @@ export default function BusinessApprovalPanel() {
           <PipelineStage
             label="Complete"
             count={0}
-            color="#10b981"
+            color="var(--tn-green)"
             icon="✓"
           />
         </div>
@@ -303,7 +321,7 @@ function getStageColor(stage?: string): string {
   switch (stage) {
     case 'draft': return '#6366f1';
     case 'review': return '#0ea5e9';
-    case 'approval': return '#f59e0b';
+    case 'approval': return 'var(--tn-orange)';
     default: return 'var(--tn-text-muted)';
   }
 }

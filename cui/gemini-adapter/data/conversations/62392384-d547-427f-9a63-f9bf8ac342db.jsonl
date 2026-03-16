@@ -1,0 +1,2 @@
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Sage Hallo auf Deutsch. Maximal 1 Satz."}]},"timestamp":"2026-03-04T06:32:48.464Z"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Hallo!"}],"model":"auto-gemini-3"},"timestamp":"2026-03-04T06:33:01.323Z"}

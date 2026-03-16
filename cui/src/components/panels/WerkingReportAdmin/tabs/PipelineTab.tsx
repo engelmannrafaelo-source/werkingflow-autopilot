@@ -9,98 +9,37 @@ interface EnvironmentHealth {
   version?: string;
 }
 
-interface EnvironmentConfig {
-  name: string;
-  url: string;
-  branch: string;
-}
-
 export default function PipelineTab({ envMode }: { envMode?: string }) {
   const [loading, setLoading] = useState(true);
   const [environments, setEnvironments] = useState<EnvironmentHealth[]>([]);
   const [error, setError] = useState('');
-  const [envConfigs, setEnvConfigs] = useState<EnvironmentConfig[]>([]);
-
-  const checkEnvironment = async (name: string, url: string, branch?: string): Promise<EnvironmentHealth> => {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-      const res = await fetch(`${url}/api/version`, {
-        signal: controller.signal,
-      }).catch(() => null);
-
-      clearTimeout(timeoutId);
-
-      if (!res || !res.ok) {
-        return { name, url, status: 'down', branch };
-      }
-
-      const data = await res.json();
-      return {
-        name,
-        url,
-        status: 'healthy',
-        branch: branch || data.branch,
-        lastDeploy: data.buildTime,
-        version: data.version,
-      };
-    } catch (err) {
-      return { name, url, status: 'down', branch };
-    }
-  };
-
-  // Fetch environment configurations from backend
-  const fetchEnvConfigs = useCallback(async () => {
-    try {
-      const res = await fetch('/api/admin/wr/environments');
-      if (!res.ok) {
-        throw new Error('Failed to fetch environment configs');
-      }
-      const data = await res.json();
-      setEnvConfigs(data.environments || []);
-    } catch (err: any) {
-      console.error('Error fetching env configs:', err);
-      // Fallback to hardcoded defaults
-      setEnvConfigs([
-        { name: 'Local', url: 'http://localhost:3008', branch: 'develop' },
-        { name: 'Staging', url: 'https://werkingflow-platform-git-develop-rafael-engelmanns-projects.vercel.app', branch: 'develop' },
-        { name: 'Production', url: 'https://werkingflow-platform.vercel.app', branch: 'main' },
-      ]);
-    }
-  }, []);
 
   const fetchAll = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
 
     try {
-      // Use envConfigs if available, otherwise wait for them to load
-      if (envConfigs.length === 0) {
-        return;
+      // Use server-side proxy to avoid CORS issues.
+      // The CUI server checks each environment's /api/version endpoint
+      // and returns the aggregated results.
+      const res = await fetch('/api/admin/wr/pipeline-health', {
+        signal: AbortSignal.timeout(20000),
+      });
+      if (!res.ok) {
+        throw new Error(`Health check failed: HTTP ${res.status}`);
       }
-
-      const checks = await Promise.all(
-        envConfigs.map(env => checkEnvironment(env.name, env.url, env.branch))
-      );
-
-      setEnvironments(checks);
+      const data = await res.json();
+      setEnvironments(data.environments || []);
     } catch (err: any) {
+      console.warn('[WRPipeline] fetchAll:', err);
       setError(err.message);
     } finally {
       setLoading(false);
     }
-  }, [envConfigs]);
+  }, []);
 
-  // Fetch configs on mount
-  useEffect(() => { fetchEnvConfigs(); }, [fetchEnvConfigs]);
-
-  // Fetch health checks when configs are loaded or envMode changes
-  useEffect(() => {
-    if (envConfigs.length > 0) {
-      fetchAll();
-    }
-  }, [envConfigs, envMode, fetchAll]);
+  useEffect(() => { fetchAll(); }, [fetchAll, envMode]);
 
   const statusColors = {
     healthy: 'var(--tn-green)',
@@ -122,26 +61,26 @@ export default function PipelineTab({ envMode }: { envMode?: string }) {
   );
 
   return (
-    <div style={{ padding: 12 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--tn-text)' }}>
+    <div data-ai-id="wr-pipeline-tab" style={{ padding: 12 }}>
+      <div data-ai-id="wr-pipeline-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <div data-ai-id="wr-pipeline-title" style={{ fontSize: 12, fontWeight: 700, color: 'var(--tn-text)' }}>
           Deployment Pipeline
         </div>
-        <button onClick={fetchAll} style={{
+        <button data-ai-id="wr-pipeline-refresh-btn" onClick={fetchAll} style={{
           padding: '3px 10px', borderRadius: 3, fontSize: 10, cursor: 'pointer',
           background: 'var(--tn-bg)', border: '1px solid var(--tn-border)', color: 'var(--tn-text-muted)',
         }}>Refresh</button>
       </div>
 
-      {error && <div style={{ padding: '4px 8px', fontSize: 11, color: 'var(--tn-red)', background: 'rgba(247,118,142,0.1)', borderRadius: 3, marginBottom: 8 }}>{error}</div>}
-      {loading && <div style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>Checking environments...</div>}
+      {error && <div data-ai-id="wr-pipeline-error" style={{ padding: '4px 8px', fontSize: 11, color: 'var(--tn-red)', background: 'rgba(247,118,142,0.1)', borderRadius: 3, marginBottom: 8 }}>{error}</div>}
+      {loading && <div data-ai-id="wr-pipeline-loading" style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>Checking environments...</div>}
 
       {!loading && (
-        <div style={{ display: 'flex', gap: 16, alignItems: 'center', justifyContent: 'center', marginTop: 40 }}>
+        <div data-ai-id="wr-pipeline-envs" style={{ display: 'flex', gap: 16, alignItems: 'center', justifyContent: 'center', marginTop: 40 }}>
           {environments.map((env, idx) => (
             <React.Fragment key={env.name}>
               {/* Environment Card */}
-              <div style={{
+              <div data-ai-id={`wr-pipeline-env-${env.name.toLowerCase()}`} data-status={env.status} style={{
                 background: 'var(--tn-bg-dark)',
                 border: `2px solid ${statusColors[env.status]}`,
                 borderRadius: 8,
@@ -208,14 +147,14 @@ export default function PipelineTab({ envMode }: { envMode?: string }) {
 
       {/* Pipeline Info */}
       {!loading && (
-        <div style={{
+        <div data-ai-id="wr-pipeline-info" style={{
           marginTop: 40,
           padding: 16,
           background: 'var(--tn-bg-dark)',
           border: '1px solid var(--tn-border)',
           borderRadius: 6,
         }}>
-          <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--tn-text-muted)', marginBottom: 8, textTransform: 'uppercase' }}>
+          <div data-ai-id="wr-pipeline-info-title" style={{ fontSize: 10, fontWeight: 600, color: 'var(--tn-text-muted)', marginBottom: 8, textTransform: 'uppercase' }}>
             Pipeline Flow
           </div>
           <div style={{ fontSize: 11, color: 'var(--tn-text)', lineHeight: 1.6 }}>

@@ -247,7 +247,7 @@ export default function WorkersTab() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                 <StatusBadge status={licenseHealth.status === 'healthy' ? 'ok' : 'error'} />
                 <span style={{ fontSize: 10, color: 'var(--tn-text-muted)', fontFamily: 'monospace' }}>
-                  {licenseHealth.test_duration_seconds.toFixed(2)}s
+                  {(licenseHealth.test_duration_seconds ?? 0).toFixed(2)}s
                 </span>
               </div>
               <div style={{ fontSize: 10, color: 'var(--tn-text-muted)' }}>

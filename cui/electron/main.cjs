@@ -11,13 +11,22 @@ process.on('unhandledRejection', (reason) => {
   console.error('[Electron] Unhandled rejection:', reason);
 });
 
+// Set process name based on mode — visible in Activity Monitor / Dock
+const isLocalMode = process.argv.includes('--local');
+const isDevMode = process.argv.includes('--dev');
+const appLabel = isDevMode ? 'CUI Dev' : isLocalMode ? 'CUI Local' : 'CUI Remote';
+app.name = appLabel;
+if (process.platform === 'darwin') {
+  process.title = appLabel;
+}
+
 let mainWindow;
 
 function createWindow() {
   // macOS needs an application menu for Cmd+C/V/X/A to work
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     {
-      label: app.name || 'Workspace',
+      label: appLabel,
       submenu: [
         { role: 'about' },
         { type: 'separator' },
@@ -88,30 +97,46 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.cjs'),
+      additionalArguments: ['--cui-mode=' + (isDevMode ? 'dev' : isLocalMode ? 'local' : 'remote')],
     },
   });
 
-  // CUI Workspace runs on the remote dev server (single instance).
-  // Mac Electron is a thin client — just loads the remote URL.
+  // CUI Workspace — three modes:
+  //   (default)  → Remote server (100.121.161.109:4005)
+  //   --local    → Local production server (localhost:4005)
+  //   --dev      → Vite dev server (localhost:5173)
   const REMOTE_URL = 'http://100.121.161.109:4005';
-  const isDev = process.argv.includes('--dev');
-  if (isDev) {
-    mainWindow.loadURL('http://localhost:5173');
+  const LOCAL_URL = 'http://localhost:4005';
+  const DEV_URL = 'http://localhost:5173';
+
+  const baseURL = isDevMode ? DEV_URL : isLocalMode ? LOCAL_URL : REMOTE_URL;
+  const modeLabel = isDevMode ? 'Dev' : isLocalMode ? 'Local' : 'Remote';
+  const targetURL = `${baseURL}?mode=${modeLabel.toLowerCase()}`;
+
+  mainWindow.setTitle(`CUI Workspace [${modeLabel}]`);
+  console.log(`[Electron] Mode: ${modeLabel} → ${baseURL}`);
+
+  if (isDevMode) {
     mainWindow.webContents.openDevTools({ mode: 'detach' });
-  } else {
-    mainWindow.loadURL(REMOTE_URL);
   }
+  mainWindow.loadURL(targetURL);
 
   mainWindow.webContents.on('did-fail-load', (_event, code, desc) => {
     console.error(`Failed to load: ${code} ${desc}`);
-    // Retry after 2s if remote server isn't reachable yet (Tailscale not ready, etc.)
+    // Retry after 2s if server isn't reachable yet
     if (code === -102 || code === -6) {
-      setTimeout(() => mainWindow.loadURL(REMOTE_URL), 2000);
+      setTimeout(() => mainWindow.loadURL(targetURL), 2000);
     }
   });
 }
 
 app.whenReady().then(() => {
+  // macOS Dock: show mode badge so user can distinguish instances
+  if (process.platform === 'darwin' && app.dock) {
+    const badge = isDevMode ? 'DEV' : isLocalMode ? 'L' : 'R';
+    app.dock.setBadge(badge);
+  }
+
   // IPC: open DevTools for a specific webview
   ipcMain.handle('open-devtools', (_event, webContentsId) => {
     const contents = require('electron').webContents.fromId(webContentsId);

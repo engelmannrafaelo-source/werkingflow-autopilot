@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Toolbar, ErrorBanner, LoadingSpinner, SectionFlat, StatusBadge } from "../shared";
+import { Toolbar, ErrorBanner, LoadingSpinner, SectionFlat, StatusBadge, formatTokens, timeAgoEn as timeAgo } from "../shared";
 
 interface ScrapedData {
   plan: string;
@@ -56,23 +56,6 @@ interface StatsData {
   timestamp: string;
 }
 
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
-}
-
-function timeAgo(iso: string | null): string {
-  if (!iso) return "Never";
-  const ms = Date.now() - new Date(iso).getTime();
-  const m = Math.floor(ms / 60000);
-  if (m < 1) return "Just now";
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
-}
-
 function pctColor(pct: number): string {
   if (pct >= 80) return "var(--tn-red)";
   if (pct >= 50) return "var(--tn-orange)";
@@ -119,18 +102,34 @@ export default function CCUsageTab() {
   const [error, setError] = useState("");
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
-  const fetchStats = useCallback(async () => {
+  const fetchStats = useCallback(async (triggerScrape = false) => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     setError("");
     try {
-      const res = await fetch("/api/claude-code/stats-v2");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      // Trigger scraping if requested
+      if (triggerScrape) {
+        try {
+          const scrapeRes = await fetch("/api/claude-code/scrape-now", { method: "POST", signal: AbortSignal.timeout(30000) });
+          if (!scrapeRes.ok) {
+            setError(`Scrape failed: HTTP ${scrapeRes.status}`);
+          }
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        } catch (scrapeErr: any) {
+          const msg = scrapeErr.name === "TimeoutError" ? "Scrape timeout (30s)" : `Scrape error: ${scrapeErr.message}`;
+          setError(msg);
+        }
+      }
+
+      const res = await fetch("/api/claude-code/stats-v2", { signal: AbortSignal.timeout(15000) });
+      if (!res.ok) throw new Error(`Stats API HTTP ${res.status}`);
       const data = await res.json();
-      if (data.error) setError(data.error);
-      else setStats(data);
+      if (data.error) throw new Error(data.error);
+      setStats(data);
       setLastRefresh(new Date());
     } catch (err: any) {
-      setError(err.message);
+      const msg = err.name === "TimeoutError" ? "CUI Server nicht erreichbar (stats-v2 timeout 15s)" : err.message;
+      setError(msg);
     } finally {
       setLoading(false);
     }
@@ -144,7 +143,7 @@ export default function CCUsageTab() {
 
   return (
     <div style={{ padding: 12 }}>
-      <Toolbar lastRefresh={lastRefresh} loading={loading} onRefresh={fetchStats} autoRefresh={60} />
+      <Toolbar lastRefresh={lastRefresh} loading={loading} onRefresh={() => fetchStats(true)} autoRefresh={60} />
       {error && <ErrorBanner message={error} />}
       {loading && <LoadingSpinner text="Lade Claude Code Stats..." />}
 
@@ -229,16 +228,20 @@ export default function CCUsageTab() {
           {stats.combinedJsonl && (
             <SectionFlat title="JSONL Stats (alle Accounts, shared)">
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 6, marginBottom: 8 }}>
-                <MetricBox label="Burn Rate" value={`${(stats.combinedJsonl.burnRatePerHour / 1000).toFixed(1)}K/h`} color="var(--tn-blue)" />
-                <MetricBox label="Sessions" value={String(stats.combinedJsonl.totalSessions)} />
-                <MetricBox label="Total Tokens" value={formatTokens(stats.combinedJsonl.totalTokens)} />
-                <MetricBox label="Cache Reads" value={formatTokens(stats.combinedJsonl.totalCacheRead)} color="var(--tn-blue)" />
-                <MetricBox label="Cache Creation" value={formatTokens(stats.combinedJsonl.totalCacheCreation)} color="var(--tn-purple)" />
-                <MetricBox label="Storage" value={`${(stats.combinedJsonl.storageBytes / (1024 * 1024)).toFixed(0)} MB`} />
+                <MetricBox
+                  label="Burn Rate"
+                  value={stats.combinedJsonl.burnRatePerHour ? `${(stats.combinedJsonl.burnRatePerHour / 1000).toFixed(1)}K/h` : "N/A"}
+                  color="var(--tn-blue)"
+                />
+                <MetricBox label="Sessions" value={String(stats.combinedJsonl.totalSessions ?? 0)} />
+                <MetricBox label="Total Tokens" value={formatTokens(stats.combinedJsonl.totalTokens ?? 0)} />
+                <MetricBox label="Cache Reads" value={formatTokens(stats.combinedJsonl.totalCacheRead ?? 0)} color="var(--tn-blue)" />
+                <MetricBox label="Cache Creation" value={formatTokens(stats.combinedJsonl.totalCacheCreation ?? 0)} color="var(--tn-purple)" />
+                <MetricBox label="Storage" value={stats.combinedJsonl.storageBytes ? `${(stats.combinedJsonl.storageBytes / (1024 * 1024)).toFixed(0)} MB` : "N/A"} />
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "var(--tn-text-muted)", paddingTop: 6, borderTop: "1px solid var(--tn-border)" }}>
-                <span>{stats.combinedJsonl.workspaceCount} workspaces</span>
-                <span>In: {formatTokens(stats.combinedJsonl.totalInputTokens)} | Out: {formatTokens(stats.combinedJsonl.totalOutputTokens)}</span>
+                <span>{stats.combinedJsonl.workspaceCount ?? 0} workspaces</span>
+                <span>In: {formatTokens(stats.combinedJsonl.totalInputTokens ?? 0)} | Out: {formatTokens(stats.combinedJsonl.totalOutputTokens ?? 0)}</span>
                 <span>Last: {timeAgo(stats.combinedJsonl.lastActivity)}</span>
               </div>
             </SectionFlat>

@@ -1,0 +1,59 @@
+[
+  {
+    "id": "tpl_fix_commit",
+    "label": "Fix & Commit",
+    "message": "Mache die architektonisch sauberste Lösung. Defensive coding, fail fast. Committe die Änderungen.",
+    "category": "reply",
+    "order": 1,
+    "createdAt": "2026-03-01T00:00:00Z"
+  },
+  {
+    "id": "tpl_fix_test_commit",
+    "label": "Fix → Test → Commit",
+    "message": "Spawne einen Subtask um die Probleme zu beheben: Defensive coding, fail fast. Committe. Dann teste weiter bis alles voll funktionsfähig ist.",
+    "category": "reply",
+    "order": 2,
+    "createdAt": "2026-03-01T00:00:00Z"
+  },
+  {
+    "id": "tpl_weiter_testen",
+    "label": "Weiter testen",
+    "message": "Schau dir den aktuellen Stand der Tests an. Löse die Probleme auf die arhictektonisch sauberste Arte. Dann starte beim fehlgeschlagenen Test neu und mach weiter. Teste und Löse weiter bis alles voll funktionsfähig ist. Defensive Coding, fail fast, no quick fixes- regular git commits.",
+    "category": "reply",
+    "order": 3,
+    "createdAt": "2026-03-01T00:00:00Z"
+  },
+  {
+    "id": "tpl_approve_plan",
+    "label": "Approve Plan",
+    "message": "Ja, mach weiter mit diesem Plan.",
+    "category": "reply",
+    "order": 4,
+    "createdAt": "2026-03-01T00:00:00Z"
+  },
+  {
+    "id": "tpl_weiter",
+    "label": "Weiter",
+    "message": "Weiter.",
+    "category": "reply",
+    "order": 5,
+    "createdAt": "2026-03-01T00:00:00Z"
+  },
+  {
+    "id": "tpl_unified_test",
+    "label": "Unified Test Run",
+    "message": "Führe den Unified Tester aus und behebe alle gefundenen Probleme. Defensive coding, fail fast. Committe nach jedem Fix.",
+    "category": "start",
+    "subject": "Test Run",
+    "order": 1,
+    "createdAt": "2026-03-01T00:00:00Z"
+  },
+  {
+    "id": "tpl_1773047422040_s1cc2q",
+    "label": "Weitermachen ?",
+    "message": "wie würdest du aus deiner sicht weitermachen ?",
+    "category": "reply",
+    "order": 6,
+    "createdAt": "2026-03-09T09:10:22.040Z"
+  }
+]

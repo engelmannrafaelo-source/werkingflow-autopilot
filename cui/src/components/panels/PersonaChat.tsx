@@ -30,16 +30,17 @@ export default function PersonaChat({ personaId, personaName }: PersonaChatProps
   }, [messages]);
 
   async function loadHistory() {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
-      const response = await fetch(`${API}/team/chat/${personaId}/history`);
+      const response = await fetch(`${API}/team/chat/${personaId}/history`, { signal: AbortSignal.timeout(20000) });
       if (!response.ok) {
-        console.warn('[PersonaChat] History not available');
+        console.warn(`[PersonaChat] History not available: HTTP ${response.status}`);
         return;
       }
       const data = await response.json();
       setMessages(data.messages || []);
     } catch (err: any) {
-      console.error('[PersonaChat] Load history error:', err);
+      console.warn('[PersonaChat] load history error:', err);
     }
   }
 
@@ -52,16 +53,18 @@ export default function PersonaChat({ personaId, personaName }: PersonaChatProps
     setLoading(true);
     setError(null);
 
+    if ((window as any).__cuiServerAlive === false) return;
     try {
       const response = await fetch(`${API}/team/chat/${personaId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: input }),
+        signal: AbortSignal.timeout(15000),
       });
 
       if (!response.ok) {
         const errData = await response.json();
-        throw new Error(errData.error || 'Failed to send message');
+        throw new Error(errData.error || `[PersonaChat] send failed: HTTP ${response.status}`);
       }
 
       const data = await response.json();
@@ -72,7 +75,7 @@ export default function PersonaChat({ personaId, personaName }: PersonaChatProps
       };
       setMessages(prev => [...prev, assistantMessage]);
     } catch (err: any) {
-      console.error('[PersonaChat] Send error:', err);
+      console.warn('[PersonaChat] send error:', err);
       setError(err.message);
       // Remove the user message if sending failed
       setMessages(prev => prev.slice(0, -1));
