@@ -15,7 +15,8 @@ export type AttentionReason =
   | 'done'
   | 'rate_limit'
   | 'send_failed'
-  | 'context_overflow';
+  | 'context_overflow'
+  | 'tool_concurrency';
 
 /** High-level attention state for a conversation. */
 export type ConvAttentionState = 'working' | 'needs_attention' | 'idle';

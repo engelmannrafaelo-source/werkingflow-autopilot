@@ -33,9 +33,10 @@ interface AutoInjectDeps {
 }
 
 // --- Constants ---
-const AUTOINJECT_TICK_MS = 30_000;
-const MIN_INJECT_INTERVAL_MS = 30_000;
-const DEFAULT_MESSAGE = "Weiter. Falls idle: prüfe aktuellen Stand und arbeite weiter.";
+const AUTOINJECT_TICK_MS = 60_000;          // Check every 60s (was 30s — less CPU waste)
+const MIN_INJECT_INTERVAL_MS = 600_000;     // Minimum 10 minutes between injects (was 30s!)
+const DEFAULT_INJECT_INTERVAL_MS = 900_000; // Default 15 minutes
+const DEFAULT_MESSAGE = "Weiter mit der Test-Pyramide (bottom-up: Layer 0 vor 1 vor 2 vor 3 vor 4). Fuehre IMMER eine konkrete Aktion aus — NIEMALS nur 'Idle' oder 'Warte' antworten. Ablauf: (1) Pruefe ob ein Test gerade laeuft → monitore bis Ergebnis da ist. (2) Test FAIL? → Lies den Report, finde den echten Bug im APP-Code, fixe ihn, git commit + push, teste erneut. (3) Layer komplett PASS? → Starte naechsten Layer. (4) Alles gruen? → Melde Erfolg mit Score-Zusammenfassung. VERBOTEN: Szenario-Dateien oder Tester-Code aendern. NUR App-Code fixen.";
 const MAX_LOOPS_PER_ACCOUNT = 5;
 
 // Module-level state
@@ -92,6 +93,17 @@ function updateAutoInjectSession(oldSessionId: string, newSessionId: string): vo
   }
   saveAutoInject(state);
   console.log(`[AutoInject] Config migrated: ${oldSessionId.slice(0, 8)} → ${newSessionId.slice(0, 8)}`);
+}
+
+// --- Public: Disable autoinject for a session (called when conversation is finished) ---
+function disableAutoInject(sessionId: string): boolean {
+  const state = loadAutoInject();
+  const cfg = state.configs[sessionId];
+  if (!cfg || !cfg.enabled) return false;
+  cfg.enabled = false;
+  saveAutoInject(state);
+  console.log(`[AutoInject] Config disabled (finish): ${cfg.accountId}/${sessionId.slice(0, 8)}`);
+  return true;
 }
 
 async function autoInjectTick() {
@@ -169,6 +181,11 @@ async function _autoInjectTickInner() {
     try {
       let result: { ok: boolean; sessionId: string; error?: string };
       if (claudeCli.isActive(sessionId)) {
+        // Skip injection if tools are still executing (prevents concurrency error)
+        if (claudeCli.hasActiveTools(sessionId)) {
+          console.log(`[AutoInject] ${cfg.accountId}/${sessionId.slice(0, 8)}: SKIP — tools still executing`);
+          continue;
+        }
         const piped = claudeCli.sendMessage(sessionId, cfg.message);
         result = piped ? { ok: true, sessionId } : { ok: false, sessionId: '', error: 'stdin pipe failed' };
         if (!piped) {
@@ -182,6 +199,10 @@ async function _autoInjectTickInner() {
       }
 
       if (result.ok) {
+        const effectiveSessionId = result.sessionId || sessionId;
+        // Mark session as working IMMEDIATELY to prevent re-injection before agent responds
+        deps.setSessionState(effectiveSessionId, cfg.accountId, "working", undefined, effectiveSessionId);
+
         // Session migration: if startConversation returned a different sessionId (resume failed)
         if (result.sessionId && result.sessionId !== sessionId) {
           console.log(`[AutoInject] Session changed: ${sessionId.slice(0, 8)} → ${result.sessionId.slice(0, 8)}`);
@@ -193,9 +214,9 @@ async function _autoInjectTickInner() {
           state.lastInject[sessionId] = new Date().toISOString();
         }
         saveAutoInject(state);
-        logUserInput({ type: "auto-inject", accountId: cfg.accountId, workDir: cfg.workDir, message: cfg.message, sessionId: result.sessionId || sessionId, result: "ok" });
-        logBackgroundEvent('autoinject', 'inject', `Injected into ${cfg.accountId}/${(result.sessionId || sessionId).slice(0, 8)}`, { accountId: cfg.accountId, sessionId: result.sessionId || sessionId });
-        console.log(`[AutoInject] OK: ${cfg.accountId}/${(result.sessionId || sessionId).slice(0, 8)}`);
+        logUserInput({ type: "auto-inject", accountId: cfg.accountId, workDir: cfg.workDir, message: cfg.message, sessionId: effectiveSessionId, result: "ok" });
+        logBackgroundEvent('autoinject', 'inject', `Injected into ${cfg.accountId}/${effectiveSessionId.slice(0, 8)}`, { accountId: cfg.accountId, sessionId: effectiveSessionId });
+        console.log(`[AutoInject] OK: ${cfg.accountId}/${effectiveSessionId.slice(0, 8)} (set working)`);
       } else {
         logBackgroundEvent('autoinject', 'error', `Failed: ${cfg.accountId}/${sessionId.slice(0, 8)}: ${result.error}`, { accountId: cfg.accountId });
         console.log(`[AutoInject] FAIL: ${cfg.accountId}/${sessionId.slice(0, 8)}: ${result.error}`);
@@ -266,7 +287,7 @@ export default function createAutoInjectRouter(injectedDeps: AutoInjectDeps): Ro
       accountId,
       workDir: workDir || existing?.workDir || "",
       message: message || existing?.message || DEFAULT_MESSAGE,
-      intervalMs: Math.max(typeof intervalMs === 'number' ? intervalMs : (existing?.intervalMs || 300000), MIN_INJECT_INTERVAL_MS),
+      intervalMs: Math.max(typeof intervalMs === 'number' ? intervalMs : (existing?.intervalMs || DEFAULT_INJECT_INTERVAL_MS), MIN_INJECT_INTERVAL_MS),
       enabled: typeof enabled === "boolean" ? enabled : (existing?.enabled ?? true),
       idleSinceMs: typeof idleSinceMs === "number" ? idleSinceMs : (existing?.idleSinceMs || undefined),
     };
@@ -290,5 +311,5 @@ export default function createAutoInjectRouter(injectedDeps: AutoInjectDeps): Ro
   return router;
 }
 
-export { startAutoInjectTimer, stopAutoInjectTimer, logUserInput, updateAutoInjectSession };
+export { startAutoInjectTimer, stopAutoInjectTimer, logUserInput, updateAutoInjectSession, disableAutoInject };
 export type { AutoInjectConfig, AutoInjectState };

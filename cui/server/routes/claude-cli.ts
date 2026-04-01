@@ -18,6 +18,11 @@ import type { ConvAttentionState, AttentionReason, SessionState, ToolExecutionIn
 import { IS_LOCAL_MODE } from './state.js';
 
 // --- Account Configuration ---
+// Account mapping (ID = label = consistent):
+//   engelmann → .cui-account1 → rafael@engelmann.at
+//   office    → .cui-account2 → office@data-energyneering.at
+//   gmail     → .cui-account3 → engelmann.rafaelo@gmail.com
+//   werking   → .cui-account4 → office@werking.tools
 
 export interface AccountConfig {
   id: string;
@@ -26,12 +31,15 @@ export interface AccountConfig {
   color: string;
 }
 
+import { PATHS } from '../config/paths.js';
+
 export const ACCOUNT_CONFIG: AccountConfig[] = IS_LOCAL_MODE
   ? [{ id: 'local', home: process.env.HOME || '/Users/rafael', label: 'Local', color: '#7aa2f7' }]
   : [
-      { id: 'rafael',    home: '/home/claude-user/.cui-account1', label: 'Engelmann', color: '#7aa2f7' },
-      { id: 'engelmann', home: '/home/claude-user/.cui-account2', label: 'Gmail',     color: '#bb9af7' },
-      { id: 'office',    home: '/home/claude-user/.cui-account3', label: 'Office',    color: '#9ece6a' },
+      { id: 'engelmann',    home: `${PATHS.claudeUserHome}/.cui-account1`, label: 'Engelmann', color: '#bb9af7' },
+      { id: 'office', home: `${PATHS.claudeUserHome}/.cui-account2`, label: 'Office',    color: '#9ece6a' },
+      { id: 'gmail',    home: `${PATHS.claudeUserHome}/.cui-account3`, label: 'Gmail',     color: '#7aa2f7' },
+      { id: 'werking',      home: `${PATHS.claudeUserHome}/.cui-account4`, label: 'Werking',   color: '#f7768e' },
     ];
 
 // --- FIFO Constants ---
@@ -288,11 +296,21 @@ function handleStdoutLine(line: string, entry: ClaudeProcess): { sessionId?: str
       _broadcast(cliResult);
     }
 
-    // Result with error subtype — context overflow
+    // Result with error subtype — context overflow or concurrency
     if (obj.type === 'result' && obj.subtype === 'error') {
       const errStr = JSON.stringify(obj.error || '').slice(0, 300);
+      const errLower = errStr.toLowerCase();
       console.log(`[ClaudeCLI] ${entry.accountId}: result error: ${errStr}`);
-      if (errStr.toLowerCase().includes('prompt is too long') || errStr.toLowerCase().includes('too many tokens')) {
+
+      // Detect tool use concurrency error (API 400)
+      if (errLower.includes('concurrency') || (errLower.includes('tool_use') && errLower.includes('tool_result'))) {
+        console.log(`[ClaudeCLI] ${entry.accountId}: TOOL CONCURRENCY ERROR — session needs wait, not restart`);
+        _broadcast({ type: 'cui-state', cuiId: entry.accountId, sessionId: entry.sessionId, state: 'error', message: 'Tool-Concurrency: Session wartet auf Tool-Ergebnisse. Bitte warten.' });
+        _setSessionState(entry.sessionId, entry.accountId, 'needs_attention', 'tool_concurrency', entry.sessionId);
+        return result;
+      }
+
+      if (errLower.includes('prompt is too long') || errLower.includes('too many tokens')) {
         console.log(`[ClaudeCLI] ${entry.accountId}: CONTEXT OVERFLOW — killing process`);
         _broadcast({ type: 'cui-state', cuiId: entry.accountId, sessionId: entry.sessionId, state: 'error', message: 'Kontext zu lang — nächste Nachricht startet kompaktierte Session.' });
         _setSessionState(entry.sessionId, entry.accountId, 'needs_attention', 'context_overflow', entry.sessionId);
@@ -415,7 +433,7 @@ export async function startConversation(
   // Clean environment
   const env: Record<string, string> = {
     HOME: config.home,
-    PATH: '/usr/local/bin:/usr/bin:/bin:/home/claude-user/.local/bin',
+    PATH: `/usr/local/bin:/usr/bin:/bin:${PATHS.claudeUserHome}/.local/bin`,
     TERM: 'xterm-256color',
     LANG: process.env.LANG || 'en_US.UTF-8',
     XDG_CONFIG_HOME: `${config.home}/.config`,
@@ -504,6 +522,13 @@ function startDirect(
       const text = chunk.toString().trim();
       if (!text) return;
       console.log(`[ClaudeCLI:${accountId}:stderr] ${text.slice(0, 300)}`);
+      // Detect tool concurrency error (API 400) — must check before rate limit
+      if (text.includes('concurrency') || (text.includes('400') && text.includes('tool'))) {
+        console.log(`[ClaudeCLI] ${accountId}: Tool concurrency error detected in stderr`);
+        _broadcast({ type: 'cui-concurrency-error', cuiId: accountId, sessionId: entry.sessionId, message: 'Nachricht konnte nicht gesendet werden — Tools laufen noch.' });
+        _setSessionState(entry.sessionId, accountId, 'needs_attention', 'tool_concurrency', entry.sessionId);
+        return;
+      }
       if (text.includes('rate limit') || text.includes('rate_limit') || text.includes('429') || text.includes('overloaded')) {
         _broadcast({ type: 'cui-state', cuiId: accountId, sessionId: entry.sessionId, state: 'error', message: 'Rate Limit: Account hat das Nutzungslimit erreicht.' });
         _broadcast({ type: 'cui-rate-limit-hit', cuiId: accountId, sessionId: entry.sessionId });
@@ -736,10 +761,10 @@ async function reconnectExistingSessions(): Promise<void> {
       }
 
       // Read metadata
-      let accountId = 'rafael';
+      let accountId = 'engelmann';
       try {
         const meta = JSON.parse(await fsp.readFile(metaPath, 'utf8'));
-        accountId = meta.accountId || 'rafael';
+        accountId = meta.accountId || 'engelmann';
       } catch { /* use default */ }
 
       // Open FIFO write-end
@@ -868,12 +893,123 @@ async function cleanupSessionFiles(sessionId: string): Promise<void> {
   }
 }
 
+// --- Helper: force-kill session by PID file (fallback when not in activeProcesses) ---
+
+async function forceKillByPidFile(sessionId: string): Promise<boolean> {
+  const pidPath = `${FIFO_DIR}/${sessionId}.pid`;
+  try {
+    const pidContent = await fsp.readFile(pidPath, 'utf8');
+    const pids = pidContent.trim().split('\n').map(Number).filter(p => p > 0);
+    if (pids.length === 0) return false;
+
+    console.log(`[ClaudeCLI] Force-kill via PID file: session ${sessionId.slice(0, 8)}, PIDs: ${pids.join(', ')}`);
+
+    // Kill entire process tree for each PID
+    for (const pid of pids) {
+      try {
+        const tree = execSync(`pstree -p ${pid} 2>/dev/null | grep -oP '\\(\\K[0-9]+(?=\\))' || true`, { encoding: 'utf8', timeout: 3000 }).trim();
+        const allPids = tree.split('\n').filter(Boolean).map(Number).filter(p => p > 0);
+        if (allPids.length > 0) {
+          execSync(`kill -9 ${allPids.join(' ')} 2>/dev/null || true`, { timeout: 3000 });
+        }
+      } catch { /* process may already be dead */ }
+      try { process.kill(pid, 'SIGKILL'); } catch { /* */ }
+    }
+
+    await cleanupSessionFiles(sessionId);
+    console.log(`[ClaudeCLI] Force-killed session ${sessionId.slice(0, 8)} via PID file fallback`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// --- Hard-kill: nuclear option that finds ALL processes by session ID ---
+
+export async function hardKillSession(sessionId: string): Promise<{ killed: number; cleaned: boolean }> {
+  // Validate UUID format — this value is used in shell commands
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) {
+    throw new Error(`Invalid sessionId format: ${sessionId.slice(0, 20)}`);
+  }
+
+  let killed = 0;
+
+  // 1. Remove from activeProcesses map (in-memory tracking)
+  const entry = activeProcesses.get(sessionId);
+  if (entry) {
+    activeProcesses.delete(sessionId);
+    try {
+      const pid = entry.mode === 'direct' ? entry.proc.pid : entry.claudePid;
+      if (pid) { process.kill(pid, 'SIGKILL'); killed++; }
+    } catch { /* already dead */ }
+    if (entry.mode === 'persistent' && entry.wrapperPid > 0) {
+      try { process.kill(entry.wrapperPid, 'SIGKILL'); killed++; } catch { /* */ }
+    }
+    if (entry.mode === 'persistent') {
+      try { entry.tailProc.kill('SIGKILL'); } catch { /* */ }
+    }
+  }
+
+  // 2. Kill via PID file (catches processes not in memory map)
+  try {
+    const pidContent = await fsp.readFile(`${FIFO_DIR}/${sessionId}.pid`, 'utf8');
+    const pids = pidContent.trim().split('\n').map(Number).filter(p => p > 0);
+    for (const pid of pids) {
+      try {
+        const tree = execSync(`pstree -p ${pid} 2>/dev/null | grep -oP '\\(\\K[0-9]+(?=\\))' || true`, { encoding: 'utf8', timeout: 3000 }).trim();
+        const allPids = tree.split('\n').filter(Boolean).map(Number).filter(p => p > 0);
+        if (allPids.length > 0) {
+          execSync(`kill -9 ${allPids.join(' ')} 2>/dev/null || true`, { timeout: 3000 });
+          killed += allPids.length;
+        }
+      } catch { /* pstree/kill failed — process may be dead */ }
+    }
+  } catch { /* no PID file */ }
+
+  // 3. Nuclear grep: find ALL processes by session UUID (zombie wrappers, orphan tails)
+  // Safe because sessionId is validated as UUID above (no shell injection possible)
+  try {
+    const grepResult = execSync(
+      `ps aux | grep '${sessionId}' | grep -v grep | awk '{print $2}' || true`,
+      { encoding: 'utf8', timeout: 5000 }
+    ).trim();
+    const grepPids = grepResult.split('\n').filter(Boolean).map(Number).filter(p => p > 0);
+    if (grepPids.length > 0) {
+      execSync(`kill -9 ${grepPids.join(' ')} 2>/dev/null || true`, { timeout: 3000 });
+      killed += grepPids.length;
+      console.log(`[ClaudeCLI] Hard-kill grep found ${grepPids.length} additional processes for ${sessionId.slice(0, 8)}`);
+    }
+  } catch { /* grep/kill failed */ }
+
+  // 4. Cleanup session files (.fifo, .pid, .stdout, .stderr, .meta)
+  await cleanupSessionFiles(sessionId);
+
+  console.log(`[ClaudeCLI] Hard-kill complete: session ${sessionId.slice(0, 8)}, ${killed} processes killed`);
+  return { killed, cleaned: true };
+}
+
 // --- Public API ---
 
 export function sendMessage(sessionId: string, message: string): boolean {
   const entry = activeProcesses.get(sessionId);
   if (!entry) {
     console.log(`[ClaudeCLI] sendMessage(${sessionId.slice(0, 8)}): no active process`);
+    return false;
+  }
+
+  // Block message injection while tools are executing (prevents API 400 concurrency error)
+  if (entry._currentToolInfo) {
+    const elapsed = Date.now() - entry._currentToolInfo.startedAt;
+    console.log(`[ClaudeCLI] sendMessage(${sessionId.slice(0, 8)}): BLOCKED — tool "${entry._currentToolInfo.toolName}" running for ${Math.round(elapsed / 1000)}s`);
+    _broadcast({
+      type: 'send-blocked',
+      sessionId,
+      accountId: entry.accountId,
+      reason: 'tool_executing',
+      toolName: entry._currentToolInfo.toolName,
+      toolDetail: entry._currentToolInfo.toolDetail,
+      elapsedMs: elapsed,
+    });
     return false;
   }
 
@@ -890,9 +1026,22 @@ export function sendMessage(sessionId: string, message: string): boolean {
   return ok;
 }
 
+export function hasActiveTools(sessionId: string): boolean {
+  const entry = activeProcesses.get(sessionId);
+  return !!entry?._currentToolInfo;
+}
+
+export function getToolInfo(sessionId: string): ToolExecutionInfo | undefined {
+  return activeProcesses.get(sessionId)?._currentToolInfo;
+}
+
 export async function stopConversation(sessionId: string): Promise<boolean> {
   const entry = activeProcesses.get(sessionId);
-  if (!entry) return false;
+  if (!entry) {
+    // Fallback: session not in memory map (e.g. after server restart).
+    // Try to kill via PID file directly — this is the hard-kill path.
+    return forceKillByPidFile(sessionId);
+  }
 
   console.log(`[ClaudeCLI] Stopping session ${sessionId.slice(0, 8)} (account=${entry.accountId}, mode=${entry.mode})`);
   activeProcesses.delete(sessionId);

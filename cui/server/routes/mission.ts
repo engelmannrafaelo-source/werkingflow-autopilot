@@ -1,15 +1,16 @@
 import { Router } from 'express';
-import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, unlinkSync, rmSync, realpathSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync, statSync, unlinkSync, rmSync, realpathSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 
+import { PATHS, BRIDGE_URL } from '../config/paths.js';
 import type { AttentionReason, ConvAttentionState, SessionState, PanelVisibility } from './shared/types.js';
 import { logUserInput as sharedLogUserInput, atomicWriteFileSync } from './shared/utils.js';
 import { findJsonlPath, findJsonlPathAllAccounts, readJsonlMetadata, clearMetaCache, readConversationMessages, getOriginalCwd, extractConversationContext, unstickConversation, deepRepairJsonl, compactJsonlForResume } from './shared/jsonl.js';
 import * as convMeta from './shared/conv-metadata.js';
-import { updateAutoInjectSession } from './autoinject.js';
+import { updateAutoInjectSession, disableAutoInject } from './autoinject.js';
 
 /** Validates that a workDir is under an allowed root path */
 function isValidWorkDir(d: string): boolean {
@@ -131,11 +132,11 @@ function buildSessionProjectMap(): void {
     }
   } catch (e: any) { console.warn("[Mission] projectConfigs load error:", e?.message); }
   const extraPaths: Record<string, { name: string; path: string }> = {
-    '-root-projekte-orchestrator': { name: 'orchestrator', path: '/root/projekte/orchestrator' },
-    '-root-projekte-werkingflow': { name: 'werkingflow', path: '/root/projekte/werkingflow' },
+    '-root-projekte-orchestrator': { name: 'orchestrator', path: PATHS.orchestratorDir },
+    '-root-projekte-werkingflow': { name: 'werkingflow', path: PATHS.werkingflowDir },
     '-root': { name: 'root', path: '/root' },
     '-tmp': { name: 'tmp', path: '/tmp' },
-    '-home-claude-user': { name: 'claude-user', path: '/home/claude-user' },
+    '-home-claude-user': { name: 'claude-user', path: PATHS.claudeUserHome },
   };
   const acctDirs = claudeCli.ACCOUNT_CONFIG.map(a => join(a.home, '.claude', 'projects'));
   for (const base of acctDirs) {
@@ -226,6 +227,48 @@ function autoTitleUntitled(results: Array<{ sessionId: string; summary: string; 
 
 // --- User Input Log ---
 // Persistent log of all user inputs (subject + message) from Queue/Commander
+
+// ---------------------------------------------------------------------------
+// logRawUserInput — save raw user text to per-workspace user-history.jsonl
+// ---------------------------------------------------------------------------
+// This captures ONLY what the user actually typed in the chat input.
+// No system context, no auto-inject, no enrichment.
+// Stored in: {workspaceDir}/user-history.jsonl (one per workspace)
+// Format: {"ts": "ISO", "sessionId": "...", "text": "..."}
+
+function getWorkspaceDir(workDir: string): string | null {
+  // Map workDir to workspace data directory
+  // e.g. /root/orchestrator/workspaces/diverse -> {DATA_DIR}/workspaces/diverse/
+  // For workspace-based workDirs, extract the workspace name
+  const wsMatch = workDir.match(/workspaces\/([^/]+)/);
+  if (wsMatch) return wsMatch[1];
+  // For project-based workDirs, use the project name
+  const projMatch = workDir.match(/\/([^/]+)$/);
+  if (projMatch) return projMatch[1];
+  return null;
+}
+
+function logRawUserInput(workDir: string, sessionId: string, text: string): void {
+  try {
+    const wsName = getWorkspaceDir(workDir);
+    if (!wsName) return;
+
+    // Store in DATA_DIR/workspaces/{workspace}/user-history.jsonl
+    const wsDir = join(DATA_DIR, 'workspaces', wsName);
+    mkdirSync(wsDir, { recursive: true });
+
+    const historyFile = join(wsDir, 'user-history.jsonl');
+    const entry = JSON.stringify({
+      ts: new Date().toISOString(),
+      sessionId: sessionId.slice(0, 8),
+      text: text.trim(),
+    });
+    appendFileSync(historyFile, entry + '\n');
+  } catch (err) {
+    console.warn('[Mission] Failed to log raw user input:', err instanceof Error ? err.message : err);
+  }
+}
+
 let INPUT_LOG_FILE: string;
 function logUserInput(entry: { type: string; accountId: string; workDir?: string; subject?: string; message: string; sessionId?: string; result: 'ok' | 'error'; error?: string }) {
   sharedLogUserInput(INPUT_LOG_FILE, entry);
@@ -252,22 +295,23 @@ function deduplicateConversations(results: any[]): any[] {
     // Multiple accounts have this conversation — pick the best one
     const assigned = assignments[sessionId];
 
-    // Priority: 1) streaming, 2) ongoing, 3) assigned account, 4) preferred order (rafael > engelmann > office)
+    // Priority: 1) assigned account, 2) streaming, 3) ongoing, 4) preferred order (rafael > engelmann > office)
     const streaming = entries.find(e => e.streamingId);
     const ongoing = entries.find(e => e.status === 'ongoing');
     let best: any;
 
-    if (streaming) {
+    if (assigned) {
+      // User-assigned account takes priority — never override
+      best = entries.find(e => e.accountId === assigned) || entries[0];
+    } else if (streaming) {
       best = streaming;
       convMeta.saveAssignment(sessionId, streaming.accountId);
     } else if (ongoing) {
       best = ongoing;
       convMeta.saveAssignment(sessionId, ongoing.accountId);
-    } else if (assigned) {
-      best = entries.find(e => e.accountId === assigned) || entries[0];
     } else {
       // No assignment yet — prefer rafael > engelmann > office
-      const preferOrder = ['rafael', 'engelmann', 'office'];
+      const preferOrder = ['engelmann', 'office', 'gmail'];
       best = entries[0];
       for (const pref of preferOrder) {
         const match = entries.find(e => e.accountId === pref);
@@ -394,7 +438,8 @@ async function fetchConvList() {
 
   const states = getSessionStates();
   for (const conv of deduped) {
-    const stateInfo = states[conv.accountId];
+    // Look up by sessionId (primary key for state tracking)
+    const stateInfo = states[conv.sessionId] || states[conv.accountId];
     if (stateInfo) {
       (conv as any).attentionState = stateInfo.state;
       (conv as any).attentionReason = stateInfo.reason;
@@ -581,9 +626,32 @@ router.get('/conversation/:accountId/:sessionId', async (req, res) => {
         timestamp: m.timestamp || '',
       };
     }
+    // Strip system context from user messages (resume enrichment + session context noise)
+    let displayContent = m.message?.content || m.content || '';
+    if ((m.message?.role || m.type) === 'user' && typeof displayContent === 'string') {
+      displayContent = displayContent
+        .replace(/<session-context>[\s\S]*?<\/session-context>\s*/g, '')
+        .replace(/\[KONTEXT:[^\]]*\]\s*/g, '')
+        .replace(/\[PEERS:[^\]]*\]\s*/g, '')
+        .replace(/\[TEAM\]\n?[\s\S]*?(?=\n[^#\[_*\-\s]|$)/g, '')
+        .trim();
+    } else if ((m.message?.role || m.type) === 'user' && Array.isArray(displayContent)) {
+      displayContent = displayContent.map((block: any) => {
+        if (block.type === 'text' && typeof block.text === 'string') {
+          const cleaned = block.text
+            .replace(/<session-context>[\s\S]*?<\/session-context>\s*/g, '')
+            .replace(/\[KONTEXT:[^\]]*\]\s*/g, '')
+            .replace(/\[PEERS:[^\]]*\]\s*/g, '')
+            .replace(/\[TEAM\]\n?[\s\S]*?(?=\n[^#\[_*\-\s]|$)/g, '')
+            .trim();
+          return cleaned ? { ...block, text: cleaned } : null;
+        }
+        return block;
+      }).filter(Boolean);
+    }
     return {
       role: m.message?.role || m.type || 'user',
-      content: m.message?.content || m.content || '',
+      content: displayContent,
       timestamp: m.timestamp || '',
     };
   });
@@ -597,7 +665,9 @@ router.get('/conversation/:accountId/:sessionId', async (req, res) => {
     hasPendingToolUse = lastContent.some((b: any) => b.type === 'tool_use');
   }
   const isRunning = claudeCli.isActive(req.params.sessionId);
-  const isAgentDone = lastRole === 'assistant' && !hasPendingToolUse && !isRunning;
+  // Agent is "done" (waiting for user input) when last message is assistant text without pending tool calls.
+  // isRunning is NOT a factor — the CLI process stays alive while waiting for input.
+  const isAgentDone = lastRole === 'assistant' && !hasPendingToolUse;
 
   // Extract session CWD and plan text for ExitPlanMode rendering
   const sessionCwd = getOriginalCwd(req.params.sessionId) || '';
@@ -650,6 +720,21 @@ router.post('/send', async (req, res) => {
   const resolvedWorkDir = (isValidWorkDir(workDir) ? workDir : null) || convMeta.getWorkDir(sessionId) || defaultWorkDir;
   if (workDir) convMeta.saveWorkDir(sessionId, workDir);
 
+  // Block if session has active tool executions (prevents API 400 concurrency error)
+  if (claudeCli.isActive(sessionId) && claudeCli.hasActiveTools(sessionId)) {
+    const toolInfo = claudeCli.getToolInfo(sessionId);
+    const elapsed = toolInfo ? Math.round((Date.now() - toolInfo.startedAt) / 1000) : 0;
+    console.log(`[Send] BLOCKED: session ${sessionId.slice(0, 8)} has active tool "${toolInfo?.toolName}" (${elapsed}s)`);
+    res.status(409).json({
+      error: 'Session hat aktive Tool-Ausfuehrungen. Bitte warten.',
+      toolName: toolInfo?.toolName,
+      toolDetail: toolInfo?.toolDetail,
+      elapsedSeconds: elapsed,
+      retryAfterMs: 10000,
+    });
+    return;
+  }
+
   // Interactive mode: if process already running for this session, pipe via stdin
   if (claudeCli.isActive(sessionId)) {
     const activeAccount = claudeCli.getActiveAccountId(sessionId);
@@ -663,7 +748,9 @@ router.post('/send', async (req, res) => {
       if (piped) {
         console.log(`[Send] Piped to existing process (session=${sessionId.slice(0, 8)})`);
         logUserInput({ type: 'send-piped', accountId, workDir, message, sessionId, result: 'ok' });
+        logRawUserInput(resolvedWorkDir, sessionId, message);
         convMeta.setLastPrompt(sessionId);
+        convMeta.setFinished(sessionId, false); // Auto-unfinish when message sent
         convMeta.saveAssignment(sessionId, accountId);
         invalidateConvCache();
         res.json({ ok: true, sessionId, piped: true });
@@ -697,16 +784,27 @@ router.post('/send', async (req, res) => {
     }
   }
 
+  // Enrich message with session context on resume (prevents context amnesia)
+  // Inlines full user messages + truncated assistant text — no tool calls
+  let resumeMessage = message;
+  if (resumeId) {
+    const ctx = extractConversationContext(sessionId, 100);
+    if (ctx) {
+      resumeMessage = `<session-context>\n${ctx}\n</session-context>\n\n${message}`;
+      console.log(`[Send] Enriched resume message with inline context (${ctx.length} chars)`);
+    }
+  }
+
   let finalSessionId = sessionId;
   let resumeFailed = false;
-  let result = await claudeCli.startConversation(accountId, message, resumeWorkDir, resumeId);
+  let result = await claudeCli.startConversation(accountId, resumeMessage, resumeWorkDir, resumeId);
 
   // If resume failed, try deep repair then retry with original CWD
   if (!result.ok) {
     console.log(`[Send] Resume failed for ${sessionId}: ${result.error} — attempting deep repair...`);
     const deepCleaned = deepRepairJsonl(sessionId);
     if (deepCleaned > 0) {
-      result = await claudeCli.startConversation(accountId, message, resumeWorkDir, sessionId);
+      result = await claudeCli.startConversation(accountId, resumeMessage, resumeWorkDir, sessionId);
     }
     // Still fails — start fresh WITH conversation context (don't lose history)
     if (!result.ok) {
@@ -734,9 +832,11 @@ router.post('/send', async (req, res) => {
     updateAutoInjectSession(sessionId, finalSessionId);
   }
   logUserInput({ type: 'send', accountId, workDir, message, sessionId: finalSessionId, result: 'ok' });
+  logRawUserInput(resolvedWorkDir, finalSessionId, message);
   convMeta.saveAssignment(finalSessionId, accountId);
   convMeta.saveWorkDir(finalSessionId, resolvedWorkDir);
   convMeta.setLastPrompt(finalSessionId);
+  convMeta.setFinished(finalSessionId, false); // Auto-unfinish when message sent
   invalidateConvCache();
 
   // State tracking is handled by claude-cli stdout parsing — just respond
@@ -781,6 +881,8 @@ router.post('/conversation/:sessionId/assign', (req, res) => {
   // Auto-unstick: remove rate-limit messages so the conversation can continue on the new account
   const removed = unstickConversation(sid);
   if (removed > 0) console.log(`[Assign] Unsticked ${sid}: removed ${removed} rate-limit messages`);
+  // Broadcast account change so other panels pick it up
+  broadcast({ type: 'conv-account-changed', sessionId: sid, accountId, workDir: convMeta.getWorkDir(sid) });
   res.json({ ok: true, sessionId: sid, accountId, unsticked: removed, workDir: convMeta.getWorkDir(sid) });
 });
 
@@ -798,6 +900,9 @@ router.post('/conversation/:sessionId/finish', async (req, res) => {
   convMeta.setFinished(sid, finished);
   invalidateConvCache();
   if (finished) {
+    // Disable auto-inject — finished sessions must not be respawned
+    const wasAutoInjected = disableAutoInject(sid);
+    if (wasAutoInjected) console.log(`[Finish] Disabled auto-inject for ${sid.slice(0, 8)}`);
     // Kill the CLI process — finished means done
     const stopped = await claudeCli.stopConversation(sid);
     if (stopped) console.log(`[Finish] Stopped CLI process for ${sid.slice(0, 8)}`);
@@ -812,7 +917,38 @@ router.post('/conversation/:sessionId/finish', async (req, res) => {
   res.json({ ok: true, sessionId: sid, finished });
 });
 
-// 5e. Delete conversation permanently (removes .jsonl from disk)
+// 5e-hard. Hard-kill: nuclear kill of ALL processes for a session (zombie wrappers, orphans, everything)
+router.post('/conversation/:sessionId/hard-kill', async (req, res) => {
+  try {
+    const sid = req.params.sessionId;
+    // Validate UUID format — prevents shell injection via ps aux | grep
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sid)) {
+      res.status(400).json({ error: 'Invalid sessionId format' });
+      return;
+    }
+    console.log(`[HardKill] Requested for ${sid.slice(0, 8)}`);
+
+    // 1. Hard-kill all processes
+    const result = await claudeCli.hardKillSession(sid);
+
+    // 2. Mark as finished + disable auto-inject
+    convMeta.setFinished(sid, true);
+    const wasAutoInjected = disableAutoInject(sid);
+    if (wasAutoInjected) console.log(`[HardKill] Disabled auto-inject for ${sid.slice(0, 8)}`);
+
+    // 3. Broadcast to UI
+    invalidateConvCache();
+    broadcast({ type: 'control:conversation-finished', sessionId: sid, panelsToClose: [] });
+
+    console.log(`[HardKill] Done: ${sid.slice(0, 8)} — ${result.killed} processes killed`);
+    res.json({ ok: true, sessionId: sid, ...result });
+  } catch (err: any) {
+    console.error('[HardKill] Error:', err);
+    res.status(500).json({ error: 'Hard-kill failed', detail: err?.message });
+  }
+});
+
+// 5f. Delete conversation permanently (removes .jsonl from disk)
 router.delete('/conversation/:sessionId', (req, res) => {
   const sid = req.params.sessionId;
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sid)) {
@@ -928,12 +1064,12 @@ function buildSessionContext(workDir: string): string | null {
 
   const teamCtxFile = IS_LOCAL_MODE
     ? join(homedir(), '.claude', 'team-context.md')
-    : '/home/claude-user/.claude/team-context.md';
+    : join(PATHS.claudeUserHome, '.claude', 'team-context.md');
   const teamCtx = existsSync(teamCtxFile) ? readFileSync(teamCtxFile, 'utf8').trim() : '';
 
   const activeWorkFile = IS_LOCAL_MODE
     ? join(homedir(), '.claude', 'active-work.md')
-    : '/home/claude-user/.claude/active-work.md';
+    : join(PATHS.claudeUserHome, '.claude', 'active-work.md');
   const hasActivePeers = existsSync(activeWorkFile)
     && readFileSync(activeWorkFile, 'utf8').includes('AKTIV');
 
@@ -973,6 +1109,7 @@ router.post('/start', async (req, res) => {
   const sessionId = result.sessionId;
 
   logUserInput({ type: 'start', accountId, workDir, subject, message, sessionId, result: 'ok' });
+  logRawUserInput(resolvedWorkDir, sessionId, message);
   if (subject) convMeta.saveTitle(sessionId, subject);
   convMeta.saveAssignment(sessionId, accountId);
   convMeta.saveWorkDir(sessionId, resolvedWorkDir);
@@ -1169,7 +1306,6 @@ router.post('/commander', async (req, res) => {
     return;
   }
 
-  const BRIDGE_URL = process.env.AI_BRIDGE_URL || 'http://49.12.72.66:8000';
   const BRIDGE_KEY = process.env.AI_BRIDGE_API_KEY;
   if (!BRIDGE_KEY) {
     res.status(500).json({ error: 'AI_BRIDGE_API_KEY not set' });
@@ -1266,7 +1402,7 @@ router.post('/commander/dispatch', async (req, res) => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          accountId: action.accountId || 'rafael',
+          accountId: action.accountId || 'engelmann',
           workDir: action.workDir,
           subject: action.subject || '',
           message: action.message,
@@ -1312,6 +1448,18 @@ router.post('/cleanup-zombies', async (_req, res) => {
 router.post('/force-reload', (_req, res) => {
   broadcast({ type: 'cui-update-available' });
   res.json({ ok: true, message: 'Reload broadcast sent' });
+});
+
+// Force all browsers to reset their layouts from server templates
+router.post('/force-layout-reset', (_req, res) => {
+  broadcast({ type: 'control:layout-reset' });
+  res.json({ ok: true, message: 'Layout reset broadcast sent to all panels' });
+});
+
+// Nuclear: clear ALL browser layout caches and force reload
+router.post('/nuke-layouts', (_req, res) => {
+  broadcast({ type: 'control:nuke-layout-cache' });
+  res.json({ ok: true, message: 'Nuke broadcast sent — browsers will clear cache and reload' });
 });
 
 export default router;
