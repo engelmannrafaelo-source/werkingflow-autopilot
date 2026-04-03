@@ -527,13 +527,16 @@ async function runExtractionAsync(sessionId: string, sources: string[], extracti
   const session = loadSession(sessionId);
   if (!session) return;
   try {
-    const docs = sources.map((relPath: string) => {
+    const docs = sources.flatMap((relPath: string) => {
       const fullPath = join(BUSINESS_DIR, relPath);
-      if (!existsSync(fullPath)) throw new Error(`File not found: ${relPath}`);
       if (!fullPath.startsWith(BUSINESS_DIR)) throw new Error(`Path traversal blocked: ${relPath}`);
+      if (!existsSync(fullPath)) {
+        console.warn(`[ReportBuilder] Skipping missing source: ${relPath}`);
+        return [];
+      }
       let content = readFileSync(fullPath, 'utf-8');
       if (relPath.endsWith('.html')) content = htmlToText(content);
-      return { path: relPath, content };
+      return [{ path: relPath, content }];
     });
 
     const documentsText = docs.map((d: { path: string; content: string }) =>
@@ -826,10 +829,9 @@ DESIGN-ANWEISUNGEN:
 
     // Inject Report Builder provenance meta tag into HTML output
     // This tag is used by the pre-commit hook to verify files were generated via Report Builder
-    const session = loadSession(sessionId);
-    const isHtml = session && (session.outputFormat === 'html' || session.outputFormat === 'presentation' || session.outputFormat === 'document');
+    const isHtml = session.outputFormat === 'html' || session.outputFormat === 'presentation' || session.outputFormat === 'document';
     if (isHtml && content.includes('<head>')) {
-      const rbMeta = `\n  <meta name="rb-session" content="${sessionId}">\n  <meta name="rb-generated" content="${new Date().toISOString()}">\n  <meta name="rb-format" content="${session?.outputFormat || 'html'}">`;
+      const rbMeta = `\n  <meta name="rb-session" content="${sessionId}">\n  <meta name="rb-generated" content="${new Date().toISOString()}">\n  <meta name="rb-format" content="${session.outputFormat || 'html'}">`;
       content = content.replace('<head>', `<head>${rbMeta}`);
     }
 
