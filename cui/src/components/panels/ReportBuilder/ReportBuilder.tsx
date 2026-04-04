@@ -37,7 +37,18 @@ interface Revision {
   addedSources: string[]; designHints: string[]; timestamp: string;
 }
 
-type Step = 'source-select' | 'claim-curation' | 'generation' | 'review';
+type Step = 'source-select' | 'claim-curation' | 'generation' | 'review' | 'update-plan';
+type SessionMode = 'generate' | 'update';
+
+interface UpdateProposal {
+  docPath: string; docName: string; claimIds: string[];
+  reasoning: string; isNew: boolean;
+}
+interface UpdateDiff {
+  docPath: string; docName: string; originalContent: string;
+  proposedContent: string; changeSummary: string;
+  status: 'pending' | 'ready' | 'applied' | 'skipped'; isNew: boolean;
+}
 
 // --- Category Colors ---
 const CAT_COLORS: Record<string, string> = {
@@ -64,7 +75,7 @@ function SessionPicker({ onSelect, onCreate }: { onSelect: (id: string) => void;
     fetch(`${API}/sessions`).then(r => r.json()).then(d => { setSessions(d.sessions || []); setLoading(false); }).catch(() => setLoading(false));
   }, []);
 
-  const stepLabels: Record<string, string> = { 'source-select': 'Quellen', 'claim-curation': 'Claims', generation: 'Config', review: 'Output' };
+  const stepLabels: Record<string, string> = { 'source-select': 'Quellen', 'claim-curation': 'Claims', generation: 'Config', review: 'Output', 'update-plan': 'Update' };
 
   if (loading) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>Lade Sessions...</div>;
 
@@ -513,12 +524,12 @@ function ClaimCard({ claim, onChange, templateCandidates, onSelectTemplate }: {
 // =============================================================================
 // Claim Curation (Step 2)
 // =============================================================================
-function ClaimCuration({ groups, draftOutline, onChange, onToggleGroup, generalNotes, setGeneralNotes, onBack, onNext, claimTemplateMatches, onSelectTemplate }: {
+function ClaimCuration({ groups, draftOutline, onChange, onToggleGroup, generalNotes, setGeneralNotes, onBack, onNext, claimTemplateMatches, onSelectTemplate, nextLabel }: {
   groups: ClaimGroup[]; draftOutline: DraftSection[];
   onChange: (groupId: string, claimId: string, update: Partial<Claim>) => void;
   onToggleGroup: (groupId: string, selected: boolean) => void;
   generalNotes: string; setGeneralNotes: (v: string) => void;
-  onBack: () => void; onNext: () => void;
+  onBack: () => void; onNext: () => void; nextLabel?: string;
   claimTemplateMatches?: Array<{ claimId: string; templateId: string; reason: string; rank: number; selected: boolean; templateTitle: string; templateType: string; templateFile: string; hasSvg: boolean }>;
   onSelectTemplate?: (claimId: string, templateId: string) => void;
 }) {
@@ -609,7 +620,7 @@ function ClaimCuration({ groups, draftOutline, onChange, onToggleGroup, generalN
       <textarea rows={2} style={{ ...inputStyle, resize: 'vertical' as const }} placeholder="z.B. 'Max. 10 Seiten, SVG Architektur-Diagramm, Executive Summary'" value={generalNotes} onChange={e => setGeneralNotes(e.target.value)} />
       <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--tn-border)' }}>
         <button style={btnSecondary} onClick={onBack}>Quellen</button>
-        <button style={btnPrimary} onClick={onNext} disabled={selected === 0}>Config ({selected} Claims)</button>
+        <button style={btnPrimary} onClick={onNext} disabled={selected === 0}>{nextLabel || `Config (${selected} Claims)`}</button>
       </div>
     </div>
   );
@@ -1203,6 +1214,311 @@ function GenerationStep({ outputFormat, setOutputFormat, customInstructions, set
 }
 
 // =============================================================================
+// Update Plan Step — Target Selection + AI Proposal + Diff Review
+// =============================================================================
+function UpdatePlanStep({ sessionId, groups, updateProposals, setUpdateProposals, updateDiffs, setUpdateDiffs, updateStatus, loading, onBack, onPropose, onExecute, onApply }: {
+  sessionId: string;
+  groups: ClaimGroup[];
+  updateProposals: UpdateProposal[];
+  setUpdateProposals: React.Dispatch<React.SetStateAction<UpdateProposal[]>>;
+  updateDiffs: UpdateDiff[];
+  setUpdateDiffs: React.Dispatch<React.SetStateAction<UpdateDiff[]>>;
+  updateStatus: string;
+  loading: boolean;
+  onBack: () => void;
+  onPropose: (targets: string[]) => void;
+  onExecute: (proposals: UpdateProposal[]) => void;
+  onApply: (docPaths: string[]) => void;
+}) {
+  const [tree, setTree] = useState<TreeNode[]>([]);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set(['shared', 'sales', 'marketing', 'customer-success']));
+  const [selectedTargets, setSelectedTargets] = useState<Set<string>>(new Set());
+  const [newFilePath, setNewFilePath] = useState('');
+  const [showDiff, setShowDiff] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch(`${API}/business-tree`).then(r => r.json()).then(d => setTree(d.tree || [])).catch(() => {});
+  }, []);
+
+  // Filter tree to only .md files
+  function filterMd(nodes: TreeNode[]): TreeNode[] {
+    return nodes.flatMap(n => {
+      if (n.type === 'file') return n.name.endsWith('.md') ? [n] : [];
+      const kids = filterMd(n.children || []);
+      return kids.length > 0 ? [{ ...n, children: kids }] : [];
+    });
+  }
+
+  function toggleExpand(path: string) {
+    setExpanded(prev => { const n = new Set(prev); n.has(path) ? n.delete(path) : n.add(path); return n; });
+  }
+
+  function toggleTarget(path: string) {
+    setSelectedTargets(prev => { const n = new Set(prev); n.has(path) ? n.delete(path) : n.add(path); return n; });
+  }
+
+  function addNewFile() {
+    const p = newFilePath.trim();
+    if (!p) return;
+    const normalized = p.endsWith('.md') ? p : `${p}.md`;
+    setSelectedTargets(prev => new Set([...prev, normalized]));
+    setNewFilePath('');
+  }
+
+  // Get all claims for display
+  const allClaims = groups.flatMap(g => g.claims.filter(c => c.selected));
+
+  // Remove a claim from a proposal
+  function removeClaimFromProposal(docPath: string, claimId: string) {
+    setUpdateProposals(prev => prev.map(p =>
+      p.docPath === docPath ? { ...p, claimIds: p.claimIds.filter(id => id !== claimId) } : p
+    ));
+  }
+
+  // Move a claim to a different proposal
+  function moveClaimToProposal(claimId: string, fromDocPath: string, toDocPath: string) {
+    setUpdateProposals(prev => prev.map(p => {
+      if (p.docPath === fromDocPath) return { ...p, claimIds: p.claimIds.filter(id => id !== claimId) };
+      if (p.docPath === toDocPath) return { ...p, claimIds: [...p.claimIds, claimId] };
+      return p;
+    }));
+  }
+
+  function renderTree(nodes: TreeNode[], depth = 0): React.ReactNode {
+    return nodes.map(node => {
+      if (node.type === 'directory') {
+        const isExp = expanded.has(node.path);
+        return (
+          <div key={node.path}>
+            <div onClick={() => toggleExpand(node.path)} style={{
+              paddingLeft: depth * 12 + 4, paddingTop: 3, paddingBottom: 3,
+              cursor: 'pointer', fontSize: 10, color: 'var(--tn-text-muted)',
+              display: 'flex', alignItems: 'center', gap: 4,
+            }}>
+              <span style={{ fontSize: 8 }}>{isExp ? '▼' : '▶'}</span>
+              <span>{node.name}/</span>
+            </div>
+            {isExp && <div>{renderTree(node.children || [], depth + 1)}</div>}
+          </div>
+        );
+      }
+      const isSel = selectedTargets.has(node.path);
+      return (
+        <div key={node.path} onClick={() => toggleTarget(node.path)} style={{
+          paddingLeft: depth * 12 + 14, paddingTop: 3, paddingBottom: 3,
+          cursor: 'pointer', fontSize: 11, display: 'flex', alignItems: 'center', gap: 6,
+          background: isSel ? 'rgba(158,206,106,0.1)' : 'transparent',
+          borderRadius: 3,
+        }}>
+          <span style={{ fontSize: 10, color: isSel ? 'var(--tn-green)' : 'var(--tn-border)' }}>{isSel ? '☑' : '☐'}</span>
+          <span style={{ color: isSel ? 'var(--tn-green)' : 'var(--tn-text)' }}>{node.name}</span>
+        </div>
+      );
+    });
+  }
+
+  const mdTree = filterMd(tree);
+  const isProposing = updateStatus === 'proposing';
+  const isExecuting = updateStatus === 'executing';
+  const hasProposals = updateProposals.length > 0;
+  const hasDiffs = updateDiffs.length > 0;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* Navigation */}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <button onClick={onBack} style={{ ...btnSecondary, fontSize: 10 }}>&larr; Claims</button>
+        <span style={{ fontSize: 10, color: 'var(--tn-text-muted)' }}>
+          {isProposing && '⟳ Vorschläge werden erstellt...'}
+          {isExecuting && '⟳ Inhalte werden generiert...'}
+          {!isProposing && !isExecuting && hasProposals && !hasDiffs && `${updateProposals.length} Zuordnung(en) bereit`}
+          {hasDiffs && `${updateDiffs.length} Dokument(e) bereit zum Anwenden`}
+          {!isProposing && !isExecuting && !hasProposals && !hasDiffs && 'Target-Dokumente auswählen'}
+        </span>
+      </div>
+
+      {/* Phase 1: Target selection (wenn noch keine Diffs vorhanden) */}
+      {!hasDiffs && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          {/* Left: Target Doc Tree */}
+          <div style={{ border: '1px solid var(--tn-border)', borderRadius: 6, overflow: 'hidden' }}>
+            <div style={{ padding: '6px 10px', background: 'var(--tn-bg-dark)', borderBottom: '1px solid var(--tn-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--tn-text-muted)' }}>ZIEL-DOKUMENTE</span>
+              <span style={{ fontSize: 9, color: 'var(--tn-text-muted)' }}>{selectedTargets.size} gewählt</span>
+            </div>
+            <div style={{ maxHeight: 300, overflow: 'auto', padding: '4px 6px' }}>
+              {renderTree(mdTree)}
+            </div>
+            {/* New file input */}
+            <div style={{ padding: '6px 8px', borderTop: '1px solid var(--tn-border)', display: 'flex', gap: 6 }}>
+              <input
+                value={newFilePath}
+                onChange={e => setNewFilePath(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && addNewFile()}
+                placeholder="Neue Datei: pfad/datei.md"
+                style={{ ...inputStyle, flex: 1, fontSize: 10 }}
+              />
+              <button onClick={addNewFile} style={{ ...btnSecondary, fontSize: 10, padding: '3px 8px', flexShrink: 0 }}>+</button>
+            </div>
+            {/* Show manually added new files */}
+            {[...selectedTargets].filter(p => {
+              // Check if it's a manually typed path (not in tree)
+              function inTree(nodes: TreeNode[], path: string): boolean {
+                return nodes.some(n => n.path === path || (n.type === 'directory' && inTree(n.children || [], path)));
+              }
+              return !inTree(mdTree, p);
+            }).map(p => (
+              <div key={p} style={{ padding: '3px 8px 3px 14px', display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, background: 'rgba(158,206,106,0.1)' }}>
+                <span style={{ color: 'var(--tn-green)' }}>✦ NEU:</span>
+                <span style={{ flex: 1 }}>{p}</span>
+                <span onClick={() => setSelectedTargets(prev => { const n = new Set(prev); n.delete(p); return n; })} style={{ cursor: 'pointer', color: 'var(--tn-red)' }}>✕</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Right: Claims/Proposals */}
+          <div style={{ border: '1px solid var(--tn-border)', borderRadius: 6, overflow: 'hidden' }}>
+            <div style={{ padding: '6px 10px', background: 'var(--tn-bg-dark)', borderBottom: '1px solid var(--tn-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--tn-text-muted)' }}>{hasProposals ? 'ZUORDNUNGEN' : 'CLAIMS'}</span>
+              <span style={{ fontSize: 9, color: 'var(--tn-text-muted)' }}>{allClaims.length} ausgewählt</span>
+            </div>
+            <div style={{ maxHeight: 340, overflow: 'auto', padding: 8 }}>
+              {!hasProposals && allClaims.map(c => (
+                <div key={c.id} style={{ padding: '4px 6px', marginBottom: 4, borderRadius: 4, background: 'var(--tn-bg-dark)', fontSize: 10, borderLeft: `2px solid ${CAT_COLORS[c.category] || '#565f89'}` }}>
+                  <span style={{ color: CAT_COLORS[c.category] || '#565f89', marginRight: 4 }}>[{c.category}]</span>
+                  {c.text.slice(0, 80)}{c.text.length > 80 ? '…' : ''}
+                </div>
+              ))}
+              {hasProposals && updateProposals.map(proposal => {
+                const proposalClaims = proposal.claimIds.map(id => allClaims.find(c => c.id === id)).filter(Boolean) as typeof allClaims;
+                return (
+                  <div key={proposal.docPath} style={{ marginBottom: 10, border: '1px solid var(--tn-border)', borderRadius: 6, overflow: 'hidden' }}>
+                    <div style={{ padding: '5px 8px', background: proposal.isNew ? 'rgba(158,206,106,0.1)' : 'var(--tn-bg-dark)', display: 'flex', gap: 6, alignItems: 'center' }}>
+                      {proposal.isNew && <span style={{ fontSize: 9, color: 'var(--tn-green)', fontWeight: 700 }}>NEU</span>}
+                      <span style={{ fontSize: 10, fontWeight: 600, flex: 1 }}>{proposal.docName}</span>
+                      <span style={{ fontSize: 9, color: 'var(--tn-text-muted)' }}>{proposalClaims.length} Claims</span>
+                    </div>
+                    <div style={{ padding: '4px 6px' }}>
+                      {proposalClaims.map(c => (
+                        <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '2px 0', fontSize: 10 }}>
+                          <span style={{ color: CAT_COLORS[c.category] || '#565f89', flexShrink: 0 }}>•</span>
+                          <span style={{ flex: 1 }}>{c.text.slice(0, 60)}{c.text.length > 60 ? '…' : ''}</span>
+                          <span onClick={() => removeClaimFromProposal(proposal.docPath, c.id)} style={{ cursor: 'pointer', color: 'var(--tn-red)', fontSize: 9, flexShrink: 0 }}>✕</span>
+                        </div>
+                      ))}
+                      {proposalClaims.length === 0 && <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', padding: 4 }}>Keine Claims</div>}
+                    </div>
+                    <div style={{ padding: '4px 8px', borderTop: '1px solid var(--tn-border)', fontSize: 9, color: 'var(--tn-text-muted)', fontStyle: 'italic' }}>
+                      {proposal.reasoning.slice(0, 100)}{proposal.reasoning.length > 100 ? '…' : ''}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Action Buttons */}
+      {!hasDiffs && (
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          {!hasProposals && (
+            <button
+              onClick={() => onPropose([...selectedTargets])}
+              disabled={loading || selectedTargets.size === 0 || isProposing}
+              style={{ ...btnPrimary, opacity: selectedTargets.size === 0 ? 0.5 : 1 }}
+            >
+              {isProposing ? '⟳ Analysiere...' : `Vorschlag erstellen (${selectedTargets.size} Targets)`}
+            </button>
+          )}
+          {hasProposals && (
+            <>
+              <button onClick={() => { setUpdateProposals([]); }} style={btnSecondary}>Neue Zuordnung</button>
+              <button
+                onClick={() => onExecute(updateProposals)}
+                disabled={loading || isExecuting || updateProposals.every(p => p.claimIds.length === 0)}
+                style={{ ...btnPrimary, background: 'var(--tn-green)', opacity: loading ? 0.5 : 1 }}
+              >
+                {isExecuting ? '⟳ Generiere...' : 'Updates generieren'}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Phase 2: Diff Review */}
+      {hasDiffs && (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--tn-green)' }}>{updateDiffs.length} Dokument(e) bereit</span>
+            <button
+              onClick={() => onApply(updateDiffs.filter(d => d.status !== 'applied' && d.status !== 'skipped').map(d => d.docPath))}
+              disabled={loading || updateDiffs.every(d => d.status === 'applied' || d.status === 'skipped')}
+              style={{ ...btnPrimary, background: 'var(--tn-green)', fontSize: 10 }}
+            >
+              Alle anwenden
+            </button>
+          </div>
+          {updateDiffs.map(diff => (
+            <div key={diff.docPath} style={{ marginBottom: 10, border: '1px solid var(--tn-border)', borderRadius: 6, overflow: 'hidden' }}>
+              <div style={{ padding: '6px 10px', background: 'var(--tn-bg-dark)', display: 'flex', gap: 8, alignItems: 'center' }}>
+                {diff.isNew && <span style={{ fontSize: 9, color: 'var(--tn-green)', fontWeight: 700, flexShrink: 0 }}>NEU</span>}
+                <span style={{ fontSize: 11, fontWeight: 600, flex: 1 }}>{diff.docName}</span>
+                <span style={{ fontSize: 9, color: diff.status === 'applied' ? 'var(--tn-green)' : 'var(--tn-text-muted)', flexShrink: 0 }}>
+                  {diff.status === 'applied' ? '✓ Angewendet' : diff.status === 'skipped' ? '— Übersprungen' : diff.changeSummary}
+                </span>
+                <button
+                  onClick={() => setShowDiff(showDiff === diff.docPath ? null : diff.docPath)}
+                  style={{ ...btnSecondary, fontSize: 9, padding: '2px 8px', flexShrink: 0 }}
+                >
+                  {showDiff === diff.docPath ? 'Einklappen' : 'Vorschau'}
+                </button>
+                {diff.status !== 'applied' && diff.status !== 'skipped' && (
+                  <button
+                    onClick={() => onApply([diff.docPath])}
+                    disabled={loading}
+                    style={{ ...btnPrimary, background: 'var(--tn-green)', fontSize: 9, padding: '2px 8px', flexShrink: 0 }}
+                  >
+                    Anwenden
+                  </button>
+                )}
+              </div>
+              {showDiff === diff.docPath && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0 }}>
+                  <div style={{ borderRight: '1px solid var(--tn-border)' }}>
+                    <div style={{ padding: '4px 8px', fontSize: 9, fontWeight: 700, color: 'var(--tn-text-muted)', background: 'rgba(247,118,142,0.05)', borderBottom: '1px solid var(--tn-border)' }}>
+                      {diff.isNew ? '(Nicht vorhanden)' : 'VORHER'}
+                    </div>
+                    <textarea
+                      readOnly value={diff.originalContent}
+                      style={{ width: '100%', height: 200, padding: 8, fontSize: 10, fontFamily: 'monospace', background: 'var(--tn-bg)', color: 'var(--tn-text-muted)', border: 'none', resize: 'none', outline: 'none', boxSizing: 'border-box' }}
+                    />
+                  </div>
+                  <div>
+                    <div style={{ padding: '4px 8px', fontSize: 9, fontWeight: 700, color: 'var(--tn-text-muted)', background: 'rgba(158,206,106,0.05)', borderBottom: '1px solid var(--tn-border)' }}>
+                      NACHHER {diff.isNew ? '(Neu erstellt)' : '(Aktualisiert)'}
+                    </div>
+                    <textarea
+                      readOnly value={diff.proposedContent}
+                      style={{ width: '100%', height: 200, padding: 8, fontSize: 10, fontFamily: 'monospace', background: 'var(--tn-bg)', color: 'var(--tn-text)', border: 'none', resize: 'none', outline: 'none', boxSizing: 'border-box' }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+          <div style={{ marginTop: 8 }}>
+            <button onClick={() => { setUpdateDiffs([]); setUpdateProposals([]); }} style={{ ...btnSecondary, fontSize: 10 }}>
+              Neu starten
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =============================================================================
 // Shared UI Primitives
 // =============================================================================
 function SectionLabel({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
@@ -1284,6 +1600,12 @@ export default function ReportBuilder() {
   const [revisions, setRevisions] = useState<Revision[]>([]);
   const [activeRevisionIndex, setActiveRevisionIndex] = useState(-1);
 
+  // Update mode state
+  const [sessionMode, setSessionMode] = useState<SessionMode>('generate');
+  const [updateProposals, setUpdateProposals] = useState<UpdateProposal[]>([]);
+  const [updateDiffs, setUpdateDiffs] = useState<UpdateDiff[]>([]);
+  const [updateStatus, setUpdateStatus] = useState<string>('idle');
+
   // Claim-template matching state
   const [autoMatchLoading, setAutoMatchLoading] = useState(false);
   const [claimTemplateMatches, setClaimTemplateMatches] = useState<Array<{
@@ -1324,7 +1646,7 @@ export default function ReportBuilder() {
       });
 
       // Update local templateSectionIds (only selected ones)
-      const newIds = new Set(selectedMatches.map((m: any) => m.templateId).filter(Boolean));
+      const newIds = new Set<string>(selectedMatches.map((m: any) => m.templateId as string).filter(Boolean));
       setTemplateSectionIds(newIds);
       setAutoMatchApplied(true);
 
@@ -1344,12 +1666,70 @@ export default function ReportBuilder() {
   }
 
   function handleClaimsToConfig() {
+    if (sessionMode === 'update') {
+      // Persist mode to session then go to update-plan
+      if (sessionId) {
+        fetch(`${API}/sessions/${sessionId}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: 'update', step: 'update-plan' }),
+        }).catch(() => {});
+      }
+      setStep('update-plan');
+      return;
+    }
     setStep('generation');
     // Auto-match if no assignments exist yet
     const hasAssignments = groups.some(g => g.claims.some(c => (c as any).templateId));
     if (!hasAssignments) {
       runClaimTemplateMatch();
     }
+  }
+
+  async function handleProposeUpdates(targets: string[]) {
+    if (!sessionId) return;
+    setLoading(true); setError(null); setUpdateStatus('proposing');
+    try {
+      const resp = await fetch(`${API}/propose-updates`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, targetDocuments: targets }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || 'Propose failed');
+      startPolling(sessionId);
+    } catch (err: any) { setError(err.message); setLoading(false); setUpdateStatus('error'); }
+  }
+
+  async function handleExecuteUpdates(proposals: UpdateProposal[]) {
+    if (!sessionId) return;
+    setLoading(true); setError(null); setUpdateStatus('executing');
+    try {
+      const resp = await fetch(`${API}/execute-updates`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, proposals }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || 'Execute failed');
+      startPolling(sessionId);
+    } catch (err: any) { setError(err.message); setLoading(false); setUpdateStatus('error'); }
+  }
+
+  async function handleApplyUpdates(docPaths: string[]) {
+    if (!sessionId) return;
+    try {
+      const resp = await fetch(`${API}/apply-updates`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, docPaths }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || 'Apply failed');
+      // Refresh diffs from server to get applied status
+      const sessionResp = await fetch(`${API}/sessions/${sessionId}`);
+      const sessionData = await sessionResp.json();
+      if (sessionData.session?.updateDiffs) setUpdateDiffs(sessionData.session.updateDiffs);
+      if (data.errors?.length > 0) {
+        setError(`Fehler bei: ${data.errors.map((e: any) => e.path).join(', ')}`);
+      }
+    } catch (err: any) { setError(err.message); }
   }
 
   // Normalize old-format claims (included→selected, userNote→note, add missing variants)
@@ -1388,6 +1768,11 @@ export default function ReportBuilder() {
       setGeneratedContent(loadedContent);
       setRevisions(s.revisions || []);
       setActiveRevisionIndex(s.activeRevisionIndex ?? -1);
+      // Restore update mode state
+      setSessionMode(s.mode === 'update' ? 'update' : 'generate');
+      setUpdateProposals(s.updateProposals || []);
+      setUpdateDiffs(s.updateDiffs || []);
+      setUpdateStatus(s.updateStatus || 'idle');
       setShowPicker(false);
       // Restore claim-template matches from session (persisted by server)
       if (s.claimTemplateMatches && s.claimTemplateMatches.length > 0) {
@@ -1400,7 +1785,9 @@ export default function ReportBuilder() {
       // Derive correct step from actual data — don't trust persisted step blindly
       const totalClaims = loadedGroups.reduce((a: number, g: any) => a + (g.claims?.length || 0), 0);
       let derivedStep: Step = s.step || 'source-select';
-      if (loadedContent && loadedContent.length > 100) {
+      if (s.mode === 'update' && (s.updateProposals?.length > 0 || s.updateDiffs?.length > 0 || s.updateStatus === 'proposing' || s.updateStatus === 'executing')) {
+        derivedStep = 'update-plan';
+      } else if (loadedContent && loadedContent.length > 100) {
         derivedStep = 'review';
       } else if (totalClaims > 0) {
         derivedStep = derivedStep === 'generation' ? 'generation' : 'claim-curation';
@@ -1418,7 +1805,9 @@ export default function ReportBuilder() {
       setSelectedSources(new Set()); setBrief(''); setExtractionPrompt(''); setGroups([]); setDraftOutline([]);
       setGeneralNotes(''); setOutputFormat('presentation'); setTone('formal'); setLanguage('de');
       setCustomInstructions(''); setTemplateSectionIds(new Set()); setGeneratedContent(''); setFeedback('');
-      setRevisions([]); setActiveRevisionIndex(-1); setShowPicker(false);
+      setRevisions([]); setActiveRevisionIndex(-1);
+      setSessionMode('generate'); setUpdateProposals([]); setUpdateDiffs([]); setUpdateStatus('idle');
+      setShowPicker(false);
     } catch { setError('Session konnte nicht erstellt werden'); }
   }
 
@@ -1430,7 +1819,7 @@ export default function ReportBuilder() {
     persistRef.current = setTimeout(() => {
       fetch(`${API}/sessions/${sessionId}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ step, groups, draftOutline, generalNotes, outputFormat, tone, language, customInstructions, templateSectionIds: [...templateSectionIds], generatedContent, sources: [...selectedSources], brief, extractionPrompt }),
+        body: JSON.stringify({ step, groups, draftOutline, generalNotes, outputFormat, tone, language, customInstructions, templateSectionIds: [...templateSectionIds], generatedContent, sources: [...selectedSources], brief, extractionPrompt, mode: sessionMode }),
       }).catch(() => {});
     }, 1500);
   }, [sessionId, showPicker, step, groups, generalNotes, outputFormat, tone, language, customInstructions, templateSectionIds, generatedContent, brief]);
@@ -1458,6 +1847,9 @@ export default function ReportBuilder() {
           startPolling(sessionId);
         } else if (s?.generationStatus === 'generating') {
           setLoading(true); setStep('review'); setGeneratedContent('');
+          startPolling(sessionId);
+        } else if (s?.updateStatus === 'proposing' || s?.updateStatus === 'executing') {
+          setLoading(true); setStep('update-plan');
           startPolling(sessionId);
         }
       } catch {}
@@ -1493,8 +1885,28 @@ export default function ReportBuilder() {
           if (pollRef.current) clearInterval(pollRef.current);
           pollRef.current = null;
           setError(s.error || 'Operation failed'); setLoading(false);
+        } else if (s.updateStatus === 'proposed') {
+          // propose-updates finished
+          if (pollRef.current) clearInterval(pollRef.current);
+          pollRef.current = null;
+          setUpdateProposals(s.updateProposals || []);
+          setUpdateStatus('proposed');
+          setLoading(false); setError(null);
+        } else if (s.updateStatus === 'done') {
+          // execute-updates finished
+          if (pollRef.current) clearInterval(pollRef.current);
+          pollRef.current = null;
+          setUpdateDiffs(s.updateDiffs || []);
+          setUpdateStatus('done');
+          setLoading(false); setError(null);
+        } else if (s.updateStatus === 'error') {
+          // update operation failed
+          if (pollRef.current) clearInterval(pollRef.current);
+          pollRef.current = null;
+          setError(s.updateError || 'Update fehlgeschlagen'); setLoading(false);
+          setUpdateStatus('error');
         }
-        // else: still extracting/generating, keep polling
+        // else: still in progress, keep polling
       } catch {}
     }, 2000);
   }
@@ -1567,10 +1979,18 @@ export default function ReportBuilder() {
     } catch (err: any) { setError(err.message); }
   }
 
-  const steps: { key: Step; label: string }[] = [
-    { key: 'source-select', label: '1. Quellen' }, { key: 'claim-curation', label: '2. Claims' },
-    { key: 'generation', label: '3. Config' }, { key: 'review', label: '4. Output' },
-  ];
+  const steps: { key: Step; label: string }[] = sessionMode === 'update'
+    ? [
+        { key: 'source-select', label: '1. Quellen' },
+        { key: 'claim-curation', label: '2. Claims' },
+        { key: 'update-plan', label: '3. Update' },
+      ]
+    : [
+        { key: 'source-select', label: '1. Quellen' },
+        { key: 'claim-curation', label: '2. Claims' },
+        { key: 'generation', label: '3. Config' },
+        { key: 'review', label: '4. Output' },
+      ];
   const stepIdx = steps.findIndex(s => s.key === step);
 
   // Session Picker
@@ -1622,9 +2042,23 @@ export default function ReportBuilder() {
 
       {/* Body */}
       <div style={{ flex: 1, overflow: 'auto', minHeight: 0, padding: 12 }}>
-        {step === 'source-select' && <SourceSelector selected={selectedSources} onToggle={toggleSource} onExtract={handleExtract} brief={brief} setBrief={setBrief} extractionPrompt={extractionPrompt} setExtractionPrompt={setExtractionPrompt} loading={loading} />}
-        {step === 'claim-curation' && <ClaimCuration groups={groups} draftOutline={draftOutline} onChange={updateClaim} onToggleGroup={toggleGroup} generalNotes={generalNotes} setGeneralNotes={setGeneralNotes} onBack={() => setStep('source-select')} onNext={handleClaimsToConfig} claimTemplateMatches={claimTemplateMatches} onSelectTemplate={handleSelectTemplate} />}
+        {step === 'source-select' && (
+          <>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 12, padding: '8px 10px', background: 'var(--tn-bg-dark)', borderRadius: 6, border: '1px solid var(--tn-border)' }}>
+              <span style={{ fontSize: 10, color: 'var(--tn-text-muted)', alignSelf: 'center', marginRight: 4 }}>Ziel:</span>
+              <button onClick={() => setSessionMode('generate')} style={{ ...btnSecondary, fontSize: 10, padding: '3px 10px', background: sessionMode === 'generate' ? 'rgba(122,162,247,0.2)' : undefined, border: sessionMode === 'generate' ? '1px solid var(--tn-blue)' : '1px solid var(--tn-border)', color: sessionMode === 'generate' ? 'var(--tn-blue)' : undefined }}>
+                Neues HTML-Dokument
+              </button>
+              <button onClick={() => setSessionMode('update')} style={{ ...btnSecondary, fontSize: 10, padding: '3px 10px', background: sessionMode === 'update' ? 'rgba(158,206,106,0.2)' : undefined, border: sessionMode === 'update' ? '1px solid var(--tn-green)' : '1px solid var(--tn-border)', color: sessionMode === 'update' ? 'var(--tn-green)' : undefined }}>
+                Bestehende Docs aktualisieren
+              </button>
+            </div>
+            <SourceSelector selected={selectedSources} onToggle={toggleSource} onExtract={handleExtract} brief={brief} setBrief={setBrief} extractionPrompt={extractionPrompt} setExtractionPrompt={setExtractionPrompt} loading={loading} />
+          </>
+        )}
+        {step === 'claim-curation' && <ClaimCuration groups={groups} draftOutline={draftOutline} onChange={updateClaim} onToggleGroup={toggleGroup} generalNotes={generalNotes} setGeneralNotes={setGeneralNotes} onBack={() => setStep('source-select')} onNext={handleClaimsToConfig} claimTemplateMatches={claimTemplateMatches} onSelectTemplate={handleSelectTemplate} nextLabel={sessionMode === 'update' ? 'Weiter zu Targets' : undefined} />}
         {(step === 'generation' || step === 'review') && <GenerationStep outputFormat={outputFormat} setOutputFormat={setOutputFormat} customInstructions={customInstructions} setCustomInstructions={setCustomInstructions} templateSectionIds={templateSectionIds} onToggleTemplate={(id) => setTemplateSectionIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; })} onSetTemplateCategory={() => {}} onBack={() => setStep('claim-curation')} onGenerate={handleGenerate} generatedContent={generatedContent} loading={loading} feedback={feedback} setFeedback={setFeedback} onSave={handleSave} savedPath={savedPath} revisions={revisions} activeRevisionIndex={activeRevisionIndex} onSwitchRevision={switchRevision} autoMatchResults={autoMatchResults} autoMatchLoading={autoMatchLoading} autoMatchApplied={autoMatchApplied} onRerunAutoMatch={runClaimTemplateMatch} onClearAutoMatch={() => { setTemplateSectionIds(new Set()); setAutoMatchApplied(false); setClaimTemplateMatches([]); }} claimTemplateMatches={claimTemplateMatches} groups={groups} />}
+        {step === 'update-plan' && sessionId && <UpdatePlanStep sessionId={sessionId} groups={groups} updateProposals={updateProposals} setUpdateProposals={setUpdateProposals} updateDiffs={updateDiffs} setUpdateDiffs={setUpdateDiffs} updateStatus={updateStatus} loading={loading} onBack={() => setStep('claim-curation')} onPropose={handleProposeUpdates} onExecute={handleExecuteUpdates} onApply={handleApplyUpdates} />}
       </div>
     </div>
   );

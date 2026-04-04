@@ -73,6 +73,25 @@ interface Revision {
   timestamp: string;
 }
 
+// --- Update Mode Types ---
+interface UpdateProposal {
+  docPath: string;       // relative to BUSINESS_DIR (or absolute for new files outside)
+  docName: string;       // display name
+  claimIds: string[];    // which claims should update this document
+  reasoning: string;     // AI reasoning
+  isNew: boolean;        // true if file doesn't exist yet
+}
+
+interface UpdateDiff {
+  docPath: string;
+  docName: string;
+  originalContent: string;   // empty string for new files
+  proposedContent: string;   // complete new markdown content
+  changeSummary: string;
+  status: 'pending' | 'ready' | 'applied' | 'skipped';
+  isNew: boolean;
+}
+
 interface ReportBuilderSession {
   id: string;
   name: string;
@@ -80,7 +99,7 @@ interface ReportBuilderSession {
   brief: string;
   createdAt: string;
   updatedAt: string;
-  step: 'source-select' | 'claim-curation' | 'generation' | 'review';
+  step: 'source-select' | 'claim-curation' | 'generation' | 'review' | 'update-plan';
   sources: string[];
   extractionPrompt: string;
   groups: ClaimGroup[];
@@ -97,6 +116,12 @@ interface ReportBuilderSession {
   error: string | null;
   revisions: Revision[];
   activeRevisionIndex: number;
+  // Update mode (optional — backward compatible)
+  mode?: 'generate' | 'update';
+  updateProposals?: UpdateProposal[];
+  updateDiffs?: UpdateDiff[];
+  updateStatus?: 'idle' | 'proposing' | 'executing' | 'done' | 'error';
+  updateError?: string | null;
 }
 
 // --- Helpers ---
@@ -1668,6 +1693,328 @@ router.post('/templates/set-category', (req, res) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// =============================================================================
+// Update Mode Endpoints
+// =============================================================================
+
+const BACKUP_DIR = '/root/projekte/local-storage/report-builder/backups';
+
+// Helper: resolve a target path (relative to BUSINESS_DIR or absolute)
+function resolveTargetPath(docPath: string): string {
+  if (docPath.startsWith('/')) return docPath;
+  return join(BUSINESS_DIR, docPath);
+}
+
+// Helper: run propose-updates in background
+async function runProposeUpdatesAsync(sessionId: string, targetDocuments: string[]) {
+  const session = loadSession(sessionId);
+  if (!session) return;
+  try {
+    // Collect selected claims
+    const selectedClaims = session.groups.flatMap(g =>
+      g.claims.filter(c => c.selected).map(c => ({
+        id: c.id,
+        text: c.text,
+        category: c.category,
+        source: c.source,
+        sourceSection: c.sourceSection,
+        weight: c.weight,
+      }))
+    );
+
+    if (selectedClaims.length === 0) throw new Error('Keine Claims ausgewählt');
+
+    // Load each target document
+    interface TargetDoc { docPath: string; docName: string; content: string; isNew: boolean; }
+    const targetDocs: TargetDoc[] = targetDocuments.map(docPath => {
+      const fullPath = resolveTargetPath(docPath);
+      const isNew = !existsSync(fullPath);
+      const content = isNew ? '' : readFileSync(fullPath, 'utf-8');
+      const docName = docPath.split('/').pop() || docPath;
+      return { docPath, docName, content, isNew };
+    });
+
+    const claimsList = selectedClaims.map(c =>
+      `ID: ${c.id} | [${c.category}] (weight:${c.weight}) ${c.text}\n  Quelle: ${c.source} > ${c.sourceSection}`
+    ).join('\n');
+
+    const docsList = targetDocs.map(d =>
+      `=== Dokument: "${d.docName}" (Pfad: ${d.docPath}) ${d.isNew ? '[NEU - wird erstellt]' : '[VORHANDEN]'} ===\n${d.content || '(noch nicht vorhanden)'}`
+    ).join('\n\n');
+
+    const systemPrompt = `Du bist ein Dokumenten-Assistent. Weise Claims den richtigen Zieldokumenten zu.
+
+Regeln:
+- Weise jeden Claim dem Dokument zu das thematisch am besten passt
+- Ein Claim kann nur einem Dokument zugewiesen werden
+- Weise nur Claims zu die neue oder andere Informationen als der bestehende Content enthalten
+- Bei neuen Dokumenten: weise alle thematisch passenden Claims zu
+- Nicht jeder Claim muss zugewiesen werden (irrelevante Claims können wegfallen)
+
+Antworte NUR mit einem JSON-Array von Objekten:
+[
+  {
+    "docPath": "relativer/pfad.md",
+    "docName": "dateiname.md",
+    "claimIds": ["cl-0", "cl-3"],
+    "reasoning": "Diese Claims enthalten X und Y was in dieses Dokument gehört weil...",
+    "isNew": false
+  }
+]`;
+
+    const userPrompt = `Claims:\n${claimsList}\n\nZieldokumente:\n${docsList}`;
+
+    console.log(`[ReportBuilder] propose-updates: ${BRIDGE_URL}/v1/chat/completions (${selectedClaims.length} claims, ${targetDocs.length} targets)`);
+
+    const response = await fetch(`${BRIDGE_URL}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${BRIDGE_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-5-20250929',
+        max_tokens: 4096,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+      }),
+      signal: AbortSignal.timeout(300000),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Bridge API ${response.status}: ${errText}`);
+    }
+
+    const data = await response.json() as any;
+    const text = data.choices?.[0]?.message?.content || '';
+    const jsonMatch = text.match(/```json\s*([\s\S]*?)```/) || text.match(/(\[[\s\S]*\])/);
+    if (!jsonMatch) throw new Error('No JSON array in propose response');
+    const proposals: UpdateProposal[] = JSON.parse(jsonMatch[1]);
+
+    const updatedSession = loadSession(sessionId);
+    if (!updatedSession) return;
+    updatedSession.updateProposals = proposals;
+    updatedSession.updateStatus = 'proposed' as any;
+    updatedSession.updateError = null;
+    saveSession(updatedSession);
+
+    console.log(`[ReportBuilder] propose-updates complete: ${proposals.length} proposals`);
+  } catch (err: any) {
+    const errSession = loadSession(sessionId);
+    if (errSession) {
+      errSession.updateStatus = 'error';
+      errSession.updateError = err.message;
+      saveSession(errSession);
+    }
+    console.error('[ReportBuilder] propose-updates error:', err.message);
+  }
+}
+
+// Helper: run execute-updates in background
+async function runExecuteUpdatesAsync(sessionId: string, proposals: UpdateProposal[]) {
+  const session = loadSession(sessionId);
+  if (!session) return;
+  try {
+    const diffs: UpdateDiff[] = [];
+
+    for (const proposal of proposals) {
+      if (!proposal.claimIds || proposal.claimIds.length === 0) continue;
+
+      const fullPath = resolveTargetPath(proposal.docPath);
+      const isNew = !existsSync(fullPath);
+      const originalContent = isNew ? '' : readFileSync(fullPath, 'utf-8');
+
+      // Get the claims for this proposal
+      const allClaims = session.groups.flatMap(g => g.claims);
+      const proposalClaims = proposal.claimIds
+        .map(id => allClaims.find(c => c.id === id))
+        .filter((c): c is ReportClaim => c !== undefined);
+
+      if (proposalClaims.length === 0) continue;
+
+      const claimsText = proposalClaims.map(c => {
+        const displayText = c.selectedVariant >= 0 && c.variants[c.selectedVariant]
+          ? c.variants[c.selectedVariant].text
+          : c.text;
+        return `- [${c.category}] (Gewicht: ${c.weight}/5) ${displayText}${c.context ? `\n  Kontext: ${c.context}` : ''}${c.note ? `\n  Anmerkung: ${c.note}` : ''}\n  Quelle: ${c.source} > ${c.sourceSection}`;
+      }).join('\n');
+
+      const systemPrompt = isNew
+        ? `Du bist ein technischer Redakteur. Erstelle ein neues Markdown-Dokument basierend auf den gegebenen Claims.
+Regeln:
+- Schreibe klares, strukturiertes Markdown
+- Verwende nur Informationen aus den Claims — ERFINDE NICHTS
+- Erstelle sinnvolle Überschriften und Struktur
+- Antworte NUR mit dem vollständigen Markdown-Dokument`
+        : `Du bist ein technischer Redakteur. Aktualisiere ein bestehendes Markdown-Dokument mit neuen Claims.
+Regeln:
+- Aktualisiere bestehende Abschnitte wenn Claims neue/korrigierte Informationen enthalten
+- Ergänze neue Informationen in passenden Abschnitten oder füge neue Abschnitte hinzu
+- Behalte bestehende Struktur und Style bei — minimale Änderungen
+- Entferne NICHTS was nicht durch Claims widerlegt wird
+- ERFINDE NICHTS — nur was in den Claims steht
+- Antworte NUR mit dem vollständigen, aktualisierten Markdown-Dokument`;
+
+      const userPrompt = isNew
+        ? `Erstelle ein neues Dokument "${proposal.docName}" aus diesen Claims:\n\n${claimsText}`
+        : `Bestehendes Dokument "${proposal.docName}":\n\n${originalContent}\n\n---\nNeue Claims zum Einarbeiten:\n\n${claimsText}`;
+
+      console.log(`[ReportBuilder] execute-updates: generating for "${proposal.docName}" (${proposalClaims.length} claims, isNew=${isNew})`);
+
+      const response = await fetch(`${BRIDGE_URL}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${BRIDGE_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-5-20250929',
+          max_tokens: 8192,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+        }),
+        signal: AbortSignal.timeout(300000),
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Bridge API ${response.status} for "${proposal.docName}": ${errText}`);
+      }
+
+      const data = await response.json() as any;
+      const proposedContent = data.choices?.[0]?.message?.content || '';
+
+      diffs.push({
+        docPath: proposal.docPath,
+        docName: proposal.docName,
+        originalContent,
+        proposedContent,
+        changeSummary: isNew ? `Neues Dokument mit ${proposalClaims.length} Claims erstellt` : `${proposalClaims.length} Claims eingearbeitet`,
+        status: 'ready',
+        isNew,
+      });
+    }
+
+    const updatedSession = loadSession(sessionId);
+    if (!updatedSession) return;
+    updatedSession.updateDiffs = diffs;
+    updatedSession.updateStatus = 'done';
+    updatedSession.updateError = null;
+    saveSession(updatedSession);
+
+    console.log(`[ReportBuilder] execute-updates complete: ${diffs.length} diffs generated`);
+  } catch (err: any) {
+    const errSession = loadSession(sessionId);
+    if (errSession) {
+      errSession.updateStatus = 'error';
+      errSession.updateError = err.message;
+      saveSession(errSession);
+    }
+    console.error('[ReportBuilder] execute-updates error:', err.message);
+  }
+}
+
+// POST /propose-updates — AI assigns claims to target documents
+router.post('/propose-updates', async (req, res) => {
+  const { sessionId, targetDocuments } = req.body;
+  if (!sessionId || !Array.isArray(targetDocuments) || targetDocuments.length === 0) {
+    return res.status(400).json({ error: 'sessionId and targetDocuments[] required' });
+  }
+
+  const session = loadSession(sessionId);
+  if (!session) return res.status(404).json({ error: 'Session not found' });
+
+  session.updateStatus = 'proposing';
+  session.updateError = null;
+  session.updateProposals = [];
+  saveSession(session);
+
+  runProposeUpdatesAsync(sessionId, targetDocuments).catch(err => {
+    console.error('[ReportBuilder] Background propose-updates failed:', err);
+  });
+
+  res.json({ ok: true });
+});
+
+// POST /execute-updates — generate diffs for each target document
+router.post('/execute-updates', async (req, res) => {
+  const { sessionId, proposals } = req.body;
+  if (!sessionId || !Array.isArray(proposals) || proposals.length === 0) {
+    return res.status(400).json({ error: 'sessionId and proposals[] required' });
+  }
+
+  const session = loadSession(sessionId);
+  if (!session) return res.status(404).json({ error: 'Session not found' });
+
+  session.updateStatus = 'executing';
+  session.updateError = null;
+  session.updateDiffs = [];
+  // Persist user's (potentially modified) proposals
+  session.updateProposals = proposals;
+  saveSession(session);
+
+  runExecuteUpdatesAsync(sessionId, proposals).catch(err => {
+    console.error('[ReportBuilder] Background execute-updates failed:', err);
+  });
+
+  res.json({ ok: true });
+});
+
+// POST /apply-updates — write confirmed diffs to disk (with backup for existing files)
+router.post('/apply-updates', async (req, res) => {
+  const { sessionId, docPaths } = req.body;
+  if (!sessionId || !Array.isArray(docPaths) || docPaths.length === 0) {
+    return res.status(400).json({ error: 'sessionId and docPaths[] required' });
+  }
+
+  const session = loadSession(sessionId);
+  if (!session) return res.status(404).json({ error: 'Session not found' });
+  if (!session.updateDiffs || session.updateDiffs.length === 0) {
+    return res.status(400).json({ error: 'No diffs to apply' });
+  }
+
+  const applied: string[] = [];
+  const errors: { path: string; error: string }[] = [];
+
+  for (const docPath of docPaths) {
+    const diff = session.updateDiffs.find(d => d.docPath === docPath);
+    if (!diff) {
+      errors.push({ path: docPath, error: 'Diff not found' });
+      continue;
+    }
+    if (diff.status === 'applied') continue;
+
+    try {
+      const fullPath = resolveTargetPath(docPath);
+
+      // Ensure parent directory exists for new files
+      const parentDir = fullPath.substring(0, fullPath.lastIndexOf('/'));
+      if (!existsSync(parentDir)) mkdirSync(parentDir, { recursive: true });
+
+      // Backup existing file
+      if (existsSync(fullPath)) {
+        mkdirSync(BACKUP_DIR, { recursive: true });
+        const now = new Date();
+        const ts = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}-${String(now.getMinutes()).padStart(2,'0')}`;
+        const fileName = fullPath.split('/').pop() || 'backup.md';
+        const backupPath = join(BACKUP_DIR, `${ts}_${fileName}`);
+        writeFileSync(backupPath, readFileSync(fullPath, 'utf-8'));
+        console.log(`[ReportBuilder] Backup created: ${backupPath}`);
+      }
+
+      writeFileSync(fullPath, diff.proposedContent, 'utf-8');
+      diff.status = 'applied';
+      applied.push(docPath);
+      console.log(`[ReportBuilder] Applied update: ${fullPath}`);
+    } catch (err: any) {
+      errors.push({ path: docPath, error: err.message });
+      console.error(`[ReportBuilder] apply-updates error for ${docPath}:`, err.message);
+    }
+  }
+
+  saveSession(session);
+  res.json({ applied, errors });
 });
 
 export default router;
