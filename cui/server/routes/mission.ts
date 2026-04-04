@@ -8,18 +8,19 @@ import { promisify } from 'util';
 import { PATHS, BRIDGE_URL } from '../config/paths.js';
 import type { AttentionReason, ConvAttentionState, SessionState, PanelVisibility } from './shared/types.js';
 import { logUserInput as sharedLogUserInput, atomicWriteFileSync } from './shared/utils.js';
-import { findJsonlPath, findJsonlPathAllAccounts, readJsonlMetadata, clearMetaCache, readConversationMessages, getOriginalCwd, extractConversationContext, unstickConversation, deepRepairJsonl, compactJsonlForResume } from './shared/jsonl.js';
+import { findJsonlPath, findJsonlPathAllAccounts, ensureJsonlForAccount, readJsonlMetadata, clearMetaCache, readConversationMessages, getOriginalCwd, extractConversationContext, unstickConversation, deepRepairJsonl, compactJsonlForResume } from './shared/jsonl.js';
 import * as convMeta from './shared/conv-metadata.js';
 import { updateAutoInjectSession, disableAutoInject } from './autoinject.js';
 
-/** Validates that a workDir is under an allowed root path */
+/** Validates that a workDir is under an allowed root path.
+ *  Bare /root/projekte is blocked — sessions must use a registered workspace subdirectory. */
 function isValidWorkDir(d: string): boolean {
   if (!d) return false;
   if (IS_LOCAL_MODE) return d.startsWith("/Users/") || d.startsWith("/tmp/");
-  return d.startsWith("/root/projekte") || d.startsWith("/root/orchestrator") || d.startsWith("/home/claude-user");
+  if (d === '/root/projekte' || d === '/root/projekte/') return false; // Guard: no bare root-projekte
+  return d.startsWith("/root/projekte/") || d.startsWith("/root/orchestrator/") || d.startsWith("/home/claude-user") || d.startsWith("/opt/");
 }
-import { findJsonlPath, findJsonlPathAllAccounts, readJsonlMetadata, readConversationMessages, getOriginalCwd, extractConversationContext, unstickConversation, deepRepairJsonl, compactJsonlForResume } from './shared/jsonl.js';
-import { IS_LOCAL_MODE } from './state.js';
+import { IS_LOCAL_MODE, onSessionStateChange } from './state.js';
 import * as claudeCli from './claude-cli.js';
 
 const execAsync = promisify(exec);
@@ -69,6 +70,63 @@ export function initMissionRouter(deps: MissionDeps) {
   // Initialize file paths
   INPUT_LOG_FILE = join(DATA_DIR, 'input-log.jsonl');
   buildSessionProjectMap();
+
+  // Review completion handler: when a review session reaches done state,
+  // inject its result into the original session and mark it finished.
+  onSessionStateChange(async (sessionId, state, reason) => {
+    const originalSessionId = convMeta.getReviewOriginal(sessionId);
+    if (!originalSessionId) return;
+    const isDone = (state === 'needs_attention' && reason === 'done') || (state === 'idle' && reason === 'done');
+    if (!isDone) return;
+
+    console.log(`[Review] Session ${sessionId.slice(0, 8)} done → injecting feedback into ${originalSessionId.slice(0, 8)}`);
+    convMeta.deleteReview(sessionId);
+
+    try {
+      // Get last assistant message from review session
+      const found = findJsonlPathAllAccounts(sessionId);
+      let reviewResult = '';
+      if (found) {
+        const lines = readFileSync(found.path, 'utf8').trim().split('\n').filter(Boolean).reverse();
+        for (const line of lines) {
+          try {
+            const obj = JSON.parse(line);
+            if (obj.type === 'assistant' && obj.message?.content) {
+              const parts = Array.isArray(obj.message.content) ? obj.message.content : [];
+              const text = parts.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n').trim();
+              if (text) { reviewResult = text; break; }
+            }
+          } catch { /* skip */ }
+        }
+      }
+
+      if (!reviewResult) {
+        console.warn(`[Review] No result found for review session ${sessionId.slice(0, 8)}`);
+        return;
+      }
+
+      // Inject review feedback into original session
+      const originalAccountId = convMeta.getAssignment(originalSessionId) || claudeCli.ACCOUNT_CONFIG[0]?.id || 'werking';
+      const originalWorkDir = convMeta.getWorkDir(originalSessionId) || '';
+      const originalModel = convMeta.getModel(originalSessionId) || '';
+      const feedbackMessage = `[Review-Ergebnis]\n\n${reviewResult}`;
+
+      const result = await claudeCli.startConversation(originalAccountId, feedbackMessage, originalWorkDir, originalSessionId, originalModel);
+      if (result.ok) {
+        broadcast({ type: 'conv-review-complete', sessionId: originalSessionId, reviewSessionId: sessionId, result: reviewResult });
+        console.log(`[Review] Feedback injected into ${originalSessionId.slice(0, 8)}`);
+      } else {
+        console.warn(`[Review] Injection failed: ${result.error}`);
+      }
+
+      // Mark review session as finished
+      convMeta.setFinished(sessionId, true);
+      await claudeCli.stopConversation(sessionId);
+      broadcast({ type: 'control:conversation-finished', sessionId, panelsToClose: [] });
+    } catch (err) {
+      console.warn('[Review] Completion handler error:', (err as Error).message);
+    }
+  });
 
   // Warm up conversation cache on startup (async, non-blocking)
   setTimeout(async () => {
@@ -325,6 +383,23 @@ function deduplicateConversations(results: any[]): any[] {
   return deduped;
 }
 
+// Helper: get all registered workspace workDirs from project configs
+function getRegisteredWorkspaces(): string[] {
+  try {
+    return readdirSync(PROJECTS_DIR)
+      .filter(f => f.endsWith('.json'))
+      .map(f => { try { return JSON.parse(readFileSync(join(PROJECTS_DIR, f), 'utf8')).workDir; } catch { return null; } })
+      .filter((d): d is string => !!d);
+  } catch { return []; }
+}
+
+// Helper: check if workDir matches a registered workspace (exact match or subdirectory)
+function isRegisteredWorkspace(workDir: string): boolean {
+  if (!workDir) return false;
+  const registered = getRegisteredWorkspaces();
+  return registered.some(ws => workDir === ws || workDir.startsWith(ws + '/'));
+}
+
 // Helper: resolve projectPath → project name
 function resolveProjectName(projectPath: string): string {
   const projects = readdirSync(PROJECTS_DIR).filter(f => f.endsWith('.json'));
@@ -417,8 +492,10 @@ async function fetchConvList() {
   console.log(`[Perf] fetchConvList scan: ${Date.now() - t0}ms, ${results.length} conversations, ${scannedRealpaths.size} unique dirs`);
 
   const promptTimes = convMeta.getAllLastPrompts();
+  const assignedModels = convMeta.getAllModels();
   for (const r of results) {
     r.lastPromptAt = promptTimes[r.sessionId] || '';
+    r.assignedModel = assignedModels[r.sessionId] || '';
   }
 
   results.sort((a, b) => {
@@ -451,6 +528,13 @@ async function fetchConvList() {
   for (const conv of deduped) {
     if (finished[conv.sessionId]) {
       (conv as any).manualFinished = true;
+    }
+  }
+
+  const paused = convMeta.getAllPaused();
+  for (const conv of deduped) {
+    if (paused[conv.sessionId]) {
+      (conv as any).manualPaused = true;
     }
   }
 
@@ -696,6 +780,8 @@ router.get('/conversation/:accountId/:sessionId', async (req, res) => {
     apiErrorText: hasApiError ? errorText : undefined,
     sessionCwd,
     planText,
+    assignedModel: convMeta.getModel(req.params.sessionId) || '',
+    manualPaused: convMeta.isPaused(req.params.sessionId) || false,
   });
   } catch (err: any) {
     console.warn('[Server] GET /api/mission/conversation detail error:', err);
@@ -715,9 +801,9 @@ router.post('/send', async (req, res) => {
     res.status(400).json({ error: 'unknown account' }); return;
   }
 
-  // Resolve workDir: validate explicit > persisted > default
-  const defaultWorkDir = IS_LOCAL_MODE ? '/Users/rafael/Documents/GitHub' : '/root/projekte';
-  const resolvedWorkDir = (isValidWorkDir(workDir) ? workDir : null) || convMeta.getWorkDir(sessionId) || defaultWorkDir;
+  // Resolve workDir: validate explicit > persisted > default (no fallback to bare /root/projekte)
+  const defaultWorkDir = IS_LOCAL_MODE ? '/Users/rafael/Documents/GitHub' : null;
+  const resolvedWorkDir = (isValidWorkDir(workDir) ? workDir : null) || convMeta.getWorkDir(sessionId) || defaultWorkDir || '/root/projekte';
   if (workDir) convMeta.saveWorkDir(sessionId, workDir);
 
   // Block if session has active tool executions (prevents API 400 concurrency error)
@@ -761,8 +847,19 @@ router.post('/send', async (req, res) => {
   }
 
   // Only resume if JSONL file exists (otherwise it's a new session)
-  const jsonlExists = findJsonlPathAllAccounts(sessionId) !== null;
+  const jsonlInfo = findJsonlPathAllAccounts(sessionId);
+  const jsonlExists = jsonlInfo !== null;
   const resumeId = jsonlExists ? sessionId : undefined;
+
+  // Cross-account resume: ensure JSONL is accessible from target account HOME
+  if (jsonlExists && jsonlInfo!.accountId !== accountId) {
+    const linked = ensureJsonlForAccount(sessionId, accountId);
+    if (linked) {
+      console.log();
+    } else {
+      console.warn();
+    }
+  }
 
   // Use original CWD from JSONL for resume (fixes CWD mismatch)
   const resumeWorkDir = jsonlExists ? (getOriginalCwd(sessionId) || resolvedWorkDir) : resolvedWorkDir;
@@ -784,6 +881,9 @@ router.post('/send', async (req, res) => {
     }
   }
 
+  // Read stored model for this session (for resume)
+  const storedModel = convMeta.getModel(sessionId) || 'opus';
+
   // Enrich message with session context on resume (prevents context amnesia)
   // Inlines full user messages + truncated assistant text — no tool calls
   let resumeMessage = message;
@@ -797,14 +897,14 @@ router.post('/send', async (req, res) => {
 
   let finalSessionId = sessionId;
   let resumeFailed = false;
-  let result = await claudeCli.startConversation(accountId, resumeMessage, resumeWorkDir, resumeId);
+  let result = await claudeCli.startConversation(accountId, resumeMessage, resumeWorkDir, resumeId, storedModel);
 
   // If resume failed, try deep repair then retry with original CWD
   if (!result.ok) {
     console.log(`[Send] Resume failed for ${sessionId}: ${result.error} — attempting deep repair...`);
     const deepCleaned = deepRepairJsonl(sessionId);
     if (deepCleaned > 0) {
-      result = await claudeCli.startConversation(accountId, resumeMessage, resumeWorkDir, sessionId);
+      result = await claudeCli.startConversation(accountId, resumeMessage, resumeWorkDir, sessionId, storedModel);
     }
     // Still fails — start fresh WITH conversation context (don't lose history)
     if (!result.ok) {
@@ -812,10 +912,10 @@ router.post('/send', async (req, res) => {
       if (context) {
         console.log(`[Send] Resume failed — starting fresh session WITH conversation context`);
         const contextMessage = `${context}\n\n[Neue Nachricht vom User:]\n${message}`;
-        result = await claudeCli.startConversation(accountId, contextMessage, resumeWorkDir);
+        result = await claudeCli.startConversation(accountId, contextMessage, resumeWorkDir, undefined, storedModel);
       } else {
         console.log(`[Send] Resume failed, no context available — starting fresh session`);
-        result = await claudeCli.startConversation(accountId, message, resumeWorkDir);
+        result = await claudeCli.startConversation(accountId, message, resumeWorkDir, undefined, storedModel);
       }
       if (result.ok) resumeFailed = true;
     }
@@ -915,6 +1015,110 @@ router.post('/conversation/:sessionId/finish', async (req, res) => {
     broadcast({ type: 'control:conversation-finished', sessionId: sid, panelsToClose });
   }
   res.json({ ok: true, sessionId: sid, finished });
+});
+
+// 5e. Start a review session for a conversation
+// Extracts user inputs, starts independent review session, auto-injects result when done
+router.post('/conversation/:sessionId/review', async (req, res) => {
+  const sid = req.params.sessionId;
+
+  // Extract user inputs + last assistant response from original session
+  const context = extractConversationContext(sid, 80);
+  if (!context) {
+    res.status(404).json({ error: 'Cannot read conversation context' });
+    return;
+  }
+
+  // Also get the last assistant message for "what was implemented"
+  let lastAssistantText = '';
+  const found = findJsonlPathAllAccounts(sid);
+  if (found) {
+    const lines = readFileSync(found.path, 'utf8').trim().split('\n').filter(Boolean).reverse();
+    for (const line of lines) {
+      try {
+        const obj = JSON.parse(line);
+        if (obj.type === 'assistant' && obj.message?.content) {
+          const parts = Array.isArray(obj.message.content) ? obj.message.content : [];
+          const text = parts.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n').trim();
+          if (text.length > 50) { lastAssistantText = text.slice(0, 3000); break; }
+        }
+      } catch { /* skip */ }
+    }
+  }
+
+  const reviewPrompt = `Du bist ein unabhängiger Code-Reviewer. Analysiere ob die KI-Session die Anforderungen vollständig erfüllt hat.
+
+**GESPRÄCHSVERLAUF (User-Anforderungen & KI-Antworten):**
+${context}
+
+${lastAssistantText ? `**LETZTE KI-ANTWORT (Was wurde umgesetzt):**\n${lastAssistantText}\n\n` : ''}Prüfe systematisch:
+1. Was hat der User konkret verlangt?
+2. Was wurde tatsächlich umgesetzt?
+3. Gibt es Lücken, Fehler oder Abweichungen?
+
+Schreibe ein klares Fazit:
+- **APPROVED** — Alles korrekt und vollständig umgesetzt
+- **NEEDS_REVISION** — Liste der konkreten Punkte die fehlen oder falsch sind
+
+Halte dich präzise. Deine Antwort wird automatisch als Feedback in die Originalkonversation eingefügt.`;
+
+  const accountId = convMeta.getAssignment(sid) || claudeCli.ACCOUNT_CONFIG[0]?.id || 'werking';
+  const workDir = convMeta.getWorkDir(sid) || '';
+  const model = convMeta.getModel(sid) || '';
+
+  try {
+    const result = await claudeCli.startConversation(accountId, reviewPrompt, workDir, undefined, model);
+    if (!result.ok) {
+      res.status(502).json({ error: result.error || 'Failed to start review session' });
+      return;
+    }
+    const reviewSessionId = result.sessionId;
+    convMeta.setReview(reviewSessionId, sid);
+    convMeta.saveTitle(reviewSessionId, `Review: ${convMeta.getTitle(sid) || sid.slice(0, 8)}`);
+    convMeta.saveAssignment(reviewSessionId, accountId);
+    convMeta.saveWorkDir(reviewSessionId, workDir);
+    convMeta.saveModel(reviewSessionId, model);
+    invalidateConvCache();
+
+    broadcast({ type: 'conv-review-started', sessionId: sid, reviewSessionId });
+    console.log(`[Review] Started ${reviewSessionId.slice(0, 8)} for ${sid.slice(0, 8)}`);
+    res.json({ ok: true, reviewSessionId });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 5f. Pause conversation (suppresses needs_attention indicator without closing)
+router.post('/conversation/:sessionId/pause', (req, res) => {
+  const paused = req.body.paused !== false;
+  const sid = req.params.sessionId;
+  convMeta.setPaused(sid, paused);
+  invalidateConvCache();
+  broadcast({ type: 'conv-paused', sessionId: sid, paused });
+  console.log(`[Pause] ${sid.slice(0, 8)} → ${paused ? 'paused' : 'unpaused'}`);
+  res.json({ ok: true, sessionId: sid, paused });
+});
+
+// 5f. Model change — takes effect on next resume
+router.post('/model/:sessionId', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { model } = req.body;
+    const VALID_MODELS = ['opus', 'sonnet', 'haiku'];
+    if (!model || !VALID_MODELS.includes(model)) {
+      res.status(400).json({ error: `Invalid model. Valid: ${VALID_MODELS.join(', ')}` });
+      return;
+    }
+    const previousModel = convMeta.getModel(sessionId) || 'opus';
+    convMeta.saveModel(sessionId, model);
+    broadcast({ type: 'conv-model-changed', sessionId, model, previousModel });
+    console.log(`[Model] ${sessionId.slice(0, 8)}: ${previousModel} -> ${model}`);
+    res.json({ ok: true, sessionId, model, previousModel, note: 'Takes effect on next resume' });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn('[Server] POST /api/mission/model error:', msg);
+    res.status(500).json({ error: 'Internal error' });
+  }
 });
 
 // 5e-hard. Hard-kill: nuclear kill of ALL processes for a session (zombie wrappers, orphans, everything)
@@ -1073,10 +1277,15 @@ function buildSessionContext(workDir: string): string | null {
   const hasActivePeers = existsSync(activeWorkFile)
     && readFileSync(activeWorkFile, 'utf8').includes('AKTIV');
 
+  const isMissionWorkspace = workDir.includes('administration') || workDir.includes('orchestrator');
   const parts = [
     `[KONTEXT: Projekt="${project}", Leader: ${PROJECT_LEADERS[project]?.join(', ')}]`,
     hasActivePeers ? '[PEERS: Andere Sessions aktiv — cat ~/.claude/active-work.md]' : '',
     teamCtx ? `[TEAM]\n${teamCtx}` : '',
+    isMissionWorkspace ? `[MODEL-CONTROL: Du bist Mission Chat (Opus). Andere Sessions laufen default Sonnet.
+Zum Modell-Wechsel einer Session: curl -s -X POST http://localhost:4005/api/mission/model/SESSION_ID -H 'Content-Type: application/json' -d '{"model":"opus"}'
+Zum Zurueckschalten: curl -s -X POST http://localhost:4005/api/mission/model/SESSION_ID -H 'Content-Type: application/json' -d '{"model":"sonnet"}'
+Gueltige Modelle: opus, sonnet. Nur auf Opus eskalieren wenn Sonnet nicht ausreicht (komplexe Architektur, Multi-File-Refactoring, Security-Audit).]` : '',
   ].filter(Boolean);
 
   return parts.length > 0 ? parts.join('\n') : null;
@@ -1084,7 +1293,9 @@ function buildSessionContext(workDir: string): string | null {
 
 router.post('/start', async (req, res) => {
   try {
-  const { accountId, workDir, subject, message } = req.body;
+  const { accountId, workDir, subject, message, model } = req.body;
+  const VALID_MODELS = ['opus', 'sonnet', 'haiku'];
+  const resolvedModel = (model && VALID_MODELS.includes(model)) ? model : 'opus';
   if (!accountId || !message) {
     res.status(400).json({ error: 'accountId, message required' });
     return;
@@ -1093,14 +1304,26 @@ router.post('/start', async (req, res) => {
     res.status(400).json({ error: 'unknown account' }); return;
   }
 
-  const defaultWorkDir = IS_LOCAL_MODE ? '/Users/rafael/Documents/GitHub' : '/root/projekte';
+  // No default to /root/projekte — sessions must declare a registered workspace
+  const defaultWorkDir = IS_LOCAL_MODE ? '/Users/rafael/Documents/GitHub' : null;
   const resolvedWorkDir = (isValidWorkDir(workDir) ? workDir : null) || defaultWorkDir;
+
+  // Workspace-gate: require a registered workDir on remote (no fallback to root)
+  if (!IS_LOCAL_MODE && (!resolvedWorkDir || !isRegisteredWorkspace(resolvedWorkDir))) {
+    const registered = getRegisteredWorkspaces();
+    console.warn(`[Start] REJECTED: workDir "${workDir || ''}" is not a registered workspace.`);
+    res.status(400).json({
+      error: `workDir "${workDir || ''}" is required and must be a registered workspace.`,
+      registeredWorkspaces: registered,
+    });
+    return;
+  }
 
   // Enrich first message with team context (only for new conversations)
   const ctx = buildSessionContext(resolvedWorkDir);
   const enrichedMessage = ctx ? `${ctx}\n\n---\n\n${message}` : message;
 
-  const result = await claudeCli.startConversation(accountId, enrichedMessage, resolvedWorkDir);
+  const result = await claudeCli.startConversation(accountId, enrichedMessage, resolvedWorkDir, undefined, resolvedModel);
   if (!result.ok) {
     logUserInput({ type: 'start', accountId, workDir, subject, message, result: 'error', error: result.error });
     res.status(502).json({ error: result.error || 'CLI spawn failed' });
@@ -1113,13 +1336,14 @@ router.post('/start', async (req, res) => {
   if (subject) convMeta.saveTitle(sessionId, subject);
   convMeta.saveAssignment(sessionId, accountId);
   convMeta.saveWorkDir(sessionId, resolvedWorkDir);
+  convMeta.saveModel(sessionId, resolvedModel);
   convMeta.setLastPrompt(sessionId);
   invalidateConvCache();
 
   // State tracking is handled by claude-cli stdout parsing
   // Broadcast so LayoutManagers can auto-mount immediately
   broadcast({ type: 'control:conversation-started', sessionId, accountId, workDir: resolvedWorkDir });
-  res.json({ ok: true, sessionId });
+  res.json({ ok: true, sessionId, model: resolvedModel });
   } catch (err: any) {
     console.warn('[Server] POST /api/mission/start error:', err);
     res.status(500).json({ error: 'Internal error' });
@@ -1406,6 +1630,7 @@ router.post('/commander/dispatch', async (req, res) => {
           workDir: action.workDir,
           subject: action.subject || '',
           message: action.message,
+          model: action.model || 'opus',
         }),
         signal: AbortSignal.timeout(65000),
       });
