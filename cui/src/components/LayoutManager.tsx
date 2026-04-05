@@ -2,7 +2,9 @@ import { useCallback, useRef, useState, useEffect, useMemo, lazy, Suspense } fro
 import { Layout, Model, TabNode, TabSetNode, BorderNode, IJsonModel, ITabSetRenderValues, ITabRenderValues, Actions, DockLocation, Rect } from 'flexlayout-react';
 import type { CuiStates } from '../types';
 import { copyToClipboard } from '../utils/clipboard';
-const ACCOUNT_LABELS: Record<string, string> = { rafael: "Engelmann", engelmann: "Gmail", office: "Office", local: "Lokal", gemini: "Gemini" };
+import { useAuth } from '../contexts/AuthContext';
+import { ACCOUNTS } from '../types';
+const ACCOUNT_LABELS: Record<string, string> = Object.fromEntries(ACCOUNTS.map(a => [a.id, a.label]));
 
 // --- flexlayout-react CPU fix ---
 // flexlayout's internal useLayoutEffect hooks (no dep arrays) call getBoundingClientRect
@@ -54,23 +56,18 @@ import NotesPanel from './panels/NotesPanel';
 import ErrorBoundary from './ErrorBoundary';
 import PanelConnectivityGuard from './panels/PanelConnectivityGuard';
 
-// --- Heavy panels (lazy-loaded: recharts, d3, large component trees) ---
-const MissionControl = lazy(() => import('./panels/MissionControl'));
-const OfficePanel = lazy(() => import('./panels/OfficePanel'));
-const KnowledgeFullscreen = lazy(() => import('./panels/KnowledgeFullscreen'));
-const WerkingReportAdmin = lazy(() => import('./panels/WerkingReportAdmin/WerkingReportAdmin'));
-const LinkedInPanel = lazy(() => import('./panels/LinkedInPanel'));
-const BridgeMonitor = lazy(() => import('./panels/BridgeMonitor/BridgeMonitor'));
-const InfisicalMonitor = lazy(() => import('./panels/InfisicalMonitor/InfisicalMonitor'));
-const QADashboard = lazy(() => import('./panels/QADashboard/QADashboard'));
-const RepoDashboard = lazy(() => import('./panels/RepoDashboard/RepoDashboard'));
-const SystemHealth = lazy(() => import('./panels/SystemHealth'));
-const WatchdogPanel = lazy(() => import('./panels/WatchdogPanel'));
+// --- Heavy panels — aus Panel Registry (Single Source of Truth) ---
+// Neues Panel? panelRegistry.ts editieren, NICHT diese Datei.
+import {
+  MissionControl, OfficePanel, KnowledgeFullscreen, WerkingReportAdmin,
+  LinkedInPanel, BridgeMonitor, InfisicalMonitor, QADashboard, RepoDashboard,
+  SystemHealth, WatchdogPanel, PeerAwarenessPanel, BackgroundOpsPanel,
+  ConversationQueuePanel, MaintenancePanel, UserInputAuditPanel,
+  ArchitectureExplorer, ReportBuilder, PromptExplorer, BusinessAngelPanel,
+  PANEL_NAMES, PANEL_MENU_OPTIONS,
+} from './panelRegistry';
+// LayoutBuilder ist Desktop-only — bleibt hier
 const LayoutBuilder = lazy(() => import('./LayoutBuilder'));
-const PeerAwarenessPanel = lazy(() => import('./panels/PeerAwarenessPanel'));
-const BackgroundOpsPanel = lazy(() => import('./panels/BackgroundOpsPanel'));
-const ConversationQueuePanel = lazy(() => import("./panels/ConversationQueuePanel"));
-const MaintenancePanel = lazy(() => import('./panels/MaintenancePanel/MaintenancePanel'));
 
 import '../styles/office.css';
 
@@ -112,7 +109,7 @@ function defaultLayout(workDir: string): IJsonModel {
                 {
                   type: 'tab',
                   name: 'CUI',
-                  component: 'cui',
+                  component: 'cui-lite',
                   config: {},
                 },
               ],
@@ -148,7 +145,7 @@ function defaultLayout(workDir: string): IJsonModel {
                 {
                   type: 'tab',
                   name: 'CUI',
-                  component: 'cui',
+                  component: 'cui-lite',
                   config: {},
                 },
               ],
@@ -181,13 +178,16 @@ interface LayoutManagerProps {
   projectId: string;
   workDir: string;
   cuiStates?: CuiStates;
-  onAttentionChange?: (needsAttention: boolean, state?: 'working' | 'needs_attention') => void;
+  onAttentionChange?: (needsAttention: boolean, state?: 'working' | 'needs_attention' | 'idle') => void;
   onCuiStateReset?: (cuiId: string) => void;
   pendingActivation?: ActivationPlan[] | null;
   onActivationProcessed?: (projectId?: string) => void;
+  isActive?: boolean;
 }
 
-export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAttentionChange, onCuiStateReset, pendingActivation, onActivationProcessed }: LayoutManagerProps) {
+export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAttentionChange, onCuiStateReset, pendingActivation, onActivationProcessed, isActive }: LayoutManagerProps) {
+  const { canAccessPanel } = useAuth();
+
   // Stale-while-revalidate: use cached layout instantly, refresh in background
   const [model, setModel] = useState<Model | null>(() => {
     try {
@@ -207,6 +207,8 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
   // Per-session state tracking for tab indicators (updated via WS conv-attention events)
   // Key: sessionId, Value: { state, reason }
   const sessionStatesRef = useRef<Map<string, { state: string; reason?: string }>>(new Map());
+  // Per-session pause tracking (updated via WS conv-paused events)
+  const pausedSessionsRef = useRef<Set<string>>(new Set());
   // Force tab re-render counter (bumped when session states change)
   const [tabRenderTick, setTabRenderTick] = useState(0);
 
@@ -215,8 +217,11 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
   cuiStatesRef.current = cuiStates;
   const onCuiStateResetRef = useRef(onCuiStateReset);
   onCuiStateResetRef.current = onCuiStateReset;
+  const isActiveRef = useRef(isActive);
+  isActiveRef.current = isActive;
   const modelRef = useRef<Model | null>(null);
   modelRef.current = model;
+  const modelInitialized = model !== null;  // stable boolean: changes only once (null->Model)
 
   // Background refresh: fetch fresh layout from server (stale-while-revalidate)
   // Model is already loaded from localStorage cache in useState initializer above
@@ -309,6 +314,18 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       <Suspense fallback={<PanelLoader />}>{children}</Suspense>
     );
 
+    // Panel access check (no-op when auth is disabled)
+    if (component && !canAccessPanel(component)) {
+      return wrapPanel('AccessDenied',
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--tn-text-muted)', fontSize: 12, textAlign: 'center', padding: 20 }}>
+          <div>
+            <div style={{ fontSize: 18, marginBottom: 8, opacity: 0.5 }}>Restricted</div>
+            <div>You don't have access to this panel.</div>
+          </div>
+        </div>
+      );
+    }
+
     switch (component) {
       case 'cui':
       case 'cui-lite':
@@ -324,13 +341,14 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
             }
           }} />);
       case 'chat': {
-        const accountId = config.accountId || 'rafael';
+        const accountId = config.accountId || 'engelmann';
         const PROXY_PORTS: Record<string, number> = {
           rafael: 5001,
           engelmann: 5002,
           office: 5003,
           local: 5004,
-          gemini: 5005
+          gemini: 5005,
+          werking: 5006
         };
         return wrapPanel('NativeChat', <NativeChat accountId={accountId} proxyPort={PROXY_PORTS[accountId] || 5001} />);
       }
@@ -345,7 +363,18 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         return wrapPanel('NotesPanel', <NotesPanel projectId={projectId} />);
       case 'mission':
         return wrapPanel('MissionControl', withSuspense(<MissionControl projectId={config.projectId || projectId} workDir={config.workDir || workDir} />));
-      case 'office':
+      case 'mission-chat':
+        return wrapPanel('MissionChat', <CuiLitePanel accountId={config.accountId || 'engelmann'} projectId="mission-chat" workDir="/root/orchestrator/workspaces/mission-chat" panelId={nodeId} isTabVisible={node.isVisible()}
+          initialSessionId={config.initialSessionId}
+          onRouteChange={(route) => updateNodeConfig(nodeId, { _route: route })}
+          onStateChange={(state) => { updateNodeConfig(nodeId, { _attention: state }); setAttentionVersion(v => v + 1); }}
+          onFinish={(sid) => {
+            const m = modelRef.current;
+            if (m) {
+              try { m.doAction(Actions.deleteTab(nodeId)); saveLayoutRef.current(m); } catch (e) { console.warn('[LM] Finish deleteTab:', e); }
+            }
+          }} />);
+      case 'gmail':
       case 'virtual-office':
         return wrapPanel('OfficePanel', withSuspense(<OfficePanel projectId={projectId} workDir={workDir} />));
       case 'knowledge':
@@ -386,6 +415,16 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         return wrapPanel('ConversationQueue', withSuspense(<ConversationQueuePanel projectId={projectId} />));
       case 'maintenance':
         return wrapPanel('MaintenancePanel', withSuspense(<MaintenancePanel />));
+      case 'input-audit':
+        return wrapPanel('UserInputAuditPanel', withSuspense(<UserInputAuditPanel />));
+      case 'architecture':
+        return wrapPanel('ArchitectureExplorer', withSuspense(<ArchitectureExplorer />));
+      case 'report-builder':
+        return wrapPanel('ReportBuilder', withSuspense(<ReportBuilder />));
+      case 'business-angel':
+        return wrapPanel('Business Angel', withSuspense(<BusinessAngelPanel />));
+      case 'prompt-explorer':
+        return wrapPanel('PromptExplorer', withSuspense(<PromptExplorer />));
       default:
         return wrapPanel(`Unknown:${component}`,
           <div style={{ padding: 20, color: 'var(--tn-text-muted)' }}>
@@ -456,38 +495,17 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
   const saveLayoutRef = useRef(saveLayout);
   saveLayoutRef.current = saveLayout;
 
-  const addTab = useCallback((type: 'cui' | 'cui-lite' | 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'repo-dashboard' | 'watchdog' | 'background-ops' | 'conversation-queue' | 'maintenance' | 'qa-dashboard' | 'peer-awareness' | 'infisical-monitor', config: Record<string, string>, targetId: string) => {
+  const addTab = useCallback((type: 'cui' | 'cui-lite' | 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'gmail' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'repo-dashboard' | 'watchdog' | 'background-ops' | 'conversation-queue' | 'maintenance' | 'input-audit' | 'qa-dashboard' | 'peer-awareness' | 'infisical-monitor' | 'mission-chat' | 'architecture' | 'report-builder' | 'prompt-explorer', config: Record<string, string>, targetId: string) => {
     const m = modelRef.current;
     if (!m) return;
-    const names: Record<string, string> = {
-      cui: 'CUI',
-      'cui-lite': 'CUI',
-      browser: 'Browser',
-      preview: 'File Preview',
-      notes: 'Notes',
-      images: 'Images',
-      mission: 'Mission Control',
-      office: 'Virtual Office',
-      'admin-wr': 'Werking Report Admin',
-      linkedin: 'LinkedIn Marketing',
-      'system-health': 'System Health',
-      'bridge-monitor': 'Bridge Monitor',
-      'repo-dashboard': 'Git & Pipeline Monitor',
-      watchdog: 'Dev Server Watchdog',
-      'background-ops': 'Background Ops',
-      'conversation-queue': 'Conversation Queue',
-      maintenance: 'Maintenance',
-      'qa-dashboard': 'QA Dashboard',
-      'peer-awareness': 'Peer Awareness',
-      'infisical-monitor': 'Infisical Monitor',
-    };
+    // Panel-Namen kommen aus der Registry (SSoT)
     if (type === 'preview' && !config.watchPath) {
       config.watchPath = activeDirRef.current || workDir;
     }
     try {
       m.doAction(
         Actions.addNode(
-          { type: 'tab', name: names[type], component: type, config },
+          { type: 'tab', name: PANEL_NAMES[type] ?? type, component: type, config },
           targetId,
           DockLocation.CENTER,
           -1
@@ -509,7 +527,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           if (val === 'cui') {
             addTab('cui', {}, node.getId());
           } else {
-            addTab(val as 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'office' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'repo-dashboard' | 'watchdog' | 'background-ops' | 'conversation-queue' | 'maintenance' | 'qa-dashboard' | 'peer-awareness' | 'infisical-monitor', {}, node.getId());
+            addTab(val as 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'gmail' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'repo-dashboard' | 'watchdog' | 'background-ops' | 'conversation-queue' | 'maintenance' | 'input-audit' | 'qa-dashboard' | 'peer-awareness' | 'infisical-monitor' | 'mission-chat' | 'architecture' | 'report-builder' | 'prompt-explorer', {}, node.getId());
           }
           e.target.value = '';
         }}
@@ -527,25 +545,9 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         }}
       >
         <option value="">+</option>
-        <option value="cui">CUI</option>
-        <option value="browser">Browser</option>
-        <option value="preview">File Preview</option>
-        <option value="notes">Notes</option>
-        <option value="images">Images</option>
-        <option value="mission">Mission Control</option>
-        <option value="office">Virtual Office</option>
-        <option value="qa-dashboard">QA Dashboard</option>
-        <option value="admin-wr">Werking Report Admin</option>
-        <option value="system-health">System Health</option>
-        <option value="watchdog">Dev Server Watchdog</option>
-        <option value="linkedin">LinkedIn Marketing</option>
-        <option value="peer-awareness">Peer Awareness</option>
-        <option value="background-ops">Background Ops</option>
-        <option value="conversation-queue">Conversation Queue</option>
-        <option value="bridge-monitor">Bridge Monitor (Old)</option>
-        <option value="repo-dashboard">Git & Pipeline Monitor</option>
-        <option value="infisical-monitor">Infisical Monitor</option>
-        <option value="maintenance">Maintenance</option>
+        {PANEL_MENU_OPTIONS.map(({ value, label }) => (
+          <option key={value} value={value}>{label}</option>
+        ))}
       </select>
     );
   }, [addTab]);
@@ -641,8 +643,12 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       }
     }
 
-    // State indicators: working (green pulse), needs_attention (red pulse), idle (dim)
-    if (sessionState === 'working') {
+    // State indicators: working (green pulse), needs_attention (red pulse), paused (grey), idle (dim)
+    const sessionId = node.getConfig()?.initialSessionId || node.getConfig()?.sessionId;
+    const isPaused = sessionId ? pausedSessionsRef.current.has(sessionId) : false;
+    if (isPaused) {
+      renderValues.leading = <span key="dot" className="cui-tab-dot cui-tab-dot--paused" title="Paused">⏸</span>;
+    } else if (sessionState === 'working') {
       renderValues.leading = <span key="dot" className="cui-tab-dot cui-tab-dot--working" />;
     } else if (sessionState === 'needs_attention') {
       const attentionReason = node.getConfig()?._attentionReason;
@@ -654,6 +660,21 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabRenderTick]);
+
+  // Stable refs for Layout callbacks — prevent Layout element recreation on state changes.
+  // Without these, every tabRenderTick bump recreates the <Layout> element via useMemo,
+  // which causes flexlayout to re-render ALL visible tabs (expensive!).
+  const onRenderTabStableRef = useRef(onRenderTab);
+  onRenderTabStableRef.current = onRenderTab;
+  const stableOnRenderTab = useCallback((node: TabNode, rv: ITabRenderValues) => {
+    onRenderTabStableRef.current(node, rv);
+  }, []);
+
+  const onRenderTabSetStableRef = useRef(onRenderTabSet);
+  onRenderTabSetStableRef.current = onRenderTabSet;
+  const stableOnRenderTabSet = useCallback((node: TabSetNode | BorderNode, rv: ITabSetRenderValues) => {
+    onRenderTabSetStableRef.current(node, rv);
+  }, []);
 
   // Control API: listen for panel/layout commands + report panel state (auto-reconnect)
   // IMPORTANT: No model/callback dependencies — uses refs to prevent WS reconnect on every model change
@@ -684,7 +705,9 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
               panels.push({ id: tab.getId(), component: tab.getComponent() ?? 'unknown', config: tab.getConfig() ?? {}, name: tab.getName() });
             }
           });
-          ws.send(JSON.stringify({ type: 'state-report', panels, projectId }));
+          const msg: Record<string, unknown> = { type: 'state-report', panels, projectId };
+          if (isActiveRef.current) msg.activeProjectId = projectId;
+          ws.send(JSON.stringify(msg));
         } catch (err) { console.warn('[LayoutManager] reportPanels failed:', err); }
       }
 
@@ -693,6 +716,14 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         reportPanels();
         // Re-sync conversations on reconnect
         setTimeout(() => syncNowRef.current?.(), 1500);
+        // Auto-layout: split stacked CUI panels — only when this workspace is currently active
+        if (isActiveRef.current) {
+          fetch(`/api/control/auto-layout`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ projectId }),
+          }).catch(() => { /* non-critical */ });
+        }
       };
       ws.onclose = () => {
         if (controlWsRef.current === ws) controlWsRef.current = null;
@@ -738,12 +769,32 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           }
         }
         if (msg.type === 'control:conversation-started' && msg.workDir === workDir) {
-          // New conversation for our project — delay to let panel update its config first
-          setTimeout(() => syncNowRef.current?.(), 5000);
+          // New conversation for our project — short delay to let session initialize
+          setTimeout(() => syncNowRef.current?.(), 1000);
         }
         if (msg.type === 'control:layout-reset') {
           handleResetLayoutRef.current();
           setTimeout(reportPanels, 200);
+        }
+        // Nuclear option: clear all layout caches and force full reload from server
+        if (msg.type === 'control:nuke-layout-cache') {
+          try {
+            const keys = Object.keys(localStorage).filter(k => k.startsWith('cui-layout-') || k.startsWith('cui-template-') || k.startsWith('cui-msgs-'));
+            keys.forEach(k => localStorage.removeItem(k));
+            console.log(`[LayoutManager] Nuked ${keys.length} layout cache entries, reloading...`);
+          } catch (e) { console.warn('[LayoutManager] nuke-layout-cache error:', e); }
+          setTimeout(() => window.location.reload(), 500);
+        }
+        // Server-pushed layout update: apply without reload (triggered by POST /api/layouts/:projectId)
+        if (msg.type === 'control:apply-layout' && msg.projectId === projectId && msg.layout) {
+          try {
+            const layoutData = msg.layout.layout || msg.layout;
+            const newModel = Model.fromJson(layoutData);
+            setModel(newModel);
+            try { localStorage.setItem(`cui-layout-${projectId}`, JSON.stringify(msg.layout)); } catch (e) { /* ignore */ }
+            console.log(`[LayoutManager] Applied server layout for ${projectId}`);
+            setTimeout(reportPanels, 200);
+          } catch (err) { console.warn('[LayoutManager] apply-layout failed:', err); }
         }
         if (msg.type === 'control:select-tab' && m && msg.target) {
           let foundId = '';
@@ -803,6 +854,52 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
             ws.send(JSON.stringify({ type: 'panel-ensure-failed', component: msg.component, error: 'could not add' }));
           }
         }
+        // Split tabsets that contain multiple CUI panels into separate panels
+        if (msg.type === 'control:split-cui-panels' && m) {
+          let tabsetCount = 0;
+          m.visitNodes((node) => { if (node.getType() === 'tabset') tabsetCount++; });
+
+          let changed = false;
+          // Collect tabsets that have >1 CUI tab
+          const tabsetsToSplit: Array<{ tabsetId: string; extraTabIds: string[] }> = [];
+          m.visitNodes((node) => {
+            if (node.getType() !== 'tabset') return;
+            const ts = node as TabSetNode;
+            const cuiTabs = (ts.getChildren() as TabNode[]).filter(
+              t => t.getType() === 'tab' && (t.getComponent() === 'cui' || t.getComponent() === 'cui-lite')
+            );
+            if (cuiTabs.length > 1) {
+              // Keep the first, split out the rest
+              tabsetsToSplit.push({ tabsetId: ts.getId(), extraTabIds: cuiTabs.slice(1).map(t => t.getId()) });
+            }
+          });
+
+          for (const { tabsetId, extraTabIds } of tabsetsToSplit) {
+            for (const tabId of extraTabIds) {
+              // Dock relative to the CUI tabset itself — flexlayout splits it into a sibling tabset
+              const targetId = tabsetId;
+
+              const dockLocation = tabsetCount % 2 === 0 ? DockLocation.RIGHT : DockLocation.BOTTOM;
+              const tab = m.getNodeById(tabId) as TabNode | undefined;
+              if (!tab) continue;
+              const tabJson = { type: 'tab' as const, name: tab.getName(), component: tab.getComponent() || 'cui', config: { ...tab.getConfig() } };
+              try {
+                m.doAction(Actions.moveNode(tabId, targetId, dockLocation, -1));
+                tabsetCount++;
+                changed = true;
+              } catch {
+                // moveNode not available — add new + delete old
+                try {
+                  m.doAction(Actions.addNode(tabJson, targetId, dockLocation, -1));
+                  m.doAction(Actions.deleteTab(tabId));
+                  tabsetCount++;
+                  changed = true;
+                } catch (err) { console.warn('[LayoutManager] split-cui-panels failed:', err); }
+              }
+            }
+          }
+          if (changed) { saveLayoutRef.current(m); reportPanels(); }
+        }
         if (msg.type === 'control:activate-conversations' && m && msg.plan) {
           const myPlan = (msg.plan as Array<{ projectId: string; conversations: Array<{ sessionId: string; accountId: string }> }>)
             .find(p => p.projectId === projectId);
@@ -812,6 +909,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           m.visitNodes((node) => {
             if (node.getType() === 'tab') {
               const tab = node as TabNode;
+              // Only use cui/cui-lite panels for activation — never mission-chat (reserved panel)
               if (tab.getComponent() === 'cui' || tab.getComponent() === 'cui-lite') {
                 existingPanels.push(tab.getId());
               }
@@ -835,16 +933,27 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           let tabsetCount = 0;
           m.visitNodes((node) => { if (node.getType() === 'tabset') tabsetCount++; });
 
-          for (const conv of unmatched) {
+          // Only create new panels if auto-layout is explicitly triggered (not automatic)
+          if (!(window as any).__cuiAutoLayoutActive && unmatched.length > 0) {
+            console.log(`[LM] activate-conversations: ${unmatched.length} unmatched convs skipped (auto-layout disabled)`);
+          }
+
+          for (const conv of (window as any).__cuiAutoLayoutActive ? unmatched : []) {
+            // Target an existing CUI tabset directly — flexlayout splits it into a sibling tabset
             let targetId = '';
-            let minTabs = Infinity;
             m.visitNodes((node) => {
-              if (node.getType() === 'tabset') {
-                const ts = node as TabSetNode;
-                const count = ts.getChildren().length;
-                if (count < minTabs) { minTabs = count; targetId = ts.getId(); }
+              if (node.getType() === 'tab' && !targetId) {
+                const tab = node as TabNode;
+                if (tab.getComponent() === 'cui' || tab.getComponent() === 'cui-lite') {
+                  const parent = tab.getParent();
+                  if (parent && parent.getType() === 'tabset') targetId = parent.getId();
+                }
               }
             });
+            // Fallback: any tabset
+            if (!targetId) {
+              m.visitNodes((node) => { if (node.getType() === 'tabset' && !targetId) targetId = node.getId(); });
+            }
             if (!targetId) continue;
 
             const dockLocation = tabsetCount < 6
@@ -904,6 +1013,15 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
             setTabRenderTick(t => t + 1);
           }
         }
+        // Pause state: suppress needs_attention indicator
+        if (msg.type === 'conv-paused' && msg.sessionId) {
+          if (msg.paused) {
+            pausedSessionsRef.current.add(msg.sessionId);
+          } else {
+            pausedSessionsRef.current.delete(msg.sessionId);
+          }
+          setTabRenderTick(t => t + 1);
+        }
       } catch (err) { console.warn('[LayoutManager] WS message handler error:', err); }
     };
     };
@@ -934,6 +1052,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       }
 
       // Same logic as the WS handler: inventory, match, split, navigate (generic, no account binding)
+      // Only use cui/cui-lite panels — never mission-chat (reserved panel)
       const existingPanels: string[] = [];
       model.visitNodes((node) => {
         if (node.getType() === 'tab') {
@@ -962,16 +1081,22 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       model.visitNodes((node) => { if (node.getType() === 'tabset') tabsetCount++; });
 
       for (const conv of unmatched) {
+        // Find a tabset and use its PARENT as target — this creates a new separate panel
+        // (targeting the tabset itself would just add a tab into it)
         let targetId = '';
-        let minTabs = Infinity;
+        let fallbackTabsetId = '';
         model.visitNodes((node) => {
-          if (node.getType() === 'tabset') {
+          if (node.getType() === 'tabset' && !targetId) {
             const ts = node as TabSetNode;
-            const count = ts.getChildren().length;
-            if (count < minTabs) { minTabs = count; targetId = ts.getId(); }
+            fallbackTabsetId = ts.getId();
+            const parent = ts.getParent();
+            if (parent) targetId = parent.getId();
           }
         });
-        if (!targetId) continue;
+        if (!targetId) {
+          targetId = fallbackTabsetId;
+          if (!targetId) continue;
+        }
 
         const dockLocation = tabsetCount < 6
           ? (tabsetCount % 2 === 0 ? DockLocation.RIGHT : DockLocation.BOTTOM)
@@ -1020,7 +1145,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
   // Continuous auto-sync: periodically mount missing conversations, close finished ones
   const syncNowRef = useRef<(() => void) | null>(null);
   useEffect(() => {
-    if (!model || !workDir) return;
+    if (!modelInitialized || !workDir) return;
     let disposed = false;
 
     const syncConversations = async () => {
@@ -1035,105 +1160,150 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         const data = await res.json();
         const conversations: any[] = data.conversations || [];
 
-        // Inventory mounted CUI tabs
+        // Inventory mounted CUI tabs (and mission-chat tabs to avoid routing sessions there)
         const mountedSessions = new Map<string, string>(); // sessionId -> nodeId
         const emptyPanels: string[] = [];
         m.visitNodes((node) => {
           if (node.getType() === 'tab') {
             const tab = node as TabNode;
             const comp = tab.getComponent?.();
+            // Track sessions in mission-chat panels as mounted (so they don't get re-routed)
+            // but NEVER add mission-chat panels to emptyPanels (they are reserved)
+            if (comp === 'mission-chat') {
+              const route = tab.getConfig()?._route || '';
+              const sid = route.startsWith('/c/') ? route.slice(3) : '';
+              if (sid) mountedSessions.set(sid, tab.getId());
+              return;
+            }
             if (comp !== 'cui' && comp !== 'cui-lite') return;
             const route = tab.getConfig()?._route || '';
             const cfgSid = tab.getConfig()?.initialSessionId || '';
             const sid = route.startsWith('/c/') ? route.slice(3) : cfgSid || '';
             if (sid) {
               mountedSessions.set(sid, tab.getId());
+              // Ensure config has initialSessionId (triggers useEffect in CuiLitePanel to un-stuck Queue)
+              if (!cfgSid) {
+                try {
+                  m.doAction(Actions.updateNodeAttributes(tab.getId(), {
+                    config: { ...tab.getConfig(), initialSessionId: sid }
+                  }));
+                } catch {}
+              }
             } else {
               emptyPanels.push(tab.getId());
             }
           }
         });
-
-        // Determine which conversations should be active (ongoing OR recent 48h, not finished)
-        const cutoff48h = Date.now() - 48 * 60 * 60 * 1000;
+        // Determine which conversations should be active
         const active = conversations.filter((c: any) =>
-          !c.manualFinished &&
-          (c.status === 'ongoing' || new Date(c.updatedAt || 0).getTime() > cutoff48h)
+          c.status === "ongoing" || !c.manualFinished
         );
         const activeSessionIds = new Set(active.map((c: any) => c.sessionId));
 
-        // Close panels whose sessions are NOT in the active set (finished, old, or unknown)
-        let closedCount = 0;
+        // Cleanup: remove tabs whose session is no longer active (finished or too old)
+        const allSessionIds = new Set(conversations.map((c: any) => c.sessionId));
+        let removed = 0;
         for (const [sid, nodeId] of mountedSessions) {
-          if (!activeSessionIds.has(sid)) {
-            try { m.doAction(Actions.deleteTab(nodeId)); closedCount++; } catch {}
-          }
+          // Keep if session is in active list
+          if (activeSessionIds.has(sid)) continue;
+          // Remove stale tab
+          try {
+            m.doAction(Actions.deleteTab(nodeId));
+            removed++;
+          } catch (err) { console.warn('[LM] cleanup deleteTab failed:', err); }
         }
-        // Skip sessions that are already visible (mounted in a panel, even if config not yet updated)
-        const missing = active.filter((c: any) => !mountedSessions.has(c.sessionId) && !c.isVisible);
-        if (missing.length === 0 && closedCount === 0) return;
+        if (removed > 0) {
+          saveLayoutRef.current(m);
+          console.log(`[LM] Cleanup: removed ${removed} stale tabs`);
+        }
 
-        const assignments: Array<{ panelId: string; sessionId: string }> = [];
-        let emptyIdx = 0;
+        // Find missing conversations (not yet mounted in any panel)
+        const missing = active.filter((c: any) => !mountedSessions.has(c.sessionId));
+        if (missing.length === 0 && removed === 0) return;
+        if (missing.length === 0) return;
+
+        let mounted = 0;
 
         for (const conv of missing) {
-          if (emptyIdx < emptyPanels.length) {
-            assignments.push({ panelId: emptyPanels[emptyIdx], sessionId: conv.sessionId });
-            emptyIdx++;
-          } else {
-            // Only mount into tabsets that contain CUI panels (never web/preview/browser)
-            let targetTabsetId = '';
-            let bestScore = -1;
-            m.visitNodes((node) => {
-              if (node.getType() === 'tabset') {
-                const ts = node as TabSetNode;
-                const children = ts.getChildren();
-                let cuiCount = 0;
-                for (const child of children) {
-                  const comp = (child as TabNode).getComponent?.();
-                  if (comp === 'cui' || comp === 'cui-lite') cuiCount++;
-                }
-                if (cuiCount === 0) return; // Skip non-CUI tabsets entirely
-                // Pure CUI tabsets get priority; fewer tabs = better
-                const isPure = cuiCount === children.length;
-                const score = (isPure ? 1000 : 0) + (100 - Math.min(children.length, 100));
-                if (score > bestScore) { bestScore = score; targetTabsetId = ts.getId(); }
-              }
-            });
-            if (!targetTabsetId) continue;
+          // Priority 1: Reuse an empty/stale CUI panel — just update its config
+          if (emptyPanels.length > 0) {
+            const reuseNodeId = emptyPanels.shift()!;
             try {
-              m.doAction(Actions.addNode(
-                { type: 'tab', name: (conv as any).customName || (conv as any).summary?.slice(0, 30) || 'CUI',
-                  component: 'cui', config: { initialSessionId: conv.sessionId, accountId: conv.accountId } },
-                targetTabsetId, DockLocation.CENTER, -1
-              ));
-              m.visitNodes((node) => {
-                if (node.getType() === 'tab') {
-                  const tab = node as TabNode;
-                  if (tab.getConfig()?.initialSessionId === conv.sessionId) {
-                    assignments.push({ panelId: tab.getId(), sessionId: conv.sessionId });
-                  }
-                }
-              });
-            } catch (err) { console.warn('[LM] auto-sync addNode failed:', err); }
+              m.doAction(Actions.updateNodeAttributes(reuseNodeId, {
+                config: { initialSessionId: conv.sessionId, accountId: conv.accountId }
+              }));
+              mounted++;
+              continue;
+            } catch {}
+          }
+
+          // Priority 2: Add as separate split panel — only when explicitly triggered
+          if (!(window as any).__cuiAutoLayoutActive) {
+            console.log(`[LM] auto-sync: skipping new panel creation for session ${conv.sessionId} (auto-layout disabled)`);
+            continue;
+          }
+          // Find a CUI tabset to split from (prefer one with existing CUI panels)
+          let targetTabsetId = '';
+          m.visitNodes((node) => {
+            if (node.getType() === 'tab' && !targetTabsetId) {
+              const tab = node as TabNode;
+              if (tab.getComponent() === 'cui' || tab.getComponent() === 'cui-lite') {
+                const parent = tab.getParent();
+                if (parent && parent.getType() === 'tabset') targetTabsetId = parent.getId();
+              }
+            }
+          });
+          // Fallback: any tabset
+          if (!targetTabsetId) {
+            m.visitNodes((node) => {
+              if (!targetTabsetId && node.getType() === 'tabset') targetTabsetId = node.getId();
+            });
+          }
+          if (!targetTabsetId) continue;
+
+          // Count current tabsets to determine split direction
+          let tabsetCount = 0;
+          m.visitNodes((node) => { if (node.getType() === 'tabset') tabsetCount++; });
+
+          // Split as separate panel: alternate RIGHT/BOTTOM up to 6, then CENTER
+          const dockLocation = tabsetCount < 6
+            ? (tabsetCount % 2 === 0 ? DockLocation.RIGHT : DockLocation.BOTTOM)
+            : DockLocation.CENTER;
+
+          try {
+            m.doAction(Actions.addNode(
+              { type: 'tab', name: 'CUI', component: 'cui',
+                config: { initialSessionId: conv.sessionId, accountId: conv.accountId } },
+              targetTabsetId, dockLocation, -1
+            ));
+            mounted++;
+          } catch (err) { console.warn('[LM] auto-sync addNode failed:', err); }
+        }
+
+        // Send navigate-request for all newly mounted conversations
+        // This ensures panels that were reused or just created actually load the session
+        if (mounted > 0 && ws?.readyState === WebSocket.OPEN) {
+          // Collect all CUI panels and their sessions after mounting
+          const panelSessions: Array<{ panelId: string; sessionId: string }> = [];
+          m.visitNodes((node) => {
+            if (node.getType() === 'tab') {
+              const tab = node as TabNode;
+              const comp = tab.getComponent?.();
+              if (comp === 'cui' || comp === 'cui-lite') {
+                const sid = tab.getConfig()?.initialSessionId;
+                if (sid) panelSessions.push({ panelId: tab.getId(), sessionId: sid });
+              }
+            }
+          });
+          // Send navigate requests with staggered timing
+          for (const ps of panelSessions) {
+            ws.send(JSON.stringify({ type: 'navigate-request', panelId: ps.panelId, sessionId: ps.sessionId, projectId }));
           }
         }
 
-        // Navigate assigned panels
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          assignments.forEach((a, i) => {
-            setTimeout(() => {
-              if (ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'navigate-request', panelId: a.panelId, sessionId: a.sessionId, projectId }));
-              }
-            }, i * 300);
-          });
-        }
-
-        if (assignments.length > 0 || closedCount > 0) {
-          saveLayout(m);
-          if (assignments.length > 0) console.log(`[LM] Auto-sync: mounted ${assignments.length} conversations`);
-          if (closedCount > 0) console.log(`[LM] Auto-sync: closed ${closedCount} finished conversations`);
+        if (mounted > 0) {
+          saveLayoutRef.current(m);
+          console.log(`[LM] Auto-sync: mounted ${mounted} conversations`);
         }
       } catch (err) { console.warn('[LM] auto-sync error:', err); }
     };
@@ -1151,31 +1321,111 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       clearTimeout(initialTimer);
       clearInterval(interval);
     };
-  }, [model, workDir, projectId, saveLayout]);
+  }, [modelInitialized, workDir, projectId]);
 
-  // Report attention state to parent (any CUI panel working or needs_attention)
+  // Manual auto-layout trigger: 'cui-auto-layout' event (dispatched by Layout button in toolbar)
+  useEffect(() => {
+    if (!modelInitialized) return;
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      // Only handle if this is the active project (or no projectId filter specified)
+      if (detail?.projectId && detail.projectId !== projectId) return;
+      (window as any).__cuiAutoLayoutActive = true;
+      syncNowRef.current?.();
+      // Reset flag after short delay (one-shot)
+      setTimeout(() => { (window as any).__cuiAutoLayoutActive = false; }, 3000);
+    };
+    window.addEventListener('cui-auto-layout', handler);
+    return () => window.removeEventListener('cui-auto-layout', handler);
+  }, [modelInitialized, projectId]);
+
+  // Trigger immediate sync + notify server when this project tab becomes active
+  useEffect(() => {
+    if (isActive) {
+      // Notify server of active project (sets activeProjectId for auto-layout)
+      fetch(`/api/control/project/switch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId }),
+      }).catch(() => { /* non-critical */ });
+      // Also report panels with activeProjectId
+      const ws = controlWsRef.current;
+      if (ws?.readyState === WebSocket.OPEN) {
+        const m = modelRef.current;
+        if (m) {
+          const panels: Array<{ id: string; component: string; config: Record<string, unknown>; name: string }> = [];
+          m.visitNodes((node) => {
+            if (node.getType() === 'tab') {
+              const tab = node as TabNode;
+              panels.push({ id: tab.getId(), component: tab.getComponent() ?? 'unknown', config: tab.getConfig() ?? {}, name: tab.getName() });
+            }
+          });
+          ws.send(JSON.stringify({ type: 'state-report', panels, projectId, activeProjectId: projectId }));
+        }
+      }
+      // Small delay to let CSS display:flex take effect before syncing conversations
+      if (syncNowRef.current) {
+        const t = setTimeout(() => syncNowRef.current?.(), 300);
+        return () => clearTimeout(t);
+      }
+    }
+  }, [isActive, projectId]);
+
+  // Report attention state to parent (any CUI panel working, needs_attention, or idle with session)
+  // Uses both panel-reported _attention AND WS-tracked sessionStatesRef for reliability
   useEffect(() => {
     if (!model || !onAttentionChange) return;
     let hasAttention = false;
-    let highestState: 'working' | 'needs_attention' | undefined;
+    let highestState: 'working' | 'needs_attention' | 'idle' | undefined;
+    let hasAnySession = false;
     model.visitNodes((node) => {
       if (node.getType() === 'tab') {
         const tab = node as TabNode;
         const comp = tab.getComponent();
         if (comp === 'cui' || comp === 'cui-lite') {
-          const panelState = tab.getConfig()?._attention as string | undefined;
-          if (panelState === 'needs_attention') {
+          const route = tab.getConfig()?._route as string | undefined;
+          const hasRoute = !!route;
+          if (hasRoute) hasAnySession = true;
+
+          // Primary: panel-reported attention (_attention config)
+          let effectiveState = tab.getConfig()?._attention as string | undefined;
+
+          // Fallback: WS-tracked session state (more reliable for non-visible panels)
+          const sessionId = route?.startsWith('/c/') ? route.slice(3) :
+            (tab.getConfig()?.initialSessionId || tab.getConfig()?.sessionId || null);
+          if (!effectiveState || effectiveState === 'idle') {
+            if (sessionId) {
+              const wsState = sessionStatesRef.current.get(sessionId);
+              if (wsState && wsState.state !== 'idle') {
+                effectiveState = wsState.state;
+              }
+            }
+          }
+
+          // Paused sessions: suppress needs_attention — don't bubble up to project indicator
+          if (sessionId && pausedSessionsRef.current.has(sessionId)) {
+            effectiveState = 'idle';
+          }
+
+          if (effectiveState === 'needs_attention') {
             hasAttention = true;
             highestState = 'needs_attention'; // highest priority
-          } else if (panelState === 'working' && highestState !== 'needs_attention') {
+          } else if (effectiveState === 'working' && highestState !== 'needs_attention') {
             hasAttention = true;
             highestState = 'working';
+          } else if (hasRoute && highestState !== 'needs_attention' && highestState !== 'working') {
+            highestState = 'idle';
           }
         }
       }
     });
-    onAttentionChange(hasAttention, highestState);
-  }, [model, cuiStates, onAttentionChange, attentionVersion]);
+    // Report idle state if there are sessions but none are working/needs_attention
+    if (!hasAttention && hasAnySession && highestState === 'idle') {
+      onAttentionChange(false, 'idle');
+    } else {
+      onAttentionChange(hasAttention, highestState);
+    }
+  }, [model, cuiStates, onAttentionChange, attentionVersion, tabRenderTick]);
 
   // Patch flexlayout's redrawInternal to prevent continuous render loop
   useEffect(() => {
@@ -1195,11 +1445,11 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         factory={factory}
         onModelChange={handleModelChange}
         onAction={handleAction}
-        onRenderTabSet={onRenderTabSet}
-        onRenderTab={onRenderTab}
+        onRenderTabSet={stableOnRenderTabSet}
+        onRenderTab={stableOnRenderTab}
       />
     );
-  }, [model, factory, handleModelChange, handleAction, onRenderTabSet, onRenderTab]);
+  }, [model, factory, handleModelChange, handleAction, stableOnRenderTabSet, stableOnRenderTab]);
 
   if (!model) {
     return (
