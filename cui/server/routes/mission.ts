@@ -6,6 +6,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 
 import { PATHS, BRIDGE_URL } from '../config/paths.js';
+import { bridgeChat } from '../lib/bridge-fetch.js';
 import type { AttentionReason, ConvAttentionState, SessionState, PanelVisibility } from './shared/types.js';
 import { logUserInput as sharedLogUserInput, atomicWriteFileSync } from './shared/utils.js';
 import { findJsonlPath, findJsonlPathAllAccounts, ensureJsonlForAccount, readJsonlMetadata, clearMetaCache, readConversationMessages, getOriginalCwd, extractConversationContext, unstickConversation, deepRepairJsonl, compactJsonlForResume } from './shared/jsonl.js';
@@ -532,9 +533,13 @@ async function fetchConvList() {
   }
 
   const paused = convMeta.getAllPaused();
+  const subSessions = convMeta.getAllSubSessions();
   for (const conv of deduped) {
     if (paused[conv.sessionId]) {
       (conv as any).manualPaused = true;
+    }
+    if (subSessions[conv.sessionId]) {
+      (conv as any).isSubSession = true;
     }
   }
 
@@ -595,7 +600,13 @@ router.get('/conversations', async (req, res) => {
 
   // Apply project filter AFTER cache
   if (filterProject && data) {
-    const filtered = { ...data, conversations: data.conversations.filter((c: any) => (c.projectPath || '').includes(filterProject)), total: 0 };
+    const isSubSessionsWorkspace = filterProject.includes('sub-sessions');
+    const filtered = { ...data, conversations: data.conversations.filter((c: any) => {
+      // Sub-sessions workspace: show all sub-sessions regardless of projectPath
+      if (isSubSessionsWorkspace) return !!c.isSubSession;
+      // Normal workspace: match by projectPath, exclude sub-sessions
+      return (c.projectPath || '').includes(filterProject) && !c.isSubSession;
+    }), total: 0 };
     filtered.total = filtered.conversations.length;
     return res.json(filtered);
   }
@@ -971,19 +982,79 @@ router.post('/conversation/:accountId/:sessionId/name', async (req, res) => {
 });
 
 // 5b. Assign conversation to account (called when chat is opened in a CUI panel)
+// Atomic account-switch: updates all 4 layers (conv-metadata, layouts, visibility, browser)
 router.post('/conversation/:sessionId/assign', (req, res) => {
   const { accountId, workDir } = req.body;
   if (!accountId) { res.status(400).json({ error: 'accountId required' }); return; }
   const sid = req.params.sessionId;
+
+  // --- Layer 1: Conversation Metadata ---
   convMeta.saveAssignment(sid, accountId);
-  // Persist workDir so it survives account switches
   if (workDir) convMeta.saveWorkDir(sid, workDir);
+
   // Auto-unstick: remove rate-limit messages so the conversation can continue on the new account
   const removed = unstickConversation(sid);
   if (removed > 0) console.log(`[Assign] Unsticked ${sid}: removed ${removed} rate-limit messages`);
-  // Broadcast account change so other panels pick it up
-  broadcast({ type: 'conv-account-changed', sessionId: sid, accountId, workDir: convMeta.getWorkDir(sid) });
-  res.json({ ok: true, sessionId: sid, accountId, unsticked: removed, workDir: convMeta.getWorkDir(sid) });
+
+  // --- Layer 2: Layout Configuration ---
+  // Scan all layout files and update any tab whose sessionId matches this conversation
+  const layoutsDir = join(DATA_DIR, 'layouts');
+  const layoutsUpdated: string[] = [];
+  try {
+    const layoutFiles = readdirSync(layoutsDir).filter(f => f.endsWith('.json') && !f.includes('_template') && !f.includes('.bak'));
+    for (const file of layoutFiles) {
+      const layoutPath = join(layoutsDir, file);
+      try {
+        const layoutData = JSON.parse(readFileSync(layoutPath, 'utf8'));
+        let changed = false;
+
+        // Recursively walk the layout tree to find tabs with matching sessionId
+        const updateLayoutNode = (node: any): void => {
+          if (!node || typeof node !== 'object') return;
+          if (node.config && (node.config.sessionId === sid || node.config.initialSessionId === sid)) {
+            if (node.config.accountId !== accountId) {
+              console.log(`[Assign] Layout ${file}: updating tab "${node.name || node.component}" accountId ${node.config.accountId} → ${accountId}`);
+              node.config.accountId = accountId;
+              changed = true;
+            }
+          }
+          if (Array.isArray(node.children)) {
+            for (const child of node.children) updateLayoutNode(child);
+          }
+          if (node.layout && typeof node.layout === 'object') updateLayoutNode(node.layout);
+        };
+
+        updateLayoutNode(layoutData);
+        if (changed) {
+          writeFileSync(layoutPath, JSON.stringify(layoutData, null, 2));
+          const projectId = file.replace('.json', '');
+          layoutsUpdated.push(projectId);
+          // Broadcast layout change so browser re-renders the panel with new account
+          broadcast({ type: 'control:apply-layout', projectId, layout: layoutData });
+        }
+      } catch (err: any) {
+        console.error(`[Assign] Failed to update layout ${file}: ${err.message}`);
+      }
+    }
+  } catch (err: any) {
+    console.error(`[Assign] Failed to read layouts dir: ${err.message}`);
+  }
+
+  // --- Layer 3: Visibility Registry ---
+  // Update accountId on any panel currently showing this session
+  for (const [_key, entry] of visibilityRegistry) {
+    if (entry.sessionId === sid && entry.accountId !== accountId) {
+      console.log(`[Assign] Visibility: updating panel ${entry.panelId} accountId ${entry.accountId} → ${accountId}`);
+      entry.accountId = accountId;
+    }
+  }
+
+  // --- Layer 4: Browser Notification ---
+  // Broadcast account change so all connected browsers update their panels
+  const resolvedWorkDir = convMeta.getWorkDir(sid);
+  broadcast({ type: 'conv-account-changed', sessionId: sid, accountId, workDir: resolvedWorkDir, layoutsUpdated });
+
+  res.json({ ok: true, sessionId: sid, accountId, unsticked: removed, workDir: resolvedWorkDir, layoutsUpdated });
 });
 
 // 5c. Get panel visibility (which conversations are open in which panels)
@@ -1338,6 +1409,10 @@ router.post('/start', async (req, res) => {
   convMeta.saveWorkDir(sessionId, resolvedWorkDir);
   convMeta.saveModel(sessionId, resolvedModel);
   convMeta.setLastPrompt(sessionId);
+  // Mark as sub-session if subject starts with [Sub]
+  if (subject && subject.startsWith('[Sub]')) {
+    convMeta.setSubSession(sessionId, true);
+  }
   invalidateConvCache();
 
   // State tracking is handled by claude-cli stdout parsing
@@ -1585,6 +1660,7 @@ Antworte auf Deutsch, präzise und kompakt.`;
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${BRIDGE_KEY}`,
+        'X-Privacy-Mode': 'none',
       },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
