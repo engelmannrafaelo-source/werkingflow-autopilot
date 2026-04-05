@@ -56,6 +56,9 @@ WORKSPACES=(
   "engelmann-ai-hub:apps/engelmann:live:no"
 )
 
+# CLAUDE.md source files (relative to this script's deploy/ directory)
+CLAUDE_MD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/workspace-claude-mds"
+
 # ── 1. Sync each workspace ─────────────────────────────────────────────
 echo "[1/4] Syncing monorepo to workspaces..."
 for entry in "${WORKSPACES[@]}"; do
@@ -74,6 +77,15 @@ for entry in "${WORKSPACES[@]}"; do
     --exclude 'apps/*/data/' \
     "$MONOREPO_DIR/" \
     "root@$TARGET:$REMOTE_WORKSPACE_BASE/$WS_NAME/"
+
+  # Deploy workspace CLAUDE.md (user guide for this workspace)
+  CLAUDE_MD_SRC="$CLAUDE_MD_DIR/$WS_NAME.md"
+  if [ -f "$CLAUDE_MD_SRC" ]; then
+    scp "$CLAUDE_MD_SRC" "root@$TARGET:$REMOTE_WORKSPACE_BASE/$WS_NAME/CLAUDE.md"
+    echo "    CLAUDE.md deployed"
+  else
+    echo "    WARNING: No CLAUDE.md found at $CLAUDE_MD_SRC"
+  fi
 
   echo "    Done"
 done
