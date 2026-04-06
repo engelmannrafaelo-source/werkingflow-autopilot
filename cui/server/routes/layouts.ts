@@ -25,14 +25,38 @@ export default function createLayoutsRouter(deps: LayoutsDeps): Router {
   // Projects API
   // ============================================================================
   router.get('/projects', (_req: Request, res: Response) => {
-    const projects = readdirSync(PROJECTS_DIR)
+    const explicitProjects = readdirSync(PROJECTS_DIR)
       .filter((f) => f.endsWith('.json'))
       .map((f) => {
         try { return JSON.parse(readFileSync(join(PROJECTS_DIR, f), 'utf8')); }
         catch { return null; }
       })
       .filter(Boolean);
-    res.json(projects);
+
+    // Auto-discover workspace dirs that have no project JSON yet
+    const WORKSPACES_BASE = IS_LOCAL_MODE
+      ? join(homedir(), 'Projects')
+      : '/root/orchestrator/workspaces';
+    const SKIP_DIRS = new Set(['_archive', 'sub-sessions', 'mission-chat', 'cui-workspace']);
+    const explicitIds = new Set(explicitProjects.map((p: any) => p.id));
+    const autoProjects: any[] = [];
+    if (existsSync(WORKSPACES_BASE)) {
+      try {
+        readdirSync(WORKSPACES_BASE).forEach((entry) => {
+          if (entry.startsWith('.') || SKIP_DIRS.has(entry)) return;
+          const fullPath = join(WORKSPACES_BASE, entry);
+          try {
+            if (!statSync(fullPath).isDirectory()) return;
+          } catch { return; }
+          if (explicitIds.has(entry)) return; // already in explicit list
+          // Derive display name: capitalize words, replace dashes/underscores with spaces
+          const name = entry.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+          autoProjects.push({ id: entry, name, workDir: fullPath, _auto: true });
+        });
+      } catch { /* non-critical */ }
+    }
+
+    res.json([...explicitProjects, ...autoProjects]);
   });
 
   router.post('/projects', async (req: Request, res: Response) => {
