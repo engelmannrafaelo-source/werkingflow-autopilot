@@ -3,6 +3,8 @@ import { readdir, readFile } from 'fs/promises';
 import { join } from 'path';
 
 import { parsePersonaMd } from './shared/utils.js';
+import { PATHS, BRIDGE_URL } from '../config/paths.js';
+import { bridgeChat } from '../lib/bridge-fetch.js';
 
 // --- Task Management ---
 interface Task {
@@ -25,7 +27,7 @@ export default function createTeamRouter(): Router {
   // GET /api/team/personas
   // Returns: PersonaCard[]
   router.get('/personas', async (_req: Request, res: Response) => {
-    const personasPath = '/root/projekte/orchestrator/team/personas';
+    const personasPath = PATHS.personasDir;
     try {
       const files = await readdir(personasPath);
       const personaFiles = files.filter(f => f.endsWith('.md'));
@@ -48,7 +50,7 @@ export default function createTeamRouter(): Router {
   // Returns: string (markdown content)
   router.get('/worklist/:personaId', async (req: Request, res: Response) => {
     const { personaId } = req.params;
-    const worklistPath = `/root/projekte/orchestrator/team/worklists/${personaId}.md`;
+    const worklistPath = join(PATHS.worklistsDir, `${personaId}.md`);
 
     try {
       const content = await readFile(worklistPath, 'utf-8');
@@ -108,7 +110,7 @@ export default function createTeamRouter(): Router {
 
   // GET /api/team/events - Load activity events from events.json
   router.get('/events', async (_req: Request, res: Response) => {
-    const eventsPath = '/root/projekte/werkingflow/autopilot/cui/data/active/team/events.json';
+    const eventsPath = join(PATHS.dataDir, 'active/team/events.json');
     try {
       const content = await readFile(eventsPath, 'utf-8');
       const data = JSON.parse(content);
@@ -123,7 +125,7 @@ export default function createTeamRouter(): Router {
 
   // GET /api/team/reviews - Load reviews from reviews.json
   router.get('/reviews', async (_req: Request, res: Response) => {
-    const reviewsPath = '/root/projekte/werkingflow/autopilot/cui/data/active/team/reviews.json';
+    const reviewsPath = join(PATHS.dataDir, 'active/team/reviews.json');
     try {
       const content = await readFile(reviewsPath, 'utf-8');
       const data = JSON.parse(content);
@@ -139,7 +141,7 @@ export default function createTeamRouter(): Router {
 
   // GET /api/team/task-board - Load tasks from tasks.json (for Task Board)
   router.get('/task-board', async (_req: Request, res: Response) => {
-    const tasksPath = '/root/projekte/werkingflow/autopilot/cui/data/active/team/tasks.json';
+    const tasksPath = join(PATHS.dataDir, 'active/team/tasks.json');
     try {
       const content = await readFile(tasksPath, 'utf-8');
       const data = JSON.parse(content);
@@ -162,7 +164,7 @@ export default function createTeamRouter(): Router {
 
     try {
       // Load Persona System Prompt
-      const personasPath = '/root/projekte/orchestrator/team/personas';
+      const personasPath = PATHS.personasDir;
       const files = await readdir(personasPath);
       const personaFile = files.find(f => f.startsWith(personaId + '-') && f.endsWith('.md'));
 
@@ -181,40 +183,21 @@ Antworte im Stil dieser Persona. Beziehe dich auf deine Worklist und aktuelle Au
       const sessionId = `rafael-${personaId}`;
 
       // Call Bridge with Session
-      const BRIDGE_URL = process.env.AI_BRIDGE_URL || 'http://49.12.72.66:8000';
       const BRIDGE_KEY = process.env.AI_BRIDGE_API_KEY;
 
       if (!BRIDGE_KEY) {
         return res.status(500).json({ error: 'AI_BRIDGE_API_KEY not set' });
       }
 
-      const bridgeResp = await fetch(`${BRIDGE_URL}/v1/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${BRIDGE_KEY}`,
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-5-20250929',
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: message },
-          ],
-          max_tokens: 2048,
-          temperature: 0.7,
-          extra_body: { session_id: sessionId },
-        }),
-        signal: AbortSignal.timeout(60000),
+      const assistantMessage = await bridgeChat({
+        model: 'claude-sonnet-4-5-20250929',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: message },
+        ],
+        max_tokens: 2048,
+        timeout: 60000,
       });
-
-      if (!bridgeResp.ok) {
-        const errText = await bridgeResp.text();
-        console.error('[Team Chat] Bridge error:', errText);
-        return res.status(bridgeResp.status).json({ error: `Bridge error: ${errText}` });
-      }
-
-      const data = await bridgeResp.json();
-      const assistantMessage = data.choices?.[0]?.message?.content || '';
 
       res.json({
         message: assistantMessage,
@@ -232,7 +215,6 @@ Antworte im Stil dieser Persona. Beziehe dich auf deine Worklist und aktuelle Au
     const sessionId = `rafael-${personaId}`;
 
     try {
-      const BRIDGE_URL = process.env.AI_BRIDGE_URL || 'http://49.12.72.66:8000';
       const BRIDGE_KEY = process.env.AI_BRIDGE_API_KEY;
 
       if (!BRIDGE_KEY) {

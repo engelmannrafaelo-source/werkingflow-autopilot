@@ -13,9 +13,11 @@ import type {
   ScanResult,
 } from './types/knowledge.js';
 
-const BUSINESS_PATH = '/root/projekte/werkingflow/business';
-const PERSONAS_PATH = '/root/projekte/orchestrator/team/personas';
-const REGISTRY_PATH = '/root/projekte/orchestrator/team/KNOWLEDGE_REGISTRY.json';
+import { PATHS } from './config/paths.js';
+
+const BUSINESS_PATH = PATHS.businessDir;
+const PERSONAS_PATH = PATHS.personasDir;
+const REGISTRY_PATH = PATHS.knowledgeRegistryPath;
 
 export async function performFullScan(autoAssign: boolean): Promise<ScanResult> {
   const startTime = Date.now();

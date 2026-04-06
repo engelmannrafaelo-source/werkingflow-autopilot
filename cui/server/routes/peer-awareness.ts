@@ -18,6 +18,7 @@ import { findJsonlPath } from './shared/jsonl.js';
 import * as convMeta from './shared/conv-metadata.js';
 import { IS_LOCAL_MODE } from './state.js';
 import { logBackgroundEvent } from './background-ops.js';
+import { bridgeChat } from '../lib/bridge-fetch.js';
 
 // --- Constants ---
 const PEER_TICK_MS = 5 * 60 * 1000; // 5 minutes
@@ -26,19 +27,21 @@ const MAX_MSG_CHARS = 300; // truncate per message
 const MAX_SESSIONS_TO_SUMMARIZE = 25;
 const RECENTLY_FINISHED_WINDOW_MS = 2 * 60 * 60 * 1000; // 2 hours
 
+import { PATHS } from '../config/paths.js';
+
 // Output file paths (readable by all Claude sessions)
 const ACTIVE_WORK_FILE = IS_LOCAL_MODE
   ? join(homedir(), '.claude', 'active-work.md')
-  : '/home/claude-user/.claude/active-work.md';
+  : join(PATHS.claudeUserHome, '.claude', 'active-work.md');
 
 const TEAM_CONTEXT_FILE = IS_LOCAL_MODE
   ? join(homedir(), '.claude', 'team-context.md')
-  : '/home/claude-user/.claude/team-context.md';
+  : join(PATHS.claudeUserHome, '.claude', 'team-context.md');
 
 // Orchestrator paths (platform-dependent)
 const ORCH_DIR = IS_LOCAL_MODE
   ? '/Users/rafael/Documents/GitHub/orchestrator'
-  : '/root/projekte/orchestrator';
+  : PATHS.orchestratorDir;
 
 const LEADERS = ['max', 'herbert', 'vera', 'finn', 'felix'] as const;
 
@@ -113,47 +116,28 @@ function findSessionDirName(sessionId: string): string {
 
 // --- Bridge Summarization ---
 async function summarizeViaBridge(sessionData: string): Promise<string> {
-  const BRIDGE_URL = process.env.AI_BRIDGE_URL || 'http://49.12.72.66:8000';
-  const BRIDGE_KEY = process.env.AI_BRIDGE_API_KEY;
-
-  if (!BRIDGE_KEY) {
+  if (!process.env.AI_BRIDGE_API_KEY) {
     console.warn('[PeerAwareness] AI_BRIDGE_API_KEY not set — writing raw data');
     logBackgroundEvent('peer', 'degraded', 'AI_BRIDGE_API_KEY not set — raw data only');
     return sessionData;
   }
 
   try {
-    const resp = await fetch(`${BRIDGE_URL}/v1/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${BRIDGE_KEY}`,
-      },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        messages: [{
-          role: 'user',
-          content: `Fasse kompakt zusammen, was jede Claude-Session gerade macht oder zuletzt gemacht hat.
+    return await bridgeChat({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 2048,
+      messages: [{
+        role: 'user',
+        content: `Fasse kompakt zusammen, was jede Claude-Session gerade macht oder zuletzt gemacht hat.
 
 Für jede Session: Projekt, aktuelle Aufgabe, Status (Implementierung/Debugging/Tests/Review/Fertig).
 Format: Markdown-Tabelle + je 1 Satz Detail pro Session.
 Antworte auf Deutsch.
 
 ${sessionData}`,
-        }],
-        max_tokens: 2048,
-      }),
-      signal: AbortSignal.timeout(30000),
+      }],
+      timeout: 30000,
     });
-
-    if (!resp.ok) {
-      console.warn(`[PeerAwareness] Bridge error: ${resp.status}`);
-      logBackgroundEvent('bridge', 'error', `Bridge HTTP ${resp.status}`);
-      return sessionData;
-    }
-
-    const data = await resp.json();
-    return data.choices?.[0]?.message?.content || sessionData;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.warn('[PeerAwareness] Bridge unreachable:', msg);

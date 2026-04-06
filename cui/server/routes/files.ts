@@ -2,7 +2,9 @@ import { Router, Request, Response } from 'express';
 import { resolve, extname, join, basename } from 'path';
 import { readFileSync, readdirSync, statSync, existsSync, mkdirSync, renameSync, copyFileSync, realpathSync } from 'fs';
 import { homedir, platform } from 'os';
+import { execFile } from 'child_process';
 import mime from 'mime-types';
+import { PATHS, shortenPath } from '../config/paths.js';
 
 interface FilesDeps {
   DATA_DIR: string;
@@ -370,6 +372,69 @@ export default function createFilesRouter(deps: FilesDeps): Router {
     } catch (err: any) { res.status(500).json({ error: `File operation failed: ${err.message}` }); }
   });
 
+  // --- File Download Endpoint ---
+  // Serves files as downloadable attachments (Content-Disposition: attachment)
+  router.get('/api/file/download', (req: Request, res: Response) => {
+    const filePath = req.query.path as string;
+    if (!filePath) {
+      res.status(400).json({ error: 'path required' });
+      return;
+    }
+
+    const resolved = resolvePath(filePath);
+    if (!validatePath(resolved)) {
+      res.status(403).json({ error: 'path outside allowed directories' });
+      return;
+    }
+    if (!existsSync(resolved)) {
+      res.status(404).json({ error: 'not found' });
+      return;
+    }
+
+    try {
+      const stat = statSync(resolved);
+      if (stat.isDirectory()) {
+        res.status(400).json({ error: 'cannot download a directory' });
+        return;
+      }
+
+      const fileName = basename(resolved);
+      const mimeType = mime.lookup(extname(resolved)) || 'application/octet-stream';
+
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"`);
+      res.setHeader('Content-Type', mimeType);
+      res.setHeader('Content-Length', stat.size.toString());
+      res.sendFile(resolved);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // --- Markdown → WerkING HTML Renderer ---
+  const RENDER_SCRIPT = '/root/projekte/werkingflow-business/_tools/render.py';
+
+  router.get('/api/file/render-md', (req: Request, res: Response) => {
+    const filePath = req.query.path as string;
+    if (!filePath) { res.status(400).json({ error: 'path required' }); return; }
+
+    const resolved = resolvePath(filePath);
+    if (!validatePath(resolved)) { res.status(403).json({ error: 'path outside allowed directories' }); return; }
+    if (!existsSync(resolved)) { res.status(404).json({ error: 'not found' }); return; }
+
+    const ext = extname(resolved).toLowerCase();
+    if (ext !== '.md' && ext !== '.mdx') { res.status(400).json({ error: 'not a markdown file' }); return; }
+
+    execFile('python3', [RENDER_SCRIPT, resolved], { timeout: 10000, maxBuffer: 5 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) {
+        res.status(500).json({ error: `Render failed: ${stderr || err.message}` });
+        return;
+      }
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.send(stdout);
+    });
+  });
+
   // --- CLAUDE.md Map Endpoint ---
   // Returns all CLAUDE.md files grouped by area, with extracted refs
   let claudeMapCache: { data: any; ts: number } | null = null;
@@ -383,7 +448,7 @@ export default function createFilesRouter(deps: FilesDeps): Router {
     }
 
     try {
-      const searchBases = ['/root/projekte', '/home/claude-user/.claude', '/home/claude-user/.cui-account1/.claude'];
+      const searchBases = [PATHS.projectsRoot, join(PATHS.claudeUserHome, '.claude'), join(PATHS.claudeUserHome, '.cui-account1/.claude')];
       const found: Array<{ path: string; label: string; refs: Array<{ label: string; path: string; type: string }> }> = [];
 
       // Recursive CLAUDE.md finder (max depth 6)
@@ -406,7 +471,7 @@ export default function createFilesRouter(deps: FilesDeps): Router {
                 // Resolve to absolute path
                 let resolved = rawPath;
                 if (rawPath.startsWith('refs/')) {
-                  resolved = `/home/claude-user/.claude/${rawPath}`;
+                  resolved = `${PATHS.claudeUserHome}/.claude/${rawPath}`;
                 } else if (rawPath.startsWith('/')) {
                   resolved = rawPath;
                 } else if (rawPath.startsWith('~/')) {
@@ -429,10 +494,7 @@ export default function createFilesRouter(deps: FilesDeps): Router {
                 // Use short display label
                 let displayLabel = label && label !== basename(rawPath) ? label : rawPath;
                 // Shorten absolute paths for display
-                displayLabel = displayLabel
-                  .replace('/root/projekte/', '')
-                  .replace('/home/claude-user/.claude/', '~/.claude/')
-                  .replace('/root/.claude/', '~/.claude/');
+                displayLabel = shortenPath(displayLabel);
                 refs.push({ label: displayLabel, path: resolved, type });
               }
 
@@ -475,9 +537,9 @@ export default function createFilesRouter(deps: FilesDeps): Router {
 
               // Create short label from path
               const label = full
-                .replace('/root/projekte/', '')
-                .replace('/home/claude-user/.cui-account1/.claude/', '~/.claude (project)/')
-                .replace('/home/claude-user/.claude/', '~/.claude/')
+                .replace(PATHS.projectsRoot + '/', '')
+                .replace(PATHS.claudeUserHome + '/.cui-account1/.claude/', '~/.claude (project)/')
+                .replace(PATHS.claudeUserHome + '/.claude/', '~/.claude/')
                 .replace('/CLAUDE.md', '');
 
               found.push({ path: full, label, refs });

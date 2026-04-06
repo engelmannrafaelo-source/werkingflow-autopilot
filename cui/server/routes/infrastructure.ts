@@ -62,14 +62,16 @@ function triggerWatchdogCheck() {
   } catch (err) { console.warn('[Infrastructure] Watchdog check failed:', err); }
 }
 
+import { PATHS } from '../config/paths.js';
+
 // Panel configuration with start commands
 const PANEL_CONFIGS = [
-  { name: 'Platform', port: 3004, path: '/root/projekte/werkingflow/platform', startCmd: 'npm run build:local' },
-  { name: 'Dashboard', port: 3333, path: '/root/projekte/werkingflow/dashboard', startCmd: 'python3 -m dashboard.app &' },
-  { name: 'Werking-Report', port: 3008, path: '/root/projekte/werking-report', startCmd: 'npm run build:local' },
-  { name: 'Werking-Energy', port: 3007, path: '/root/projekte/apps/werking-energy', startCmd: 'npm run build:local' },
-  { name: 'Engelmann', port: 3009, path: '/root/projekte/engelmann-ai-hub', startCmd: 'npm run build:local' },
-  { name: 'Safety', port: 3006, path: '/root/projekte/werking-safety/frontend', startCmd: 'npm run build:local' },
+  { name: 'Platform', port: 3004, path: join(PATHS.werkingflowDir, 'platform'), startCmd: 'npm run build:local' },
+  { name: 'Dashboard', port: 3333, path: join(PATHS.werkingflowDir, 'dashboard'), startCmd: 'python3 -m dashboard.app &' },
+  { name: 'Werking-Report', port: 3008, path: join(PATHS.projectsRoot, 'werking-report'), startCmd: 'npm run build:local' },
+  { name: 'Werking-Energy', port: 3007, path: join(PATHS.projectsRoot, 'apps/werking-energy'), startCmd: 'npm run build:local' },
+  { name: 'Engelmann', port: 3009, path: join(PATHS.projectsRoot, 'engelmann-ai-hub'), startCmd: 'npm run build:local' },
+  { name: 'Safety', port: 3006, path: join(PATHS.projectsRoot, 'werking-safety/frontend'), startCmd: 'npm run build:local' },
 ];
 
 export default function createInfrastructureRouter(deps: InfrastructureDeps): Router {
@@ -158,7 +160,15 @@ export default function createInfrastructureRouter(deps: InfrastructureDeps): Ro
   });
 
   // GET /api/health-check-proxy — Proxy for external backend health checks (CORS bypass)
-  const ALLOWED_HEALTH_CHECK_HOSTS = ['localhost', '127.0.0.1', '100.121.161.109', '49.12.72.66'];
+  // Build allowlist dynamically: always localhost + Bridge IP + APP_HOST (if set)
+  const ALLOWED_HEALTH_CHECK_HOSTS = ['localhost', '127.0.0.1', '49.12.72.66'];
+  try {
+    const appHost = process.env.CUI_APP_HOST;
+    if (appHost) {
+      const hostIp = new URL(appHost).hostname;
+      if (!ALLOWED_HEALTH_CHECK_HOSTS.includes(hostIp)) ALLOWED_HEALTH_CHECK_HOSTS.push(hostIp);
+    }
+  } catch { /* ignore invalid CUI_APP_HOST */ }
 
   router.get('/api/health-check-proxy', async (req: Request, res: Response) => {
     const targetUrl = req.query.url as string;

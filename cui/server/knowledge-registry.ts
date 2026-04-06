@@ -13,8 +13,10 @@ import type {
   PersonaAssignment,
 } from './types/knowledge.js';
 
+import { PATHS } from './config/paths.js';
+
 const router = Router();
-const REGISTRY_PATH = '/root/projekte/orchestrator/team/KNOWLEDGE_REGISTRY.json';
+const REGISTRY_PATH = PATHS.knowledgeRegistryPath;
 
 // --- GET /api/team/knowledge/registry ---
 router.get('/registry', async (req, res) => {
@@ -128,7 +130,7 @@ router.post('/assign', async (req, res) => {
     }
 
     // Validate persona exists
-    const personaFile = `/root/projekte/orchestrator/team/personas/${persona_id}.md`;
+    const personaFile = `${PATHS.personasDir}/${persona_id}.md`;
     try {
       await fs.access(personaFile);
     } catch {

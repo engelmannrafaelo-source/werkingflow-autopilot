@@ -2,6 +2,7 @@
 // Created: 2026-02-19
 
 import chokidar from 'chokidar';
+import { existsSync } from 'fs';
 import { basename } from 'path';
 import type { FileChangeEvent, WatcherConfig } from './types/knowledge.js';
 
@@ -14,6 +15,12 @@ export class KnowledgeWatcher {
 
   start(): void {
     console.log(`[KnowledgeWatcher] Starting watcher on ${this.config.base_path}`);
+
+    // Graceful skip if path doesn't exist (e.g. partner server without business docs)
+    if (!existsSync(this.config.base_path)) {
+      console.log(`[KnowledgeWatcher] Path not found: ${this.config.base_path} — skipping (non-fatal)`);
+      return;
+    }
 
     this.watcher = chokidar.watch(this.config.base_path, {
       ignored: this.config.ignore_patterns,

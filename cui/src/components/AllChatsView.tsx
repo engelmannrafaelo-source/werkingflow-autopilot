@@ -20,7 +20,7 @@ interface AllChatsViewProps {
   isVisible?: boolean;
 }
 
-const MAX_VISIBLE_PANELS = 16;
+const MAX_VISIBLE_PANELS = 6;
 
 function computeGrid(n: number): { cols: number; rows: number } {
   if (n <= 0) return { cols: 1, rows: 1 };

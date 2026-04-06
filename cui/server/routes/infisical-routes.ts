@@ -10,12 +10,12 @@
 
 import { Router, type Request, type Response } from 'express';
 import { execSync } from 'child_process';
+import { PATHS, INFISICAL_BASE_URL } from '../config/paths.js';
 
 const router = Router();
 
-// Infisical server configuration (non-secret)
-const INFISICAL_BASE_URL = process.env.INFISICAL_URL || 'http://100.79.71.99:80';
-const TOKEN_SCRIPT = '/root/.infisical/get-token.py';
+// Infisical configuration — centralized in paths.ts
+const TOKEN_SCRIPT = PATHS.infisicalTokenScript;
 
 // Workspace ID mapping (loaded from env at startup)
 const WORKSPACE_MAP: Record<string, string> = {};
@@ -115,9 +115,7 @@ router.get('/status', async (_req: Request, res: Response) => {
   res.json({
     server: {
       base_url: INFISICAL_BASE_URL,
-      tailscale_ip: '100.79.71.99',
-      public_ip: '46.225.139.121',
-      web_ui: 'http://100.79.71.99:80',
+      url: INFISICAL_BASE_URL,
       healthy: serverHealthy,
       ...(serverStatus || {}),
     },
@@ -230,18 +228,18 @@ router.get('/infrastructure', async (_req: Request, res: Response) => {
   const railway = Object.entries(syncTargets).filter(([, t]) => t.includes('Railway')).map(([id]) => ({ project: id, name: id, status: 'succeeded' }));
 
   res.json({
-    server: '100.79.71.99', publicIP: '46.225.139.121', webUI: 'http://100.79.71.99:80', healthy: serverHealthy,
+    server: INFISICAL_BASE_URL, healthy: serverHealthy,
     docker: { status: serverHealthy ? 'running' : 'unknown', services: ['infisical', 'postgres', 'redis'] },
     syncTargets: { vercel, railway }, totalProjects: Object.keys(WORKSPACE_MAP).length,
-    configured: true, docs: '/root/projekte/orchestrator/deploy/PROD_OPS.md', timestamp: new Date().toISOString(),
+    configured: true, timestamp: new Date().toISOString(),
   });
 });
 
 /** GET /api/infisical/server-info */
 router.get('/server-info', async (_req: Request, res: Response) => {
   res.json({
-    server: INFISICAL_BASE_URL, tailscaleIP: '100.79.71.99', publicIP: '46.225.139.121', webUI: 'http://100.79.71.99:80',
-    configured: true, workspaces: Object.keys(WORKSPACE_MAP).length, docs: '/root/projekte/orchestrator/deploy/PROD_OPS.md', timestamp: new Date().toISOString(),
+    server: INFISICAL_BASE_URL,
+    configured: true, workspaces: Object.keys(WORKSPACE_MAP).length, timestamp: new Date().toISOString(),
   });
 });
 

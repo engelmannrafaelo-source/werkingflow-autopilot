@@ -254,7 +254,7 @@ router.post("/api/claude-code/scrape-now", async (req, res) => {
 // Bridge Monitor API Endpoints
 // ========================================
 
-const BRIDGE_URL = process.env.AI_BRIDGE_URL || 'http://49.12.72.66:8000';
+import { BRIDGE_URL } from '../config/paths.js';
 const BRIDGE_API_KEY = process.env.AI_BRIDGE_API_KEY || '';
 
 async function bridgeFetch(path: string, options: any = {}) {

@@ -8,9 +8,12 @@
 import { readFileSync as _readEnvFile, existsSync as _envExists } from 'fs';
 import { resolve as _resolvePath } from 'path';
 
-const _envPath = _resolvePath(import.meta.dirname ?? '.', '..', '.env');
-if (_envExists(_envPath)) {
-  const _lines = _readEnvFile(_envPath, 'utf8').split('\n');
+const _envPath = _resolvePath(import.meta.dirname ?? process.cwd(), '..', '.env');
+const _envPathCwd = _resolvePath(process.cwd(), '.env');
+// tsx doesn't set import.meta.dirname — fallback to cwd-based .env
+const _resolvedEnvPath = _envExists(_envPath) ? _envPath : _envPathCwd;
+if (_envExists(_resolvedEnvPath)) {
+  const _lines = _readEnvFile(_resolvedEnvPath, 'utf8').split('\n');
   for (const _line of _lines) {
     const _trimmed = _line.trim();
     if (!_trimmed || _trimmed.startsWith('#')) continue;
@@ -48,6 +51,7 @@ import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { resolve, join } from 'path';
 import { readFileSync, readdirSync, existsSync, writeFileSync, statSync, renameSync } from 'fs';
+import { PATHS, BRIDGE_URL, getAppHost } from './config/paths.js';
 import documentManager from './document-manager.js';
 import * as metricsDb from './metrics-db.js';
 
@@ -91,21 +95,36 @@ import bridgeRouter from './routes/bridge.js';
 import qaRouter from './routes/qa.js';
 import repoDashboardRouter from './routes/repo-dashboard.js';
 import maintenanceRouter from './routes/maintenance.js';
+import auditRouter, { initAuditRouter } from './routes/audit.js';
 import createInfrastructureRouter from './routes/infrastructure.js';
 import createTeamRouter from './routes/team.js';
 import createAdminRouter from './routes/admin.js';
 import createControlRouter, { getCpuProfileResolver } from './routes/control.js';
+import architectureRouter from './routes/architecture.js';
+import architectureStatusRouter from './routes/architecture-status.js';
+import reportBuilderRouter, { initReportBuilder } from './routes/report-builder.js';
+import businessAngelRouter from './routes/business-angel.js';
 
 // External route modules (pre-existing, not part of the extraction)
 import knowledgeRegistryRouter from './knowledge-registry.js';
 import infisicalRoutes from './routes/infisical-routes.js';
 
+// Auth (multi-user support for partner servers)
+import authRouter from './routes/auth.js';
+import { requireAuth } from './auth/middleware.js';
+
 // Peer Awareness (cross-session work visibility)
 import { initPeerAwareness, startPeerAwarenessTimer, stopPeerAwarenessTimer, createPeerAwarenessRouter } from './routes/peer-awareness.js';
 
+// App Proxy (reverse proxy for localhost app ports — enables browser panel on remote servers)
+import createAppProxyRouter from './routes/app-proxy.js';
+
 // Background Ops (event buffer for system monitoring panel)
-import { createSynchroniseRouter } from './routes/synchronise.js';
 import { createBackgroundOpsRouter } from './routes/background-ops.js';
+
+// Prompt Explorer (live pipeline & prompt scanner)
+import { createPromptExplorerRouter } from './routes/prompt-explorer.js';
+
 
 // ─── Section 4: Constants ───────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT ?? '4005', 10);
@@ -170,6 +189,8 @@ initMissionRouter({
 } satisfies MissionDeps);
 
 initTemplatesRouter(DATA_DIR);
+initAuditRouter(DATA_DIR);
+initReportBuilder(DATA_DIR);
 
 const filesRouter = createFilesRouter({ DATA_DIR, ACTIVE_DIR, PORT });
 const layoutsRouter = createLayoutsRouter({ LAYOUTS_DIR, PROJECTS_DIR, NOTES_DIR, UPLOADS_DIR, DATA_DIR });
@@ -197,7 +218,30 @@ const autoInjectRouter = createAutoInjectRouter({
   DATA_DIR,
 });
 
-// --- Mount all routers ---
+// --- Frontend Path Config (served to browser, public) ---
+app.get('/api/config/paths', (_req, res) => {
+  res.json({
+    businessDir: PATHS.businessDir,
+    orchestratorDir: PATHS.orchestratorDir,
+    worklistsDir: PATHS.worklistsDir,
+    personasDir: PATHS.personasDir,
+    projectsRoot: PATHS.projectsRoot,
+    werkingflowProductionDir: PATHS.werkingflowProductionDir,
+    claudeUserHome: PATHS.claudeUserHome,
+    appHost: getAppHost(),
+  });
+});
+
+// --- App Proxy (BEFORE /api auth — has its own requireAuth per-route) ---
+app.use(createAppProxyRouter());
+
+// --- Auth routes (public — must be BEFORE requireAuth middleware) ---
+app.use('/api/auth', authRouter);
+
+// --- Auth middleware (no-op when users.json doesn't exist) ---
+app.use('/api', requireAuth);
+
+// --- Mount all routers (protected when auth is enabled) ---
 app.use(filesRouter);                               // /api/health, /api/version, /api/files, /api/file, /api/file-read, /api/active-dir, /api/files/move
 app.use('/api', layoutsRouter);                      // /api/projects, /api/notes, /api/layouts, /api/upload, /api/images, /api/uploads
 app.use('/api/mission', missionRouter);              // /api/mission/conversations, /send, /states, /unstick, /start, etc.
@@ -209,6 +253,7 @@ app.use(bridgeRouter);                               // /api/claude-code/*, /api
 app.use(qaRouter);                                   // /api/qa/* (QA Dashboard - Unified-Tester integration)
 app.use('/api/repo-dashboard', repoDashboardRouter);  // /api/repo-dashboard/repositories, /pipeline, /structure, /hierarchy
 app.use('/api/maintenance', maintenanceRouter);       // /api/maintenance/status, /refresh, /run
+app.use('/api/audit', auditRouter);                   // /api/audit/inputs, /summary, /inputs/:id/context
 app.use(infrastructureRouter);                       // /watchdog/*, /api/rebuild, /api/panel-health, /api/bridge-db/*, /api/infrastructure/*
 app.use('/api/team', teamRouter);                    // /api/team/personas, /worklist, /tasks, /events, /reviews, /task-board, /chat
 app.use('/api', adminRouter);                        // /api/admin/wr/*, /api/ops/deployments
@@ -222,15 +267,27 @@ app.use('/api/infisical', infisicalRoutes);
 app.use(createPeerAwarenessRouter());                // /api/peer-awareness (GET + POST /refresh)
 
 // --- Background Ops API ---
-app.use(createSynchroniseRouter({ broadcast, sessionStates, setSessionState }));
   app.use(createBackgroundOpsRouter());                // /api/background-ops (GET)
+
+// --- Architecture Explorer API ---
+app.use('/api/architecture', architectureRouter);    // /api/architecture/graph, /refresh
+app.use('/api/architecture/status', architectureStatusRouter); // /api/architecture/status (live port checks)
+
+// --- Report Builder API ---
+app.use('/api/report-builder', reportBuilderRouter); // /api/report-builder/sessions, /extract, /generate, /save, /business-tree
+
+// --- Business Angel API ---
+app.use('/api/business-angel', businessAngelRouter); // /api/business-angel/context, /load, /apply-diffs
+
+// --- Prompt Explorer API ---
+app.use('/api/prompt-explorer', createPromptExplorerRouter()); // /api/prompt-explorer/pipelines, /scan, /prompt
 
 // --- Document Manager (Phase 3) ---
 app.use('/api/team', documentManager);
 
 // ─── Section 11: Frontend Serving (Production) ──────────────────────────────
 {
-  const distPath = resolve(import.meta.dirname ?? '.', '..', 'dist');
+  const distPath = join(WORKSPACE_ROOT, 'dist');
   if (existsSync(distPath)) {
     app.use('/assets', express.static(join(distPath, 'assets'), { maxAge: '1y', immutable: true }));
     // Serve static files EXCEPT index.html (which needs token injection)
@@ -238,8 +295,20 @@ app.use('/api/team', documentManager);
       if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     }}));
     // ALL HTML responses (root + SPA fallback) get token injection
-    app.use((_req, res) => {
+    // BUT: Skip paths that belong to proxied apps (/_next/, etc.) — return 404 instead
+    // of CUI's index.html. This prevents "CUI within CUI" when the app-proxy interceptor
+    // misses a dynamic script/resource load from a Next.js app.
+    app.use((req, res, next) => {
+      const p = req.path;
+      // Paths that are clearly NOT CUI frontend routes
+      if (p.startsWith('/_next/') || p.startsWith('/app-proxy/') ||
+          (p.startsWith('/__next') || p.match(/\.(js|css|map|json|woff2?|ttf|ico|png|jpg|svg)$/))) {
+        res.status(404).end();
+        return;
+      }
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      // Prevent CUI from being embedded in an iframe (blocks "CUI within CUI" recursion)
+      res.setHeader('X-Frame-Options', 'DENY');
 
       // Read index.html and inject CUI_REBUILD_TOKEN (Herbert's Security Recommendation #2)
       const indexPath = join(distPath, 'index.html');
@@ -247,8 +316,8 @@ app.use('/api/team', documentManager);
 
       const rebuildToken = process.env.CUI_REBUILD_TOKEN || '';
       const bridgeApiKey = process.env.AI_BRIDGE_API_KEY || '';
-      const bridgeUrl = process.env.AI_BRIDGE_URL || 'http://49.12.72.66:8000';
-      const tokenScript = `<script>window.CUI_REBUILD_TOKEN = ${JSON.stringify(rebuildToken)};window.__CUI_BRIDGE_API_KEY__ = ${JSON.stringify(bridgeApiKey)};window.__CUI_BRIDGE_URL__ = ${JSON.stringify(bridgeUrl)};</script>`;
+      const bridgeUrl = BRIDGE_URL;
+      const tokenScript = `<script>window.CUI_REBUILD_TOKEN = ${JSON.stringify(rebuildToken)};window.__CUI_BRIDGE_API_KEY__ = ${JSON.stringify(bridgeApiKey)};window.__CUI_BRIDGE_URL__ = ${JSON.stringify(bridgeUrl)};window.__CUI_APP_HOST__ = ${JSON.stringify(getAppHost())};</script>`;
 
       // Inject before closing </head> tag
       html = html.replace('</head>', `${tokenScript}\n</head>`);
@@ -263,7 +332,7 @@ app.use('/api/team', documentManager);
 // Knowledge Watcher
 import { KnowledgeWatcher } from './knowledge-watcher.js';
 const knowledgeWatcher = new KnowledgeWatcher({
-  base_path: '/root/projekte/werkingflow/business',
+  base_path: PATHS.businessDir,
   ignore_patterns: ['**/archive/**', '**/_archiv/**', '**/.DS_Store', '**/*.pdf', '**/*.html'],
   debounce_ms: 2000,
   auto_scan_threshold: 5,

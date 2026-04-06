@@ -46,13 +46,19 @@ export function updatePanelVisibility(data: { panelId: string; projectId: string
   const prev = visibilityRegistry.get(key);
   visibilityRegistry.set(key, { ...data, updatedAt: Date.now() });
   if (!prev || prev.sessionId !== data.sessionId) {
-    // Session exclusivity: if this session is now claimed by a new panel, evict it from other panels
-    if (data.sessionId) {
+    // Session exclusivity: only active CUI panels (#*) claim sessions.
+    // allchats-* panels are read-only overview panels — they must NOT claim
+    // sessions or evict other panels (prevents ping-pong between panels).
+    const isActiveCuiPanel = data.panelId.startsWith('#');
+    if (data.sessionId && isActiveCuiPanel) {
       for (const [otherKey, entry] of visibilityRegistry) {
-        if (otherKey !== key && entry.sessionId === data.sessionId) {
+        // Skip self, skip other allchats panels (they don't compete)
+        if (otherKey === key) continue;
+        if (entry.panelId.startsWith('allchats-')) continue;
+        if (entry.sessionId === data.sessionId) {
           console.log(`[Visibility] Session ${data.sessionId.slice(0, 8)} claimed by ${data.panelId} — evicting from ${entry.panelId}`);
           broadcast({ type: 'session-claimed', sessionId: data.sessionId, claimedByPanelId: data.panelId, evictPanelId: entry.panelId, projectId: data.projectId });
-          entry.sessionId = ''; // Clear old panel's session
+          entry.sessionId = '';
           entry.route = '';
         }
       }
@@ -146,13 +152,23 @@ export function restoreSessionStates() {
 // Restore session states on startup
 restoreSessionStates();
 
+type StateChangeCallback = (sessionId: string, state: string, reason?: string) => void;
+const _stateChangeCallbacks: StateChangeCallback[] = [];
+export function onSessionStateChange(cb: StateChangeCallback): void {
+  _stateChangeCallbacks.push(cb);
+}
+
 export function setSessionState(key: string, accountId: string, state: ConvAttentionState, reason?: AttentionReason, sessionId?: string) {
   const prev = sessionStates.get(key);
   if (prev?.state === state && prev?.reason === reason) return; // no change
   sessionStates.set(key, { state, reason, since: Date.now(), accountId, sessionId });
   broadcast({ type: 'conv-attention', key, accountId, sessionId, state, reason });
-  // Persist to disk for restart recovery
   persistSessionStates();
+  // Notify registered listeners (e.g. review completion handler in mission.ts)
+  const sid = sessionId || key;
+  for (const cb of _stateChangeCallbacks) {
+    try { cb(sid, state, reason); } catch { /* ignore */ }
+  }
 }
 
 export function getSessionStates(): Record<string, SessionState> {
@@ -427,7 +443,7 @@ export function initWebSocket(
           broadcast(navMsg);
           // Store for panels that connect after broadcast (race condition fix)
           pendingNavigations.set(msg.panelId, navMsg);
-          setTimeout(() => pendingNavigations.delete(msg.panelId), 30000); // expire after 30s
+          setTimeout(() => pendingNavigations.delete(msg.panelId), 5000); // expire after 5s (was 30s)
         }
         // Relay control messages from frontend components to LayoutManager (and other listeners)
         if (msg.type === 'control:ensure-panel' || msg.type === 'control:select-tab'

@@ -11,9 +11,11 @@ import type {
   MigrationResult,
 } from './types/knowledge.js';
 
-const FRESHNESS_INDEX_PATH = '/root/projekte/orchestrator/team/FRESHNESS_INDEX.json';
-const KNOWLEDGE_REGISTRY_PATH = '/root/projekte/orchestrator/team/KNOWLEDGE_REGISTRY.json';
-const BUSINESS_PATH = '/root/projekte/werkingflow/business';
+import { PATHS } from './config/paths.js';
+
+const FRESHNESS_INDEX_PATH = `${PATHS.orchestratorDir}/team/FRESHNESS_INDEX.json`;
+const KNOWLEDGE_REGISTRY_PATH = PATHS.knowledgeRegistryPath;
+const BUSINESS_PATH = PATHS.businessDir;
 
 interface FreshnessIndexDocument {
   last_updated: string;

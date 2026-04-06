@@ -1,80 +1,85 @@
 {
-  "5f77d36d-3633-426e-b8d6-8878f62fd4f0": {
+  "c8dd8dbb-1d5d-44cf-ad43-d1e0d9c8a117": {
+    "state": "idle",
+    "since": 1775471209656,
+    "accountId": "gmail",
+    "sessionId": "c8dd8dbb-1d5d-44cf-ad43-d1e0d9c8a117",
+    "reason": "done"
+  },
+  "a6c9636f-9cb4-4ff4-a15e-ef5371d4d2ee": {
     "state": "idle",
     "reason": "done",
-    "since": 1773145151345,
-    "accountId": "office",
-    "sessionId": "5f77d36d-3633-426e-b8d6-8878f62fd4f0"
+    "since": 1775471320997,
+    "accountId": "gmail",
+    "sessionId": "a6c9636f-9cb4-4ff4-a15e-ef5371d4d2ee"
   },
-  "87025140-c602-444f-8c8f-2e7d990c9adb": {
-    "state": "working",
-    "since": 1773143929058,
-    "accountId": "office",
-    "sessionId": "87025140-c602-444f-8c8f-2e7d990c9adb"
-  },
-  "f5e598fd-666e-4543-aa68-32b3f5910761": {
-    "state": "working",
-    "since": 1773145251537,
-    "accountId": "office",
-    "sessionId": "f5e598fd-666e-4543-aa68-32b3f5910761"
-  },
-  "2c13a93c-e041-4404-b281-02e890403c01": {
+  "9f4b2082-a467-44b0-a6ca-8a7a9c702923": {
     "state": "idle",
     "reason": "done",
-    "since": 1773145280524,
-    "accountId": "office",
-    "sessionId": "2c13a93c-e041-4404-b281-02e890403c01"
-  },
-  "bebe4a9a-a2b6-44ea-b505-ef4aaa4ee009": {
-    "state": "working",
-    "since": 1773145160022,
-    "accountId": "office",
-    "sessionId": "bebe4a9a-a2b6-44ea-b505-ef4aaa4ee009"
-  },
-  "6bdbb410-b44e-4beb-8016-68c9e0de45ca": {
-    "state": "idle",
-    "reason": "done",
-    "since": 1773144900697,
+    "since": 1775468621401,
     "accountId": "engelmann",
-    "sessionId": "6bdbb410-b44e-4beb-8016-68c9e0de45ca"
+    "sessionId": "9f4b2082-a467-44b0-a6ca-8a7a9c702923"
   },
-  "1b0c9ce4-2b85-4dfd-bcfa-504064315c91": {
+  "67648966-5472-4cb8-a6f3-c69d50337d66": {
     "state": "working",
-    "since": 1773145286451,
-    "accountId": "rafael",
-    "sessionId": "1b0c9ce4-2b85-4dfd-bcfa-504064315c91"
+    "since": 1775471209958,
+    "accountId": "gmail",
+    "sessionId": "67648966-5472-4cb8-a6f3-c69d50337d66"
   },
-  "45998f4b-1d41-40ba-8d49-2018c8804f4f": {
-    "state": "working",
-    "since": 1773143929040,
-    "accountId": "office",
-    "sessionId": "45998f4b-1d41-40ba-8d49-2018c8804f4f"
-  },
-  "eccf9edb-70fe-4427-9a69-9bec09480a64": {
-    "state": "working",
-    "since": 1773143929071,
-    "accountId": "office",
-    "sessionId": "eccf9edb-70fe-4427-9a69-9bec09480a64"
-  },
-  "ae890610-57d1-4a21-9bfe-2f7586732ae2": {
+  "427103ad-2dec-449a-8dfe-3b2e42b29fba": {
     "state": "idle",
     "reason": "done",
-    "since": 1773145371506,
+    "since": 1775468617884,
+    "accountId": "gmail",
+    "sessionId": "427103ad-2dec-449a-8dfe-3b2e42b29fba"
+  },
+  "1702596f-438c-469a-979d-cb6809225ce0": {
+    "state": "idle",
+    "reason": "done",
+    "since": 1775470150023,
+    "accountId": "engelmann",
+    "sessionId": "1702596f-438c-469a-979d-cb6809225ce0"
+  },
+  "05cb8fde-375f-403f-8e33-b54a204f1871": {
+    "state": "idle",
+    "reason": "done",
+    "since": 1775471209774,
+    "accountId": "gmail",
+    "sessionId": "05cb8fde-375f-403f-8e33-b54a204f1871"
+  },
+  "18828d51-02a6-4256-b1c2-23c11154f7b6": {
+    "state": "idle",
+    "reason": "done",
+    "since": 1775471209941,
+    "accountId": "gmail",
+    "sessionId": "18828d51-02a6-4256-b1c2-23c11154f7b6"
+  },
+  "3b421e57-d012-4992-b6a9-5a6e16dc773e": {
+    "state": "idle",
+    "reason": "done",
+    "since": 1775471209947,
     "accountId": "office",
-    "sessionId": "ae890610-57d1-4a21-9bfe-2f7586732ae2"
+    "sessionId": "3b421e57-d012-4992-b6a9-5a6e16dc773e"
   },
-  "130509aa-8af1-485e-a685-abe8f697e2d2": {
+  "73f46126-19cb-42fb-8b93-c13743293d40": {
     "state": "idle",
     "reason": "done",
-    "since": 1773145349373,
-    "accountId": "rafael",
-    "sessionId": "130509aa-8af1-485e-a685-abe8f697e2d2"
+    "since": 1775471209962,
+    "accountId": "gmail",
+    "sessionId": "73f46126-19cb-42fb-8b93-c13743293d40"
   },
-  "b74f06dc-7121-420b-8034-f23dfcca3d91": {
+  "7c6cac5f-1ebf-4586-b176-db6cce23aa86": {
     "state": "idle",
     "reason": "done",
-    "since": 1773145286318,
-    "accountId": "rafael",
-    "sessionId": "b74f06dc-7121-420b-8034-f23dfcca3d91"
+    "since": 1775471209967,
+    "accountId": "engelmann",
+    "sessionId": "7c6cac5f-1ebf-4586-b176-db6cce23aa86"
+  },
+  "afec331f-00bc-4a81-a095-52895912810e": {
+    "state": "idle",
+    "reason": "done",
+    "since": 1775471209981,
+    "accountId": "office",
+    "sessionId": "afec331f-00bc-4a81-a095-52895912810e"
   }
 }

@@ -1,5 +1,51 @@
 [
   {
+    "account": "office",
+    "timestamp": "2026-04-06T10:15:03.010Z",
+    "plan": "Max",
+    "currentSession": {
+      "percent": 7,
+      "resetIn": "resets in 4h 44m"
+    },
+    "weeklyAllModels": {
+      "percent": 57,
+      "resetDate": "resets in 3d 20h"
+    },
+    "weeklySonnet": {
+      "percent": 38,
+      "resetDate": "resets in 5d 0h"
+    },
+    "extraUsage": {
+      "percent": 0,
+      "spent": "0.00 EUR",
+      "limit": "42.50 EUR",
+      "balance": "42.50 EUR"
+    }
+  },
+  {
+    "account": "engelmann",
+    "timestamp": "2026-04-06T10:15:04.073Z",
+    "plan": "Max",
+    "currentSession": {
+      "percent": 6,
+      "resetIn": "resets in 4h 44m"
+    },
+    "weeklyAllModels": {
+      "percent": 81,
+      "resetDate": "resets in 3d 20h"
+    },
+    "weeklySonnet": {
+      "percent": 43,
+      "resetDate": "resets in 4d 0h"
+    },
+    "extraUsage": {
+      "percent": 0,
+      "spent": "0.00 EUR",
+      "limit": "42.50 EUR",
+      "balance": "42.50 EUR"
+    }
+  },
+  {
     "account": "rafael",
     "timestamp": "2026-03-10T12:00:03.105Z",
     "plan": "Max",
@@ -20,52 +66,7 @@
       "spent": "22.92 EUR",
       "limit": "20.00 EUR",
       "balance": "-2.92 EUR"
-    }
-  },
-  {
-    "account": "office",
-    "timestamp": "2026-03-10T12:00:04.065Z",
-    "plan": "Max",
-    "currentSession": {
-      "percent": 0,
-      "resetIn": ""
     },
-    "weeklyAllModels": {
-      "percent": 40,
-      "resetDate": "resets in 2d 18h"
-    },
-    "weeklySonnet": {
-      "percent": 28,
-      "resetDate": "resets in 2d 18h"
-    },
-    "extraUsage": {
-      "percent": 0,
-      "spent": "0.00 EUR",
-      "limit": "42.50 EUR",
-      "balance": "42.50 EUR"
-    }
-  },
-  {
-    "account": "engelmann",
-    "timestamp": "2026-03-10T12:00:05.065Z",
-    "plan": "Max",
-    "currentSession": {
-      "percent": 0,
-      "resetIn": "resets in 4h 59m"
-    },
-    "weeklyAllModels": {
-      "percent": 44,
-      "resetDate": "resets in 2d 18h"
-    },
-    "weeklySonnet": {
-      "percent": 26,
-      "resetDate": "resets in 2d 18h"
-    },
-    "extraUsage": {
-      "percent": 0,
-      "spent": "0.00 EUR",
-      "limit": "42.50 EUR",
-      "balance": "42.50 EUR"
-    }
+    "scrapeError": "Scrape failed at 2026-04-06T10:15:04.074Z — session expired"
   }
 ]

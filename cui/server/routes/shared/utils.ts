@@ -7,6 +7,7 @@
 
 import { appendFileSync, writeFileSync, renameSync } from 'fs';
 import { basename, dirname, join } from 'path';
+import { PATHS } from '../../config/paths.js';
 
 // ---------------------------------------------------------------------------
 // atomicWriteFileSync — crash-safe JSON file writes (write tmp + rename).
@@ -110,7 +111,7 @@ export function parsePersonaMd(filename: string, content: string): ParsedPersona
     role: nameMatch?.[2] || 'Team Member',
     mbti: mbtiMatch?.[1] || 'XXXX',
     status: 'idle',
-    worklistPath: `/root/projekte/orchestrator/team/worklists/${id}.md`,
+    worklistPath: join(PATHS.worklistsDir, `${id}.md`),
     lastUpdated: new Date().toISOString(),
     team: teamMatch?.[1]?.trim() || 'unassigned',
     department: deptMatch?.[1]?.trim() || 'General',

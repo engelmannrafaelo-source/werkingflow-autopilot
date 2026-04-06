@@ -66,7 +66,9 @@ const router = Router();
 
 // --- Agent Monitoring & Control ---
 
-const AGENTS_DIR = '/root/projekte/werkingflow/team-agents';
+import { PATHS } from '../config/paths.js';
+
+const AGENTS_DIR = PATHS.agentsDir;
 const AGENT_REGISTRY: Record<string, { persona_id: string; persona_name: string; schedule: string }> = {
   kai: { persona_id: 'kai-hoffmann', persona_name: 'Kai Hoffmann', schedule: 'Mo 09:00' },
 };
@@ -252,7 +254,7 @@ router.get('/api/agents/brief/:name', async (req, res) => {
 // Claude Code Agent Runner — 16 Personas, full filesystem access
 // ─────────────────────────────────────────────────────────────────────────────
 const PROMPTS_DIR = `${AGENTS_DIR}/prompts`;
-const CLAUDE_LOGS_DIR = '/root/projekte/local-storage/backends/team-agents/logs';
+const CLAUDE_LOGS_DIR = PATHS.agentLogsDir;
 const runningClaudes = new Map<string, ReturnType<typeof spawn>>();
 
 const CLAUDE_AGENT_REGISTRY: Record<string, { name: string; schedule: string; task_type: string }> = {
@@ -391,7 +393,7 @@ router.post('/api/agents/claude/run', async (req, res) => {
   const args = isRoot
     ? ['-u', 'claude-user', 'claude', '--dangerously-skip-permissions', '--print']
     : ['--dangerously-skip-permissions', '--print'];
-  const proc = spawn(cmd, args, { cwd: '/root/projekte/werkingflow', stdio: ['pipe', 'pipe', 'pipe'], env: spawnEnv });
+  const proc = spawn(cmd, args, { cwd: PATHS.werkingflowDir, stdio: ['pipe', 'pipe', 'pipe'], env: spawnEnv });
   // Timeout guard: kill the process if it hangs beyond 30 minutes
   const claudeTimeout = setTimeout(() => {
     console.error(`[ClaudeAgent:${persona_id}] TIMEOUT after 30min — killing process`);
@@ -449,7 +451,7 @@ router.get('/api/agents/claude/plan/:planFile', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Business Approval System — .pending files must be approved by Rafael
 // ─────────────────────────────────────────────────────────────────────────────
-const BUSINESS_DIR = '/root/projekte/werkingflow/business';
+const BUSINESS_DIR = PATHS.businessDir;
 const BUSINESS_QUEUE = `${BUSINESS_DIR}/.pending-queue.jsonl`;
 
 // GET /api/agents/business/pending — list all pending business changes
@@ -540,8 +542,8 @@ router.get(/^\/api\/agents\/business\/diff\/(.+)$/, async (req, res) => {
 });
 
 // --- Persona Tagging Endpoints ---
-const PERSONA_TAG_SCRIPT = '/root/projekte/orchestrator/scripts/update-persona-tags.sh';
-const ORCHESTRATOR_DATA_DIR = '/root/projekte/orchestrator/data';
+const PERSONA_TAG_SCRIPT = join(PATHS.orchestratorDir, 'scripts/update-persona-tags.sh');
+const ORCHESTRATOR_DATA_DIR = join(PATHS.orchestratorDir, 'data');
 
 // POST /api/persona-tags/update — Start persona tagging update
 router.post('/api/persona-tags/update', async (_req, res) => {
@@ -552,7 +554,7 @@ router.post('/api/persona-tags/update', async (_req, res) => {
     const child = spawn(PERSONA_TAG_SCRIPT, [], {
       detached: true,
       stdio: 'ignore',
-      cwd: '/root/projekte/orchestrator'
+      cwd: PATHS.orchestratorDir
     });
 
     // CRITICAL: handle spawn errors to prevent process crash (ENOENT on local dev)
@@ -570,26 +572,46 @@ router.post('/api/persona-tags/update', async (_req, res) => {
 });
 
 // GET /api/persona-tags/status — Get tagging status for all apps
+// App source directories for staleness detection
+const APP_SOURCE_DIRS: Record<string, string> = {
+  'werking-report': '/root/projekte/werkingflow-production/apps/werking-report/src',
+  'engelmann': '/root/projekte/werkingflow-production/apps/engelmann/src',
+  'werking-energy': '/root/projekte/werkingflow-production/apps/werking-energy/src',
+  'werking-safety': '/root/projekte/werkingflow-production/apps/werking-safety/src',
+  'acro-community': '/root/projekte/support/acro-community/src',
+};
 router.get('/api/persona-tags/status', async (_req, res) => {
   try {
-    const apps = ['werking-report', 'engelmann', 'werking-energy', 'werking-safety'];
+    const apps = ['werking-report', 'engelmann', 'werking-energy', 'werking-safety', 'acro-community'];
     const statusData: Record<string, any> = {};
 
     for (const app of apps) {
       const enrichedPath = `${ORCHESTRATOR_DATA_DIR}/${app}/enriched.json`;
       const tagsPath = `${ORCHESTRATOR_DATA_DIR}/${app}/persona-tags.json`;
 
+      statusData[app] = {
+        total_ids: 0,
+        has_enriched: existsSync(enrichedPath),
+        has_tags: existsSync(tagsPath),
+        stale: false,
+      };
+
       if (existsSync(enrichedPath)) {
         try {
           const enrichedContent = readFileSync(enrichedPath, 'utf-8');
           const enrichedData = JSON.parse(enrichedContent);
-          const totalIds = enrichedData.summary?.total_ids || 0;
+          const enrichedMtime = statSync(enrichedPath).mtimeMs;
 
-          statusData[app] = {
-            total_ids: totalIds,
-            has_tags: existsSync(tagsPath),
-            enriched_mtime: statSync(enrichedPath).mtimeMs / 1000,
-          };
+          statusData[app].total_ids = enrichedData.summary?.total_ids || 0;
+          statusData[app].enriched_mtime = enrichedMtime / 1000;
+
+          // Check staleness: is any source file newer than enriched.json?
+          const srcDir = APP_SOURCE_DIRS[app];
+          if (srcDir && existsSync(srcDir)) {
+            // Quick check: compare enriched mtime against src dir mtime
+            const srcStat = statSync(srcDir);
+            statusData[app].stale = srcStat.mtimeMs > enrichedMtime;
+          }
 
           if (existsSync(tagsPath)) {
             statusData[app].tags_mtime = statSync(tagsPath).mtimeMs / 1000;
@@ -597,6 +619,8 @@ router.get('/api/persona-tags/status', async (_req, res) => {
         } catch (err) {
           console.error(`[Persona Tags] Error reading ${app}:`, err);
         }
+      } else {
+        statusData[app].stale = true;
       }
     }
 
@@ -792,7 +816,7 @@ router.get('/api/agents/recommendations', async (_req, res) => {
 // GET /api/agents/persona/:id — get parsed persona data
 router.get('/api/agents/persona/:id', async (req, res) => {
   const { id } = req.params;
-  const personaPath = `/root/projekte/orchestrator/team/personas/${id}.md`;
+  const personaPath = join(PATHS.personasDir, `${id}.md`);
 
   try {
     const content = await fsAgentPromises.readFile(personaPath, 'utf-8');
@@ -877,14 +901,14 @@ router.get('/api/agents/persona/:id', async (req, res) => {
 router.get('/api/agents/team/structure', async (_req, res) => {
   try {
     // Try to load pre-built hierarchy from hierarchy.json first
-    const hierarchyPath = '/root/projekte/werkingflow/autopilot/cui/data/active/team/hierarchy.json';
+    const hierarchyPath = join(PATHS.dataDir, 'active/team/hierarchy.json');
 
     try {
       const hierarchyContent = await fsAgentPromises.readFile(hierarchyPath, 'utf-8');
       const hierarchyData = JSON.parse(hierarchyContent);
 
       // Load RACI matrix separately
-      const raciPath = '/root/projekte/werkingflow/autopilot/cui/data/active/team/raci-matrix.json';
+      const raciPath = join(PATHS.dataDir, 'active/team/raci-matrix.json');
       let raciMatrix: Array<any> = [];
 
       try {
@@ -913,7 +937,7 @@ router.get('/api/agents/team/structure', async (_req, res) => {
     }
 
     // Fallback: build hierarchy from persona markdown files
-    const personasDir = '/root/projekte/orchestrator/team/personas';
+    const personasDir = PATHS.personasDir;
     const files = await fsAgentPromises.readdir(personasDir);
     const mdFiles = files.filter(f => f.endsWith('.md'));
 
@@ -1023,7 +1047,7 @@ router.get('/api/agents/team/structure', async (_req, res) => {
     let raciMatrix: Array<any> = [];
 
     try {
-      const raciPath = '/root/projekte/werkingflow/autopilot/cui/data/active/team/raci-matrix.json';
+      const raciPath = join(PATHS.dataDir, 'active/team/raci-matrix.json');
       const raciContent = await fsAgentPromises.readFile(raciPath, 'utf-8');
       const raciData = JSON.parse(raciContent);
 

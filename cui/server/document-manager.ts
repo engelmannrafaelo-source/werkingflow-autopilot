@@ -4,6 +4,7 @@ import path from 'path';
 import { createPatch } from 'diff';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { PATHS } from './config/paths.js';
 
 const execAsync = promisify(exec);
 const router = Router();
@@ -33,7 +34,7 @@ async function ensureDemoDataLoaded() {
   demoDataLoaded = true;
 
   try {
-    const demoPath = '/root/projekte/werkingflow/autopilot/cui/data/active/team/reviews.json';
+    const demoPath = path.join(PATHS.dataDir, 'active/team/reviews.json');
     const content = await fs.readFile(demoPath, 'utf-8');
     const data = JSON.parse(content);
     const demoReviews = Array.isArray(data) ? data : (data.reviews || []);
@@ -129,7 +130,7 @@ async function validateBusinessDocEdit(
 
     // Lade Route Registry
     try {
-      const registryPath = '/root/projekte/werkingflow/platform/src/registry/routes.json';
+      const registryPath = path.join(PATHS.werkingflowDir, 'platform/src/registry/routes.json');
       const registryContent = await fs.readFile(registryPath, 'utf-8');
       const registry = JSON.parse(registryContent);
       const validRoutes = registry.routes || [];
@@ -164,7 +165,7 @@ async function validateBusinessDocEdit(
 // GET /api/team/documents - Liste aller Business-Dokumente
 router.get('/documents', async (req, res) => {
   try {
-    const businessPath = '/root/projekte/werkingflow/business';
+    const businessPath = PATHS.businessDir;
     const docs = await scanBusinessDocs(businessPath);
     res.json(docs);
   } catch (err: any) {
@@ -181,10 +182,10 @@ router.get('/documents/read', async (req, res) => {
     if (!relativePath) {
       return res.status(400).json({ error: 'Missing path query parameter' });
     }
-    const docPath = path.join('/root/projekte/werkingflow/business', relativePath);
+    const docPath = path.join(PATHS.businessDir, relativePath);
 
     // Security: Verhindere Path Traversal
-    if (!docPath.startsWith('/root/projekte/werkingflow/business')) {
+    if (!docPath.startsWith(PATHS.businessDir)) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -205,10 +206,10 @@ router.post('/documents/edit', async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields: path, personaId, proposedContent, reason' });
     }
 
-    const docPath = path.join('/root/projekte/werkingflow/business', relativePath);
+    const docPath = path.join(PATHS.businessDir, relativePath);
 
     // Security Check
-    if (!docPath.startsWith('/root/projekte/werkingflow/business')) {
+    if (!docPath.startsWith(PATHS.businessDir)) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -300,15 +301,15 @@ router.post('/reviews/:id/approve', async (req, res) => {
     edit.updatedAt = new Date().toISOString();
 
     // Git Commit
-    const relPath = edit.documentPath.replace('/root/projekte/werkingflow/', '');
+    const relPath = edit.documentPath.replace(PATHS.werkingflowDir + '/', '');
     const commitMsg = `docs: ${edit.personaId} updated ${path.basename(edit.documentPath)}
 
 ${edit.reason}
 
 Co-Authored-By: ${edit.personaId} (Virtual Persona)`;
 
-    await execAsync(`cd /root/projekte/werkingflow && git add ${relPath}`);
-    await execAsync(`cd /root/projekte/werkingflow && git commit -m "${commitMsg.replace(/"/g, '\\"')}"`);
+    await execAsync(`cd ${PATHS.werkingflowDir} && git add ${relPath}`);
+    await execAsync(`cd ${PATHS.werkingflowDir} && git commit -m "${commitMsg.replace(/"/g, '\\"')}"`);
 
     // Broadcast
     broadcast({ type: 'document-edit-approved', edit });

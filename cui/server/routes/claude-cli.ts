@@ -397,6 +397,7 @@ export async function startConversation(
   prompt: string,
   workDir: string,
   resumeSessionId?: string,
+  model?: string,
 ): Promise<StartResult> {
   if (!_initialized) return { sessionId: '', ok: false, error: 'Not initialized' };
 
@@ -426,6 +427,10 @@ export async function startConversation(
     '--agent-name', 'Cockpit',
     '--team-name', 'werkingflow',
   ];
+  // Model override (explicit model > settings.json fallback)
+  if (model) {
+    args.push("--model", model);
+  }
   if (resumeSessionId) {
     args.push('--resume', resumeSessionId);
   }

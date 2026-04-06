@@ -8,7 +8,7 @@
  *   extractConversationContext, deepRepairJsonl (all from mission.ts)
  */
 
-import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, openSync, readSync, closeSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, openSync, readSync, closeSync, mkdirSync, symlinkSync, lstatSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import * as claudeCli from '../claude-cli.js';
 
@@ -38,6 +38,40 @@ export function findJsonlPathAllAccounts(sessionId: string): { path: string; acc
     }
   }
   return null;
+}
+
+
+
+/**
+ * Ensure a session JSONL exists in the target account home.
+ * If the JSONL lives in a different account home, create a symlink
+ * so that claude --resume can find it under the new HOME.
+ */
+export function ensureJsonlForAccount(sessionId: string, targetAccountId: string): string | null {
+  const source = findJsonlPathAllAccounts(sessionId);
+  if (!source) return null;
+
+  // Already in target account
+  if (source.accountId === targetAccountId) return source.path;
+
+  const targetConfig = claudeCli.getAccountConfig(targetAccountId);
+  if (!targetConfig) return null;
+
+  const targetDir = join(targetConfig.home, '.claude', 'projects', source.dirName);
+  const targetPath = join(targetDir, `${sessionId}.jsonl`);
+
+  // Already exists at target
+  if (existsSync(targetPath)) return targetPath;
+
+  try {
+    mkdirSync(targetDir, { recursive: true });
+    symlinkSync(source.path, targetPath);
+    console.log(`[JSONL] Symlinked ${sessionId.slice(0, 8)}: ${source.accountId} -> ${targetAccountId}`);
+    return targetPath;
+  } catch (err) {
+    console.warn(`[JSONL] Symlink failed ${sessionId.slice(0, 8)} to ${targetAccountId}`, err);
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -242,34 +276,70 @@ export function getOriginalCwd(sessionId: string): string | null {
     return obj.cwd || null;
   } catch { return null; }
 }
-
-// ---------------------------------------------------------------------------
 // extractConversationContext — summary for context carry-over (resume fallback)
 // ---------------------------------------------------------------------------
+// User messages: FULL (important context — what the user wants)
+// Assistant messages: text only, truncated (just for conversation flow)
+// Tool calls/results: skipped (Claude can read JSONL for details)
 
-export function extractConversationContext(sessionId: string, maxMessages = 20): string | null {
+export function extractConversationContext(sessionId: string, maxMessages = 100): string | null {
   const found = findJsonlPathAllAccounts(sessionId);
   if (!found) return null;
   try {
-    const lines = readFileSync(found.path, 'utf8').split('\n').filter(l => l.trim());
+    const rawLines = readFileSync(found.path, 'utf8').split('\n').filter(l => l.trim());
     const messages: Array<{ role: string; content: string }> = [];
-    for (const line of lines) {
+    let summary = '';
+    for (const line of rawLines) {
       try {
         const obj = JSON.parse(line);
+        if (obj.type === 'summary' && obj.summary) {
+          summary = obj.summary;
+          continue;
+        }
         if (obj.type === 'user' && obj.message?.content) {
-          messages.push({ role: 'user', content: typeof obj.message.content === 'string' ? obj.message.content : JSON.stringify(obj.message.content) });
+          let text = '';
+          if (typeof obj.message.content === 'string') {
+            text = obj.message.content;
+          } else if (Array.isArray(obj.message.content)) {
+            text = obj.message.content
+              .filter((b: any) => b.type === 'text')
+              .map((b: any) => b.text)
+              .join(' ');
+          }
+          // Skip system/hook messages and old session-context hints, keep full user input
+          if (text && !text.startsWith('<task-notification>') && !text.startsWith('<system-reminder>') && !text.startsWith('<session-context>')) {
+            messages.push({ role: 'user', content: text });
+          }
         } else if (obj.type === 'assistant' && obj.message?.content) {
-          const text = Array.isArray(obj.message.content)
-            ? obj.message.content.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n')
-            : typeof obj.message.content === 'string' ? obj.message.content : '';
-          if (text) messages.push({ role: 'assistant', content: text });
+          const parts = Array.isArray(obj.message.content) ? obj.message.content : [];
+          // Only extract text blocks, skip tool_use entirely
+          const textParts = parts
+            .filter((b: any) => b.type === 'text')
+            .map((b: any) => b.text)
+            .join(' ')
+            .trim();
+          if (textParts) {
+            // Truncate assistant to 200 chars — just enough for flow
+            messages.push({ role: 'assistant', content: textParts.length > 200 ? textParts.slice(0, 200) + '...' : textParts });
+          }
         }
       } catch { /* skip corrupt lines */ }
     }
     if (messages.length === 0) return null;
     const recent = messages.slice(-maxMessages);
-    const parts = recent.map(m => `[${m.role.toUpperCase()}]: ${m.content.slice(0, 500)}`);
-    return `[KONTEXT: Vorherige Konversation (Session ${sessionId.slice(0, 8)}, ${messages.length} Nachrichten). Hier die letzten ${recent.length}:]\n\n${parts.join('\n\n')}\n\n[KONTEXT ENDE — Fahre fort wo du aufgehoert hast.]`;
+    const contextParts: string[] = [];
+    contextParts.push(`[KONTEXT: Vorherige Konversation (Session ${sessionId.slice(0, 8)}, ${messages.length} Nachrichten)]`);
+    if (summary) {
+      contextParts.push(`[SUMMARY: ${summary.slice(0, 500)}]`);
+    }
+    contextParts.push(`[History-Datei: ${found.path}]`);
+    contextParts.push('');
+    for (const m of recent) {
+      contextParts.push(`[${m.role.toUpperCase()}]: ${m.content}`);
+    }
+    contextParts.push('');
+    contextParts.push('[KONTEXT ENDE — Fahre fort wo du aufgehoert hast. Details zu Tool-Calls findest du in der JSONL-Datei.]');
+    return contextParts.join('\n');
   } catch { return null; }
 }
 
@@ -431,6 +501,8 @@ export function unstickConversation(sessionId: string): number {
 const COMPACT_SIZE_THRESHOLD = 500 * 1024;  // 500KB — compact if JSONL exceeds this
 const MAX_LINE_SIZE = 8 * 1024;             // 8KB — truncate any line exceeding this
 const TRUNCATED_CONTENT_SIZE = 2 * 1024;    // 2KB — keep this much of truncated content
+const TARGET_RESUME_SIZE = 250 * 1024;      // 250KB — prune old messages if still above this after Stage 1
+const KEEP_TAIL_MESSAGES = 40;              // Keep last 40 JSONL lines (user+assistant+tool) on prune
 
 export function compactJsonlForResume(sessionId: string): { compacted: boolean; beforeSize: number; afterSize: number } {
   const filePath = findJsonlPath(sessionId);
@@ -525,7 +597,33 @@ export function compactJsonlForResume(sessionId: string): { compacted: boolean; 
       }
     }
 
-    if (truncatedCount === 0) {
+    // --- Stage 2: Progressive message pruning if still too large ---
+    let prunedCount = 0;
+    const stage1Content = compactedLines.join('\n');
+    const stage1Size = Buffer.byteLength(stage1Content, 'utf-8');
+
+    if (stage1Size > TARGET_RESUME_SIZE && compactedLines.length > KEEP_TAIL_MESSAGES + 2) {
+      const totalLines = compactedLines.length;
+      const firstLine = compactedLines[0];
+      const tailLines = compactedLines.slice(-KEEP_TAIL_MESSAGES);
+      prunedCount = totalLines - 1 - KEEP_TAIL_MESSAGES;
+
+      const marker = JSON.stringify({
+        type: 'user',
+        message: {
+          role: 'user',
+          content: `[CONTEXT PRUNED: Konversation hatte ${totalLines} Eintraege. ${prunedCount} aeltere Eintraege entfernt um Context-Window Platz zu schaffen. Letzte ${KEEP_TAIL_MESSAGES} Eintraege vollstaendig erhalten.]`,
+        },
+        timestamp: new Date().toISOString(),
+      });
+
+      compactedLines.length = 0;
+      compactedLines.push(firstLine, marker, ...tailLines);
+      console.log(`[Compact] ${sessionId.slice(0, 8)}: Stage 2 pruned ${prunedCount} old entries (${totalLines} -> ${compactedLines.length})`);
+    }
+
+    // Nothing changed at all? Skip write.
+    if (truncatedCount === 0 && prunedCount === 0) {
       return { compacted: false, beforeSize: fileSize, afterSize: fileSize };
     }
 
@@ -536,7 +634,10 @@ export function compactJsonlForResume(sessionId: string): { compacted: boolean; 
     writeFileSync(filePath, compactedContent);
 
     const afterSize = Buffer.byteLength(compactedContent, 'utf-8');
-    console.log(`[Compact] ${sessionId.slice(0, 8)}: ${truncatedCount} tool_results truncated (${(fileSize / 1024).toFixed(0)}KB -> ${(afterSize / 1024).toFixed(0)}KB, backup at .pre-compact)`);
+    const parts: string[] = [];
+    if (truncatedCount > 0) parts.push(`${truncatedCount} tool_results truncated`);
+    if (prunedCount > 0) parts.push(`${prunedCount} old entries pruned`);
+    console.log(`[Compact] ${sessionId.slice(0, 8)}: ${parts.join(', ')} (${(fileSize / 1024).toFixed(0)}KB -> ${(afterSize / 1024).toFixed(0)}KB, backup at .pre-compact)`);
 
     return { compacted: true, beforeSize: fileSize, afterSize };
   } catch (err) {

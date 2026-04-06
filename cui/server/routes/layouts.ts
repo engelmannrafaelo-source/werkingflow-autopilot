@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { join } from 'path';
 import { homedir } from 'os';
-import { IS_LOCAL_MODE } from './state.js';
+import { IS_LOCAL_MODE, broadcast } from './state.js';
 import { readFileSync, readdirSync, statSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
 
 interface LayoutsDeps {
@@ -45,11 +45,8 @@ export default function createLayoutsRouter(deps: LayoutsDeps): Router {
         readdirSync(WORKSPACES_BASE).forEach((entry) => {
           if (entry.startsWith('.') || SKIP_DIRS.has(entry)) return;
           const fullPath = join(WORKSPACES_BASE, entry);
-          try {
-            if (!statSync(fullPath).isDirectory()) return;
-          } catch { return; }
-          if (explicitIds.has(entry)) return; // already in explicit list
-          // Derive display name: capitalize words, replace dashes/underscores with spaces
+          try { if (!statSync(fullPath).isDirectory()) return; } catch { return; }
+          if (explicitIds.has(entry)) return;
           const name = entry.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
           autoProjects.push({ id: entry, name, workDir: fullPath, _auto: true });
         });
@@ -115,7 +112,11 @@ export default function createLayoutsRouter(deps: LayoutsDeps): Router {
   router.get('/common-notes', (_req: Request, res: Response) => {
     const notePath = join(NOTES_DIR, 'common.md');
     if (!existsSync(notePath)) { res.json({ content: '' }); return; }
-    res.json({ content: readFileSync(notePath, 'utf8') });
+    let content = readFileSync(notePath, 'utf8');
+    // Replace {{APP_HOST}} placeholder with actual server URL
+    const appHost = process.env.CUI_APP_HOST || 'http://localhost';
+    content = content.replace(/\{\{APP_HOST\}\}/g, appHost);
+    res.json({ content });
   });
 
   router.post('/common-notes', (req: Request, res: Response) => {
@@ -218,6 +219,8 @@ export default function createLayoutsRouter(deps: LayoutsDeps): Router {
       return;
     }
     writeFileSync(join(LAYOUTS_DIR, `${req.params.projectId}.json`), JSON.stringify(req.body, null, 2));
+    // Auto-apply: broadcast to connected browsers so they update without reload
+    broadcast({ type: 'control:apply-layout', projectId: req.params.projectId, layout: req.body });
     res.json({ ok: true });
   });
 

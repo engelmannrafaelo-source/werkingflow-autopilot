@@ -148,13 +148,98 @@ export default function createControlRouter(deps: ControlDeps): Router {
     });
   });
 
-  router.post('/control/project/switch', (req: Request, res: Response) => {
+  // Shared auto-layout logic — used by project/switch and the standalone endpoint
+  async function runAutoLayout(projectId: string): Promise<{ triggered: boolean; reason?: string; total?: number; existing?: number; unassigned?: number }> {
+    const layoutPath = join(LAYOUTS_DIR, `${projectId}.json`);
+    if (!existsSync(layoutPath)) return { triggered: false, reason: 'no layout file' };
+
+    let layout: any;
+    try { layout = JSON.parse(readFileSync(layoutPath, 'utf8')); }
+    catch { return { triggered: false, reason: 'layout parse error' }; }
+
+    const cuiPanelSessions = new Set<string>();
+    function collectCuiSessions(node: any): void {
+      if (!node) return;
+      if (node.type === 'tab' && (node.component === 'cui' || node.component === 'cui-lite')) {
+        const sid = node.config?.initialSessionId || node.config?.sessionId;
+        if (sid) cuiPanelSessions.add(sid);
+      }
+      for (const child of node.children ?? []) collectCuiSessions(child);
+    }
+    collectCuiSessions(layout?.layout);
+
+    let conversations: Array<{ sessionId: string; accountId: string }> = [];
+    try {
+      const convResp = await fetch(`http://localhost:${process.env.PORT || 4005}/api/mission/conversations`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!convResp.ok) throw new Error('conv fetch failed');
+      const convData = await convResp.json();
+      const allConvs: any[] = convData.conversations || [];
+
+      const projectFile = join(PROJECTS_DIR, `${projectId}.json`);
+      let projectWorkDir = '';
+      let projectName = '';
+      if (existsSync(projectFile)) {
+        try {
+          const p = JSON.parse(readFileSync(projectFile, 'utf8'));
+          projectWorkDir = p.workDir || '';
+          projectName = (p.name || projectId).toLowerCase();
+        } catch { /* ignore */ }
+      }
+
+      conversations = allConvs.filter((c: any) => {
+        if (c.manualFinished) return false;
+        if (c.status && c.status !== 'ongoing') return false;
+        // Sub-sessions workspace: collect all sub-sessions regardless of their workDir
+        if (projectId === 'sub-sessions') return !!c.isSubSession;
+        // Normal workspace: match by workDir or project name, but exclude sub-sessions
+        if (c.isSubSession) return false;
+        if (projectWorkDir && c.projectPath === projectWorkDir) return true;
+        const cName = (c.projectName || '').toLowerCase().replace(/[^a-z0-9]/g, '-');
+        const pId = projectId.toLowerCase();
+        return cName === pId || cName.includes(pId) || pId.includes(cName) || (projectName && cName === projectName);
+      }).map((c: any) => ({ sessionId: c.sessionId, accountId: c.accountId || 'werking' }));
+    } catch { return { triggered: false, reason: 'conv fetch failed' }; }
+
+    const unassigned = conversations.filter(c => !cuiPanelSessions.has(c.sessionId));
+
+    // Also check if any tabset has multiple stacked CUI panels → needs splitting
+    let hasStackedCuiPanels = false;
+    function checkStacked(node: any): void {
+      if (!node) return;
+      if (node.type === 'tabset' && Array.isArray(node.children)) {
+        const cuiTabs = node.children.filter((t: any) => t.type === 'tab' && (t.component === 'cui' || t.component === 'cui-lite'));
+        if (cuiTabs.length > 1) hasStackedCuiPanels = true;
+      }
+      for (const child of node.children ?? []) checkStacked(child);
+    }
+    checkStacked(layout?.layout);
+
+    if (unassigned.length === 0 && !hasStackedCuiPanels) {
+      return { triggered: false, reason: 'all conversations already have a panel', total: conversations.length, existing: cuiPanelSessions.size };
+    }
+
+    if (hasStackedCuiPanels) {
+      broadcast({ type: 'control:split-cui-panels', projectId });
+      console.log(`[AutoLayout] ${projectId}: stacked CUI panels detected → split broadcast`);
+    }
+    if (unassigned.length > 0) {
+      broadcast({ type: 'control:activate-conversations', plan: [{ projectId, conversations }] });
+      console.log(`[AutoLayout] ${projectId}: ${unassigned.length} unassigned convs → activate broadcast`);
+    }
+    return { triggered: true, total: conversations.length, existing: cuiPanelSessions.size, unassigned: unassigned.length, stacked: hasStackedCuiPanels };
+  }
+
+  router.post('/control/project/switch', async (req: Request, res: Response) => {
     const { projectId } = req.body;
     if (!projectId) { res.status(400).json({ error: 'projectId required' }); return; }
     const projectFile = join(PROJECTS_DIR, `${projectId}.json`);
     if (!existsSync(projectFile)) { res.status(404).json({ error: `project ${projectId} not found` }); return; }
     workspaceState.activeProjectId = projectId;
     broadcast({ type: 'control:project-switch', projectId });
+    // Auto-layout: split panels if new conversations have no panel yet (fire & forget)
+    runAutoLayout(projectId).catch(err => console.warn('[AutoLayout] project/switch error:', err));
     res.json({ ok: true, projectId });
   });
 
@@ -351,6 +436,26 @@ export default function createControlRouter(deps: ControlDeps): Router {
   });
 
   // ============================================================
+  // Auto-Layout API
+  // POST /api/control/auto-layout?projectId=X
+  // Checks if active conversations > existing CUI panels.
+  // Only triggers activate-conversations broadcast if new sessions
+  // have no panel yet. Existing layout is preserved and re-saved
+  // by the frontend after the split (saveLayoutRef called in activate-conversations handler).
+  // ============================================================
+
+  router.post('/control/auto-layout', async (req: Request, res: Response) => {
+    const projectId: string = req.body.projectId || req.query.projectId as string;
+    if (!projectId) { res.status(400).json({ error: 'projectId required' }); return; }
+    const result = await runAutoLayout(projectId);
+    if (!result.triggered && result.reason === 'no layout file') {
+      res.status(404).json({ error: `No layout for project: ${projectId}` });
+      return;
+    }
+    res.json({ projectId, ...result });
+  });
+
+  // ============================================================
   // All Active Chats API — shows ALL ongoing + recent 24h conversations
   // This is Rafael's management dashboard: everything not FINISH'd
   // ============================================================
@@ -387,16 +492,12 @@ export default function createControlRouter(deps: ControlDeps): Router {
       const convData = await convResp.json();
       const conversations = convData.conversations || [];
 
-      const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
-
       for (const conv of conversations) {
-        const isOngoing = conv.status === 'ongoing';
         const isFinishedConv = conv.manualFinished === true;
-        const updatedTime = new Date(conv.updatedAt || 0).getTime();
-        const isRecent = updatedTime > cutoff24h;
+        if (isFinishedConv) continue;
 
-        // Show if: not finished AND (ongoing OR recent 24h)
-        if (!isFinishedConv && (isOngoing || isRecent)) {
+        // Show all non-finished conversations
+        {
           if (seenSessions.has(conv.sessionId)) continue;
           seenSessions.add(conv.sessionId);
 
@@ -405,7 +506,7 @@ export default function createControlRouter(deps: ControlDeps): Router {
             projectName: conv.projectName || 'Unknown',
             workDir: conv.projectPath || '',
             panelId: conv.sessionId,
-            accountId: conv.accountId || 'rafael',
+            accountId: conv.accountId || 'engelmann',
             sessionId: conv.sessionId,
             isVisible: sessionToWorkspace.has(conv.sessionId),
             openInWorkspace: sessionToWorkspace.get(conv.sessionId),
@@ -502,6 +603,133 @@ export default function createControlRouter(deps: ControlDeps): Router {
       pendingProfileResolve = null;
       res.json(result);
     };
+  });
+
+  // ============================================================
+  // Layout Visibility API
+  // GET /api/layout — shows which panels are foreground/background
+  // per project, enriched with live session + attention state
+  // ============================================================
+
+  interface TabInfo {
+    tabId: string;
+    name: string;
+    component: string;
+    sessionId?: string;
+    accountId?: string;
+    attentionState?: string;
+    attentionReason?: string;
+    liveVisible?: boolean;
+  }
+
+  interface TabsetInfo {
+    tabsetId: string;
+    foreground: TabInfo;
+    background: TabInfo[];
+  }
+
+  interface ProjectLayout {
+    projectId: string;
+    projectName: string;
+    tabsets: TabsetInfo[];
+  }
+
+  function extractTabsets(node: any, result: TabsetInfo[]): void {
+    if (!node || typeof node !== 'object') return;
+    if (node.type === 'tabset' && Array.isArray(node.children)) {
+      const selected = typeof node.selected === 'number' ? node.selected : 0;
+      const tabs: TabInfo[] = node.children.map((tab: any) => ({
+        tabId: tab.id || '',
+        name: tab.name || '',
+        component: tab.component || '',
+        sessionId: tab.config?.initialSessionId || tab.config?.sessionId || undefined,
+        accountId: tab.config?.accountId || undefined,
+      }));
+      if (tabs.length === 0) return;
+      const fg = tabs[selected] ?? tabs[0];
+      const bg = tabs.filter((_: TabInfo, i: number) => i !== (selected < tabs.length ? selected : 0));
+      result.push({ tabsetId: node.id || '', foreground: fg, background: bg });
+    }
+    for (const child of node.children ?? []) {
+      extractTabsets(child, result);
+    }
+  }
+
+  router.get('/layout', (_req: Request, res: Response) => {
+    // Build session → attention state lookup
+    const stateMap = new Map<string, { state: string; reason?: string }>();
+    for (const [, s] of sessionStates) {
+      if (s.sessionId) stateMap.set(s.sessionId, { state: s.state, reason: s.reason });
+    }
+
+    // Build live visibility lookup: sessionId → panelId (from visibilityRegistry)
+    const liveSessionIds = new Set<string>();
+    for (const entry of visibilityRegistry.values()) {
+      if (entry.sessionId) liveSessionIds.add(entry.sessionId);
+    }
+
+    // Load all projects
+    const projects: ProjectLayout[] = [];
+    let projectFiles: string[] = [];
+    try {
+      projectFiles = readdirSync(PROJECTS_DIR).filter(f => f.endsWith('.json'));
+    } catch {
+      res.status(500).json({ error: 'Cannot read projects dir' });
+      return;
+    }
+
+    for (const pf of projectFiles) {
+      let project: any;
+      try { project = JSON.parse(readFileSync(join(PROJECTS_DIR, pf), 'utf8')); } catch { continue; }
+      const projectId: string = project.id || pf.replace('.json', '');
+      const projectName: string = project.name || projectId;
+
+      const layoutPath = join(LAYOUTS_DIR, `${projectId}.json`);
+      if (!existsSync(layoutPath)) continue;
+
+      let layout: any;
+      try { layout = JSON.parse(readFileSync(layoutPath, 'utf8')); } catch { continue; }
+
+      const tabsets: TabsetInfo[] = [];
+      extractTabsets(layout?.layout, tabsets);
+
+      // Enrich tabs with live state
+      for (const ts of tabsets) {
+        for (const tab of [ts.foreground, ...ts.background]) {
+          if (tab.sessionId) {
+            const s = stateMap.get(tab.sessionId);
+            if (s) { tab.attentionState = s.state; tab.attentionReason = s.reason; }
+            tab.liveVisible = liveSessionIds.has(tab.sessionId);
+          }
+        }
+      }
+
+      if (tabsets.length > 0) {
+        projects.push({ projectId, projectName, tabsets });
+      }
+    }
+
+    // Sort: active project first
+    projects.sort((a, b) => {
+      if (a.projectId === workspaceState.activeProjectId) return -1;
+      if (b.projectId === workspaceState.activeProjectId) return 1;
+      return a.projectId.localeCompare(b.projectId);
+    });
+
+    // Live visibility entries (raw, for debugging)
+    const liveEntries = Array.from(visibilityRegistry.values()).map(e => ({
+      panelId: e.panelId,
+      projectId: e.projectId,
+      sessionId: e.sessionId,
+      route: e.route,
+      updatedAt: e.updatedAt,
+    }));
+
+    res.json({
+      activeProjectId: workspaceState.activeProjectId,
+      projects,
+      liveVisibility: liveEntries,
+    });
   });
 
   return router;

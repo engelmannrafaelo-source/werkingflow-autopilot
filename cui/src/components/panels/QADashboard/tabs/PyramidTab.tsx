@@ -238,11 +238,19 @@ export default function PyramidTab() {
                                   </span>
                                 )}
                               </span>
-                              {/* Score */}
+                              {/* Score bar + number */}
                               {test.score != null && test.score > 0 && (
-                                <span style={{ fontWeight: 700, color: scoreColor(test.score), fontSize: 12 }}>
-                                  {test.score.toFixed(1)}
-                                </span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 90 }}>
+                                  <div style={{ flex: 1, height: 4, background: 'rgba(255,255,255,0.08)', borderRadius: 2, overflow: 'hidden', minWidth: 40 }}>
+                                    <div style={{
+                                      width: `${(test.score / 10) * 100}%`, height: '100%',
+                                      background: scoreColor(test.score), borderRadius: 2,
+                                    }} />
+                                  </div>
+                                  <span style={{ fontWeight: 700, color: scoreColor(test.score), fontSize: 11, minWidth: 24, textAlign: 'right' }}>
+                                    {test.score.toFixed(1)}
+                                  </span>
+                                </div>
                               )}
                               {/* Last run */}
                               {test.lastRun && (

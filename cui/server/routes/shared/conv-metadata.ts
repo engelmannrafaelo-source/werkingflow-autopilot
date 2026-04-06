@@ -21,9 +21,15 @@ interface ConvMetadata {
   workdirs: Record<string, string>;
   finished: Record<string, boolean>;
   lastPrompt: Record<string, string>;
+  models: Record<string, string>;
+  paused: Record<string, boolean>;
+  /** reviewSessionId → originalSessionId */
+  reviews: Record<string, string>;
+  /** sessionIds that are sub-sessions (spawned by parent sessions) */
+  subSessions: Record<string, boolean>;
 }
 
-const EMPTY: ConvMetadata = { titles: {}, accounts: {}, workdirs: {}, finished: {}, lastPrompt: {} };
+const EMPTY: ConvMetadata = { titles: {}, accounts: {}, workdirs: {}, finished: {}, lastPrompt: {}, models: {}, paused: {}, reviews: {}, subSessions: {} };
 
 let _data: ConvMetadata | null = null;
 let _filePath: string = '';
@@ -144,7 +150,8 @@ export function saveAssignment(sessionId: string, accountId: string) {
   const data = _load();
   if (data.accounts[sessionId] === accountId) return;
   data.accounts[sessionId] = accountId;
-  _scheduleSave();
+  // Account assignments are critical — flush immediately (no debounce)
+  flush();
 }
 
 // ---------------------------------------------------------------------------
@@ -204,5 +211,85 @@ export function setLastPrompt(sessionId: string) {
 
 export function deleteLastPrompt(sessionId: string) {
   delete _load().lastPrompt[sessionId];
+  _scheduleSave();
+}
+
+// ---------------------------------------------------------------------------
+// Models (per-session model override)
+// ---------------------------------------------------------------------------
+
+export function getModel(sessionId: string): string {
+  return _load().models[sessionId] || '';
+}
+
+export function getAllModels(): Record<string, string> {
+  return { ..._load().models };
+}
+
+export function saveModel(sessionId: string, model: string) {
+  const data = _load();
+  if (data.models[sessionId] === model) return;
+  data.models[sessionId] = model;
+  // Model changes are critical for next resume — flush immediately
+  flush();
+}
+
+// ---------------------------------------------------------------------------
+// Paused (manual pause — suppresses needs_attention indicator)
+// ---------------------------------------------------------------------------
+
+export function isPaused(sessionId: string): boolean {
+  return _load().paused?.[sessionId] === true;
+}
+
+export function getAllPaused(): Record<string, boolean> {
+  return { ...(_load().paused ?? {}) };
+}
+
+// ---------------------------------------------------------------------------
+// Reviews (reviewSessionId → originalSessionId)
+// ---------------------------------------------------------------------------
+
+export function getReviewOriginal(reviewSessionId: string): string | undefined {
+  return _load().reviews?.[reviewSessionId];
+}
+
+export function setReview(reviewSessionId: string, originalSessionId: string) {
+  const data = _load();
+  if (!data.reviews) data.reviews = {};
+  data.reviews[reviewSessionId] = originalSessionId;
+  _scheduleSave();
+}
+
+export function deleteReview(reviewSessionId: string) {
+  const data = _load();
+  if (data.reviews) delete data.reviews[reviewSessionId];
+  _scheduleSave();
+}
+
+export function setPaused(sessionId: string, paused: boolean) {
+  const data = _load();
+  if (!data.paused) data.paused = {};
+  if (paused) data.paused[sessionId] = true;
+  else delete data.paused[sessionId];
+  _scheduleSave();
+}
+
+// Sub-session tracking
+export function isSubSession(sessionId: string): boolean {
+  const data = _load();
+  return !!(data.subSessions && data.subSessions[sessionId]);
+}
+
+export function getAllSubSessions(): Record<string, boolean> {
+  const data = _load();
+  return data.subSessions || {};
+}
+
+export function setSubSession(sessionId: string, isSub: boolean) {
+  const data = _load();
+  if (!data.subSessions) data.subSessions = {};
+  if (isSub) data.subSessions[sessionId] = true;
+  else delete data.subSessions[sessionId];
   _scheduleSave();
 }

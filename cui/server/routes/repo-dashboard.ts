@@ -3,6 +3,7 @@ import { readdirSync, statSync, existsSync } from 'fs';
 import { join } from 'path';
 import { execFile, execFileSync } from 'child_process';
 import { promisify } from 'util';
+import { PATHS } from '../config/paths.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -133,7 +134,7 @@ router.get('/pipeline', async (_req, res) => {
       return res.json(pipelineCache.data);
     }
 
-    const pipelineScript = '/root/projekte/orchestrator/bin/pipeline-check';
+    const pipelineScript = PATHS.pipelineCheckBin;
     const output = execFileSafe(pipelineScript, ['--json'], { timeout: 30000 });
 
     let pipelineData = {};
@@ -287,7 +288,7 @@ router.get('/hierarchy', async (_req, res) => {
 
             const node: HierarchyNode = {
               name: item,
-              path: itemPath.replace('/root/projekte/', ''),
+              path: itemPath.replace(PATHS.projectsRoot + '/', ''),
               fullPath: itemPath,
               level,
               isGit,
@@ -296,7 +297,7 @@ router.get('/hierarchy', async (_req, res) => {
                 human: sizeHuman,
               },
               lastModified: stat.mtime.toISOString(),
-              parent: level > 0 ? basePath.replace('/root/projekte/', '') : undefined,
+              parent: level > 0 ? basePath.replace(PATHS.projectsRoot + '/', '') : undefined,
             };
 
             // Recursively get children (only if not a git repo or if level < 2)

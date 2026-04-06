@@ -15,9 +15,10 @@ const router = Router();
 
 // --- Constants ---
 import { PATHS, BRIDGE_URL } from '../config/paths.js';
+import { bridgeChat } from '../lib/bridge-fetch.js';
 
 const BUSINESS_DIR = PATHS.businessDir;
-const BRIDGE_API_KEY = process.env.AI_BRIDGE_API_KEY || '';
+
 
 // Will be set by init function
 let SESSIONS_DIR = '';
@@ -575,32 +576,16 @@ async function runExtractionAsync(sessionId: string, sources: string[], extracti
     parts.push(`Dokumente:\n${documentsText}`);
     const userPrompt = parts.join('\n\n');
 
-    console.log(`[ReportBuilder] Async extraction: ${BRIDGE_URL}/v1/chat/completions (${docs.length} docs, ~${documentsText.length} chars)`);
-    const response = await fetch(`${BRIDGE_URL}/v1/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${BRIDGE_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-5-20250929',
-        max_tokens: 16384,
-        messages: [
-          { role: 'system', content: CLAIM_EXTRACTION_SYSTEM },
-          { role: 'user', content: userPrompt },
-        ],
-      }),
-      signal: AbortSignal.timeout(900000), // 15min — large generations can take 10min+
+    console.log(`[ReportBuilder] Async extraction: Bridge (${docs.length} docs, ~${documentsText.length} chars)`);
+    const text = await bridgeChat({
+      model: 'claude-sonnet-4-5-20250929',
+      max_tokens: 16384,
+      messages: [
+        { role: 'system', content: CLAIM_EXTRACTION_SYSTEM },
+        { role: 'user', content: userPrompt },
+      ],
+      timeout: 900000, // 15min — large generations can take 10min+
     });
-
-    console.log(`[ReportBuilder] Bridge response status: ${response.status}`);
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Bridge API ${response.status}: ${errText}`);
-    }
-
-    const data = await response.json() as any;
-    const text = data.choices?.[0]?.message?.content || '';
     console.log(`[ReportBuilder] Got ${text.length} chars from Bridge`);
 
     const jsonMatch = text.match(/```json\s*([\s\S]*?)```/) || text.match(/(\{[\s\S]*\})/);
@@ -824,32 +809,16 @@ DESIGN-ANWEISUNGEN:
       if (feedback) userContent += `\n\nFeedback zur letzten Version (bitte einarbeiten): ${feedback}`;
     }
 
-    console.log(`[ReportBuilder] Async generation: ${BRIDGE_URL}/v1/chat/completions (~${claimsText.length} chars claims)`);
-    const response = await fetch(`${BRIDGE_URL}/v1/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${BRIDGE_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-5-20250929',
-        max_tokens: 16384,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userContent },
-        ],
-      }),
-      signal: AbortSignal.timeout(900000), // 15min — large generations can take 10min+
+    console.log(`[ReportBuilder] Async generation: Bridge (~${claimsText.length} chars claims)`);
+    let content = await bridgeChat({
+      model: 'claude-sonnet-4-5-20250929',
+      max_tokens: 16384,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userContent },
+      ],
+      timeout: 900000, // 15min — large generations can take 10min+
     });
-
-    console.log(`[ReportBuilder] Bridge generation response status: ${response.status}`);
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Bridge API ${response.status}: ${errText}`);
-    }
-
-    const data = await response.json() as any;
-    let content = data.choices?.[0]?.message?.content || '';
     console.log(`[ReportBuilder] Generation complete: ${content.length} chars`);
 
     // Inject Report Builder provenance meta tag into HTML output
@@ -1093,23 +1062,13 @@ PRIORITÄTEN:
 Antworte NUR mit einem JSON-Array:
 [{"sectionId": "...", "score": 1-10, "reason": "kurze Begründung"}]`;
 
-    const response = await fetch(`${BRIDGE_URL}/v1/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${BRIDGE_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
+    try {
+      const aiText = await bridgeChat({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 2048,
         messages: [{ role: 'user', content: prompt }],
-      }),
-      signal: AbortSignal.timeout(30000),
-    });
-
-    if (response.ok) {
-      const data = await response.json() as any;
-      const aiText = data.choices?.[0]?.message?.content || '';
+        timeout: 30000,
+      });
       // Extract JSON array from response
       const jsonMatch = aiText.match(/\[[\s\S]*\]/);
       if (jsonMatch) {
@@ -1122,6 +1081,8 @@ Antworte NUR mit einem JSON-Array:
         }));
         console.log(`[ReportBuilder] AI auto-match: ${recommendations.length} recommendations`);
       }
+    } catch (matchErr: any) {
+      console.warn('[ReportBuilder] AI auto-match failed (non-fatal):', matchErr.message);
     }
   } catch (err: any) {
     console.error('[ReportBuilder] AI auto-match failed, using heuristic fallback:', err.message);
@@ -1237,23 +1198,13 @@ REGELN:
 Antworte NUR mit JSON-Array:
 [{"claimId": "cl-0", "templateId": "abc123", "reason": "kurze Begründung", "rank": 1}]`;
 
-    const response = await fetch(`${BRIDGE_URL}/v1/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${BRIDGE_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
+    try {
+      const aiText = await bridgeChat({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 4096,
         messages: [{ role: 'user', content: prompt }],
-      }),
-      signal: AbortSignal.timeout(120000),
-    });
-
-    if (response.ok) {
-      const data = await response.json() as any;
-      const aiText = data.choices?.[0]?.message?.content || '';
+        timeout: 120000,
+      });
       const jsonMatch = aiText.match(/\[[\s\S]*\]/);
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]) as ClaimMatch[];
@@ -1263,9 +1214,8 @@ Antworte NUR mit JSON-Array:
       } else {
         console.error('[ReportBuilder] Claim-template match: no JSON array found in AI response:', aiText.slice(0, 200));
       }
-    } else {
-      const errText = await response.text().catch(() => '');
-      console.error(`[ReportBuilder] Claim-template match: Bridge returned ${response.status}: ${errText.slice(0, 200)}`);
+    } catch (matchErr: any) {
+      console.error('[ReportBuilder] Claim-template match failed (non-fatal):', matchErr.message);
     }
   } catch (err: any) {
     console.error('[ReportBuilder] Claim-template match failed:', err.message);
@@ -1768,27 +1718,16 @@ Antworte NUR mit einem JSON-Array von Objekten:
 
     console.log(`[ReportBuilder] propose-updates: ${BRIDGE_URL}/v1/chat/completions (${selectedClaims.length} claims, ${targetDocs.length} targets)`);
 
-    const response = await fetch(`${BRIDGE_URL}/v1/chat/completions`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${BRIDGE_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-5-20250929',
-        max_tokens: 4096,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-      }),
-      signal: AbortSignal.timeout(300000),
+    const text = await bridgeChat({
+      model: 'claude-sonnet-4-5-20250929',
+      max_tokens: 4096,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      timeout: 300000,
     });
 
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Bridge API ${response.status}: ${errText}`);
-    }
-
-    const data = await response.json() as any;
-    const text = data.choices?.[0]?.message?.content || '';
     const jsonMatch = text.match(/```json\s*([\s\S]*?)```/) || text.match(/(\[[\s\S]*\])/);
     if (!jsonMatch) throw new Error('No JSON array in propose response');
     const proposals: UpdateProposal[] = JSON.parse(jsonMatch[1]);
@@ -1863,27 +1802,15 @@ Regeln:
 
       console.log(`[ReportBuilder] execute-updates: generating for "${proposal.docName}" (${proposalClaims.length} claims, isNew=${isNew})`);
 
-      const response = await fetch(`${BRIDGE_URL}/v1/chat/completions`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${BRIDGE_API_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-5-20250929',
-          max_tokens: 8192,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt },
-          ],
-        }),
-        signal: AbortSignal.timeout(300000),
+      const proposedContent = await bridgeChat({
+        model: 'claude-sonnet-4-5-20250929',
+        max_tokens: 8192,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        timeout: 300000,
       });
-
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`Bridge API ${response.status} for "${proposal.docName}": ${errText}`);
-      }
-
-      const data = await response.json() as any;
-      const proposedContent = data.choices?.[0]?.message?.content || '';
 
       diffs.push({
         docPath: proposal.docPath,

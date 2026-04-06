@@ -17,21 +17,23 @@ const router = Router();
 //   Layer 4: Golden (Complete E2E Happy Path)
 // Report Reader: Reads .md reports from report paths
 
-const UNIFIED_TESTER_ROOT = '/root/projekte/werkingflow/tests/unified-tester';
+import { PATHS } from '../config/paths.js';
+
+const UNIFIED_TESTER_ROOT = PATHS.unifiedTesterRoot;
 const COVERAGE_DIR = join(UNIFIED_TESTER_ROOT, 'coverage/apps');
 const REPORTS_DIR = join(UNIFIED_TESTER_ROOT, 'reports');
 const SCENARIOS_DIR = join(UNIFIED_TESTER_ROOT, 'features/scenarios');
 const CHECKPOINTS_DIR = '/tmp/test-checkpoints';
 const TEST_RUNNER_LOGS = '/tmp';
-const SCENARIO_REGISTRY = '/root/projekte/orchestrator/data/scenario_registry.json';
+const SCENARIO_REGISTRY = PATHS.scenarioRegistry;
 
 // Contract Scanner directories (Layer 0 data sources)
-const TESTS_ROOT = '/root/projekte/werkingflow/tests';
+const TESTS_ROOT = PATHS.testsRoot;
 const API_SCANNER_SNAPSHOTS = join(TESTS_ROOT, 'api-contract-scanner/snapshots');
 const FRONTEND_SCANNER_RESULTS = join(TESTS_ROOT, 'frontend-contract-scanner/results');
 
 // Arch-test results (persistent JSON from arch-test.py)
-const ARCH_TEST_RESULTS_DIR = '/root/projekte/orchestrator/data/arch-test-results';
+const ARCH_TEST_RESULTS_DIR = PATHS.archTestResultsDir;
 
 // Port → App mapping for identifying frontend scanner results
 const PORT_TO_APP: Record<number, string> = {
@@ -135,7 +137,7 @@ const LAYER_PATTERNS: Record<number, string[]> = {
 };
 
 const LAYER_META: Record<number, { name: string; description: string }> = {
-  0: { name: 'Architecture & Contracts', description: 'Pre-flight: Schema, Zod, data-ai-id' },
+  0: { name: 'Architecture & Contracts', description: 'Env, Static Analysis, Contracts, Scanners' },
   1: { name: 'Backend', description: 'API-only Mental-Model Tests' },
   2: { name: 'Components', description: 'UI Hybrid Tests + UX Scoring' },
   3: { name: 'Workflows', description: 'Persona Journeys (Full)' },
@@ -152,17 +154,22 @@ const LAYER_META: Record<number, { name: string; description: string }> = {
 
 interface Layer0Sub {
   id: string;
-  status: string; // PASS, FAIL, PENDING
+  status: string; // PASS, FAIL, PENDING, NOT_RUN
   score: number | null;
   lastRun: string | null;
   reportPath: string | null;
   detail?: string;
+  group?: 'core' | 'llm_enhanced'; // core = deterministic (Tier 0-3), llm_enhanced = AI-Bridge (Tier 4)
+  tooltip?: string; // LLM test: what it does
+  outputs?: string; // LLM test: expected outputs
 }
 
 function getLayer0Data(appId: string): {
   tests: Layer0Sub[];
   passed: number; failed: number; pending: number;
   avgScore: number; status: string; description: string;
+  coreSummary: { passed: number; failed: number; pending: number; total: number };
+  llmSummary: { passed: number; failed: number; pending: number; total: number };
 } | null {
   const tests: Layer0Sub[] = [];
   let passed = 0, failed = 0, pending = 0;
@@ -204,6 +211,7 @@ function getLayer0Data(appId: string): {
               lastRun: data.timestamp?.split('T')[0] ?? null,
               reportPath: null,
               detail: `${success}/${total} routes OK${errors > 0 ? `, ${errors} errors` : ''}`,
+              group: 'core',
             });
             if (scanStatus === 'PASS') passed++;
             else if (scanStatus === 'FAIL') failed++;
@@ -236,6 +244,7 @@ function getLayer0Data(appId: string): {
           lastRun: latestMtime > 0 ? new Date(latestMtime).toISOString().split('T')[0] : null,
           reportPath: null,
           detail: `${snapshotCount} endpoint snapshots`,
+          group: 'core',
         });
         passed++;
       }
@@ -263,10 +272,14 @@ function getLayer0Data(appId: string): {
             const status = check.status === 'PASS' ? 'PASS'
               : check.status === 'FAIL' || check.status === 'ERROR' ? 'FAIL'
               : check.status === 'WARN' ? 'PASS' // WARN = not blocking
+              : check.status === 'SKIP' ? 'SKIP' // Not applicable for this app
               : 'PENDING';
             const detail = check.metric
               ? `${check.name}: ${check.metric}`
               : `${check.name} (${check.duration_ms ?? 0}ms)`;
+
+            // Tier 4 = LLM-enhanced (AI-Bridge), Tier 0-3 = core (deterministic)
+            const group: 'core' | 'llm_enhanced' = parseInt(tierNum) >= 4 ? 'llm_enhanced' : 'core';
 
             tests.push({
               id: checkId,
@@ -275,6 +288,7 @@ function getLayer0Data(appId: string): {
               lastRun: testedAt,
               reportPath: null,
               detail,
+              group,
             });
             if (status === 'PASS') passed++;
             else if (status === 'FAIL') failed++;
@@ -285,75 +299,196 @@ function getLayer0Data(appId: string): {
     }
   } catch { /* */ }
 
+  // --- Always show the 5 Persona Audit checks (Tier 4), even if arch-test --tier 4 never ran ---
+  const LLM_CHECKS = [
+    {
+      name: 'Persona: Legal',
+      desc: 'AI-Bridge: Compliance & Legal Expert',
+      tooltip: 'IT-Rechtsanwalt prueft DSGVO Art. 13/14, Impressumspflicht (§5 ECG/TMG), AGB-Klauseln, Haftungsausschluesse und Widersprueche zwischen UI-Versprechen und AGB.',
+      outputs: 'Score 0-10, Findings nach Schweregrad (Critical/High/Medium), konkrete Textstellen mit Empfehlungen',
+    },
+    {
+      name: 'Persona: Domain Expert',
+      desc: 'AI-Bridge: Ingenieur / Ziviltechniker',
+      tooltip: 'Erfahrener Ziviltechniker prueft Fachterminologie, Normen-Referenzen (OENORM, DIN), Glaubwuerdigkeit fuer Ingenieure und ob KI-Versprechen realistisch sind.',
+      outputs: 'Score 0-10, Fachliche Findings mit konkreten Textstellen, Glaubwuerdigkeits-Bewertung',
+    },
+    {
+      name: 'Persona: Consistency',
+      desc: 'AI-Bridge: QA / Consistency Tester',
+      tooltip: 'QA-Spezialist durchsucht alle UI-Texte systematisch nach Inkonsistenzen: Markenname, Begriffspaare, Du/Sie-Mix, Preis-Widersprueche, Firmendaten, Datumsformate.',
+      outputs: 'Score 0-10, Inkonsistenz-Katalog nach Kategorie, exakte Textstellen und Routen',
+    },
+    {
+      name: 'Persona: UX Writer',
+      desc: 'AI-Bridge: UX Writer / Content Designer',
+      tooltip: 'UX Writer prueft Microcopy-Qualitaet: Erster Eindruck, Nutzerfuehrung, Fehlermeldungen, CTAs, Empty States, Tone of Voice fuer B2B-Ingenieur-Zielgruppe.',
+      outputs: 'Score 0-10, UX-Findings mit konkreten Verbesserungsvorschlaegen, Tone-of-Voice-Analyse',
+    },
+    {
+      name: 'Persona: Accessibility',
+      desc: 'AI-Bridge: WCAG / Accessibility Expert',
+      tooltip: 'WCAG-Auditor prueft Barrierefreiheit der Texte: Klare Sprache, Screen-Reader-Tauglichkeit, Fehlermeldungen, Abkuerzungen — auch fuer Baustellennutzung (Handschuhe, kleine Screens).',
+      outputs: 'Score 0-10, Accessibility-Findings mit WCAG-Referenzen, Empfehlungen fuer klare Sprache',
+    },
+  ];
+  for (const llmCheck of LLM_CHECKS) {
+    const checkId = `${appId}.arch.t4.${llmCheck.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+    if (tests.some(t => t.id === checkId)) {
+      // Already loaded from arch-test JSON — enrich with tooltip/outputs
+      const existing = tests.find(t => t.id === checkId)!;
+      existing.tooltip = llmCheck.tooltip;
+      existing.outputs = llmCheck.outputs;
+      continue;
+    }
+    tests.push({
+      id: checkId,
+      status: 'NOT_RUN',
+      score: null,
+      lastRun: null,
+      reportPath: null,
+      detail: llmCheck.desc,
+      group: 'llm_enhanced',
+      tooltip: llmCheck.tooltip,
+      outputs: llmCheck.outputs,
+    });
+    // NOT_RUN does not count as passed/failed/pending for totals
+  }
+
   if (tests.length === 0) return null;
 
   const scores = tests.map(t => t.score).filter(s => s != null && s > 0) as number[];
   const avgScore = scores.length > 0 ? scores.reduce((s, v) => s + v, 0) / scores.length : 0;
   const status = failed > 0 ? 'failed' : pending > 0 ? 'partial' : 'passed';
-  const parts: string[] = [];
-  for (const t of tests) if (t.detail) parts.push(t.detail);
-  const description = parts.length > 0 ? parts.join(' | ') : 'Contract Scanner Results';
+  // Short description (not the full detail dump)
+  const description = 'Pre-flight: Env, Static Analysis, Contracts, Scanners';
 
-  return { tests, passed, failed, pending, avgScore, status, description };
+  // Compute core vs llm_enhanced summaries
+  const coreTests = tests.filter(t => t.group !== 'llm_enhanced');
+  const llmTests = tests.filter(t => t.group === 'llm_enhanced');
+  const coreSummary = {
+    passed: coreTests.filter(t => t.status === 'PASS').length,
+    failed: coreTests.filter(t => t.status === 'FAIL').length,
+    pending: coreTests.filter(t => t.status !== 'PASS' && t.status !== 'FAIL').length,
+    total: coreTests.length,
+  };
+  const llmSummary = {
+    passed: llmTests.filter(t => t.status === 'PASS').length,
+    failed: llmTests.filter(t => t.status === 'FAIL').length,
+    pending: llmTests.filter(t => t.status !== 'PASS' && t.status !== 'FAIL').length,
+    total: llmTests.length,
+  };
+
+  return { tests, passed, failed, pending, avgScore, status, description, coreSummary, llmSummary };
 }
 
 // ========================================
-// Pyramid Cache — Single Source of Truth
+// Report Scanner — Direct Source of Truth
 // ========================================
-// Written by pyramid_status.py --write-cache
-// Contains threshold-aware effective_status per scenario
-// NO FALLBACK — if cache is missing, status is UNKNOWN (fail loud)
+// Scans report .md files directly from reports/scenarios/
+// No intermediate cache or registry needed — always live data.
 
-const PYRAMID_CACHE_DIR = '/root/projekte/orchestrator/data/pyramid_cache';
+const REPORTS_SCENARIOS_DIR = join(UNIFIED_TESTER_ROOT, 'reports/scenarios');
 
-interface PyramidCacheScenario {
-  effective_status: string;
-  raw_status: string;
-  score: number | null;
-  tested_at: string | null;
-  optional: boolean;
-  stale: boolean;
-  report_path: string | null;
-}
-
-interface PyramidCacheLayer {
-  total: number;
-  pass: number;
-  fail: number;
-  pending: number;
-  stale: number;
+interface ScannedReport {
+  scenarioId: string;
   status: string;
-  avg_score: number;
-  scenarios: Record<string, PyramidCacheScenario>;
+  score: number | null;
+  timestamp: string | null;
+  reportPath: string;
+  duration: number | null;
 }
 
-interface PyramidCache {
-  app: string;
-  layers: Record<string, PyramidCacheLayer>;
-  totals: { total: number; pass: number; fail: number; pending: number; stale: number };
-  cache_written_at: string;
+/**
+ * Scan all report .md files for an app and return the latest report per scenario.
+ * Report filename pattern: {app}_{scenario-slug}_{YYYYMMDD}_{HHMMSS}_{seq}.md
+ * Parses header for: scenario_id, status, score, timestamp.
+ */
+function scanReportsForApp(appId: string): Record<string, ScannedReport> {
+  const results: Record<string, ScannedReport> = {};
+  if (!existsSync(REPORTS_SCENARIOS_DIR)) return results;
+
+  // App prefix patterns to match (handle hyphens in app names)
+  const appPrefix = appId + '_';
+
+  try {
+    for (const file of readdirSync(REPORTS_SCENARIOS_DIR)) {
+      if (!file.endsWith('.md')) continue;
+      if (!file.startsWith(appPrefix)) continue;
+
+      const fullPath = join(REPORTS_SCENARIOS_DIR, file);
+      try {
+        // Read only the header (first 800 bytes is enough)
+        const content = readFileSync(fullPath, 'utf-8').slice(0, 800);
+
+        // Derive scenario_id from FILENAME (canonical source).
+        // Filename format: {id_dots_as_underscores}_{YYYYMMDD}_{HHMMSS}_{mmm}.md
+        // Find the timestamp boundary: 8-digit date pattern from the end
+        const baseName = file.replace(/\.md$/, '');
+        const parts = baseName.split('_');
+        let tsStart = -1;
+        for (let i = parts.length - 1; i >= 0; i--) {
+          if (parts[i].length === 8 && /^\d{8}$/.test(parts[i])) {
+            tsStart = i;
+            break;
+          }
+        }
+        const idFromFile = tsStart > 0
+          ? parts.slice(0, tsStart).join('.')  // underscores back to dots
+          : null;
+
+        // Fallback: parse from header "# Scenario Test Report: {id}"
+        const idMatch = content.match(/^# Scenario Test Report:\s*(.+)$/m);
+        const scenarioId = idFromFile || (idMatch ? idMatch[1].trim() : null);
+        if (!scenarioId) continue;
+
+        // Parse status
+        let status = 'PENDING';
+        if (content.includes('✅ PASS')) status = 'PASS';
+        else if (content.includes('❌ FAIL')) status = 'FAIL';
+        else if (content.includes('⚠') || content.includes('PARTIAL')) status = 'PARTIAL';
+
+        // Parse score: "Rating: ★★★★★★★★★☆ 9/10" or "Rating: ⏳ Pending"
+        let score: number | null = null;
+        const scoreMatch = content.match(/(\d+(?:\.\d+)?)\s*\/\s*10/);
+        if (scoreMatch) score = parseFloat(scoreMatch[1]);
+
+        // Parse timestamp
+        let timestamp: string | null = null;
+        const tsMatch = content.match(/\*\*Timestamp:\*\*\s*(\S+)/);
+        if (tsMatch) timestamp = tsMatch[1];
+
+        // Parse duration
+        let duration: number | null = null;
+        const durMatch = content.match(/\*\*Duration:\*\*\s*([\d.]+)s/);
+        if (durMatch) duration = parseFloat(durMatch[1]);
+
+        const report: ScannedReport = { scenarioId, status, score, timestamp, reportPath: fullPath, duration };
+
+        // Keep the latest report per scenario (by timestamp, or by file modification time)
+        const existing = results[scenarioId];
+        if (!existing || (timestamp && existing.timestamp && timestamp > existing.timestamp)) {
+          results[scenarioId] = report;
+        }
+      } catch { /* skip unreadable reports */ }
+    }
+  } catch { /* directory not readable */ }
+
+  return results;
 }
 
-function loadPyramidCache(appId: string): PyramidCache {
-  const cachePath = join(PYRAMID_CACHE_DIR, `${appId}.json`);
-  if (!existsSync(cachePath)) {
-    throw new Error(`[QA] Pyramid cache missing for ${appId}. Run: python3 pyramid_status.py --app ${appId} --write-cache`);
-  }
-  const data = JSON.parse(readFileSync(cachePath, 'utf-8'));
-  if (!data.cache_written_at || !data.layers) {
-    throw new Error(`[QA] Pyramid cache corrupt for ${appId}: missing cache_written_at or layers`);
-  }
-  return data as PyramidCache;
+/**
+ * Resolve scenario status from scanned reports.
+ * Falls back to 'PENDING' if no report exists.
+ */
+function resolveStatusFromReports(scenarioId: string, reports: Record<string, ScannedReport>): string {
+  const report = reports[scenarioId];
+  if (!report) return 'PENDING';
+  return report.status;
 }
 
-function resolveStatusFromCache(scenarioId: string, cache: PyramidCache): string {
-  for (const layerData of Object.values(cache.layers)) {
-    const cached = layerData.scenarios?.[scenarioId];
-    if (cached) return cached.effective_status;
-  }
-  // Scenario exists on filesystem but not in cache → PENDING (new scenario, cache not refreshed yet)
-  return 'PENDING';
-}
+// Legacy compatibility: keep pyramid cache dir reference for rescan endpoint
+const PYRAMID_CACHE_DIR = PATHS.pyramidCacheDir;
 
 // Returns ALL matching layer dirs (multiple patterns may exist, e.g. layer-4-golden + layer-4-backend)
 function findLayerDirs(appScenarioDir: string, layerNum: number): string[] {
@@ -398,16 +533,19 @@ function getScenarioSummary(scenarioFile: string, reportPath: string | null): {
   stepsPreview: string | null;
   criteriaPreview: string | null;
   reviewExcerpt: string | null;
+  scenarioJson: any | null;
 } {
   let description: string | null = null;
   let stepsPreview: string | null = null;
   let criteriaPreview: string | null = null;
   let reviewExcerpt: string | null = null;
+  let scenarioJson: any | null = null;
 
   // Read scenario JSON
   try {
     const data = readJSON(scenarioFile);
     if (data) {
+      scenarioJson = data;
       description = data.description || null;
 
       // Steps: compact summary
@@ -443,39 +581,35 @@ function getScenarioSummary(scenarioFile: string, reportPath: string | null): {
         const ratingMatch = content.match(/## Rating:.*$/m);
         const rating = ratingMatch?.[0] ?? '';
 
-        // Extract Journey + Bewertung section (compact)
-        const journeyMatch = content.match(/## Journey\n([\s\S]*?)(?=\n## |$)/);
-        const journey = journeyMatch?.[1]?.trim().slice(0, 200) ?? '';
+        // Extract Journey/Erlebnis section (compact) — supports both old ("Journey") and new ("Erlebnis") format
+        const journeyMatch = content.match(/## (?:Journey|Erlebnis)\n([\s\S]*?)(?=\n## |$)/);
+        const journey = journeyMatch?.[1]?.trim() ?? '';
 
-        // Extract problems summary
-        const problemMatch = content.match(/## Gefundene Probleme\n([\s\S]*?)(?=\n## |$)/);
+        // Extract problems/findings summary — supports both old ("Gefundene Probleme") and new ("Findings") format
+        const problemMatch = content.match(/## (?:Gefundene Probleme|Findings)\n([\s\S]*?)(?=\n## |$)/);
         let problems = '';
         if (problemMatch) {
-          const lines = problemMatch[1].trim().split('\n').filter(l => l.startsWith('- ') || l.startsWith('**')).slice(0, 4);
+          const lines = problemMatch[1].trim().split('\n').filter(l => l.startsWith('- ') || l.startsWith('|') || l.startsWith('**')).slice(0, 4);
           problems = lines.join('\n');
         }
 
         if (rating || journey) {
           reviewExcerpt = [rating, journey, problems].filter(Boolean).join('\n\n');
-          if (reviewExcerpt.length > 500) reviewExcerpt = reviewExcerpt.slice(0, 497) + '...';
+          // No truncation — frontend handles scrolling
         }
       }
     } catch { /* */ }
   }
 
-  return { description, stepsPreview, criteriaPreview, reviewExcerpt };
+  return { description, stepsPreview, criteriaPreview, reviewExcerpt, scenarioJson };
 }
 
 function getPyramidData(appId: string) {
   const appScenarioDir = join(SCENARIOS_DIR, appId);
   if (!existsSync(appScenarioDir)) return null;
 
-  // Load pyramid cache (Single Source of Truth for status logic)
-  const pyramidCache = loadPyramidCache(appId);
-
-  // Load scenario registry for metadata (score, tested_at, report_path)
-  const scenarioRegistry = readJSON(SCENARIO_REGISTRY);
-  const regScenarios = scenarioRegistry?.scenarios ?? {};
+  // Scan reports directly — no cache or registry needed
+  const scannedReports = scanReportsForApp(appId);
 
   // Also check for flat scenarios (not in layer dirs — e.g. werking-safety, werking-noise)
   const flatScenarios: Array<{ id: string; file: string }> = [];
@@ -523,56 +657,81 @@ function getPyramidData(appId: string) {
       for (const layerDir of layerDirs) {
         const scenarios = scanLayerScenarios(layerDir);
         for (const s of scenarios) {
-          const reg = regScenarios[s.id];
-          const status = resolveStatusFromCache(s.id, pyramidCache);
-          const score = reg?.score ?? null;
+          const report = scannedReports[s.id];
+          const status = resolveStatusFromReports(s.id, scannedReports);
+          const score = report?.score ?? null;
           if (status === 'PASS') sPassed++;
           else if (status === 'FAIL' || status === 'ERROR') sFailed++;
           else if (status === 'PENDING') sPending++;
           else sFailed++; // PARTIAL without threshold pass = fail
           if (score != null && score > 0) sScores.push(score);
-          const summary = getScenarioSummary(s.file, reg?.report_path ?? null);
-          scenarioTests.push({ id: s.id, status, score, lastRun: reg?.tested_at ?? null, reportPath: reg?.report_path ?? null, ...summary });
+          const summary = getScenarioSummary(s.file, report?.reportPath ?? null);
+          scenarioTests.push({ id: s.id, status, score, lastRun: report?.timestamp ?? null, reportPath: report?.reportPath ?? null, ...summary });
         }
       }
 
       // Add contract scanner results
       const scannerData = getLayer0Data(appId);
       const allTests = [...scenarioTests];
-      let totalPassed = sPassed, totalFailed = sFailed, totalPending = sPending;
-      const allScores = [...sScores];
 
       if (scannerData) {
         allTests.push(...scannerData.tests);
-        totalPassed += scannerData.passed;
-        totalFailed += scannerData.failed;
-        totalPending += scannerData.pending;
-        for (const t of scannerData.tests) {
-          if (t.score != null && t.score > 0) allScores.push(t.score);
-        }
       }
 
-      if (allTests.length > 0) {
+      // Split into core (Layer 0) and LLM (Layer 0.5)
+      const coreTests = allTests.filter((t: any) => t.group !== 'llm_enhanced');
+      const llmTests = allTests.filter((t: any) => t.group === 'llm_enhanced');
+
+      // --- Layer 0: Core (deterministic) only ---
+      if (coreTests.length > 0) {
         const meta = LAYER_META[0];
-        const avgScore = allScores.length > 0 ? allScores.reduce((s, v) => s + v, 0) / allScores.length : 0;
-        const layerStatus = totalFailed > 0 ? 'failed'
-          : totalPending === allTests.length ? 'pending'
-          : totalPassed === allTests.length ? 'passed'
+        const corePassed = coreTests.filter(t => t.status === 'PASS').length;
+        const coreFailed = coreTests.filter(t => t.status === 'FAIL').length;
+        const corePending = coreTests.filter(t => t.status !== 'PASS' && t.status !== 'FAIL').length;
+        const coreScores = coreTests.map(t => t.score).filter(s => s != null && s > 0) as number[];
+        const coreAvg = coreScores.length > 0 ? coreScores.reduce((s, v) => s + v, 0) / coreScores.length : 0;
+        const coreStatus = coreFailed > 0 ? 'failed'
+          : corePassed === coreTests.length ? 'passed'
+          : coreTests.every(t => t.status === 'PENDING') ? 'pending'
           : 'partial';
 
-        // Build description from scanner data if available
         const desc = scannerData?.description ?? meta.description;
 
         layers.push({
           id: 0,
           name: meta.name,
           description: desc,
-          totalTests: allTests.length,
-          passed: totalPassed, failed: totalFailed, pending: totalPending,
-          avgScore,
-          status: layerStatus,
-          tests: allTests,
-        });
+          totalTests: coreTests.length,
+          passed: corePassed, failed: coreFailed, pending: corePending,
+          avgScore: coreAvg,
+          status: coreStatus,
+          tests: coreTests,
+        } as any);
+      }
+
+      // --- Layer 0.5: LLM-Enhanced (AI-Bridge, optional) ---
+      if (llmTests.length > 0) {
+        const llmPassed = llmTests.filter(t => t.status === 'PASS').length;
+        const llmFailed = llmTests.filter(t => t.status === 'FAIL').length;
+        const llmPending = llmTests.filter(t => t.status !== 'PASS' && t.status !== 'FAIL').length;
+        const llmScores = llmTests.map(t => t.score).filter(s => s != null && s > 0) as number[];
+        const llmAvg = llmScores.length > 0 ? llmScores.reduce((s, v) => s + v, 0) / llmScores.length : 0;
+        const allNotRun = llmTests.every(t => t.status === 'NOT_RUN' || t.status === 'PENDING');
+        const llmStatus = allNotRun ? 'not_run'
+          : llmFailed > 0 ? 'failed'
+          : llmPassed === llmTests.length ? 'passed'
+          : 'partial';
+
+        layers.push({
+          id: 0.5,
+          name: 'Persona Audits',
+          description: '5 Experten-Personas pruefen UI-Texte via AI-Bridge: Legal, Domain, Consistency, UX, Accessibility',
+          totalTests: llmTests.length,
+          passed: llmPassed, failed: llmFailed, pending: llmPending,
+          avgScore: llmAvg,
+          status: llmStatus,
+          tests: llmTests,
+        } as any);
       }
       continue;
     }
@@ -588,11 +747,11 @@ function getPyramidData(appId: string) {
     const scores: number[] = [];
 
     const tests = scenarios.map(s => {
-      const reg = regScenarios[s.id];
-      const status = resolveStatusFromCache(s.id, pyramidCache);
-      const score = reg?.score ?? null;
-      const lastRun = reg?.tested_at ?? null;
-      const reportPath = reg?.report_path ?? null;
+      const report = scannedReports[s.id];
+      const status = resolveStatusFromReports(s.id, scannedReports);
+      const score = report?.score ?? null;
+      const lastRun = report?.timestamp ?? null;
+      const reportPath = report?.reportPath ?? null;
       const summary = getScenarioSummary(s.file, reportPath);
 
       if (status === 'PASS') passed++;
@@ -602,7 +761,7 @@ function getPyramidData(appId: string) {
 
       if (score != null && score > 0) scores.push(score);
 
-      const outputQualityScore = reg?.output_quality_score ?? null;
+      const outputQualityScore = null;
       return { id: s.id, status, score, lastRun, reportPath, outputQualityScore, ...summary };
     });
 
@@ -633,16 +792,16 @@ function getPyramidData(appId: string) {
     let passed = 0, failed = 0, pending = 0;
     const scores: number[] = [];
     const tests = ungrouped.map(s => {
-      const reg = regScenarios[s.id];
-      const status = resolveStatusFromCache(s.id, pyramidCache);
-      const score = reg?.score ?? null;
+      const report = scannedReports[s.id];
+      const status = resolveStatusFromReports(s.id, scannedReports);
+      const score = report?.score ?? null;
       if (status === 'PASS') passed++;
       else if (status === 'FAIL' || status === 'ERROR') failed++;
       else if (status === 'PENDING') pending++;
       else failed++;
       if (score != null && score > 0) scores.push(score);
-      const summary = getScenarioSummary(s.file, reg?.report_path ?? null);
-      return { id: s.id, status, score, lastRun: reg?.tested_at ?? null, reportPath: reg?.report_path ?? null, ...summary };
+      const summary = getScenarioSummary(s.file, report?.reportPath ?? null);
+      return { id: s.id, status, score, lastRun: report?.timestamp ?? null, reportPath: report?.reportPath ?? null, ...summary };
     });
     const avgScore = scores.length > 0 ? scores.reduce((s, v) => s + v, 0) / scores.length : 0;
 
@@ -823,32 +982,18 @@ function getRecentRuns(limit: number = 50): Array<{ file: string; persona: strin
 function discoverScenarios() {
   const scenarios: Array<{ id: string; app: string; name: string; status: string; lastRun: string | null; score: number | null }> = [];
 
-  // Load scenario registry for metadata (tested_at, score)
-  const scenarioRegistry = readJSON(SCENARIO_REGISTRY);
-  const registryScenarios = scenarioRegistry?.scenarios ?? {};
-
-  // Pyramid caches per app — loaded on demand
-  const cachesByApp: Record<string, PyramidCache | undefined> = {};
+  // Scan reports per app — loaded on demand
+  const reportsByApp: Record<string, Record<string, ScannedReport>> = {};
 
   if (!existsSync(SCENARIOS_DIR)) return scenarios;
 
   const scanDir = (dir: string, app: string, prefix: string) => {
     if (!existsSync(dir)) return;
-    // Lazy-load cache for this app (may not exist for all apps)
-    if (!(app in cachesByApp)) {
-      const cachePath = join(PYRAMID_CACHE_DIR, `${app}.json`);
-      if (existsSync(cachePath)) {
-        try {
-          cachesByApp[app] = JSON.parse(readFileSync(cachePath, 'utf-8')) as PyramidCache;
-        } catch {
-          console.warn(`[QA] Corrupt pyramid cache for ${app}, treating all scenarios as PENDING`);
-          cachesByApp[app] = undefined;
-        }
-      } else {
-        cachesByApp[app] = undefined;
-      }
+    // Lazy-load reports for this app
+    if (!(app in reportsByApp)) {
+      reportsByApp[app] = scanReportsForApp(app);
     }
-    const cache = cachesByApp[app];
+    const reports = reportsByApp[app];
 
     for (const entry of readdirSync(dir)) {
       if (entry.startsWith('_') && entry !== '_demos' && entry !== '_neukunde') continue;
@@ -860,24 +1005,15 @@ function discoverScenarios() {
           const data = readJSON(fullPath);
           if (!data) return;
           const scenarioId = data.id || data.scenario_id || entry.replace('.json', '');
-          const regEntry = registryScenarios[scenarioId];
-
-          // Status from cache if available, otherwise PENDING (no silent guessing)
-          let status = 'PENDING';
-          if (cache) {
-            for (const layerData of Object.values(cache.layers)) {
-              const cached = layerData.scenarios?.[scenarioId];
-              if (cached) { status = cached.effective_status; break; }
-            }
-          }
+          const report = reports[scenarioId];
 
           scenarios.push({
             id: scenarioId,
             app,
             name: data.name || data.ziel || scenarioId,
-            status,
-            lastRun: regEntry?.tested_at ?? null,
-            score: regEntry?.score ?? null,
+            status: report?.status ?? 'PENDING',
+            lastRun: report?.timestamp ?? null,
+            score: report?.score ?? null,
           });
         }
       } catch { /* individual file read error — skip file */ }
@@ -1029,7 +1165,7 @@ router.get('/api/qa/report', async (req, res) => {
     }
 
     // Security: Only allow reading from unified-tester reports
-    if (!reportPath.startsWith(UNIFIED_TESTER_ROOT) && !reportPath.startsWith('/root/projekte/werkingflow/tests/')) {
+    if (!reportPath.startsWith(UNIFIED_TESTER_ROOT) && !reportPath.startsWith(TESTS_ROOT + '/')) {
       return res.status(403).json({ error: 'Access denied — reports must be under unified-tester directory' });
     }
     if (reportPath.includes('..')) {
@@ -1164,12 +1300,283 @@ router.get('/api/qa/scenarios', async (_req, res) => {
 });
 
 // ========================================
+// Dependency Graph
+// ========================================
+// Source: scenario_index.json + individual scenario JSONs
+// Builds a graph of test dependencies, file refs, user credentials
+
+const SCENARIO_INDEX_PATH = join(UNIFIED_TESTER_ROOT, 'features', 'scenario_index.json');
+const SCENARIOS_BASE = join(UNIFIED_TESTER_ROOT, 'features');
+const TEST_DATA_ROOT = join(UNIFIED_TESTER_ROOT, 'test-data');
+
+// Map test-data app dirs to scenario system names
+const TEST_DATA_APP_MAP: Record<string, string> = {
+  'engelmann': 'engelmann',
+  'werking-report': 'werking-report',
+  'werking-safety': 'werking-safety',
+  'werking-energy': 'werking-energy',
+};
+
+// Scan Tier-1 test-data directory for fixture files
+function scanTier1Fixtures(appName: string): { name: string; path: string; size: number | null; subdir: string }[] {
+  // Find the right test-data dir for this app
+  let testDataDir = '';
+  for (const [dirName, system] of Object.entries(TEST_DATA_APP_MAP)) {
+    if (system === appName) { testDataDir = join(TEST_DATA_ROOT, dirName); break; }
+  }
+  if (!testDataDir || !existsSync(testDataDir)) return [];
+
+  // If the test-data dir looks like a codebase (has package.json, Dockerfile etc.), skip it
+  const CODEBASE_MARKERS = ['package.json', 'Dockerfile', 'requirements.txt', 'Cargo.toml', 'go.mod'];
+  for (const marker of CODEBASE_MARKERS) {
+    if (existsSync(join(testDataDir, marker))) return [];
+  }
+
+  const fixtures: { name: string; path: string; size: number | null; subdir: string }[] = [];
+  const SKIP_FILES = new Set(['README.md', 'README', '.gitkeep', '.pending', 'setup.sh', '.DS_Store']);
+  const SKIP_EXTS = new Set(['.pending', '.bak']);
+  // Fixture-only extensions — skip code/config files
+  const FIXTURE_EXTS = new Set([
+    '.pdf', '.xlsx', '.xls', '.csv', '.json', '.xml',
+    '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp', '.svg',
+    '.doc', '.docx', '.ppt', '.pptx', '.odt', '.ods',
+    '.txt', '.md', '.html', '.htm', '.rtf',
+    '.wfreport', '.wfpres', '.cfg', '.env', '.ini', '.css',
+    '.zip', '.tar', '.gz', '.mp3', '.mp4', '.wav',
+  ]);
+  const MAX_DEPTH = 3;
+
+  const walk = (dir: string, relPrefix: string, depth: number) => {
+    if (depth > MAX_DEPTH) return;
+    try {
+      const entries = readdirSync(dir, { withFileTypes: true });
+
+      // Skip subdirs that look like codebases
+      if (depth > 0) {
+        const entryNames = entries.map(e => e.name);
+        if (entryNames.includes('package.json') || entryNames.includes('node_modules')) return;
+      }
+
+      for (const entry of entries) {
+        const fullPath = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (['node_modules', '.git', '__pycache__', 'venv', '.venv', '.vercel', '.pytest_cache', '_archive', '.next', 'dist', 'build'].includes(entry.name)) continue;
+          walk(fullPath, relPrefix ? `${relPrefix}/${entry.name}` : entry.name, depth + 1);
+        } else if (entry.isFile()) {
+          if (SKIP_FILES.has(entry.name)) continue;
+          const ext = entry.name.includes('.') ? '.' + entry.name.split('.').pop()!.toLowerCase() : '';
+          if (SKIP_EXTS.has(ext)) continue;
+          // At root level, only allow known fixture extensions
+          if (!relPrefix && !FIXTURE_EXTS.has(ext)) continue;
+          // In subdirs, still skip obvious code files
+          if (relPrefix && ['.ts', '.tsx', '.js', '.jsx', '.py', '.sh', '.lock', '.toml', '.yaml', '.yml'].includes(ext)) continue;
+          let size: number | null = null;
+          try { size = statSync(fullPath).size; } catch { /* */ }
+          const subdir = relPrefix.split('/')[0] || '.';
+          fixtures.push({ name: entry.name, path: fullPath, size, subdir });
+        }
+      }
+    } catch { /* skip unreadable dirs */ }
+  };
+
+  walk(testDataDir, '', 0);
+  return fixtures;
+}
+
+// GET /api/qa/dependency-graph/apps — List all systems from scenario_index
+router.get('/api/qa/dependency-graph/apps', async (_req, res) => {
+  try {
+    const index = readJSON(SCENARIO_INDEX_PATH);
+    if (!index) return res.status(404).json({ error: 'scenario_index.json not found' });
+    const scenarios = index.scenarios || index;
+    const systems = new Set<string>();
+    for (const entry of Object.values(scenarios) as any[]) {
+      if (entry.system) systems.add(entry.system);
+    }
+    res.json({ apps: [...systems].sort(), timestamp: new Date().toISOString() });
+  } catch (err: any) {
+    console.error('[QA] Dependency apps error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/qa/dependency-graph/:appId — Build dependency graph for an app
+router.get('/api/qa/dependency-graph/:appId', async (req, res) => {
+  try {
+    const appName = req.params.appId;
+    const index = readJSON(SCENARIO_INDEX_PATH);
+    if (!index) return res.status(404).json({ error: 'scenario_index.json not found' });
+
+    const allScenarios = index.scenarios || index;
+
+    // Filter by system
+    const appScenarios: Record<string, any> = {};
+    for (const [id, entry] of Object.entries(allScenarios) as [string, any][]) {
+      if (entry.system === appName) {
+        appScenarios[id] = entry;
+      }
+    }
+
+    if (Object.keys(appScenarios).length === 0) {
+      return res.status(404).json({ error: `No scenarios found for: ${appName}` });
+    }
+
+    // Load test results for status/score merge
+    const resultPath = join(PATHS.orchestratorDir, 'test-results', `${appName}.json`);
+    const testResults: Record<string, any> = {};
+    const resultData = readJSON(resultPath);
+    if (resultData) {
+      for (const layer of Object.values(resultData.layers || {}) as any[]) {
+        for (const s of (layer.scenarios || [])) {
+          testResults[s.id] = s;
+        }
+      }
+    }
+
+    // Scan reports directly for status
+    const reportEntries = scanReportsForApp(appName);
+
+    // Scan Tier-1 test fixtures for this app
+    const tier1Fixtures = scanTier1Fixtures(appName);
+
+    // Build subdir → scenario label lookup for matching fixtures to scenarios
+    // e.g. subdir "foto-analyse" matches scenario "engelmann.foto-analyse"
+    const allLabels = Object.keys(appScenarios).map(id => id.replace(/^[^.]+\./, ''));
+
+    // Process each scenario
+    const nodes: any[] = [];
+    const edges: any[] = [];
+    const userMap: Record<string, { email: string; count: number; layers: Set<number> }> = {};
+    const fileMap: Record<string, { name: string; path: string; size: number | null; scenarios: string[]; subdir: string }> = {};
+
+    // Pre-populate fileMap from Tier-1 fixtures
+    for (const fix of tier1Fixtures) {
+      if (!fileMap[fix.path]) {
+        fileMap[fix.path] = { name: fix.name, path: fix.path, size: fix.size, scenarios: [], subdir: fix.subdir };
+      }
+    }
+
+    for (const [scenarioId, entry] of Object.entries(appScenarios) as [string, any][]) {
+      const scenarioFile = join(SCENARIOS_BASE, entry.file);
+      let scenarioData: any = {};
+      try {
+        if (existsSync(scenarioFile)) {
+          scenarioData = JSON.parse(readFileSync(scenarioFile, 'utf-8'));
+        }
+      } catch { /* skip unreadable */ }
+
+      const layer = scenarioData.layer ?? null;
+      const deps = scenarioData.dependencies || {};
+
+      // Extract credentials
+      const creds = scenarioData.credentials || scenarioData.test_data?.credentials || {};
+      const email = creds.test_user?.email || creds.email || null;
+
+      // Read input_files from scenario (SSoT — no heuristic matching)
+      const files: any[] = [];
+      const label = scenarioId.replace(/^[^.]+\./, '');
+      const inputFiles: any[] = scenarioData.input_files || [];
+
+      for (const entry of inputFiles) {
+        if (!entry?.path) continue;
+        const fpath = entry.path;
+        let size: number | null = null;
+        try { size = statSync(fpath).size; } catch { /* file may not exist */ }
+        const name = fpath.split('/').pop() || '';
+        const subdir = fpath.replace(/.*\/test-data\/[^/]+\//, '').split('/')[0] || '.';
+
+        files.push({ key: entry.key || subdir, name, path: fpath, size, purpose: entry.purpose || '' });
+
+        // Register in fileMap for the files summary
+        if (!fileMap[fpath]) {
+          fileMap[fpath] = { name, path: fpath, size, scenarios: [], subdir };
+        }
+        if (!fileMap[fpath].scenarios.includes(scenarioId)) {
+          fileMap[fpath].scenarios.push(scenarioId);
+        }
+      }
+
+      // Extract dependencies
+      const reqScenarios = (deps.requires_scenarios || []).map((r: any) => r.id || r);
+      const reqArtifacts = deps.requires_artifacts || [];
+      const skipSetup = deps.skip_setup_steps || false;
+      const firstStep = deps.first_active_step || null;
+
+      // Build edges
+      for (const targetId of reqScenarios) {
+        edges.push({ from: scenarioId, to: targetId, type: 'requires_scenario' });
+      }
+      for (const art of reqArtifacts) {
+        edges.push({ from: scenarioId, to: null, type: 'requires_artifact', artifact_type: art.type });
+      }
+
+      // Merge test results + scanned reports
+      const result = testResults[scenarioId] || {};
+      const reportEntry = reportEntries[scenarioId];
+
+      nodes.push({
+        id: scenarioId,
+        layer,
+        label,
+        status: result.status || reportEntry?.status || null,
+        score: result.score ?? reportEntry?.score ?? null,
+        coverage: result.coverage ?? null,
+        duration: result.duration ?? null,
+        email,
+        files,
+        requires_scenarios: reqScenarios,
+        requires_artifacts: reqArtifacts,
+        skip_setup: skipSetup,
+        first_active_step: firstStep,
+      });
+
+      // Aggregate user map
+      if (email) {
+        if (!userMap[email]) userMap[email] = { email, count: 0, layers: new Set() };
+        userMap[email].count++;
+        if (layer !== null) userMap[email].layers.add(layer);
+      }
+    }
+
+    // Build response
+    const users = Object.values(userMap).map(u => ({
+      email: u.email, count: u.count, layers: [...u.layers].sort()
+    })).sort((a, b) => b.count - a.count);
+
+    // Show ALL Tier-1 fixtures — assigned and unassigned
+    const filesArr = Object.values(fileMap)
+      .sort((a, b) => b.scenarios.length - a.scenarios.length || a.name.localeCompare(b.name));
+    const withDeps = nodes.filter(n => n.requires_scenarios.length > 0 || n.requires_artifacts.length > 0).length;
+
+    res.json({
+      app: appName,
+      generated_at: new Date().toISOString(),
+      nodes,
+      edges,
+      users,
+      files: filesArr,
+      summary: {
+        total: nodes.length,
+        with_deps: withDeps,
+        with_files: nodes.filter(n => n.files.length > 0).length,
+        skip_setup: nodes.filter(n => n.skip_setup).length,
+        unique_users: users.length,
+        unique_files: filesArr.length,
+      }
+    });
+  } catch (err: any) {
+    console.error(`[QA] Dependency graph error for ${req.params.appId}:`, err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ========================================
 // Change Impact / Staleness Detection
 // ========================================
 // Source: change_impact_analyzer.py → orchestrator/data/staleness/{appId}.json
 // Detects which tests are "stale" (code changed since last test run)
 
-const STALENESS_DIR = '/root/projekte/orchestrator/data/staleness';
+const STALENESS_DIR = PATHS.stalenessDir;
 const CHANGE_IMPACT_ANALYZER = join(UNIFIED_TESTER_ROOT, 'tools/change_impact_analyzer.py');
 
 interface StaleScenario {
@@ -1321,5 +1728,270 @@ router.post('/api/qa/staleness/:appId/retest', async (req, res) => {
     res.status(500).json({ error: `Retest failed: ${err.message?.slice(0, 200)}` });
   }
 });
+
+// ========================================
+// Product Docs (PRODUCT.md per app)
+// ========================================
+
+const PRODUCT_DOCS_DIR = '/root/projekte/werkingflow-production/apps';
+const PRODUCT_APPS: Record<string, string> = {
+  'werking-report': 'WerkING Report',
+  'engelmann': 'Engelmann AI Hub',
+  'werking-energy': 'WerkING Energy',
+  'werking-safety': 'WerkING Safety',
+  'acro-community': 'Acro Community',
+};
+// Apps outside the monorepo need custom paths
+const PRODUCT_APP_DIRS: Record<string, string> = {
+  'acro-community': '/root/projekte/support/acro-community',
+};
+function getProductDocPath(appId: string): string {
+  const customDir = PRODUCT_APP_DIRS[appId];
+  return customDir ? join(customDir, 'PRODUCT.md') : join(PRODUCT_DOCS_DIR, appId, 'PRODUCT.md');
+}
+
+/**
+ * GET /api/qa/product-docs
+ * List all apps with PRODUCT.md availability
+ */
+router.get('/api/qa/product-docs', async (_req, res) => {
+  const apps = Object.entries(PRODUCT_APPS).map(([appId, displayName]) => {
+    const docPath = getProductDocPath(appId);
+    const exists = existsSync(docPath);
+    let modified: string | null = null;
+    let wordCount = 0;
+    if (exists) {
+      const s = statSync(docPath);
+      modified = s.mtime.toISOString();
+      const content = readFileSync(docPath, 'utf-8');
+      wordCount = content.split(/\s+/).length;
+    }
+    return { appId, displayName, exists, modified, wordCount };
+  });
+  res.json({ apps, timestamp: new Date().toISOString() });
+});
+
+/**
+ * GET /api/qa/product-docs/:appId
+ * Get PRODUCT.md content for a specific app
+ */
+router.get('/api/qa/product-docs/:appId', async (req, res) => {
+  const { appId } = req.params;
+  const displayName = PRODUCT_APPS[appId];
+  if (!displayName) {
+    return res.status(404).json({ error: `Unknown app: ${appId}` });
+  }
+
+  const docPath = getProductDocPath(appId);
+  if (!existsSync(docPath)) {
+    return res.status(404).json({
+      error: 'PRODUCT.md not found',
+      appId,
+      hint: `Run: python3 tools/generate_product_docs.py --app ${appId}`,
+    });
+  }
+
+  const content = readFileSync(docPath, 'utf-8');
+  const s = statSync(docPath);
+  res.json({
+    appId,
+    displayName,
+    content,
+    modified: s.mtime.toISOString(),
+    wordCount: content.split(/\s+/).length,
+  });
+});
+
+/**
+ * POST /api/qa/product-docs/:appId/regenerate
+ * Full chain: Scanner (refresh enriched.json) → Generator (PRODUCT.md)
+ * Runs as background process since AI-Bridge calls can take 60+ seconds.
+ */
+// Scanner uses different names for some apps
+const SCANNER_APP_NAMES: Record<string, string> = {
+  'werking-report': 'gutachten',
+};
+router.post('/api/qa/product-docs/:appId/regenerate', async (req, res) => {
+  const { appId } = req.params;
+  if (!PRODUCT_APPS[appId]) {
+    return res.status(400).json({ error: `Unknown app: ${appId}. Valid: ${Object.keys(PRODUCT_APPS).join(', ')}` });
+  }
+
+  const scannerPath = join(UNIFIED_TESTER_ROOT, 'tools', 'data-ai-id-scanner.js');
+  const generatorPath = join(UNIFIED_TESTER_ROOT, 'tools', 'generate_product_docs.py');
+  if (!existsSync(generatorPath)) {
+    return res.status(500).json({ error: 'generate_product_docs.py not found' });
+  }
+
+  try {
+    const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15);
+    const logFile = `/tmp/product-docs-${appId}-${timestamp}.log`;
+    const scannerApp = SCANNER_APP_NAMES[appId] || appId;
+    const enrichedOutput = `/root/projekte/orchestrator/data/${appId}/enriched.json`;
+
+    // Full chain: 1) Scanner → enriched.json  2) Generator → PRODUCT.md
+    let cmd: string;
+    if (existsSync(scannerPath)) {
+      cmd = `mkdir -p "$(dirname "${enrichedOutput}")" && ` +
+        `node "${scannerPath}" --app "${scannerApp}" --enriched --output "${enrichedOutput}" && ` +
+        `python3 "${generatorPath}" --app "${appId}"`;
+    } else {
+      // Scanner not found — run generator only (it has its own auto-refresh fallback)
+      cmd = `python3 "${generatorPath}" --app "${appId}"`;
+    }
+
+    const bgCmd = `nohup bash -c '${cmd.replace(/'/g, "'\\''")}' > "${logFile}" 2>&1 & echo $!`;
+
+    const pidOutput = execSync(bgCmd, {
+      cwd: UNIFIED_TESTER_ROOT,
+      timeout: 10000,
+      shell: '/bin/bash',
+    }).toString().trim();
+
+    const pid = parseInt(pidOutput, 10);
+
+    res.json({
+      message: `Enriched Map + Product Doc Regeneration gestartet fuer ${PRODUCT_APPS[appId]}`,
+      appId,
+      pid: isNaN(pid) ? null : pid,
+      logFile,
+      command: cmd,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    console.error(`[QA] Product doc regeneration error for ${appId}:`, err.message);
+    res.status(500).json({ error: `Regeneration failed: ${err.message?.slice(0, 200)}` });
+  }
+});
+
+// ========================================
+// File Preview (PDF, MD, HTML, Images, Text)
+// ========================================
+// Returns file content for inline preview in the QA Dashboard sidebar.
+// Text-based files (.md, .html, .txt, .json, .csv, .xml) → { type: 'text', content }
+// Images (.png, .jpg, .gif, .webp, .svg, .bmp, .tiff) → { type: 'image', base64, mimeType }
+// PDF (.pdf) → { type: 'pdf', base64 }
+// Others → { type: 'unsupported' }
+
+const TEXT_EXTENSIONS = new Set(['.md', '.html', '.htm', '.txt', '.json', '.csv', '.xml', '.yaml', '.yml', '.cfg', '.ini', '.env', '.rtf', '.css']);
+const IMAGE_EXTENSIONS: Record<string, string> = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
+  '.bmp': 'image/bmp', '.tiff': 'image/tiff',
+};
+const MAX_TEXT_SIZE = 2 * 1024 * 1024; // 2MB text limit
+const MAX_BINARY_SIZE = 20 * 1024 * 1024; // 20MB binary limit
+
+// Allowed base directories for file preview (security)
+const PREVIEW_ALLOWED_ROOTS = [
+  PATHS.unifiedTesterRoot,
+  PATHS.testsRoot,
+  join(PATHS.unifiedTesterRoot, 'test-data'),
+  PATHS.projectsRoot,
+];
+
+router.get('/api/qa/file-preview', async (req, res) => {
+  try {
+    const filePath = req.query.path as string;
+    if (!filePath) {
+      return res.status(400).json({ error: 'path query parameter required' });
+    }
+
+    // Security: block path traversal
+    if (filePath.includes('..')) {
+      return res.status(400).json({ error: 'Invalid path: traversal not allowed' });
+    }
+
+    // Security: must be under one of the allowed roots
+    const isAllowed = PREVIEW_ALLOWED_ROOTS.some(root => filePath.startsWith(root + '/') || filePath === root);
+    if (!isAllowed) {
+      return res.status(403).json({ error: 'Access denied — file not in allowed directories' });
+    }
+
+    if (!existsSync(filePath)) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    const stat = statSync(filePath);
+    if (!stat.isFile()) {
+      return res.status(400).json({ error: 'Path is not a file' });
+    }
+
+    const fileName = filePath.split('/').pop() || '';
+    const ext = fileName.includes('.') ? '.' + fileName.split('.').pop()!.toLowerCase() : '';
+
+    // Text files
+    if (TEXT_EXTENSIONS.has(ext)) {
+      if (stat.size > MAX_TEXT_SIZE) {
+        return res.status(413).json({ error: `File too large for text preview (${fmtBytesServer(stat.size)} > 2MB)` });
+      }
+      const content = readFileSync(filePath, 'utf-8');
+      return res.json({
+        type: 'text',
+        ext,
+        fileName,
+        content,
+        size: stat.size,
+        modified: stat.mtime.toISOString(),
+      });
+    }
+
+    // Images
+    const mimeType = IMAGE_EXTENSIONS[ext];
+    if (mimeType) {
+      if (stat.size > MAX_BINARY_SIZE) {
+        return res.status(413).json({ error: `Image too large (${fmtBytesServer(stat.size)} > 20MB)` });
+      }
+      const buffer = readFileSync(filePath);
+      const base64 = buffer.toString('base64');
+      return res.json({
+        type: 'image',
+        ext,
+        fileName,
+        mimeType,
+        base64,
+        size: stat.size,
+        modified: stat.mtime.toISOString(),
+      });
+    }
+
+    // PDF
+    if (ext === '.pdf') {
+      if (stat.size > MAX_BINARY_SIZE) {
+        return res.status(413).json({ error: `PDF too large (${fmtBytesServer(stat.size)} > 20MB)` });
+      }
+      const buffer = readFileSync(filePath);
+      const base64 = buffer.toString('base64');
+      return res.json({
+        type: 'pdf',
+        ext,
+        fileName,
+        base64,
+        size: stat.size,
+        modified: stat.mtime.toISOString(),
+      });
+    }
+
+    // Unsupported
+    return res.json({
+      type: 'unsupported',
+      ext,
+      fileName,
+      size: stat.size,
+      modified: stat.mtime.toISOString(),
+      message: `Preview not available for ${ext} files`,
+    });
+
+  } catch (err: any) {
+    console.error('[QA] File preview error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+function fmtBytesServer(bytes: number): string {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+}
 
 export default router;

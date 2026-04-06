@@ -10,18 +10,21 @@ import { execFileSync } from 'child_process';
 
 const router = Router();
 
+import { PATHS } from '../config/paths.js';
+import { join } from 'path';
+
 // --- Paths ---
-const REFS_DIR = '/home/claude-user/.cui-account1/.claude/refs';
-const WORKLISTS_DIR = '/root/projekte/orchestrator/team/worklists';
-const CLAUDE_MD = '/home/claude-user/.cui-account1/.claude/CLAUDE.md';
-const BUSINESS_DIR = '/root/projekte/werkingflow/business';
-const DOCS_MAINTENANCE_BIN = '/root/projekte/orchestrator/bin/docs-maintenance';
+const REFS_DIR = join(PATHS.claudeUserHome, '.cui-account1/.claude/refs');
+const WORKLISTS_DIR = PATHS.worklistsDir;
+const CLAUDE_MD = join(PATHS.claudeUserHome, '.cui-account1/.claude/CLAUDE.md');
+const BUSINESS_DIR = PATHS.businessDir;
+const DOCS_MAINTENANCE_BIN = PATHS.docsMaintenanceBin;
 
 const REPOS: { name: string; path: string }[] = [
-  { name: 'werkingflow-production', path: '/root/projekte/werkingflow-production' },
-  { name: 'werkingflow', path: '/root/projekte/werkingflow' },
-  { name: 'orchestrator', path: '/root/projekte/orchestrator' },
-  { name: 'workflows', path: '/root/projekte/workflows' },
+  { name: 'werkingflow-production', path: PATHS.werkingflowProductionDir },
+  { name: 'werkingflow', path: PATHS.werkingflowDir },
+  { name: 'orchestrator', path: PATHS.orchestratorDir },
+  { name: 'workflows', path: join(PATHS.projectsRoot, 'workflows') },
 ];
 
 // --- Thresholds (days) ---

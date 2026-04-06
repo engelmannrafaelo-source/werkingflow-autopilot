@@ -7,12 +7,7 @@ import type {
   PersonaProfile,
 } from './types/knowledge.js';
 
-const BRIDGE_URL = process.env.AI_BRIDGE_URL || 'http://49.12.72.66:8000';
-const BRIDGE_KEY = process.env.AI_BRIDGE_API_KEY;
-
-if (!BRIDGE_KEY) {
-  console.warn('[Classifier] Warning: AI_BRIDGE_API_KEY not set, classification will fail');
-}
+import { bridgeChat } from './lib/bridge-fetch.js';
 
 export async function classifyDocument(
   req: ClassificationRequest
@@ -21,29 +16,14 @@ export async function classifyDocument(
   const userPrompt = buildClassificationUserPrompt(req);
 
   try {
-    const response = await fetch(`${BRIDGE_URL}/v1/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${BRIDGE_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-5-20250929',
-        temperature: 0.3, // Consistent classifications
-        max_tokens: 2000,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-      }),
+    const content = await bridgeChat({
+      model: 'claude-sonnet-4-5-20250929',
+      max_tokens: 2000,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
     });
-
-    if (!response.ok) {
-      throw new Error(`Bridge classification failed: ${response.statusText}`);
-    }
-
-    const data = await response.json();
-    const content = data.choices[0].message.content;
 
     return parseClassificationResponse(content);
   } catch (err: any) {
