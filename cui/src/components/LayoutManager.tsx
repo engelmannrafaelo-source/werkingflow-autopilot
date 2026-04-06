@@ -879,7 +879,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
               // Dock relative to the CUI tabset itself — flexlayout splits it into a sibling tabset
               const targetId = tabsetId;
 
-              const dockLocation = tabsetCount % 2 === 0 ? DockLocation.RIGHT : DockLocation.BOTTOM;
+              const dockLocation = DockLocation.RIGHT;
               const tab = m.getNodeById(tabId) as TabNode | undefined;
               if (!tab) continue;
               const tabJson = { type: 'tab' as const, name: tab.getName(), component: tab.getComponent() || 'cui', config: { ...tab.getConfig() } };
@@ -957,7 +957,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
             if (!targetId) continue;
 
             const dockLocation = tabsetCount < 6
-              ? (tabsetCount % 2 === 0 ? DockLocation.RIGHT : DockLocation.BOTTOM)
+              ? DockLocation.RIGHT
               : DockLocation.CENTER;
 
             try {
@@ -1099,7 +1099,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         }
 
         const dockLocation = tabsetCount < 6
-          ? (tabsetCount % 2 === 0 ? DockLocation.RIGHT : DockLocation.BOTTOM)
+          ? DockLocation.RIGHT
           : DockLocation.CENTER;
 
         try {
@@ -1271,9 +1271,9 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           let tabsetCount = 0;
           m.visitNodes((node) => { if (node.getType() === 'tabset') tabsetCount++; });
 
-          // Split as separate panel: alternate RIGHT/BOTTOM up to 6, then CENTER
+          // Split as separate panel: always horizontal (side by side), CENTER as fallback
           const dockLocation = tabsetCount < 6
-            ? (tabsetCount % 2 === 0 ? DockLocation.RIGHT : DockLocation.BOTTOM)
+            ? DockLocation.RIGHT
             : DockLocation.CENTER;
 
           try {
