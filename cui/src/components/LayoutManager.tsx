@@ -525,7 +525,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           const val = e.target.value;
           if (!val) return;
           if (val === 'cui') {
-            addTab('cui', {}, node.getId());
+            addTab('cui', { _userReserved: Date.now() }, node.getId());
           } else {
             addTab(val as 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'gmail' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'repo-dashboard' | 'watchdog' | 'background-ops' | 'conversation-queue' | 'maintenance' | 'input-audit' | 'qa-dashboard' | 'peer-awareness' | 'infisical-monitor' | 'mission-chat' | 'architecture' | 'report-builder' | 'prompt-explorer', {}, node.getId());
           }
@@ -1228,28 +1228,38 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         const newlyMounted: Array<{ panelId: string; sessionId: string }> = [];
 
         for (const conv of missing) {
-          // Both Priority 1 (reuse empty panel) and Priority 2 (create new panel) only when explicitly triggered
-          if (!(window as any).__cuiAutoLayoutActive) {
-            console.log(`[LM] auto-sync: skipping panel assignment for session ${conv.sessionId} (auto-layout disabled)`);
+          // Skip mission-chat sessions — they belong only in mission-chat panels
+          if (conv.projectPath === '/root/orchestrator/workspaces/mission-chat' ||
+              conv.subject?.toLowerCase().includes('mission chat') ||
+              conv.isMissionChat) {
             continue;
           }
 
           // Priority 1: Reuse an empty/stale CUI panel — just update its config
+          // (always allowed — needed to show sessions on load and after sync)
           if (emptyPanels.length > 0) {
             const reuseNodeId = emptyPanels.shift()!;
-            try {
-              // Merge config to preserve existing panel state (_attention, etc.)
-              const existing = (m.getNodeById(reuseNodeId) as TabNode)?.getConfig?.() ?? {};
-              m.doAction(Actions.updateNodeAttributes(reuseNodeId, {
-                config: { ...existing, initialSessionId: conv.sessionId, accountId: conv.accountId }
-              }));
-              newlyMounted.push({ panelId: reuseNodeId, sessionId: conv.sessionId });
-              mounted++;
-              continue;
-            } catch {}
+            // Skip panels that were just reserved by user (have _userReserved timestamp within last 60s)
+            const existingCfg = (m.getNodeById(reuseNodeId) as TabNode)?.getConfig?.() ?? {};
+            if (existingCfg._userReserved && Date.now() - existingCfg._userReserved < 60000) {
+              emptyPanels.unshift(reuseNodeId); // put back, don't claim
+            } else {
+              try {
+                m.doAction(Actions.updateNodeAttributes(reuseNodeId, {
+                  config: { ...existingCfg, initialSessionId: conv.sessionId, accountId: conv.accountId }
+                }));
+                newlyMounted.push({ panelId: reuseNodeId, sessionId: conv.sessionId });
+                mounted++;
+                continue;
+              } catch {}
+            }
           }
 
           // Priority 2: Add as separate split panel — only when explicitly triggered
+          if (!(window as any).__cuiAutoLayoutActive) {
+            console.log(`[LM] auto-sync: skipping new panel creation for session ${conv.sessionId} (auto-layout disabled)`);
+            continue;
+          }
           // Find a CUI tabset to split from (prefer one with existing CUI panels)
           let targetTabsetId = '';
           m.visitNodes((node) => {
