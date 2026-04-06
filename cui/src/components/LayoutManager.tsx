@@ -1228,6 +1228,12 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         const newlyMounted: Array<{ panelId: string; sessionId: string }> = [];
 
         for (const conv of missing) {
+          // Both Priority 1 (reuse empty panel) and Priority 2 (create new panel) only when explicitly triggered
+          if (!(window as any).__cuiAutoLayoutActive) {
+            console.log(`[LM] auto-sync: skipping panel assignment for session ${conv.sessionId} (auto-layout disabled)`);
+            continue;
+          }
+
           // Priority 1: Reuse an empty/stale CUI panel — just update its config
           if (emptyPanels.length > 0) {
             const reuseNodeId = emptyPanels.shift()!;
@@ -1244,10 +1250,6 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           }
 
           // Priority 2: Add as separate split panel — only when explicitly triggered
-          if (!(window as any).__cuiAutoLayoutActive) {
-            console.log(`[LM] auto-sync: skipping new panel creation for session ${conv.sessionId} (auto-layout disabled)`);
-            continue;
-          }
           // Find a CUI tabset to split from (prefer one with existing CUI panels)
           let targetTabsetId = '';
           m.visitNodes((node) => {
