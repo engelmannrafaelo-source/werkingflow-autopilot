@@ -40,6 +40,7 @@ interface CuiLitePanelProps {
   initialSessionId?: string;
   onLoadFailed?: (sessionId: string) => void;
   onFinish?: (sessionId: string) => void;
+  onStateChange?: (state: 'idle' | 'working' | 'needs_attention') => void;
 }
 
 // --- Markdown Components (Tokyo Night) ---
@@ -448,7 +449,7 @@ function LoadingConversation({ sessionId, onBack, onRetry, onLoadFailed }: { ses
 }
 
 // --- Main Component ---
-export default function CuiLitePanel({ accountId, projectId, workDir, panelId, isTabVisible = true, onRouteChange, initialSessionId, onLoadFailed, onFinish }: CuiLitePanelProps) {
+export default function CuiLitePanel({ accountId, projectId, workDir, panelId, isTabVisible = true, onRouteChange, initialSessionId, onLoadFailed, onFinish, onStateChange }: CuiLitePanelProps) {
   const storageKey = `cui-lite-account-${panelId || projectId || 'default'}`;
   const persistSession = !initialSessionId; // Don't persist to localStorage for AllChats panels
 
@@ -480,13 +481,24 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   const [queueRefresh, setQueueRefresh] = useState(0);
   const [attention, setAttention] = useState<'idle' | 'working' | 'needs_attention'>('idle');
   const [attentionReason, setAttentionReason] = useState<string | undefined>();
+
+  // Propagate attention state to parent (LayoutManager) for project-tab coloring
+  useEffect(() => {
+    onStateChange?.(attention);
+  }, [attention, onStateChange]);
+
   const [currentTool, setCurrentTool] = useState<{ toolName: string; toolDetail?: string; startedAt: number } | null>(null);
   const [permissions, setPermissions] = useState<Permission[]>([]);
   const [rateLimitMessage, setRateLimitMessage] = useState<string | null>(null);
   const [convName, setConvName] = useState('');
+  const [sessionModel, setSessionModel] = useState('');
+  const [isPaused, setIsPaused] = useState(false);
+  const [reviewState, setReviewState] = useState<'idle' | 'running' | 'done'>('idle');
   const [planMode, setPlanMode] = useState(false);
   const [liveMode, setLiveMode] = useState(false);
-  const [isAgentDone, setIsAgentDone] = useState(false);
+  const [isAgentDone, _setIsAgentDone] = useState(false);
+  const isAgentDoneRef = useRef(false);
+  const setIsAgentDone = useCallback((v: boolean) => { isAgentDoneRef.current = v; _setIsAgentDone(v); }, []);
   const [showAllMessages, setShowAllMessages] = useState(false);
   const [serverPlanText, setServerPlanText] = useState<string | undefined>();
   const [sessionCwd, setSessionCwd] = useState<string | undefined>();
@@ -502,9 +514,23 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   const [editingTemplate, setEditingTemplate] = useState<PromptTemplate | null>(null);
 
   // --- Auto-Inject (Loop Mode) ---
+  const LOOP_PRESETS: { label: string; message: string }[] = [
+    {
+      label: "Test-Pyramide (Fix-Loop)",
+      message: "Weiter mit der Test-Pyramide (bottom-up: Layer 0 vor 1 vor 2 vor 3 vor 4). Fuehre IMMER eine konkrete Aktion aus — NIEMALS nur 'Idle' oder 'Warte' antworten. Ablauf: (1) Pruefe ob ein Test gerade laeuft → monitore bis Ergebnis da ist. (2) Test FAIL? → Lies den Report, finde den echten Bug im APP-Code, fixe ihn, git commit + push, teste erneut. (3) Layer komplett PASS? → Starte naechsten Layer. (4) Alles gruen? → Melde Erfolg mit Score-Zusammenfassung. VERBOTEN: Szenario-Dateien oder Tester-Code aendern. NUR App-Code fixen.",
+    },
+    {
+      label: "Nur testen (kein Fix)",
+      message: "Fuehre alle Tests dieser App durch (Unified Tester, bottom-up: Layer 0 vor 1 vor 2 vor 3 vor 4). Berichte die Ergebnisse pro Layer mit Score-Tabelle. Aendere KEINEN Code — nur testen und dokumentieren.",
+    },
+    {
+      label: "Weiter arbeiten",
+      message: "Fuehre den naechsten anstehenden Task aus. Antworte NIEMALS nur mit 'Idle' oder 'Warte' — fuehre IMMER eine konkrete Aktion aus. Wenn kein Task definiert: pruefe failing Tests und arbeite sie ab.",
+    },
+  ];
   const [loopEnabled, setLoopEnabled] = useState(false);
   const [loopIntervalMin, setLoopIntervalMin] = useState(5);
-  const [loopMessage, setLoopMessage] = useState("Schau dir die aktuellen Test-Logs an und entscheide selbst: Wenn Probleme sichtbar sind, behebe sie (defensive coding, fail fast) und committe. Wenn Tests noch laufen oder alles passt, sage kurz Bescheid und warte.");
+  const [loopMessage, setLoopMessage] = useState(LOOP_PRESETS[0].message);
   const [showLoopConfig, setShowLoopConfig] = useState(false);
   const [lastInjectTime, setLastInjectTime] = useState<string | null>(null);
 
@@ -512,11 +538,14 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const userScrolledUpRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const pasteZoneRef = useRef<HTMLDivElement>(null);
+  const [pasteUploading, setPasteUploading] = useState(false);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollFailCountRef = useRef(0);
   const circuitOpenRef = useRef(false); // Circuit breaker: stops polling after persistent failures
   const panelWsRef = useRef<WebSocket | null>(null);
   const sessionIdRef = useRef<string | null>(sessionId);
+  const selectedIdRef = useRef<string>(selectedId);
   // Track last poll data to skip redundant setState (avoids re-render + LCP shift)
   const lastPollHashRef = useRef('');
 
@@ -538,7 +567,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         const newMsgs: Message[] = data.messages || [];
         const newStatus = data.status === 'ongoing' ? 'ongoing' : 'completed';
         const newPerms: Permission[] = data.permissions || [];
-        const newName = data.summary || '';
+        const newName = data.customName || data.summary || '';
         const newDone = !!data.isAgentDone;
         // Fast hash: skip redundant setState when nothing changed
         const lastTs = newMsgs[newMsgs.length - 1]?.timestamp || '';
@@ -555,12 +584,23 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
           setConvStatus(newStatus as 'ongoing' | 'completed');
           setPermissions(newPerms);
           setConvName(newName);
+          if (data.assignedModel) setSessionModel(data.assignedModel);
+          if (typeof data.manualPaused === 'boolean') setIsPaused(data.manualPaused);
           setIsAgentDone(newDone);
           if (data.planText) setServerPlanText(data.planText);
           if (data.sessionCwd) setSessionCwd(data.sessionCwd);
           if (data.rateLimited) {
             setAttention('needs_attention');
             setAttentionReason('rate_limit');
+          }
+          // JSONL is source of truth: if agent is done or has pending permissions, override WS state
+          if (newDone && !data.rateLimited) {
+            setAttention(prev => prev === 'needs_attention' ? prev : 'idle');
+            setAttentionReason(prev => prev === 'rate_limit' ? prev : 'done');
+            setCurrentTool(null);
+          } else if (newPerms.length > 0) {
+            setAttention('needs_attention');
+            setAttentionReason('permission');
           }
         }
         pollFailCountRef.current = 0;
@@ -653,6 +693,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   // Keep sessionIdRef in sync (avoids WS reconnection on every session change)
   useEffect(() => {
     sessionIdRef.current = sessionId;
+    selectedIdRef.current = selectedId;
     // Report visibility change to server (session exclusivity)
     const ws = panelWsRef.current;
     if (ws?.readyState === WebSocket.OPEN) {
@@ -737,6 +778,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
               setMessages([]);
               setPermissions([]);
               setConvName('');
+              setSessionModel('');
               setAttention('idle');
               setAttentionReason(undefined);
               setRateLimitMessage(null);
@@ -752,9 +794,21 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
             if (navMsg.type === 'control:cui-navigate-conversation' && navMsg.panelId === panelId) {
               console.log(`[CuiLite] Navigate to session ${navMsg.sessionId?.slice(0, 8)} (panel=${panelId})`);
               setSessionId(navMsg.sessionId);
+              setShowQueue(false);
               circuitOpenRef.current = false;
               pollFailCountRef.current = 0;
               setTimeout(pollNow, 300);
+              return;
+            }
+          }
+          // Handle account change from another panel (e.g. assign endpoint)
+          if (raw.includes("conv-account-changed")) {
+            const acMsg = JSON.parse(raw);
+            if (acMsg.type === "conv-account-changed" && acMsg.sessionId === sessionIdRef.current && acMsg.accountId !== selectedIdRef.current) {
+              console.log(`[CuiLite] Account changed externally: ${selectedIdRef.current} -> ${acMsg.accountId}`);
+              setSelectedId(acMsg.accountId);
+              try { localStorage.setItem(storageKey, acMsg.accountId); } catch {}
+              setMessages(prev => [...prev, { role: "system", content: `Account gewechselt → ${acMsg.accountId}`, timestamp: new Date().toISOString() }]);
               return;
             }
           }
@@ -762,24 +816,46 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
           const currentSid2 = sessionIdRef.current;
           if (!raw.includes(selectedId) && !(currentSid2 && raw.includes(currentSid2))) return;
           const msg = JSON.parse(raw);
-          if (msg.type === 'conv-attention' && (msg.accountId === selectedId || msg.key === selectedId || msg.sessionId === currentSid2)) {
-            setAttention(msg.state);
-            setAttentionReason(msg.reason);
+          if (msg.type === 'conv-review-started' && msg.sessionId === sessionIdRef.current) {
+            setReviewState('running');
+          } else if (msg.type === 'conv-review-complete' && msg.sessionId === sessionIdRef.current) {
+            setReviewState('done');
+            setTimeout(() => setReviewState('idle'), 8000);
+          } else if (msg.type === 'conv-paused' && msg.sessionId === sessionIdRef.current) {
+            setIsPaused(!!msg.paused);
+          } else if (msg.type === 'conv-model-changed' && msg.sessionId === sessionIdRef.current) {
+            setSessionModel(msg.model || '');
+          } else if (msg.type === 'conv-attention' && (msg.accountId === selectedId || msg.key === selectedId || msg.sessionId === currentSid2)) {
+            // JSONL poll (isAgentDone) is source of truth — don't let stale WS "working" override it
+            if (msg.state === 'working' && isAgentDoneRef.current) {
+              // Server thinks working, but JSONL says done — ignore, poll will correct
+            } else {
+              setAttention(msg.state);
+              setAttentionReason(msg.reason);
+            }
             if (msg.state === 'needs_attention' && sessionIdRef.current) {
-              // Reset circuit breaker + poll immediately on attention change
               circuitOpenRef.current = false;
               pollFailCountRef.current = 0;
               setTimeout(pollNow, 500);
             }
+            // If WS says working and agent was done, it might actually be working again — re-poll to verify
+            if (msg.state === 'working' && isAgentDoneRef.current) {
+              setTimeout(pollNow, 1000);
+            }
           }
           if (msg.type === 'cui-state' && (msg.cuiId === selectedId || msg.sessionId === currentSid2)) {
-            // Any state change from WS means binary is alive — reset circuit breaker
             circuitOpenRef.current = false;
             pollFailCountRef.current = 0;
             if (msg.state === 'processing') {
-              setAttention('working');
-              setAttentionReason(undefined);
-              setRateLimitMessage(null);
+              // Only trust "processing" if JSONL doesn't say done, OR trigger poll to verify
+              if (!isAgentDoneRef.current) {
+                setAttention('working');
+                setAttentionReason(undefined);
+                setRateLimitMessage(null);
+              } else {
+                // Agent was done but WS says processing — might be restarted, re-poll
+                setTimeout(pollNow, 500);
+              }
             }
             if (msg.state === 'done') {
               // Don't overwrite rate_limit state — user needs to see it
@@ -1009,6 +1085,47 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     } catch (err) { console.warn('[CuiLite] Delete template error:', (err as Error).message); }
   }, []);
 
+  const handleImagePaste = useCallback(async (e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const imageFiles: File[] = [];
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (file) imageFiles.push(file);
+      }
+    }
+    if (imageFiles.length === 0) return;
+    if ((window as any).__cuiServerAlive === false) return;
+    setPasteUploading(true);
+    try {
+      const imageData = await Promise.all(imageFiles.map(file =>
+        new Promise<{ name: string; data: string }>((resolve) => {
+          const reader = new FileReader();
+          reader.onload = (ev) => resolve({ name: file.name, data: ev.target?.result as string });
+          reader.readAsDataURL(file);
+        })
+      ));
+      const resp = await fetch('/api/images', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountId: 'local', images: imageData }),
+        signal: AbortSignal.timeout(60000),
+      });
+      if (!resp.ok) throw new Error(`Upload failed: HTTP ${resp.status}`);
+      const data = await resp.json();
+      if (data.readCommand) {
+        setInput(prev => (prev ? prev + '\n' : '') + data.readCommand);
+        setTimeout(() => textareaRef.current?.focus(), 50);
+      }
+    } catch (err: any) {
+      console.warn('[CuiLitePanel] Paste image upload error:', err.message);
+    } finally {
+      setPasteUploading(false);
+    }
+  }, []);
+
   const handleSend = useCallback(async (overrideMessage?: string) => {
     const rawMsg = overrideMessage || input.trim();
     if (!rawMsg || !sessionId) return;
@@ -1061,6 +1178,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     // Invalidate hash so next poll always applies state (user just sent a message)
     lastPollHashRef.current = '';
     // Mark as working immediately (WS turn-update will deliver content in real-time)
+    setIsAgentDone(false); // Reset so WS events can set working again
     setAttention('working');
     setTimeout(pollNow, 1000);
   }, [input, sessionId, selectedId, workDir, planMode, pollNow, onRouteChange]);
@@ -1148,6 +1266,26 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     }
   }, [sessionId, selectedId, pollNow]);
 
+  const handleHardKill = useCallback(async () => {
+    if (!sessionId) return;
+    if ((window as any).__cuiServerAlive === false) return;
+    if (!confirm('HARD KILL — Alle Prozesse dieser Session sofort beenden?')) return;
+    try {
+      const resp = await fetch(`/api/mission/conversation/${sessionId}/hard-kill`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(15000),
+      });
+      const data = await resp.json().catch(() => ({}));
+      setAttention('idle');
+      setAttentionReason('done');
+      setConvStatus('completed');
+      console.log(`[CuiLite] Hard-kill: ${data.killed} processes killed`);
+      setTimeout(pollNow, 500);
+    } catch (err) {
+      console.error('[CuiLite] Hard-kill error:', err);
+    }
+  }, [sessionId, pollNow]);
+
   const handleQueueNavigate = useCallback((sid: string) => {
     setSessionId(sid);
     setShowQueue(false);
@@ -1160,25 +1298,29 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     onRouteChange?.(`/c/${sid}`);
   }, [onRouteChange, selectedId, persistSession]);
 
-  const handleStartNew = useCallback(async (subject: string, message: string) => {
+  const handleStartNew = useCallback(async (subject: string, message: string, model: string = 'opus') => {
     if ((window as any).__cuiServerAlive === false) {
       console.warn('[CuiLite] Start new blocked: server not alive');
       return false;
     }
+    // Reserve panel immediately so auto-sync doesn't treat it as empty during POST
+    onRouteChange?.('/c/_starting');
     try {
       const resp = await fetch('/api/mission/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accountId: selectedId, message, workDir, subject }),
+        body: JSON.stringify({ accountId: selectedId, message, workDir, subject, model }),
         signal: AbortSignal.timeout(65000),
       });
       if (!resp.ok) {
         console.warn('[CuiLite] Start new HTTP error:', resp.status);
+        onRouteChange?.('');
         return false;
       }
       const data = await resp.json().catch(() => null);
       if (!data || !data.sessionId) {
         console.warn('[CuiLite] Start new: invalid response (missing sessionId)');
+        onRouteChange?.('');
         return false;
       }
       setSessionId(data.sessionId);
@@ -1189,11 +1331,47 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       return true;
     } catch (err) {
       console.warn('[CuiLite] Start new error:', err);
+      onRouteChange?.('');
       return false;
     }
   }, [selectedId, workDir, onRouteChange, persistSession]);
 
   // handleBack removed — conversations stay mounted until Finish
+
+  const handlePause = useCallback(async () => {
+    if (!sessionId) return;
+    const newPaused = !isPaused;
+    try {
+      await fetch(`/api/mission/conversation/${sessionId}/pause`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paused: newPaused }),
+        signal: AbortSignal.timeout(5000),
+      });
+      setIsPaused(newPaused);
+    } catch (e) { console.warn('[CuiLite] Pause error:', e); }
+  }, [sessionId, isPaused]);
+
+  const handleReview = useCallback(async () => {
+    if (!sessionId || reviewState === 'running') return;
+    try {
+      setReviewState('running');
+      const resp = await fetch(`/api/mission/conversation/${sessionId}/review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ error: 'unknown' }));
+        console.warn('[CuiLite] Review error:', err);
+        setReviewState('idle');
+      }
+    } catch (e) {
+      console.warn('[CuiLite] Review error:', e);
+      setReviewState('idle');
+    }
+  }, [sessionId, reviewState]);
 
   const handleFinish = useCallback(async () => {
     if (!sessionId) return;
@@ -1213,21 +1391,21 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   // --- Render ---
   return (
     <div
-      className={attention === 'working' ? 'cui-panel-border--working' : attention === 'needs_attention' ? 'cui-panel-border--attention' : ''}
-      style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--tn-surface)', overflow: 'hidden' }}
+      className={isPaused ? 'cui-panel-border--paused' : attention === 'working' ? 'cui-panel-border--working' : attention === 'needs_attention' ? 'cui-panel-border--attention' : ''}
+      style={{ display: 'flex', flexDirection: 'column', height: '100%', background: isPaused ? 'rgba(122,162,247,0.13)' : 'var(--tn-surface)', overflow: 'hidden' }}
     >
       {/* Header */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8, padding: '4px 8px',
-        background: (attention === 'working' && sessionId) ? '#1e3a5f' : (attention === 'needs_attention' && sessionId) ? (attentionReason === 'rate_limit' ? '#4a1515' : '#4a3215') : (attention === 'idle' && attentionReason === 'done' && sessionId) ? '#1a332a' : 'var(--tn-bg-dark)', borderBottom: (attention === 'working' && sessionId) ? '2px solid #3B82F6' : (attention === 'needs_attention' && sessionId) ? (attentionReason === 'rate_limit' ? '2px solid #EF4444' : '2px solid #F59E0B') : (attention === 'idle' && attentionReason === 'done' && sessionId) ? '2px solid #10B981' : '1px solid var(--tn-border)',
+        background: (attention === 'working' && sessionId) ? '#1a2e1a' : (attention === 'needs_attention' && sessionId) ? (attentionReason === 'rate_limit' ? '#4a1515' : '#3d2a1a') : (attention === 'idle' && attentionReason === 'done' && sessionId) ? '#3d2a1a' : 'var(--tn-bg-dark)', borderBottom: (attention === 'working' && sessionId) ? '2px solid #9ece6a' : (attention === 'needs_attention' && sessionId) ? (attentionReason === 'rate_limit' ? '2px solid #EF4444' : '2px solid #ff9e64') : (attention === 'idle' && attentionReason === 'done' && sessionId) ? '2px solid #ff9e64' : '1px solid var(--tn-border)',
         height: 30, flexShrink: 0,
       }}>
         <div style={{
           width: 8, height: 8, borderRadius: '50%',
-          background: attention === 'working' ? '#3B82F6'
-            : attention === 'needs_attention' ? '#F59E0B'
-            : (isAgentDone && attentionReason === 'done') ? '#9ece6a'
-            : convStatus === 'ongoing' ? '#9ece6a'
+          background: attention === 'working' ? '#9ece6a'
+            : attention === 'needs_attention' ? '#ff9e64'
+            : (isAgentDone && attentionReason === 'done') ? '#ff9e64'
+            : convStatus === 'ongoing' ? '#565f89'
             : account.color,
           animation: attention === 'working' ? 'q-pulse 2s ease-in-out infinite' : undefined,
         }} />
@@ -1288,8 +1466,8 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
 
         {/* Status badge */}
         {attention === 'working' && sessionId && (
-          <span style={{ fontSize: 9, color: '#3B82F6', fontWeight: 600, opacity: 0.8, display: 'flex', alignItems: 'center', gap: 3, overflow: 'hidden', maxWidth: 220 }}>
-            <span style={{ display: 'inline-block', width: 5, height: 5, borderRadius: '50%', background: '#3B82F6', animation: 'q-pulse 1s ease-in-out infinite', flexShrink: 0 }} />
+          <span style={{ fontSize: 9, color: '#9ece6a', fontWeight: 600, opacity: 0.8, display: 'flex', alignItems: 'center', gap: 3, overflow: 'hidden', maxWidth: 220 }}>
+            <span style={{ display: 'inline-block', width: 5, height: 5, borderRadius: '50%', background: '#9ece6a', animation: 'q-pulse 1s ease-in-out infinite', flexShrink: 0 }} />
             {currentTool ? (
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={currentTool.toolDetail || currentTool.toolName}>
                 {currentTool.toolName}{currentTool.toolDetail ? `: ${currentTool.toolDetail}` : ''}
@@ -1297,11 +1475,14 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
             ) : 'arbeitet'}
           </span>
         )}
-        {attention === 'idle' && isAgentDone && sessionId && attentionReason === 'done' && (
-          <span style={{ fontSize: 9, color: '#9ece6a', fontWeight: 600 }}>Wartet</span>
+        {isPaused && sessionId && (
+          <span style={{ fontSize: 9, color: '#7aa2f7', fontWeight: 600, letterSpacing: '0.3px' }}>Pausiert</span>
         )}
-        {attention === 'needs_attention' && sessionId && (
-          <span style={{ fontSize: 9, color: '#F59E0B', fontWeight: 600 }}>
+        {!isPaused && attention === 'idle' && isAgentDone && sessionId && attentionReason === 'done' && (
+          <span style={{ fontSize: 9, color: '#ff9e64', fontWeight: 600 }}>Wartet</span>
+        )}
+        {!isPaused && attention === 'needs_attention' && sessionId && (
+          <span style={{ fontSize: 9, color: attentionReason === 'rate_limit' ? '#EF4444' : '#ff9e64', fontWeight: 600 }}>
             {attentionReason === 'plan' ? 'Plan' : attentionReason === 'question' ? 'Frage' : attentionReason === 'context_overflow' ? 'Zu lang' : attentionReason === 'rate_limit' ? 'Rate Limit' : attentionReason === 'error' || attentionReason === 'send_failed' ? 'Fehler' : attentionReason === 'done' ? 'Wartet' : 'Aktion'}
           </span>
         )}
@@ -1338,6 +1519,35 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
           </button>
         )}
 
+        {/* Review button — starts independent review session */}
+        {sessionId && (
+          <button onClick={handleReview} disabled={reviewState === 'running'}
+            title="Unabhängige Review-Session starten — prüft ob Umsetzung den Anforderungen entspricht"
+            style={{
+              background: reviewState === 'done' ? 'rgba(158,206,106,0.15)' : reviewState === 'running' ? 'rgba(122,162,247,0.1)' : 'transparent',
+              color: reviewState === 'done' ? '#9ece6a' : reviewState === 'running' ? '#7aa2f7' : 'var(--tn-text-muted)',
+              border: `1px solid ${reviewState === 'done' ? '#9ece6a' : reviewState === 'running' ? '#7aa2f7' : 'var(--tn-border)'}`,
+              borderRadius: 4, padding: '1px 8px', fontSize: 10, cursor: reviewState === 'running' ? 'default' : 'pointer', fontWeight: 600,
+              opacity: reviewState === 'running' ? 0.8 : 1,
+            }}>
+            {reviewState === 'running' ? '⧖ Review...' : reviewState === 'done' ? '✓ Review' : 'Review'}
+          </button>
+        )}
+
+        {/* Pause button — suppresses needs_attention without closing */}
+        {sessionId && (
+          <button onClick={handlePause} title={isPaused ? 'Pausierung aufheben' : 'Konversation pausieren'}
+            style={{
+              background: isPaused ? 'rgba(122,162,247,0.15)' : 'transparent',
+              color: isPaused ? '#7aa2f7' : 'var(--tn-text-muted)',
+              border: `1px solid ${isPaused ? '#7aa2f7' : 'var(--tn-border)'}`,
+              borderRadius: 4, padding: '1px 8px', fontSize: 10, cursor: 'pointer', fontWeight: 600,
+              boxShadow: isPaused ? '0 0 6px rgba(122,162,247,0.25)' : 'none',
+            }}>
+            ⏸ {isPaused ? 'Pausiert' : 'Pause'}
+          </button>
+        )}
+
         {/* Finish button — persistent close */}
         {sessionId && (
           <button onClick={handleFinish} title="Konversation abschließen"
@@ -1350,6 +1560,18 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
           </button>
         )}
 
+        {/* Model badge */}
+        {sessionId && sessionModel && (
+          <span style={{
+            fontSize: 9, fontWeight: 600, padding: '1px 5px', borderRadius: 3,
+            background: sessionModel === 'opus' ? '#2d2040' : 'var(--tn-bg)',
+            color: sessionModel === 'opus' ? '#bb9af7' : 'var(--tn-text-muted)',
+            border: `1px solid ${sessionModel === 'opus' ? '#bb9af7' : 'var(--tn-border)'}`,
+            textTransform: 'uppercase', letterSpacing: '0.5px',
+          }}>
+            {sessionModel}
+          </span>
+        )}
         {/* Lite badge */}
         <span style={{ fontSize: 8, color: 'var(--tn-text-muted)', opacity: 0.5 }}>LITE</span>
       </div>
@@ -1386,9 +1608,9 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         }}>
           <span style={{
             fontSize: 12, fontWeight: 700,
-            color: attentionReason === 'plan' ? '#F59E0B'
-              : attentionReason === 'question' ? '#3B82F6'
-              : attentionReason === 'context_overflow' ? '#e0af68'
+            color: attentionReason === 'plan' ? '#ff9e64'
+              : attentionReason === 'question' ? '#ff9e64'
+              : attentionReason === 'context_overflow' ? '#ff9e64'
               : attentionReason === 'rate_limit' ? '#EF4444'
               : '#EF4444',
           }}>
@@ -1550,6 +1772,18 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
                 Stop
               </button>
               <button
+                onClick={handleHardKill}
+                title="HARD KILL — Alle Prozesse sofort beenden (inkl. Zombies)"
+                style={{
+                  padding: '4px 6px', borderRadius: 4, fontSize: 9, cursor: 'pointer', flexShrink: 0,
+                  background: 'rgba(239,68,68,0.15)',
+                  border: '1px solid rgba(239,68,68,0.5)',
+                  color: '#EF4444', fontWeight: 700, letterSpacing: 0.5,
+                }}
+              >
+                KILL
+              </button>
+              <button
                 onClick={() => { setShowTemplateForm(true); setEditingTemplate(null); setNewTplLabel(''); setNewTplMessage(''); }}
                 title="Neues Template erstellen"
                 style={{ padding: '4px 8px', borderRadius: 4, fontSize: 11, cursor: 'pointer', background: 'transparent', border: '1px dashed var(--tn-border)', color: 'var(--tn-text-muted)', opacity: 0.6 }}
@@ -1579,6 +1813,13 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
                   <div style={{ flex: 1 }} />
                   <button onClick={() => { toggleLoop(true); setShowLoopConfig(false); }} style={{ padding: "3px 10px", borderRadius: 3, fontSize: 10, cursor: "pointer", background: "#10B981", border: "none", color: "#fff", fontWeight: 600 }}>Start</button>
                   <button onClick={() => setShowLoopConfig(false)} style={{ padding: "3px 6px", borderRadius: 3, fontSize: 10, cursor: "pointer", background: "transparent", border: "1px solid var(--tn-border)", color: "var(--tn-text-muted)" }}>X</button>
+                </div>
+                <div style={{ display: "flex", gap: 4, marginBottom: 4 }}>
+                  {LOOP_PRESETS.map((preset, i) => (
+                    <button key={i} onClick={() => setLoopMessage(preset.message)} title={preset.message.slice(0, 120)} style={{ padding: "2px 6px", borderRadius: 3, fontSize: 9, cursor: "pointer", background: loopMessage === preset.message ? "rgba(16,185,129,0.2)" : "var(--tn-bg-dark)", border: `1px solid ${loopMessage === preset.message ? "#10B981" : "var(--tn-border)"}`, color: loopMessage === preset.message ? "#10B981" : "var(--tn-text-muted)", fontWeight: loopMessage === preset.message ? 600 : 400 }}>
+                      {preset.label}
+                    </button>
+                  ))}
                 </div>
                 <textarea value={loopMessage} onChange={e => setLoopMessage(e.target.value)} placeholder="Auto-Inject Nachricht..." rows={2} style={{ width: "100%", padding: "4px 6px", fontSize: 10, background: "var(--tn-bg-dark)", color: "var(--tn-text)", border: "1px solid var(--tn-border)", borderRadius: 3, fontFamily: "inherit", resize: "vertical", minHeight: 36, boxSizing: "border-box", lineHeight: "1.3" }} />
                 {lastInjectTime && <div style={{ fontSize: 9, color: "var(--tn-text-muted)", marginTop: 2 }}>Letzter Inject: {new Date(lastInjectTime).toLocaleTimeString("de-DE")}</div>}
@@ -1621,8 +1862,29 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
                 <textarea value={newTplMessage} onChange={e => setNewTplMessage(e.target.value)} placeholder="Prompt-Text eingeben..." rows={3} onKeyDown={e => { if (e.key === 'Escape') { setShowTemplateForm(false); setEditingTemplate(null); } }} style={{ width: '100%', padding: '4px 6px', fontSize: 11, background: 'var(--tn-bg-dark)', color: 'var(--tn-text)', border: '1px solid var(--tn-border)', borderRadius: 3, fontFamily: 'inherit', resize: 'vertical', minHeight: 50, boxSizing: 'border-box', lineHeight: '1.4' }} />
               </div>
             )}
-            {/* Input Row - Textarea + Send */}
+            {/* Input Row - Paste Zone + Textarea + Send */}
             <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
+              {/* Image paste zone — click then Cmd+V */}
+              <div
+                ref={pasteZoneRef}
+                tabIndex={0}
+                onPaste={handleImagePaste}
+                onClick={() => pasteZoneRef.current?.focus()}
+                onFocus={(e) => { e.currentTarget.style.borderColor = '#A855F7'; e.currentTarget.style.color = '#A855F7'; }}
+                onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--tn-border)'; e.currentTarget.style.color = 'var(--tn-text-muted)'; }}
+                title="Hier klicken, dann Cmd+V um Bild einzufuegen"
+                style={{
+                  width: 36, minHeight: 48, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  background: pasteUploading ? 'rgba(168,85,247,0.15)' : 'var(--tn-bg)',
+                  border: `1px solid ${pasteUploading ? '#A855F7' : 'var(--tn-border)'}`,
+                  borderRadius: 4, cursor: 'pointer', outline: 'none',
+                  fontSize: 16, color: pasteUploading ? '#A855F7' : 'var(--tn-text-muted)',
+                  transition: 'border-color 0.2s, color 0.2s',
+                  flexShrink: 0,
+                }}
+              >
+                {pasteUploading ? '\u23F3' : '\uD83D\uDDBC'}
+              </div>
               <textarea
                 ref={textareaRef}
                 value={input}
@@ -1633,12 +1895,12 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
                     handleSend();
                   }
                 }}
-                placeholder={planMode ? 'Aufgabe beschreiben... (Plan-Modus)' : 'Nachricht... (Enter = Senden)'}
+                placeholder={pasteUploading ? 'Bild wird hochgeladen...' : planMode ? 'Aufgabe beschreiben... (Plan-Modus)' : 'Nachricht... (Enter = Senden)'}
                 rows={2}
                 style={{
                   flex: 1, resize: 'vertical', padding: '6px 10px', fontSize: 13,
                   background: 'var(--tn-bg)', color: 'var(--tn-text)',
-                  border: `1px solid ${planMode ? '#F59E0B' : 'var(--tn-border)'}`, borderRadius: 4,
+                  border: `1px solid ${pasteUploading ? '#A855F7' : planMode ? '#F59E0B' : 'var(--tn-border)'}`, borderRadius: 4,
                   fontFamily: 'inherit', maxHeight: 120, minHeight: 48,
                 }}
               />
@@ -1647,7 +1909,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
                 disabled={!input.trim() || isLoading}
                 style={{
                   padding: '6px 14px', borderRadius: 4, fontSize: 12, cursor: 'pointer',
-                  background: input.trim() && !isLoading ? (planMode ? '#F59E0B' : '#3B82F6') : 'var(--tn-border)',
+                  background: input.trim() && !isLoading ? (planMode ? '#ff9e64' : '#9ece6a') : 'var(--tn-border)',
                   border: 'none', color: '#fff', fontWeight: 600,
                   opacity: input.trim() && !isLoading ? 1 : 0.5,
                   alignSelf: 'stretch',

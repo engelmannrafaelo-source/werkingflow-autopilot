@@ -1206,6 +1206,8 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         for (const [sid, nodeId] of mountedSessions) {
           // Keep if session is in active list
           if (activeSessionIds.has(sid)) continue;
+          // Keep panels reserved for new session creation (placeholder route)
+          if (sid === '_starting') continue;
           // Remove stale tab
           try {
             m.doAction(Actions.deleteTab(nodeId));
@@ -1223,15 +1225,19 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         if (missing.length === 0) return;
 
         let mounted = 0;
+        const newlyMounted: Array<{ panelId: string; sessionId: string }> = [];
 
         for (const conv of missing) {
           // Priority 1: Reuse an empty/stale CUI panel — just update its config
           if (emptyPanels.length > 0) {
             const reuseNodeId = emptyPanels.shift()!;
             try {
+              // Merge config to preserve existing panel state (_attention, etc.)
+              const existing = (m.getNodeById(reuseNodeId) as TabNode)?.getConfig?.() ?? {};
               m.doAction(Actions.updateNodeAttributes(reuseNodeId, {
-                config: { initialSessionId: conv.sessionId, accountId: conv.accountId }
+                config: { ...existing, initialSessionId: conv.sessionId, accountId: conv.accountId }
               }));
+              newlyMounted.push({ panelId: reuseNodeId, sessionId: conv.sessionId });
               mounted++;
               continue;
             } catch {}
@@ -1276,27 +1282,22 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
                 config: { initialSessionId: conv.sessionId, accountId: conv.accountId } },
               targetTabsetId, dockLocation, -1
             ));
+            // addNode generates a new nodeId — find it by scanning for the session
+            m.visitNodes((node) => {
+              if (node.getType() === 'tab') {
+                const tab = node as TabNode;
+                if (tab.getConfig()?.initialSessionId === conv.sessionId) {
+                  newlyMounted.push({ panelId: tab.getId(), sessionId: conv.sessionId });
+                }
+              }
+            });
             mounted++;
           } catch (err) { console.warn('[LM] auto-sync addNode failed:', err); }
         }
 
-        // Send navigate-request for all newly mounted conversations
-        // This ensures panels that were reused or just created actually load the session
-        if (mounted > 0 && ws?.readyState === WebSocket.OPEN) {
-          // Collect all CUI panels and their sessions after mounting
-          const panelSessions: Array<{ panelId: string; sessionId: string }> = [];
-          m.visitNodes((node) => {
-            if (node.getType() === 'tab') {
-              const tab = node as TabNode;
-              const comp = tab.getComponent?.();
-              if (comp === 'cui' || comp === 'cui-lite') {
-                const sid = tab.getConfig()?.initialSessionId;
-                if (sid) panelSessions.push({ panelId: tab.getId(), sessionId: sid });
-              }
-            }
-          });
-          // Send navigate requests with staggered timing
-          for (const ps of panelSessions) {
+        // Send navigate-request ONLY for newly mounted panels (not all panels)
+        if (newlyMounted.length > 0 && ws?.readyState === WebSocket.OPEN) {
+          for (const ps of newlyMounted) {
             ws.send(JSON.stringify({ type: 'navigate-request', panelId: ps.panelId, sessionId: ps.sessionId, projectId }));
           }
         }
