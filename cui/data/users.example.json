@@ -22,7 +22,7 @@
       "role": "product-owner",
       "claudeAccountId": "david",
       "allowedPanels": [
-        "cui-lite", "chat", "browser", "preview", "notes",
+        "cui", "cui-lite", "browser", "preview", "notes",
         "mission", "qa-dashboard", "architecture"
       ],
       "allowedWorkspaces": ["werking-energy"],
@@ -38,7 +38,7 @@
       "role": "fachpartner",
       "claudeAccountId": "herbert",
       "allowedPanels": [
-        "cui-lite", "chat", "browser", "preview", "notes"
+        "cui", "cui-lite", "browser", "preview"
       ],
       "allowedWorkspaces": ["werkingsafety"],
       "canGitPush": false,

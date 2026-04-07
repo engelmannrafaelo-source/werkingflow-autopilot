@@ -1,7 +1,6 @@
 import { useCallback, useRef, useState, useEffect, useMemo, lazy, Suspense } from 'react';
 import { Layout, Model, TabNode, TabSetNode, BorderNode, IJsonModel, ITabSetRenderValues, Actions, DockLocation } from 'flexlayout-react';
 import CuiLitePanel from './panels/CuiLitePanel';
-import NativeChat from './panels/NativeChat';
 import FilePreview from './panels/FilePreview';
 import NotesPanel from './panels/NotesPanel';
 import BrowserPanel from './panels/BrowserPanel';
@@ -140,11 +139,6 @@ export default function MobileLayout({ projectId, workDir }: MobileLayoutProps) 
         return wrapPanel('MissionControl', S(<MissionControl projectId={projectId} workDir={workDir} />));
       case 'mission-chat':
         return wrapPanel('MissionChat', <CuiLitePanel accountId={config.accountId || 'rafael'} projectId="mission-chat" workDir="/root/orchestrator/workspaces/mission-chat" panelId={nodeId} isTabVisible={node.isVisible()} />);
-      case 'chat': {
-        const accountId = config.accountId || 'rafael';
-        const PROXY_PORTS: Record<string, number> = { rafael: 5001, engelmann: 5002, office: 5003, local: 5004, gemini: 5005 };
-        return wrapPanel('NativeChat', <NativeChat accountId={accountId} proxyPort={PROXY_PORTS[accountId] || 5001} />);
-      }
       case 'office': case 'virtual-office':
         return wrapPanel('OfficePanel', S(<OfficePanel projectId={projectId} workDir={workDir} />));
       case 'knowledge': case 'knowledge-fullscreen':
