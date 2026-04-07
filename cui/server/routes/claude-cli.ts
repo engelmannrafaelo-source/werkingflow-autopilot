@@ -802,6 +802,7 @@ async function reconnectExistingSessions(): Promise<void> {
       const pidContent = await fsp.readFile(pidPath, 'utf8');
       const pidLines = pidContent.trim().split('\n');
       const claudePid = parseInt(pidLines[pidLines.length - 1], 10);
+      const wrapperPid = pidLines.length > 1 ? parseInt(pidLines[0], 10) : claudePid;
 
       // Check if process is alive
       try {
@@ -833,7 +834,7 @@ async function reconnectExistingSessions(): Promise<void> {
       const tailProc = spawn('tail', ['-f', '-n', '0', stdoutPath], { stdio: ['ignore', 'pipe', 'ignore'] });
 
       const entry: PersistentProcess = {
-        mode: 'persistent', fifoFd, tailProc, claudePid, stdoutFile: stdoutPath,
+        mode: 'persistent', fifoFd, tailProc, claudePid, wrapperPid, stdoutFile: stdoutPath,
         sessionId, accountId, startedAt: Date.now(), stdoutBuffer: '',
       };
       activeProcesses.set(sessionId, entry);
