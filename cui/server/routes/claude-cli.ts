@@ -16,6 +16,7 @@ import { promises as fsp, createReadStream, existsSync, readFileSync, writeSync 
 import { createInterface } from 'readline';
 import type { ConvAttentionState, AttentionReason, SessionState, ToolExecutionInfo } from './shared/types.js';
 import { IS_LOCAL_MODE } from './state.js';
+import { hasIncompleteToolUse, getOriginalCwd } from './shared/jsonl.js';
 
 // --- Account Configuration ---
 // Account mapping (ID = label = consistent):
@@ -74,6 +75,10 @@ type ClaudeProcess = DirectProcess | PersistentProcess;
 
 const activeProcesses = new Map<string, ClaudeProcess>();
 const MAX_ACTIVE_PROCESSES = 48;
+
+// --- Auto-Continue: retry counter per session (prevents infinite loops) ---
+const _autoContinueCount = new Map<string, number>();
+const AUTO_CONTINUE_MAX_RETRIES = 3;
 
 // --- Dependencies ---
 
@@ -359,6 +364,40 @@ function handleStdoutLine(line: string, entry: ClaudeProcess): { sessionId?: str
         _broadcast({ type: 'cui-state', cuiId: entry.accountId, sessionId: entry.sessionId, state: 'done' });
         _broadcast({ type: 'cui-response-ready', cuiId: entry.accountId, sessionId: entry.sessionId });
         _setSessionState(entry.sessionId, entry.accountId, 'idle', 'done', entry.sessionId);
+
+        // --- Auto-Continue: if last assistant message was tool_use without text, resume ---
+        if (entry.sessionId) {
+          const sid = entry.sessionId;
+          const retryCount = _autoContinueCount.get(sid) || 0;
+          if (retryCount < AUTO_CONTINUE_MAX_RETRIES) {
+            // Defer check to allow JSONL to flush
+            setTimeout(() => {
+              try {
+                if (!hasIncompleteToolUse(sid)) return;
+                const newCount = (_autoContinueCount.get(sid) || 0) + 1;
+                _autoContinueCount.set(sid, newCount);
+                const workDir = getOriginalCwd(sid) || '/root/orchestrator/workspaces/diverse';
+                console.log(`[AutoContinue] Session ${sid.slice(0, 8)}: last message was tool_use only, auto-continuing (attempt ${newCount}/${AUTO_CONTINUE_MAX_RETRIES})`);
+                _setSessionState(sid, entry.accountId, 'working', undefined, sid);
+                _broadcast({ type: 'cui-state', cuiId: entry.accountId, sessionId: sid, state: 'processing' });
+                startConversation(entry.accountId, '', workDir, sid).then((res) => {
+                  if (!res.ok) {
+                    console.error(`[AutoContinue] Session ${sid.slice(0, 8)}: resume failed: ${res.error}`);
+                    _setSessionState(sid, entry.accountId, 'idle', 'done', sid);
+                    _broadcast({ type: 'cui-state', cuiId: entry.accountId, sessionId: sid, state: 'done' });
+                  }
+                }).catch((err) => {
+                  console.error(`[AutoContinue] Session ${sid.slice(0, 8)}: error: ${err instanceof Error ? err.message : err}`);
+                  _setSessionState(sid, entry.accountId, 'idle', 'done', sid);
+                });
+              } catch (err) {
+                console.error(`[AutoContinue] Session ${sid.slice(0, 8)}: check failed: ${err instanceof Error ? err.message : err}`);
+              }
+            }, 2000);
+          } else if (retryCount >= AUTO_CONTINUE_MAX_RETRIES) {
+            console.warn(`[AutoContinue] Session ${sid.slice(0, 8)}: max retries (${AUTO_CONTINUE_MAX_RETRIES}) reached, staying idle`);
+          }
+        }
       }
     }
 
@@ -415,6 +454,11 @@ export async function startConversation(
 
   if (activeProcesses.size >= MAX_ACTIVE_PROCESSES) {
     return { sessionId: '', ok: false, error: `Max active processes reached (${MAX_ACTIVE_PROCESSES})` };
+  }
+
+  // Reset auto-continue counter on manual conversation start (non-empty prompt)
+  if (prompt && resumeSessionId) {
+    _autoContinueCount.delete(resumeSessionId);
   }
 
   // Kill existing process if resuming same sessionId
@@ -1071,6 +1115,9 @@ export function sendMessage(sessionId: string, message: string): boolean {
     });
     return false;
   }
+
+  // Reset auto-continue counter on manual user message
+  _autoContinueCount.delete(sessionId);
 
   const payload = JSON.stringify({ type: 'user', message: { role: 'user', content: message } });
   const ok = writeToProcess(entry, payload + '\n');

@@ -490,6 +490,65 @@ export function unstickConversation(sessionId: string): number {
 
 
 // ---------------------------------------------------------------------------
+// hasIncompleteToolUse — detect sessions that ended mid-tool-use
+// ---------------------------------------------------------------------------
+// Returns true if the last assistant message contains only tool_use blocks
+// (no text with actual content). This indicates the session was interrupted
+// while Claude was still working and should be auto-continued.
+
+export function hasIncompleteToolUse(sessionId: string): boolean {
+  const found = findJsonlPathAllAccounts(sessionId);
+  if (!found) return false;
+
+  try {
+    const stat = statSync(found.path);
+    if (stat.size === 0) return false;
+
+    // Read last 16KB to find the last assistant message
+    const TAIL_SIZE = 16384;
+    const fd = openSync(found.path, 'r');
+    const readSize = Math.min(TAIL_SIZE, stat.size);
+    const buf = Buffer.alloc(readSize);
+    readSync(fd, buf, 0, readSize, stat.size - readSize);
+    closeSync(fd);
+
+    const tailStr = buf.toString('utf-8');
+    const lines = tailStr.split('\n').filter(l => l.trim());
+
+    // Walk backwards to find last assistant message
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const obj = JSON.parse(lines[i]);
+        if (!obj.message?.role) continue;
+
+        if (obj.message.role === 'assistant') {
+          const content = obj.message.content;
+          if (!Array.isArray(content) || content.length === 0) return false;
+
+          const hasToolUse = content.some((b: any) => b.type === 'tool_use');
+          if (!hasToolUse) return false;
+
+          // Check if there's meaningful text alongside tool_use
+          const hasText = content.some((b: any) =>
+            b.type === 'text' && typeof b.text === 'string' && b.text.trim().length > 0
+          );
+
+          // Incomplete = has tool_use but no meaningful text
+          return !hasText;
+        }
+
+        // If we hit a user message first, the conversation ended properly
+        if (obj.message.role === 'user') return false;
+      } catch { /* skip unparseable lines at boundary */ }
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // compactJsonlForResume — truncate large tool_results before --resume
 // ---------------------------------------------------------------------------
 // When a JSONL file is too large for Claude's context window, --resume triggers
