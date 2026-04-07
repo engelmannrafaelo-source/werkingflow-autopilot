@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import type { DocumentEdit } from '../../../server/document-manager';
+import { getPathConfig } from '../../utils/paths';
 
 const API = '/api';
 
@@ -123,7 +124,7 @@ export default function ReviewQueue() {
   }
 
   function getRelativePath(fullPath: string): string {
-    return fullPath.replace('/root/projekte/werkingflow/business/', '');
+    return fullPath.replace(getPathConfig().businessDir + '/', '');
   }
 
   if (loading) {

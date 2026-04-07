@@ -11,12 +11,12 @@
  *   2. GET /api/organizations/{uuid}/usage → structured usage JSON
  *
  * Session keys from:
- *   - Env vars: CLAUDE_SESSION_RAFAEL, CLAUDE_SESSION_OFFICE, CLAUDE_SESSION_ENGELMANN
+ *   - Env vars: CLAUDE_SESSION_RAFAEL, CLAUDE_SESSION_OFFICE, CLAUDE_SESSION_ENGELMANN, CLAUDE_SESSION_WERKING
  *   - Playwright session files: /root/projekte/local-storage/backends/cui/playwright-sessions/{account}.json
  *
  * Usage:
  *   npx tsx scripts/scrape-claude-usage.ts
- *   npx tsx scripts/scrape-claude-usage.ts --account rafael
+ *   npx tsx scripts/scrape-claude-usage.ts --account engelmann
  */
 
 import { execSync } from "child_process";
@@ -28,9 +28,10 @@ const CURL_LIB = "/tmp";
 const STORAGE_DIR = "/root/projekte/local-storage/backends/cui/playwright-sessions";
 
 const ACCOUNTS: { id: string; displayName: string; envVar: string }[] = [
-  { id: "rafael", displayName: "Gmail", envVar: "CLAUDE_SESSION_RAFAEL" },
-  { id: "office", displayName: "Office", envVar: "CLAUDE_SESSION_OFFICE" },
   { id: "engelmann", displayName: "Engelmann", envVar: "CLAUDE_SESSION_ENGELMANN" },
+  { id: "office", displayName: "Office", envVar: "CLAUDE_SESSION_OFFICE" },
+  { id: "gmail", displayName: "Gmail", envVar: "CLAUDE_SESSION_RAFAEL" },
+  { id: "werking", displayName: "Werking", envVar: "CLAUDE_SESSION_WERKING" },
 ];
 
 // ── Output interface (backward-compatible with bridge.ts consumer) ──

@@ -14,7 +14,8 @@ process.on('unhandledRejection', (reason) => {
 // Set process name based on mode — visible in Activity Monitor / Dock
 const isLocalMode = process.argv.includes('--local');
 const isDevMode = process.argv.includes('--dev');
-const appLabel = isDevMode ? 'CUI Dev' : isLocalMode ? 'CUI Local' : 'CUI Remote';
+const isPartnerMode = process.argv.includes('--partner');
+const appLabel = isDevMode ? 'CUI Dev' : isLocalMode ? 'CUI Local' : isPartnerMode ? 'CUI Partner' : 'CUI Remote';
 app.name = appLabel;
 if (process.platform === 'darwin') {
   process.title = appLabel;
@@ -97,20 +98,22 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.cjs'),
-      additionalArguments: ['--cui-mode=' + (isDevMode ? 'dev' : isLocalMode ? 'local' : 'remote')],
+      additionalArguments: ['--cui-mode=' + (isDevMode ? 'dev' : isLocalMode ? 'local' : isPartnerMode ? 'partner' : 'remote')],
     },
   });
 
-  // CUI Workspace — three modes:
+  // CUI Workspace — four modes:
   //   (default)  → Remote server (100.121.161.109:4005)
+  //   --partner  → Partner server (partner.werking.tools)
   //   --local    → Local production server (localhost:4005)
   //   --dev      → Vite dev server (localhost:5173)
   const REMOTE_URL = 'http://100.121.161.109:4005';
+  const PARTNER_URL = 'https://partner.werking.tools';
   const LOCAL_URL = 'http://localhost:4005';
   const DEV_URL = 'http://localhost:5173';
 
-  const baseURL = isDevMode ? DEV_URL : isLocalMode ? LOCAL_URL : REMOTE_URL;
-  const modeLabel = isDevMode ? 'Dev' : isLocalMode ? 'Local' : 'Remote';
+  const baseURL = isDevMode ? DEV_URL : isLocalMode ? LOCAL_URL : isPartnerMode ? PARTNER_URL : REMOTE_URL;
+  const modeLabel = isDevMode ? 'Dev' : isLocalMode ? 'Local' : isPartnerMode ? 'Partner' : 'Remote';
   const targetURL = `${baseURL}?mode=${modeLabel.toLowerCase()}`;
 
   mainWindow.setTitle(`CUI Workspace [${modeLabel}]`);
@@ -133,7 +136,7 @@ function createWindow() {
 app.whenReady().then(() => {
   // macOS Dock: show mode badge so user can distinguish instances
   if (process.platform === 'darwin' && app.dock) {
-    const badge = isDevMode ? 'DEV' : isLocalMode ? 'L' : 'R';
+    const badge = isDevMode ? 'DEV' : isLocalMode ? 'L' : isPartnerMode ? 'P' : 'R';
     app.dock.setBadge(badge);
   }
 
@@ -202,6 +205,13 @@ app.whenReady().then(() => {
   }
   stripCSP(session.defaultSession);
   stripCSP(session.fromPartition('persist:browser'));
+
+  // Inject X-CUI-Session header into all requests from the browser webview partition
+  // This allows apps to detect they are running inside CUI (e.g. DevStatusBar visibility)
+  session.fromPartition('persist:browser').webRequest.onBeforeSendHeaders((details, callback) => {
+    details.requestHeaders['X-CUI-Session'] = 'true';
+    callback({ requestHeaders: details.requestHeaders });
+  });
 
   createWindow();
 

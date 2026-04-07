@@ -1,38 +1,44 @@
 import { useState, useMemo, useCallback, type JSX } from 'react';
 import type { IJsonModel } from 'flexlayout-react';
-const ACCOUNT_LABELS: Record<string, string> = { rafael: "Engelmann", engelmann: "Gmail", office: "Office", local: "Lokal", gemini: "Gemini" };
+import { useAuth } from '../contexts/AuthContext';
+import { ACCOUNTS } from '../types';
+const ACCOUNT_LABELS: Record<string, string> = Object.fromEntries(ACCOUNTS.map(a => [a.id, a.label]));
 
 // --- Panel options for cell assignment ---
 const PANEL_OPTIONS = [
-  { value: 'cui:rafael', label: 'CUI: Engelmann' },
-  { value: 'cui:engelmann', label: 'CUI: Gmail' },
+  { value: 'cui:engelmann', label: 'CUI: Engelmann' },
   { value: 'cui:office', label: 'CUI: Office' },
+  { value: 'cui:gmail', label: 'CUI: Gmail' },
   { value: 'cui:local', label: 'CUI: Local' },
   { value: 'cui:gemini', label: 'CUI: Gemini' },
-  { value: 'chat:rafael', label: 'Chat: Engelmann 🖼️' },
-  { value: 'chat:engelmann', label: 'Chat: Gmail 🖼️' },
+  { value: 'cui:werking', label: 'CUI: Werking' },
+  { value: 'chat:engelmann', label: 'Chat: Engelmann 🖼️' },
   { value: 'chat:office', label: 'Chat: Office 🖼️' },
+  { value: 'chat:gmail', label: 'Chat: Gmail 🖼️' },
   { value: 'chat:local', label: 'Chat: Local 🖼️' },
   { value: 'chat:gemini', label: 'Chat: Gemini 🖼️' },
+  { value: 'chat:werking', label: 'Chat: Werking 🖼️' },
   { value: 'images', label: 'Images' },
   { value: 'browser', label: 'Browser' },
   { value: 'preview', label: 'File Preview' },
   { value: 'notes', label: 'Notes' },
   { value: 'mission', label: 'Mission Control' },
-  { value: 'office', label: 'Virtual Office 👥' },
+  { value: 'gmail', label: 'Virtual Office 👥' },
   { value: 'admin-wr', label: 'Werking Report Admin' },
   { value: 'linkedin', label: 'LinkedIn Marketing 🔗' },
   { value: 'bridge-monitor', label: 'Bridge Monitor' },
   { value: 'infisical-monitor', label: 'Infisical Monitor 🔐' },
   { value: 'qa-dashboard', label: 'QA Dashboard 📊' },
   { value: 'administration', label: 'Administration 🔧' },
+  { value: 'architecture', label: 'Architecture Explorer' },
+  { value: 'report-builder', label: 'Report Builder' },
 ];
 
 const CELL_DEFAULTS = [
-  'cui:rafael', 'cui:engelmann', 'preview', 'browser',
-  'notes', 'cui:office', 'cui:local', 'browser',
-  'preview', 'notes', 'cui:rafael', 'cui:engelmann',
-  'browser', 'preview', 'notes', 'cui:office',
+  'cui:gmail', 'cui:gmail', 'preview', 'browser',
+  'notes', 'cui:gmail', 'cui:local', 'browser',
+  'preview', 'notes', 'cui:gmail', 'cui:gmail',
+  'browser', 'preview', 'notes', 'cui:gmail',
 ];
 
 // --- Grid templates ---
@@ -104,12 +110,14 @@ function panelFromValue(value: string, workDir: string): PanelConfig {
     case 'preview':  return { component: 'preview', name: 'File Preview', config: { watchPath: workDir } };
     case 'notes':    return { component: 'notes', name: 'Notes', config: {} };
     case 'mission':  return { component: 'mission', name: 'Mission Control', config: {} };
-    case 'office':   return { component: 'office', name: 'Virtual Office', config: {} };
+    case 'gmail':   return { component: 'gmail', name: 'Virtual Office', config: {} };
     case 'admin-wr': return { component: 'admin-wr', name: 'Werking Report Admin', config: {} };
     case 'linkedin':                return { component: 'linkedin', name: 'LinkedIn Marketing 🔗', config: {} };
     case 'bridge-monitor':          return { component: 'bridge-monitor', name: 'Bridge Monitor', config: {} };
     case 'infisical-monitor':       return { component: 'infisical-monitor', name: 'Infisical Monitor 🔐', config: {} };
     case 'administration':          return { component: 'administration', name: 'Administration 🔧', config: {} };
+    case 'architecture':            return { component: 'architecture', name: 'Architecture Explorer', config: {} };
+    case 'report-builder':          return { component: 'report-builder', name: 'Report Builder', config: {} };
     default:                        throw new Error(`Unknown panel type: ${value}`);
   }
 }
@@ -293,7 +301,7 @@ function cellColor(value: string): string {
     case 'preview': return 'var(--tn-yellow)';
     case 'notes':   return 'var(--tn-purple)';
     case 'mission': return 'var(--tn-orange)';
-    case 'office':  return 'var(--tn-blue)';
+    case 'gmail':  return 'var(--tn-blue)';
     default:        return 'var(--tn-text-muted)';
   }
 }
@@ -306,6 +314,17 @@ interface LayoutBuilderProps {
 }
 
 export default function LayoutBuilder({ workDir, onApply, onClose }: LayoutBuilderProps) {
+  const { canAccessPanel } = useAuth();
+
+  // Filter panel options based on user's allowed panels
+  const filteredPanelOptions = useMemo(() =>
+    PANEL_OPTIONS.filter(opt => {
+      // Panel value format: 'component' or 'component:account'
+      const component = opt.value.split(':')[0];
+      return canAccessPanel(component);
+    }),
+  [canAccessPanel]);
+
   const [templateId, setTemplateId] = useState('grid-2x2');
   const [cells, setCells] = useState<string[]>(CELL_DEFAULTS.slice(0, 4));
 
@@ -453,12 +472,12 @@ export default function LayoutBuilder({ workDir, onApply, onClose }: LayoutBuild
                   }}
                 >
                   <optgroup label="CUI">
-                    {PANEL_OPTIONS.filter(o => o.value.startsWith('cui:')).map(o => (
+                    {filteredPanelOptions.filter(o => o.value.startsWith('cui:')).map(o => (
                       <option key={o.value} value={o.value}>{o.label}</option>
                     ))}
                   </optgroup>
                   <optgroup label="Tools">
-                    {PANEL_OPTIONS.filter(o => !o.value.startsWith('cui:')).map(o => (
+                    {filteredPanelOptions.filter(o => !o.value.startsWith('cui:')).map(o => (
                       <option key={o.value} value={o.value}>{o.label}</option>
                     ))}
                   </optgroup>

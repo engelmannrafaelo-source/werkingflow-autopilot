@@ -2,9 +2,9 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
 
 const ACCOUNTS = [
-  { id: 'rafael', label: 'Gmail (Remote)' },
   { id: 'engelmann', label: 'Engelmann (Remote)' },
   { id: 'office', label: 'Office (Remote)' },
+  { id: 'gmail', label: 'Gmail (Remote)' },
   { id: 'local', label: 'Local' },
 ];
 
@@ -22,7 +22,7 @@ interface UploadResult {
 }
 
 export default function ImageDrop() {
-  const [accountId, setAccountId] = useState('rafael');
+  const [accountId, setAccountId] = useState('engelmann');
   const [images, setImages] = useState<UploadedImage[]>([]);
   const [result, setResult] = useState<UploadResult | null>(null);
   const [uploading, setUploading] = useState(false);

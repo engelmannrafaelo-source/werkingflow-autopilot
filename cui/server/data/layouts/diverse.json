@@ -1,0 +1,110 @@
+{
+  "global": {
+    "splitterSize": 4,
+    "tabSetMinWidth": 200,
+    "tabSetMinHeight": 150
+  },
+  "borders": [],
+  "layout": {
+    "type": "row",
+    "id": "#54a16de4-de7f-436f-b5eb-849a0fa085c8",
+    "children": [
+      {
+        "type": "tabset",
+        "id": "#c158833f-3ea0-47e2-be2b-981c820def5a",
+        "weight": 29.90688028727012,
+        "selected": 4,
+        "children": [
+          {
+            "type": "tab",
+            "id": "#4ba6a41e-689d-4b8f-8350-c3650b683c0a",
+            "name": "QA Dashboard",
+            "component": "qa-dashboard",
+            "config": {}
+          },
+          {
+            "type": "tab",
+            "id": "#40d90e5c-ee96-4603-90ab-eb824b2b9f76",
+            "name": "File Preview",
+            "component": "preview",
+            "config": {
+              "watchPath": "/root/projekte/werkingflow/autopilot/cui/data/active/diverse"
+            }
+          },
+          {
+            "type": "tab",
+            "id": "#5b9591fa-6bc1-4f45-9e61-c196e4e47e67",
+            "name": "Notes",
+            "component": "notes",
+            "config": {}
+          },
+          {
+            "type": "tab",
+            "id": "#6f3790d6-f590-4465-904b-9b46c1ee9f44",
+            "name": "Browser",
+            "component": "browser",
+            "config": {
+              "url": "https://acro-community.vercel.app/kalender"
+            }
+          },
+          {
+            "type": "tab",
+            "id": "#70f9d22a-6ac6-4c0f-afa9-de059aa99618",
+            "name": "Images",
+            "component": "images",
+            "config": {}
+          }
+        ],
+        "active": true
+      },
+      {
+        "type": "tabset",
+        "id": "#7d645cf6-275a-4420-ae18-d3d6c3d737e5",
+        "weight": 37.09420348371414,
+        "selected": 4,
+        "children": [
+          {
+            "type": "tab",
+            "id": "#4282d11a-a2ea-4cd0-b43a-409a359bb0a8",
+            "name": "QA Dashboard",
+            "component": "qa-dashboard",
+            "config": {}
+          },
+          {
+            "type": "tab",
+            "id": "#f7977fc0-b541-438f-aa40-85879841b08b",
+            "name": "File Preview",
+            "component": "preview",
+            "config": {
+              "watchPath": "/root/projekte/werkingflow/autopilot/cui/data/active/diverse"
+            }
+          },
+          {
+            "type": "tab",
+            "id": "#40dd6da7-ebb1-4f5f-9873-2c1306c6245e",
+            "name": "Images",
+            "component": "images",
+            "config": {}
+          },
+          {
+            "type": "tab",
+            "id": "#2ed906e9-84ed-4b76-a293-577bc62477a6",
+            "name": "Browser",
+            "component": "browser",
+            "config": {
+              "url": "https://partner.werking.tools/"
+            }
+          },
+          {
+            "type": "tab",
+            "id": "#5edda0ba-73f3-4ab0-8b8c-c0e9974c1da9",
+            "name": "QA Dashboard",
+            "component": "qa-dashboard",
+            "config": {}
+          }
+        ]
+      }
+    ]
+  },
+  "popouts": {}
+}

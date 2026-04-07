@@ -1,0 +1,76 @@
+{
+  "03ea656f-47ff-410a-8a72-cf81b73d5058": {
+    "state": "idle",
+    "since": 1774864252216,
+    "accountId": "gmail",
+    "sessionId": "03ea656f-47ff-410a-8a72-cf81b73d5058",
+    "reason": "done"
+  },
+  "0537afa6-7c2b-4b82-b055-67819705c16d": {
+    "state": "idle",
+    "since": 1774863851562,
+    "accountId": "gmail",
+    "sessionId": "0537afa6-7c2b-4b82-b055-67819705c16d",
+    "reason": "done"
+  },
+  "11bcd314-0291-4892-870d-6b7a49f8d513": {
+    "state": "working",
+    "since": 1774865395027,
+    "accountId": "gmail",
+    "sessionId": "11bcd314-0291-4892-870d-6b7a49f8d513"
+  },
+  "1b1d8673-b2e6-4bdb-b65c-f71950f83df3": {
+    "state": "idle",
+    "reason": "done",
+    "since": 1774861846739,
+    "accountId": "gmail",
+    "sessionId": "1b1d8673-b2e6-4bdb-b65c-f71950f83df3"
+  },
+  "674f210f-6f4c-4455-8e6b-65b43114ee75": {
+    "state": "working",
+    "since": 1774865395034,
+    "accountId": "engelmann",
+    "sessionId": "674f210f-6f4c-4455-8e6b-65b43114ee75"
+  },
+  "6e777096-c43a-41a2-882e-e5a0ecc527f8": {
+    "state": "idle",
+    "reason": "done",
+    "since": 1774865405084,
+    "accountId": "gmail",
+    "sessionId": "6e777096-c43a-41a2-882e-e5a0ecc527f8"
+  },
+  "c0112d15-a8b0-4cd0-9f09-7e45bdd5d7f1": {
+    "state": "idle",
+    "since": 1774863851562,
+    "accountId": "gmail",
+    "sessionId": "c0112d15-a8b0-4cd0-9f09-7e45bdd5d7f1",
+    "reason": "done"
+  },
+  "c41510e8-e7b4-45c1-abd2-7fca9f6d2988": {
+    "state": "idle",
+    "reason": "done",
+    "since": 1774861846752,
+    "accountId": "engelmann",
+    "sessionId": "c41510e8-e7b4-45c1-abd2-7fca9f6d2988"
+  },
+  "ce456b98-72b1-449a-a8ac-f9d2bbbe3aff": {
+    "state": "idle",
+    "since": 1774864252216,
+    "accountId": "engelmann",
+    "sessionId": "ce456b98-72b1-449a-a8ac-f9d2bbbe3aff",
+    "reason": "done"
+  },
+  "e497c125-4a5b-4fd6-becd-45bffe48ed8f": {
+    "state": "working",
+    "since": 1774865395057,
+    "accountId": "gmail",
+    "sessionId": "e497c125-4a5b-4fd6-becd-45bffe48ed8f"
+  },
+  "fc9ac79a-e4b7-4e9d-857f-2b05c8cf873c": {
+    "state": "idle",
+    "reason": "done",
+    "since": 1774865404063,
+    "accountId": "gmail",
+    "sessionId": "fc9ac79a-e4b7-4e9d-857f-2b05c8cf873c"
+  }
+}

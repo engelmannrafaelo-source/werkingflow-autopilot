@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
 import { SessionStoreProvider } from './contexts/SessionStore';
+import { AuthProvider } from './contexts/AuthContext';
 import ErrorBoundary from './components/ErrorBoundary';
 import './styles/tokyo-night.css';
 import 'flexlayout-react/style/dark.css';
@@ -25,9 +26,11 @@ if (isTouchDevice && !isMobile && !isDesktopForced) {
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <ErrorBoundary componentName="App">
-        <SessionStoreProvider>
-          <App />
-        </SessionStoreProvider>
+        <AuthProvider>
+          <SessionStoreProvider>
+            <App />
+          </SessionStoreProvider>
+        </AuthProvider>
       </ErrorBoundary>
     </StrictMode>
   );

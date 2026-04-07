@@ -4,6 +4,7 @@
 import { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { getPathConfig } from '../../utils/paths';
 
 interface DocumentViewerModalProps {
   documentPath: string;
@@ -25,7 +26,7 @@ export default function DocumentViewerModal({ documentPath, onClose }: DocumentV
       setLoading(true);
       setError(null);
 
-      const fullPath = `/root/projekte/werkingflow/business/${documentPath}`;
+      const fullPath = `${getPathConfig().businessDir}/${documentPath}`;
       const response = await fetch(`/api/file?path=${encodeURIComponent(fullPath)}`, { signal: AbortSignal.timeout(20000) });
 
       if (!response.ok) throw new Error(`Failed to load document (${response.status})`);
@@ -119,6 +120,7 @@ export default function DocumentViewerModal({ documentPath, onClose }: DocumentV
             flex: 1,
             overflow: 'auto',
             padding: '2rem',
+            minHeight: 0,
           }}
         >
           {loading && (

@@ -1,12 +1,13 @@
 import { useState, useCallback, useEffect, useRef, lazy, Suspense } from 'react';
 import ProjectTabs from './components/ProjectTabs';
 import LayoutManager from './components/LayoutManager';
+import LoginPage from './components/LoginPage';
 const MissionControl = lazy(() => import('./components/panels/MissionControl'));
-const SyncPanel = lazy(() => import('./components/panels/SyncPanel').then(m => ({ default: m.SyncPanel })));
 const MobileLayout = lazy(() => import('./components/MobileLayout'));
 import AllChatsView from './components/AllChatsView';
 import type { Project } from './types';
 import { useSessionStore } from './contexts/SessionStore';
+import { useAuth } from './contexts/AuthContext';
 import { IS_LOCAL, IS_MOBILE } from './env';
 
 const API = '/api';
@@ -206,6 +207,22 @@ function DeleteDialog({ projectName, onConfirm, onClose }: { projectName: string
 }
 
 export default function App() {
+  const { authenticated, authEnabled } = useAuth();
+
+  // Auth gate: show login page when auth is enabled and user isn't authenticated
+  if (authEnabled && authenticated === false) {
+    return <LoginPage />;
+  }
+
+  // Still checking auth status — show nothing (prevents flash)
+  if (authenticated === null) {
+    return <div style={{ background: '#1a1b26', height: '100vh' }} />;
+  }
+
+  return <AppContent />;
+}
+
+function AppContent() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeId, _setActiveId] = useState(() => {
     try { return localStorage.getItem('cui-active-project') || ''; } catch (err) { console.warn('[App] localStorage activeId read failed:', err); return ''; }
@@ -220,11 +237,10 @@ export default function App() {
   const [editTarget, setEditTarget] = useState<Project | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   // cuiStates + serverAlive from shared SessionStore (single WS)
-  const { sendWs, addMessageHandler } = useSessionStore();
-  const [projectAttention, setProjectAttention] = useState<Record<string, 'working' | 'needs_attention'>>({}); // projectId → state
+  const { sendWs, addMessageHandler, sessionStates, sessionStatesTick } = useSessionStore();
+  const [projectAttention, setProjectAttention] = useState<Record<string, 'working' | 'needs_attention' | 'idle'>>({}); // projectId → state
   const [showMission, setShowMission] = useState(false);
   const [showAllChats, setShowAllChats] = useState(false);
-  const [showSync, setShowSync] = useState(false);
   const [pendingActivation, setPendingActivation] = useState<Array<{ projectId: string; conversations: Array<{ sessionId: string; accountId: string }> }> | null>(null);
 
   // Auto-reload when bundle changes (detects Syncthing-triggered rebuilds)
@@ -377,23 +393,108 @@ export default function App() {
     });
   }, [addMessageHandler, sendWs, checkForUpdate]);
 
-  const handleAttentionChange = useCallback((projectId: string, needsAttention: boolean, state?: 'working' | 'needs_attention') => {
-    setProjectAttention(prev => {
-      if (needsAttention && state) {
-        if (prev[projectId] === state) return prev;
-        return { ...prev, [projectId]: state };
-      }
-      if (!needsAttention) {
-        if (!(projectId in prev)) return prev;
-        const next = { ...prev };
-        delete next[projectId];
-        return next;
-      }
-      return prev;
-    });
-  }, []);
+  // handleAttentionChange removed — projectAttention now computed directly from SessionStore + Conversations API
 
   // cuiState reset not needed — SessionStore tracks from WS events
+
+  // === Project-level attention from SessionStore + Conversations API ===
+  // Split into two effects:
+  // 1. Conversation fetching (every 5s, depends only on projects)
+  // 2. Attention computation (reacts to sessionStatesTick from WS events)
+  const convCacheRef = useRef<Array<{ sessionId: string; projectName: string; status: string; updatedAt: string; attentionState?: string; attentionReason?: string; isSubSession?: boolean }>>([]);
+  const convTickRef = useRef(0);
+  const [convTick, setConvTick] = useState(0);
+
+  // Effect 1: Fetch conversations periodically
+  useEffect(() => {
+    if (!projects.length) return;
+    const fetchConvs = () => {
+      fetch('/api/mission/conversations', { signal: AbortSignal.timeout(3000) })
+        .then(r => r.json())
+        .then(data => {
+          const convs = Array.isArray(data) ? data : data?.conversations || [];
+          convCacheRef.current = convs.map((c: any) => ({
+            sessionId: c.sessionId,
+            projectName: c.projectName || '',
+            status: c.status || 'completed',
+            updatedAt: c.updatedAt || '',
+            attentionState: c.attentionState,
+            attentionReason: c.attentionReason,
+            isSubSession: c.isSubSession || false,
+          }));
+          convTickRef.current++;
+          setConvTick(convTickRef.current);
+        })
+        .catch(() => {}); // Keep cached data on error
+    };
+    fetchConvs();
+    const interval = setInterval(fetchConvs, 5000);
+    return () => clearInterval(interval);
+  }, [projects]);
+
+  // Effect 2: Compute attention — fires on WS state changes AND conversation fetches
+  useEffect(() => {
+    if (!projects.length || convCacheRef.current.length === 0) return;
+
+    const result: Record<string, 'working' | 'needs_attention' | 'idle'> = {};
+    const nameToId = new Map<string, string>();
+    for (const p of projects) nameToId.set(p.name.toLowerCase(), p.id);
+
+    const now = Date.now();
+    for (const conv of convCacheRef.current) {
+      if (conv.status !== 'ongoing') continue;
+      // Sub-sessions belong to the sub-sessions workspace for attention tracking
+      const projId = conv.isSubSession
+        ? 'sub-sessions'
+        : nameToId.get(conv.projectName.toLowerCase());
+      if (!projId) continue;
+
+      // Prefer WS-based sessionStates (real-time), fall back to server attentionState (from conv list)
+      const ss = sessionStates.get(conv.sessionId);
+      const rawState = ss?.state || (conv.attentionState as any) || 'idle';
+      const reason = ss?.reason || conv.attentionReason;
+
+      // Stale detection: if "working" but no WS update in 90s, treat as needs_attention
+      // Use ss.since (WS-based, updated on every event) instead of conv.updatedAt (API-based, rarely updated)
+      let isStale = false;
+      if (rawState === 'working') {
+        const lastUpdate = ss?.since || (conv.updatedAt ? new Date(conv.updatedAt).getTime() : 0);
+        if (lastUpdate > 0) {
+          isStale = (now - lastUpdate) > 90_000;
+        }
+      }
+
+      let effectiveState: 'working' | 'needs_attention' | 'idle';
+      if (rawState === 'working' && !isStale) {
+        effectiveState = 'working';
+      } else if (rawState === 'needs_attention' || isStale) {
+        effectiveState = 'needs_attention';
+      } else if (rawState === 'idle' && reason === 'done') {
+        // Session finished and is waiting for user input → needs attention
+        effectiveState = 'needs_attention';
+      } else {
+        effectiveState = 'idle';
+      }
+
+      const existing = result[projId];
+      if (effectiveState === 'needs_attention' && existing !== 'needs_attention') {
+        result[projId] = 'needs_attention';
+      } else if (effectiveState === 'working' && existing !== 'needs_attention') {
+        result[projId] = 'working';
+      } else if (!existing) {
+        result[projId] = effectiveState;
+      }
+    }
+
+    setProjectAttention(prev => {
+      const keys = new Set([...Object.keys(prev), ...Object.keys(result)]);
+      let changed = false;
+      for (const k of keys) {
+        if (prev[k] !== result[k]) { changed = true; break; }
+      }
+      return changed ? result : prev;
+    });
+  }, [projects, sessionStatesTick, convTick]); // sessionStatesTick triggers on every WS event
 
   const handleActivationProcessed = useCallback((processedProjectId?: string) => {
     if (!processedProjectId) {
@@ -482,14 +583,14 @@ export default function App() {
       // Cmd+0: toggle Mission Control
       if (e.key === '0') {
         e.preventDefault();
-        setShowMission(prev => { if (!prev) { setShowAllChats(false); setShowSync(false); } return !prev; });
+        setShowMission(prev => { if (!prev) { setShowAllChats(false);} return !prev; });
         return;
       }
 
       // Cmd+`: toggle All Chats
       if (e.key === '`') {
         e.preventDefault();
-        setShowAllChats(prev => { if (!prev) { setShowMission(false); setShowSync(false); } return !prev; });
+        setShowAllChats(prev => { if (!prev) { setShowMission(false);} return !prev; });
         return;
       }
 
@@ -580,16 +681,14 @@ export default function App() {
         projects={projects}
         activeId={activeId}
         attention={projectAttention}
-        onSelect={(id) => { setShowMission(false); setShowAllChats(false); setShowSync(false); handleSelect(id); }}
+        onSelect={(id) => { setShowMission(false); setShowAllChats(false);handleSelect(id); }}
         onNew={handleNew}
         onEdit={handleEdit}
         onDelete={handleDelete}
         missionActive={showMission}
-        onMissionClick={() => setShowMission(prev => { if (!prev) { setShowAllChats(false); setShowSync(false); } return !prev; })}
+        onMissionClick={() => setShowMission(prev => { if (!prev) { setShowAllChats(false);} return !prev; })}
         allChatsActive={showAllChats}
-        onAllChatsClick={() => setShowAllChats(prev => { if (!prev) { setShowMission(false); setShowSync(false); } return !prev; })}
-        syncPanelActive={showSync}
-        onSyncPanelClick={() => setShowSync(prev => { if (!prev) { setShowMission(false); setShowAllChats(false); } return !prev; })}
+        onAllChatsClick={() => setShowAllChats(prev => { if (!prev) { setShowMission(false);} return !prev; })}
         isMobile={IS_MOBILE}
       />
       <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
@@ -619,17 +718,6 @@ export default function App() {
             />
           </div>
         )}
-        {/* Synchronise Panel */}
-        {!IS_MOBILE && showSync && (
-          <div style={{
-            position: 'absolute', inset: 0, zIndex: 2,
-            display: 'flex', flexDirection: 'column',
-          }}>
-            <Suspense fallback={<div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--tn-text-muted)' }}>Loading Sync Panel...</div>}>
-              <SyncPanel onClose={() => setShowSync(false)} />
-            </Suspense>
-          </div>
-        )}
         {projects.filter(p => mounted.has(p.id)).map((p) => (
           <div
             key={p.id}
@@ -652,7 +740,6 @@ export default function App() {
               <LayoutManager
                 projectId={p.id}
                 workDir={p.workDir}
-                onAttentionChange={(needs, state) => handleAttentionChange(p.id, needs, state)}
                 pendingActivation={pendingActivation}
                 isActive={p.id === activeId}
                 onActivationProcessed={handleActivationProcessed}

@@ -32,8 +32,8 @@ type TimeFilter = 'today' | 'yesterday' | 'week' | 'all';
 type StatusFilter = 'all' | 'working' | 'needs_input' | 'idle';
 
 const KNOWN_PROJECTS = new Set([
-  'ADMINISTRATION', 'Business', 'DIVERSE', 'Engelmann - AI HUB',
-  'RLB CAMPUS', 'Team', 'Werking Energy', 'Werking Report', 'WerkingSafety',
+  'ADMINISTRATION', 'Acro Community Wien', 'Business', 'DIVERSE', 'Engelmann - AI HUB',
+  'Mission Chat', 'Privat', 'RLB CAMPUS', 'Team', 'Werking Energy', 'Werking Report', 'WerkingSafety',
 ]);
 
 function isToday(d: Date): boolean {
@@ -60,12 +60,13 @@ function extractText(content: unknown): string {
   return '';
 }
 
-// --- Color scheme per state ---
+// --- Color scheme per state (consistent with ProjectTabs) ---
+// Orange (#ff9e64) = needs user input, Green (#9ece6a) = working, Gray (#565f89) = idle
 const STATE_COLORS = {
-  working:    { bg: 'rgba(59, 130, 246, 0.15)',  border: '#3B82F6', text: '#93C5FD', label: 'ARBEITET',  labelBg: 'rgba(59,130,246,0.3)' },
-  needs_input:{ bg: 'rgba(245, 158, 11, 0.18)',  border: '#F59E0B', text: '#FCD34D', label: 'INPUT',     labelBg: 'rgba(245,158,11,0.3)' },
+  working:    { bg: 'rgba(158, 206, 106, 0.15)', border: '#9ece6a', text: '#9ece6a', label: 'ARBEITET',  labelBg: 'rgba(158,206,106,0.25)' },
+  needs_input:{ bg: 'rgba(255, 158, 100, 0.18)', border: '#ff9e64', text: '#ff9e64', label: 'INPUT',     labelBg: 'rgba(255,158,100,0.3)' },
   rate_limit: { bg: 'rgba(239, 68, 68, 0.15)',   border: '#EF4444', text: '#FCA5A5', label: 'LIMIT',     labelBg: 'rgba(239,68,68,0.3)' },
-  idle:       { bg: 'rgba(16, 185, 129, 0.08)',   border: '#10B981', text: '#6EE7B7', label: 'IDLE',      labelBg: 'rgba(16,185,129,0.2)' },
+  idle:       { bg: 'rgba(86, 95, 137, 0.12)',    border: '#565f89', text: '#8b90a0', label: 'IDLE',      labelBg: 'rgba(86,95,137,0.2)' },
   unknown:    { bg: 'rgba(86, 90, 110, 0.08)',    border: '#565a6e', text: '#8b90a0', label: '',          labelBg: 'transparent' },
   finished:   { bg: 'transparent',                border: '#2a2a3e', text: '#565a6e', label: 'FERTIG',    labelBg: 'rgba(86,90,110,0.15)' },
 } as const;

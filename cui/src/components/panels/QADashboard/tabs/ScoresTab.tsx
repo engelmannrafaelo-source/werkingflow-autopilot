@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm';
 import type { AppDetailData, ReportData } from '../types';
 import { resilientFetch } from '../../../../utils/resilientFetch';
 
-const APP_IDS = ['werking-report', 'engelmann', 'werking-energy', 'werking-safety', 'werking-noise', 'platform'];
+const APP_IDS = ['werking-report', 'engelmann', 'werking-energy', 'werking-safety', 'werking-noise', 'platform', 'acro-community'];
 
 const LAYER_NAMES: Record<number, string> = {
   0: 'L0 Contracts',

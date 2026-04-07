@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 
-const APP_IDS = ['werking-report', 'engelmann', 'werking-energy', 'werking-safety', 'werking-noise', 'platform'];
+const APP_IDS = ['werking-report', 'engelmann', 'werking-energy', 'werking-safety', 'werking-noise', 'platform', 'acro-community'];
 const APP_NAMES: Record<string, string> = {
   'werking-report': 'WerkING Report',
   'engelmann': 'Engelmann AI Hub',
@@ -8,6 +8,7 @@ const APP_NAMES: Record<string, string> = {
   'werking-energy': 'WerkING Energy',
   'werking-safety': 'WerkING Safety',
   'werking-noise': 'WerkING Noise',
+  'acro-community': 'Acro Community',
 };
 
 interface GapDetail {

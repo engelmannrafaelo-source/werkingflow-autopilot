@@ -9,6 +9,7 @@ const APP_NAMES: Record<string, string> = {
   'werking-energy': 'WerkING Energy',
   'werking-safety': 'WerkING Safety',
   'werking-noise': 'WerkING Noise',
+  'acro-community': 'Acro Community',
 };
 
 

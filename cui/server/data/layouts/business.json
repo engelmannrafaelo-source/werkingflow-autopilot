@@ -1,0 +1,98 @@
+{
+  "global": {
+    "splitterSize": 4,
+    "tabSetMinWidth": 200,
+    "tabSetMinHeight": 150
+  },
+  "borders": [],
+  "layout": {
+    "type": "row",
+    "id": "#081f5bdf-e4d8-42f7-8951-c89a8c552b19",
+    "children": [
+      {
+        "type": "row",
+        "id": "#2ec4160d-3d5e-4567-8fd8-176a85e2a144",
+        "weight": 53.61578045437264,
+        "children": [
+          {
+            "type": "tabset",
+            "id": "#fc211ea3-769e-44bb-bd76-1a62a1be92d3",
+            "weight": 82.71375402072088,
+            "selected": 4,
+            "children": [
+              {
+                "type": "tab",
+                "id": "#5ce7142a-d404-4c6b-aeb1-9d868e7fef10",
+                "name": "Notes",
+                "component": "notes",
+                "config": {}
+              },
+              {
+                "type": "tab",
+                "id": "#eede0913-7325-49c4-a8fd-4a212ba556ef",
+                "name": "Images",
+                "component": "images",
+                "config": {}
+              },
+              {
+                "type": "tab",
+                "id": "#a2dd61ac-5ab2-4c74-aabd-74f1b3e90cb2",
+                "name": "Infisical Monitor",
+                "component": "infisical-monitor",
+                "config": {}
+              },
+              {
+                "type": "tab",
+                "id": "#3804eaa6-7e16-42f7-947c-01f2f703f1b3",
+                "name": "File Preview",
+                "component": "preview",
+                "config": {
+                  "watchPath": "/root/projekte/werkingflow/autopilot/cui/data/active/business"
+                }
+              },
+              {
+                "type": "tab",
+                "id": "#b0b5f621-deb8-4f5e-a71d-e709fa22c112",
+                "name": "Report Builder",
+                "component": "report-builder",
+                "config": {}
+              }
+            ]
+          },
+          {
+            "type": "tabset",
+            "id": "#59edde08-d81e-4666-9b43-6e5d16df11a6",
+            "weight": 17.30562329143307,
+            "children": [
+              {
+                "type": "tab",
+                "id": "#a9868936-96c4-4bca-91ea-e82f0ac3e371",
+                "name": "File Preview",
+                "component": "preview",
+                "config": {
+                  "watchPath": "/root/projekte/werkingflow/autopilot/cui/data/active/business"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "tabset",
+        "id": "#7953d50e-07ac-4ebe-aaeb-875322fae3af",
+        "weight": 46.38421954562736,
+        "children": [
+          {
+            "type": "tab",
+            "id": "#0e3ac7e7-dabf-498a-89d9-620bbb662353",
+            "name": "Input Audit",
+            "component": "input-audit",
+            "config": {}
+          }
+        ],
+        "active": true
+      }
+    ]
+  },
+  "popouts": {}
+}

@@ -24,11 +24,15 @@ export interface SessionStateEntry {
   state: 'idle' | 'working' | 'needs_attention';
   reason?: string;
   toolInfo?: ToolInfo;
+  /** Timestamp (ms) when this state was last set/confirmed via WS */
+  since?: number;
 }
 
 interface SessionStoreValue {
   cuiStates: CuiStates;
   sessionStates: Map<string, SessionStateEntry>;
+  /** Increments on every sessionStates Map mutation — use as useEffect dependency */
+  sessionStatesTick: number;
   serverAlive: boolean;
   /** Send a JSON message over the shared WebSocket */
   sendWs: (msg: Record<string, unknown>) => void;
@@ -94,6 +98,25 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
         backoff = 1000;
         console.log('[SessionStore] WS connected');
         if (wasDown) window.dispatchEvent(new CustomEvent('cui-reconnected'));
+
+        // Pre-populate session states from server on connect
+        fetch('/api/mission/conversations', { signal: AbortSignal.timeout(5000) })
+          .then(r => r.json())
+          .then(data => {
+            const convs = Array.isArray(data) ? data : data?.conversations || [];
+            let changed = false;
+            for (const c of convs) {
+              if (!c.sessionId || c.status !== 'ongoing') continue;
+              if (!sessionStatesRef.current.has(c.sessionId)) {
+                const state = c.attentionState || 'idle';
+                const reason = c.attentionReason;
+                sessionStatesRef.current.set(c.sessionId, { state: state as any, reason, since: Date.now() });
+                changed = true;
+              }
+            }
+            if (changed) setSessionStatesTick(t => t + 1);
+          })
+          .catch(() => {}); // Non-critical, WS events will populate soon
       };
 
       ws.onclose = () => {
@@ -121,7 +144,7 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
               const mapped = msg.state === 'processing' ? 'working' : msg.state === 'done' ? 'idle' : msg.state;
               const prev = sessionStatesRef.current.get(msg.sessionId);
               if (!prev || prev.state !== mapped) {
-                sessionStatesRef.current.set(msg.sessionId, { state: mapped as any, reason: prev?.reason });
+                sessionStatesRef.current.set(msg.sessionId, { state: mapped as any, reason: prev?.reason, since: Date.now() });
                 setSessionStatesTick(t => t + 1);
               }
             }
@@ -133,7 +156,7 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
             const newReason = msg.reason;
             const newToolInfo = msg.toolInfo || undefined;
             if (!prev || prev.state !== newState || prev.reason !== newReason || prev.toolInfo?.toolName !== newToolInfo?.toolName) {
-              sessionStatesRef.current.set(msg.sessionId, { state: newState, reason: newReason, toolInfo: newToolInfo });
+              sessionStatesRef.current.set(msg.sessionId, { state: newState, reason: newReason, toolInfo: newToolInfo, since: Date.now() });
               setSessionStatesTick(t => t + 1);
             }
           }
@@ -145,13 +168,14 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
               state: prev?.state || 'working',
               reason: prev?.reason,
               toolInfo: { toolName: msg.toolName, toolDetail: msg.toolDetail, startedAt: msg.startedAt },
+              since: Date.now(),
             });
             setSessionStatesTick(t => t + 1);
           }
           if (msg.type === 'tool-done' && msg.sessionId) {
             const prev = sessionStatesRef.current.get(msg.sessionId);
             if (prev?.toolInfo) {
-              sessionStatesRef.current.set(msg.sessionId, { state: prev.state, reason: prev.reason });
+              sessionStatesRef.current.set(msg.sessionId, { state: prev.state, reason: prev.reason, since: Date.now() });
               setSessionStatesTick(t => t + 1);
             }
           }
@@ -161,6 +185,7 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
               sessionStatesRef.current.set(msg.sessionId, {
                 ...prev,
                 toolInfo: { toolName: msg.toolName, toolDetail: msg.toolDetail, startedAt: prev.toolInfo?.startedAt || Date.now(), elapsedMs: msg.elapsedMs },
+                since: Date.now(),
               });
               setSessionStatesTick(t => t + 1);
             }
@@ -188,10 +213,11 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Stable context value (only changes when cuiStates or sessionStatesTick changes)
+  // Context value — changes when cuiStates or sessionStatesTick changes
   const value: SessionStoreValue = {
     cuiStates,
     sessionStates: sessionStatesRef.current,
+    sessionStatesTick,
     serverAlive,
     sendWs,
     addMessageHandler,

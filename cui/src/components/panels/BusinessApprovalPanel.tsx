@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { getPathConfig } from '../../utils/paths';
 
 const API = '/api';
 
@@ -55,7 +56,7 @@ export default function BusinessApprovalPanel() {
     setSelected(entry);
     setDiff(null);
     try {
-      const filePath = entry.file.replace('/root/projekte/werkingflow/business/', '');
+      const filePath = entry.file.replace(getPathConfig().businessDir + '/', '');
       const resp = await fetch(`${API}/agents/business/diff/${filePath}`, { signal: AbortSignal.timeout(20000) });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       setDiff(await resp.json());
@@ -189,7 +190,7 @@ export default function BusinessApprovalPanel() {
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 3 }}>
               <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--tn-text)', flex: 1 }}>
-                {entry.file.replace('/root/projekte/werkingflow/business/', '')}
+                {entry.file.replace(getPathConfig().businessDir + '/', '')}
               </div>
               {entry.ageDays !== undefined && entry.ageDays > 0 && (
                 <div style={{
@@ -230,7 +231,7 @@ export default function BusinessApprovalPanel() {
           <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--tn-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
               <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--tn-text)' }}>
-                {selected.file.replace('/root/projekte/werkingflow/business/', '')}
+                {selected.file.replace(getPathConfig().businessDir + '/', '')}
               </div>
               <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginTop: 2 }}>{selected.summary}</div>
             </div>

@@ -75,6 +75,132 @@ interface AppConfig {
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', '.next', '.vercel']);
 const MAX_SCAN_DEPTH = 5;
 
+// Golden Test info per app — dynamically discovered from scenario JSONs with tier === 4
+interface GoldenTestInfo {
+  email: string;
+  scenario: string;
+}
+
+// Scenarios base path (unified-tester)
+const SCENARIOS_PATHS = [
+  join(GH, 'werkingflow/tests/unified-tester/features/scenarios'),
+  join(GH, 'werkingflow-production/tests/unified-tester/features/scenarios'),
+];
+
+/**
+ * Recursively collect all .json files from a directory (max depth 4).
+ */
+function collectJsonFiles(dir: string, depth: number = 0): string[] {
+  if (depth > 4 || !existsSync(dir)) return [];
+  const results: string[] = [];
+  let entries: string[];
+  try { entries = readdirSync(dir); } catch { return []; }
+
+  for (const entry of entries) {
+    if (entry.startsWith('_') || entry.startsWith('.')) continue;
+    const fullPath = join(dir, entry);
+    let stat;
+    try { stat = statSync(fullPath); } catch { continue; }
+    if (stat.isFile() && entry.endsWith('.json')) {
+      results.push(fullPath);
+    } else if (stat.isDirectory()) {
+      results.push(...collectJsonFiles(fullPath, depth + 1));
+    }
+  }
+  return results;
+}
+
+/**
+ * Scan all scenario JSON files for tier/layer === 4 (Golden Tests).
+ * Searches recursively through all subdirectories (layer-4-golden/, layer-4/, etc.).
+ * Extracts the test_user email and scenario ID per app.
+ * Returns a map: appId → { email, scenario }
+ */
+function discoverGoldenTests(apps: AppConfig[]): Record<string, GoldenTestInfo> {
+  // Build a lookup: appId → default user email (from test-credentials.json default_user)
+  const defaultUserEmails: Record<string, string> = {};
+  for (const app of apps) {
+    // Read the original credentials file to get default_user
+    try {
+      const raw = JSON.parse(readFileSync(app.credentialsPath, 'utf8'));
+      if (raw.default_user && raw.users?.[raw.default_user]?.email) {
+        defaultUserEmails[app.appId] = raw.users[raw.default_user].email;
+      }
+    } catch { /* ignore */ }
+  }
+  const goldenMap: Record<string, GoldenTestInfo> = {};
+
+  for (const scenariosBase of SCENARIOS_PATHS) {
+    if (!existsSync(scenariosBase)) continue;
+
+    let appDirs: string[];
+    try { appDirs = readdirSync(scenariosBase); } catch { continue; }
+
+    for (const appDir of appDirs) {
+      if (appDir.startsWith('_') || appDir.startsWith('.')) continue;
+      const appPath = join(scenariosBase, appDir);
+      let stat;
+      try { stat = statSync(appPath); } catch { continue; }
+      if (!stat.isDirectory()) continue;
+
+      // Recursively find ALL json files in this app's scenario directory
+      const jsonFiles = collectJsonFiles(appPath);
+
+      for (const filePath of jsonFiles) {
+        const file = filePath.split('/').pop()!;
+        try {
+          const raw = JSON.parse(readFileSync(filePath, 'utf8'));
+
+          // Check for tier/layer 4 (Golden) — field name varies across apps
+          const tier = raw.tier ?? raw.layer ?? raw.meta?.tier ?? raw.meta?.layer;
+          // Also detect by directory name (layer-4-golden/, layer-4/)
+          const inGoldenDir = filePath.includes('layer-4');
+          if (tier !== 4 && !inGoldenDir) continue;
+
+          // Extract app system id
+          const system: string = raw.system || raw.config?.app || appDir;
+          // Extract test user email — various formats across apps:
+          // - credentials.test_user.email (werking-energy, acro, safety)
+          // - credentials.admin_user.email (acro fallback)
+          // - credentials.email (engelmann mental-model format)
+          // - test_data.credentials.email (engelmann layer-4)
+          // - user (werking-report top-level)
+          const email: string | undefined =
+            raw.credentials?.test_user?.email ||
+            raw.credentials?.admin_user?.email ||
+            raw.credentials?.email ||
+            raw.test_data?.credentials?.email ||
+            raw.user;
+          // Extract scenario id
+          const scenarioId: string = raw.id || raw.scenario_id || file.replace('.json', '');
+          const scenarioName: string = raw.name || raw.tier_name || raw.description || scenarioId;
+
+          // Fallback: use default_user from test-credentials.json if scenario has no email
+          const resolvedEmail = email || defaultUserEmails[system];
+          if (!resolvedEmail) continue;
+
+          // Prefer scenarios with "golden" in filename/id (most canonical per app)
+          const existing = goldenMap[system];
+          const hasGolden = file.includes('golden') || scenarioId.includes('golden');
+          const existingHasGolden = existing?.scenario.includes('golden');
+          const isMoreCanonical = !existing || (hasGolden && !existingHasGolden);
+
+          if (isMoreCanonical) {
+            goldenMap[system] = {
+              email: resolvedEmail,
+              scenario: `${scenarioId} (${scenarioName})`,
+            };
+          }
+        } catch {
+          // Skip unparseable scenario files
+        }
+      }
+    }
+  }
+
+  return goldenMap;
+}
+
 // URL mapping for known apps (ports from ports.json, staged from Vercel)
 const APP_URLS: Record<string, { localPort?: number; stagedUrl?: string }> = {
   'engelmann': { localPort: 3009, stagedUrl: 'https://engelmann.vercel.app' },
@@ -169,10 +295,14 @@ function parsePerAppCredentials(credPath: string): AppConfig | null {
   const appName = credentials.app?.name || appDir.split('/').pop()!;
   const appId = credentials.app?.id || appName.toLowerCase().replace(/\s+/g, '-');
 
-  // Validate every user
+  // Validate every user (skip incomplete entries with warning)
   const validatedUsers: Record<string, TestUser> = {};
   for (const [role, user] of Object.entries(credentials.users)) {
-    validatedUsers[role] = validateUser(user, role, appId);
+    try {
+      validatedUsers[role] = validateUser(user, role, appId);
+    } catch (e) {
+      console.warn(`  ⚠️  Skipping incomplete user "${role}" in ${appId}: ${e instanceof Error ? e.message : e}`);
+    }
   }
 
   const urls = resolveUrls(appId, credentials.app);
@@ -276,9 +406,63 @@ function discoverApps(): AppConfig[] {
   return apps;
 }
 
+// --- Partner CUI Login ---
+
+interface PartnerCuiUser {
+  name: string;
+  username: string;
+  password: string;
+}
+
+interface PartnerCuiLogin {
+  _note?: string;
+  url: string;
+  users: PartnerCuiUser[];
+}
+
+interface CredentialsEntry {
+  name?: string;
+  partnerCuiLogin?: PartnerCuiLogin;
+  [key: string]: unknown;
+}
+
+function generatePartnerSection(): string | null {
+  const credPath = join(__dirname, '../data/credentials.json');
+  if (!existsSync(credPath)) return null;
+
+  try {
+    const data = JSON.parse(readFileSync(credPath, 'utf8')) as Record<string, CredentialsEntry>;
+    const partnerUsers: { name: string; username: string; password: string; workspace: string }[] = [];
+    let partnerUrl = '';
+
+    for (const [wsId, entry] of Object.entries(data)) {
+      if (!entry.partnerCuiLogin?.users?.length) continue;
+      if (!partnerUrl) partnerUrl = entry.partnerCuiLogin.url;
+      const wsName = entry.name || wsId;
+      for (const u of entry.partnerCuiLogin.users) {
+        partnerUsers.push({ name: u.name, username: u.username, password: u.password, workspace: wsName });
+      }
+    }
+
+    if (partnerUsers.length === 0) return null;
+
+    let md = `## Partner CUI Login (${partnerUrl})\n\n`;
+    md += `| Partner | Username | Password | Workspace |\n`;
+    md += `|---------|----------|----------|-----------|\n`;
+    for (const u of partnerUsers) {
+      md += `| ${u.name} | \`${u.username}\` | \`${u.password}\` | ${u.workspace} |\n`;
+    }
+    md += `\n---\n\n`;
+    return md;
+  } catch {
+    console.warn('  ⚠️  Could not read partnerCuiLogin from credentials.json');
+    return null;
+  }
+}
+
 // --- Markdown generation ---
 
-function generateMarkdown(apps: AppConfig[]): string {
+function generateMarkdown(apps: AppConfig[], goldenTests: Record<string, GoldenTestInfo>): string {
   const now = new Date().toISOString().split('T')[0];
   const time = new Date().toTimeString().split(' ')[0].slice(0, 5);
 
@@ -303,7 +487,15 @@ function generateMarkdown(apps: AppConfig[]): string {
     totalApps++;
     totalUsers += users.length;
 
+    const goldenInfo = goldenTests[app.appId];
+
     md += `## ${app.name}\n\n`;
+
+    // Show golden test info banner if available
+    if (goldenInfo) {
+      md += `**GOLDEN TEST:** \`${goldenInfo.scenario}\` → ${goldenInfo.email}\n\n`;
+    }
+
     md += `| User | Email | Password | Role | Environment |\n`;
     md += `|------|-------|----------|------|-------------|\n`;
 
@@ -313,11 +505,19 @@ function generateMarkdown(apps: AppConfig[]): string {
       if (app.stagedUrl) envs.push(`**Staged:** ${app.stagedUrl}`);
       const environment = envs.length > 0 ? envs.join('<br>') : '—';
 
+      const isGolden = goldenInfo && user.email === goldenInfo.email;
       const displayName = user.name || role.charAt(0).toUpperCase() + role.slice(1);
-      md += `| ${displayName} | ${user.email} | \`${user.password}\` | ${role} | ${environment} |\n`;
+      const goldenMarker = isGolden ? ' **[GOLDEN]**' : '';
+      md += `| ${displayName}${goldenMarker} | ${user.email} | \`${user.password}\` | ${role} | ${environment} |\n`;
     }
 
     md += `\n---\n\n`;
+  }
+
+  // --- Partner CUI Login section (from credentials.json partnerCuiLogin) ---
+  const partnerSection = generatePartnerSection();
+  if (partnerSection) {
+    md += partnerSection;
   }
 
   md += `## 📋 Summary
@@ -338,9 +538,17 @@ function generateMarkdown(apps: AppConfig[]): string {
 // --- Main ---
 
 const apps = discoverApps();
-console.log('📝 Generating Shared Notes from test-credentials.json files...');
 
-const markdown = generateMarkdown(apps);
+console.log('\n🏆 Discovering Golden Tests (tier 4) from scenario files...');
+const goldenTests = discoverGoldenTests(apps);
+const goldenCount = Object.keys(goldenTests).length;
+for (const [appId, info] of Object.entries(goldenTests)) {
+  console.log(`  🥇 ${appId}: ${info.email} → ${info.scenario}`);
+}
+console.log(`   Found ${goldenCount} golden test(s)\n`);
+
+console.log('📝 Generating Shared Notes...');
+const markdown = generateMarkdown(apps, goldenTests);
 
 // Ensure output directory exists
 const outputDir = dirname(OUTPUT_MD);

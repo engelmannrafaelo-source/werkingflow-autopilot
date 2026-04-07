@@ -1,0 +1,6 @@
+{
+  "id": "platform",
+  "name": "Platform",
+  "workDir": "/root/orchestrator/workspaces/platform",
+  "_auto": true
+}

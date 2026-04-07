@@ -110,3 +110,10 @@ export interface ReportData {
   score: number | null;
   reasoning: string | null;
 }
+
+export interface GroupSummary {
+  passed: number;
+  failed: number;
+  pending: number;
+  total: number;
+}

@@ -1,0 +1,121 @@
+{
+  "global": {
+    "splitterSize": 4,
+    "tabSetMinWidth": 200,
+    "tabSetMinHeight": 150
+  },
+  "borders": [],
+  "layout": {
+    "type": "row",
+    "id": "#93211898-efdd-430a-a4f1-7e7a77d07df7",
+    "children": [
+      {
+        "type": "row",
+        "id": "#bd5ea82d-37eb-46e3-abfe-8c1e6a62b57b",
+        "weight": 62.20871062519499,
+        "children": [
+          {
+            "type": "tabset",
+            "id": "#b4637019-47e1-4bbd-b2e2-d09503d78146",
+            "weight": 65.28039111282799,
+            "selected": 2,
+            "children": [
+              {
+                "type": "tab",
+                "id": "#10cbfa12-7440-4d46-9a95-920bf720f387",
+                "name": "Notes",
+                "component": "notes",
+                "config": {}
+              },
+              {
+                "type": "tab",
+                "id": "#833f1446-62d6-49e0-8640-d444a569f0ba",
+                "name": "Images",
+                "component": "images",
+                "config": {}
+              },
+              {
+                "type": "tab",
+                "id": "#2272f8fc-02dc-4d05-8ae4-46e7177fdc95",
+                "name": "QA Dashboard",
+                "component": "qa-dashboard",
+                "config": {}
+              }
+            ],
+            "active": true
+          },
+          {
+            "type": "tabset",
+            "id": "#f4939030-a8d8-4f09-8ea8-9a4cdadf97d9",
+            "weight": 34.71960888717202,
+            "selected": 2,
+            "children": [
+              {
+                "type": "tab",
+                "id": "#5ed5496b-44bc-48ea-9349-804ce59de1b7",
+                "name": "Werking Report Admin",
+                "component": "admin-wr",
+                "config": {}
+              },
+              {
+                "type": "tab",
+                "id": "#9dd9b0be-91e4-4acc-b401-fe9e664e7012",
+                "name": "QA Dashboard",
+                "component": "qa-dashboard",
+                "config": {}
+              },
+              {
+                "type": "tab",
+                "id": "#69acebe9-5f18-4a7d-a9f5-c3a38040ae16",
+                "name": "Notes",
+                "component": "notes",
+                "config": {}
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "tabset",
+        "id": "#d7dd4989-f98b-44df-a6e3-eabb34a1ab05",
+        "weight": 37.79128937480501,
+        "selected": 3,
+        "children": [
+          {
+            "type": "tab",
+            "id": "#4451b467-45b6-462b-9f53-a85753fda90b",
+            "name": "Browser",
+            "component": "browser",
+            "config": {
+              "url": "http://localhost:3008/"
+            }
+          },
+          {
+            "type": "tab",
+            "id": "#bd4336aa-2b24-472f-9917-d066795a8d09",
+            "name": "Preview",
+            "component": "preview",
+            "config": {}
+          },
+          {
+            "type": "tab",
+            "id": "#b65b8384-7fc3-48cf-a396-76a56aeb7e96",
+            "name": "Browser",
+            "component": "browser",
+            "config": {
+              "url": "https://werking-report.vercel.app"
+            }
+          },
+          {
+            "type": "tab",
+            "id": "#77374f89-35a5-4718-99a9-570ddfe48889",
+            "name": "QA Dashboard",
+            "component": "qa-dashboard",
+            "config": {}
+          }
+        ]
+      }
+    ]
+  },
+  "popouts": {}
+}

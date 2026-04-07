@@ -25,17 +25,9 @@ const MAX_VISIBLE_PANELS = 6;
 function computeGrid(n: number): { cols: number; rows: number } {
   if (n <= 0) return { cols: 1, rows: 1 };
   if (n === 1) return { cols: 1, rows: 1 };
-  if (n === 2) return { cols: 2, rows: 1 };
-  if (n === 3) return { cols: 3, rows: 1 };
-  if (n === 4) return { cols: 2, rows: 2 };
-  if (n <= 6) return { cols: 3, rows: 2 };
-  if (n <= 9) return { cols: 3, rows: 3 };
-  if (n <= 12) return { cols: 4, rows: 3 };
-  if (n <= 16) return { cols: 4, rows: 4 };
-  // >16: still use 4 cols, scroll vertically
-  const cols = 4;
-  const rows = Math.ceil(n / cols);
-  return { cols, rows };
+  if (n <= 3) return { cols: n, rows: 1 };
+  // Always 3 columns, 2 rows max per page
+  return { cols: 3, rows: 2 };
 }
 
 export default function AllChatsView({ onNavigateToProject, isVisible = true }: AllChatsViewProps) {
@@ -44,6 +36,9 @@ export default function AllChatsView({ onNavigateToProject, isVisible = true }: 
   const [localFinished, setLocalFinished] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(0);
+  const [compactInputBar, setCompactInputBar] = useState(() => {
+    try { return localStorage.getItem("cui-allchats-compact") === "true"; } catch { return false; }
+  });
   const prevVisibleRef = useRef(isVisible);
 
   const fetchChats = useCallback(async () => {
@@ -113,33 +108,45 @@ export default function AllChatsView({ onNavigateToProject, isVisible = true }: 
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      {/* Page tabs when >16 chats */}
-      {totalPages > 1 && (
-        <div style={{
-          display: 'flex', gap: 2, padding: '3px 6px',
-          background: 'var(--tn-bg-dark)', borderBottom: '1px solid var(--tn-border)',
-          alignItems: 'center', flexShrink: 0,
-        }}>
-          <span style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginRight: 6 }}>
-            {visibleChats.length} Chats
-          </span>
-          {Array.from({ length: totalPages }, (_, i) => {
-            const start = i * MAX_VISIBLE_PANELS + 1;
-            const end = Math.min((i + 1) * MAX_VISIBLE_PANELS, visibleChats.length);
-            return (
-              <button key={i} onClick={() => setPage(i)} style={{
-                padding: '2px 8px', fontSize: 10, borderRadius: 3, cursor: 'pointer',
-                border: currentPage === i ? '1px solid var(--tn-blue)' : '1px solid var(--tn-border)',
-                background: currentPage === i ? 'rgba(59,130,246,0.15)' : 'var(--tn-surface)',
-                color: currentPage === i ? 'var(--tn-blue)' : 'var(--tn-text-muted)',
-                fontWeight: currentPage === i ? 700 : 400,
-              }}>
-                {start}-{end}
-              </button>
-            );
-          })}
-        </div>
-      )}
+      {/* Toolbar: chat count, pagination, compact toggle */}
+      <div style={{
+        display: 'flex', gap: 2, padding: '3px 6px',
+        background: 'var(--tn-bg-dark)', borderBottom: '1px solid var(--tn-border)',
+        alignItems: 'center', flexShrink: 0,
+      }}>
+        <span style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginRight: 6 }}>
+          {visibleChats.length} Chats
+        </span>
+        {totalPages > 1 && Array.from({ length: totalPages }, (_, i) => {
+          const start = i * MAX_VISIBLE_PANELS + 1;
+          const end = Math.min((i + 1) * MAX_VISIBLE_PANELS, visibleChats.length);
+          return (
+            <button key={i} onClick={() => setPage(i)} style={{
+              padding: '2px 8px', fontSize: 10, borderRadius: 3, cursor: 'pointer',
+              border: currentPage === i ? '1px solid var(--tn-blue)' : '1px solid var(--tn-border)',
+              background: currentPage === i ? 'rgba(59,130,246,0.15)' : 'var(--tn-surface)',
+              color: currentPage === i ? 'var(--tn-blue)' : 'var(--tn-text-muted)',
+              fontWeight: currentPage === i ? 700 : 400,
+            }}>
+              {start}-{end}
+            </button>
+          );
+        })}
+        <span style={{ flex: 1 }} />
+        <button
+          onClick={() => setCompactInputBar(prev => { const next = !prev; try { localStorage.setItem("cui-allchats-compact", String(next)); } catch {} return next; })}
+          title={compactInputBar ? "Eingabebereich einblenden" : "Eingabebereich ausblenden"}
+          style={{
+            padding: '2px 8px', fontSize: 10, borderRadius: 3, cursor: 'pointer',
+            border: compactInputBar ? '1px solid var(--tn-blue)' : '1px solid var(--tn-border)',
+            background: compactInputBar ? 'rgba(59,130,246,0.15)' : 'var(--tn-surface)',
+            color: compactInputBar ? 'var(--tn-blue)' : 'var(--tn-text-muted)',
+            fontWeight: compactInputBar ? 700 : 400,
+          }}
+        >
+          {compactInputBar ? "\u25BC Eingabe" : "\u25B2 Eingabe"}
+        </button>
+      </div>
 
       {/* Chat grid */}
       <div style={{
@@ -226,6 +233,7 @@ export default function AllChatsView({ onNavigateToProject, isVisible = true }: 
                   initialSessionId={chat.sessionId}
                   onLoadFailed={handleLoadFailed}
                   onFinish={handleLocalFinish}
+                  compactInputBar={compactInputBar}
                 />
               </div>
             </div>

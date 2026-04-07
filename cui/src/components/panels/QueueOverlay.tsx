@@ -27,7 +27,7 @@ interface QueueOverlayProps {
   workDir?: string;
   useLocal?: boolean;
   onNavigate: (sessionId: string) => void;  // Navigate CUI iframe to conversation
-  onStartNew: (subject: string, message: string) => Promise<boolean>;  // Start new conversation, returns success
+  onStartNew: (subject: string, message: string, model: string) => Promise<boolean>;  // Start new conversation, returns success
   refreshSignal?: number;  // Increment to trigger conversation list refresh (from parent WS)
 }
 
@@ -191,6 +191,7 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
   });
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
+  const [model, setModel] = useState<'sonnet' | 'opus'>('opus');
   const [showCompleted, setShowCompleted] = useState(false);
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState('');
@@ -218,7 +219,7 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
       .then(r => { if (!r.ok) throw new Error('fetch failed'); return r.json(); })
       .then(data => {
         const convs: Conversation[] = data.conversations || [];
-        const REMOTE_IDS = new Set(['rafael', 'engelmann', 'office']);
+        const REMOTE_IDS = new Set(['engelmann', 'office', 'gmail', 'werking']);
         const REMOTE_WS_PREFIX = '/root/orchestrator/workspaces/';
         const LOCAL_WS_PREFIX_MATCH = '/.cui/workspaces/';
         const wsName = workDir?.startsWith(REMOTE_WS_PREFIX)
@@ -345,7 +346,7 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
     if (!subject.trim() || !message.trim() || starting) return;
     setStarting(true);
     setStartError('');
-    const ok = await onStartNew(subject.trim(), message.trim());
+    const ok = await onStartNew(subject.trim(), message.trim(), model);
     if (ok) {
       setSubject('');
       setMessage('');
@@ -466,6 +467,20 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
               fontWeight: 600,
             }}
           />
+          <div style={{ display: 'flex', gap: 6, marginBottom: 6, alignItems: 'center' }}>
+            <span style={{ fontSize: 10, color: 'var(--tn-text-muted)', whiteSpace: 'nowrap' }}>Modell:</span>
+            <select value={model} onChange={e => setModel(e.target.value as 'sonnet' | 'opus')}
+              style={{
+                padding: '2px 6px', fontSize: 10, borderRadius: 3,
+                background: model === 'opus' ? '#2d2040' : 'var(--tn-bg-dark)',
+                color: model === 'opus' ? '#bb9af7' : 'var(--tn-text)',
+                border: `1px solid ${model === 'opus' ? '#bb9af7' : 'var(--tn-border)'}`,
+                cursor: 'pointer', fontWeight: model === 'opus' ? 600 : 400,
+              }}>
+              <option value="sonnet">Sonnet</option>
+              <option value="opus">Opus</option>
+            </select>
+          </div>
           <div style={{ display: 'flex', gap: 6 }}>
             <textarea
               value={message}

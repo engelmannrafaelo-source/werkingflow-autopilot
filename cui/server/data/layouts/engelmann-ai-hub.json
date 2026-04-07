@@ -1,0 +1,99 @@
+{
+  "global": {
+    "splitterSize": 4,
+    "tabSetMinWidth": 200,
+    "tabSetMinHeight": 150
+  },
+  "borders": [],
+  "layout": {
+    "type": "row",
+    "id": "#dc4bf411-f3f7-4913-adfa-981782996fd8",
+    "children": [
+      {
+        "type": "tabset",
+        "id": "#57bcb769-914c-476c-97ca-d807ab6131a0",
+        "weight": 25.341432084261548,
+        "selected": 1,
+        "children": [
+          {
+            "type": "tab",
+            "id": "#4255bb4d-9888-46ba-895f-58adc832a5b6",
+            "name": "Notes",
+            "component": "notes",
+            "config": {}
+          },
+          {
+            "type": "tab",
+            "id": "#7a31d6e8-f92a-40c1-8ff5-4028bc135e26",
+            "name": "Images",
+            "component": "images",
+            "config": {}
+          }
+        ]
+      },
+      {
+        "type": "row",
+        "id": "#5aca02f6-91b4-4c0c-8c55-1e1db2217bde",
+        "weight": 49.317135831476904,
+        "children": [
+          {
+            "type": "tabset",
+            "id": "#fda1c514-ff9c-444c-9d22-3b9ecc540689",
+            "weight": 45.95209299988226,
+            "children": [
+              {
+                "type": "tab",
+                "id": "#c6552c8c-5831-4cab-b8d3-980384ea65fa",
+                "name": "Browser",
+                "component": "browser",
+                "config": {
+                  "url": "https://partner.werking.tools/"
+                }
+              },
+              {
+                "type": "tab",
+                "id": "#9b2f1313-a03b-46f7-a10d-d75206288cd0",
+                "name": "File Preview",
+                "component": "preview",
+                "config": {
+                  "watchPath": "/root/projekte/werkingflow/autopilot/cui/data/active/engelmann-ai-hub"
+                }
+              },
+              {
+                "type": "tab",
+                "id": "#dd732c14-78fd-4521-999d-9bcdb75310b5",
+                "name": "Architecture Explorer",
+                "component": "architecture",
+                "config": {}
+              },
+              {
+                "type": "tab",
+                "id": "#f9441378-f4d4-4d4a-8e93-da1f715bfe1d",
+                "name": "File Preview",
+                "component": "preview",
+                "config": {
+                  "watchPath": "/root/projekte/werkingflow/autopilot/cui/data/active/engelmann-ai-hub"
+                }
+              }
+            ]
+          },
+          {
+            "type": "tabset",
+            "id": "#b9c50c8e-5f4b-410e-bcd5-7d785b7763a1",
+            "weight": 54.04790700011774,
+            "children": [
+              {
+                "type": "tab",
+                "id": "#cfe2e70f-21b1-4510-a294-e572c4e34c2d",
+                "name": "Images",
+                "component": "images",
+                "config": {}
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "popouts": {}
+}

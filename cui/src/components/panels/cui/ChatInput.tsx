@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { PromptTemplate } from './types';
 
 interface LoopConfig {
@@ -39,6 +39,55 @@ export default function ChatInput({
   const [newTplMessage, setNewTplMessage] = useState('');
   const [editingTemplate, setEditingTemplate] = useState<PromptTemplate | null>(null);
   const [showLoopConfig, setShowLoopConfig] = useState(false);
+
+  const [pasteUploading, setPasteUploading] = useState(false);
+  const pasteZoneRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef(input);
+  inputRef.current = input;
+
+  const handleImagePaste = useCallback(async (e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const imageFiles: File[] = [];
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (file) imageFiles.push(file);
+      }
+    }
+    if (imageFiles.length === 0) return;
+    if ((window as any).__cuiServerAlive === false) return;
+
+    setPasteUploading(true);
+    try {
+      const imageData = await Promise.all(imageFiles.map(file =>
+        new Promise<{ name: string; data: string }>((resolve) => {
+          const reader = new FileReader();
+          reader.onload = (ev) => resolve({ name: file.name, data: ev.target?.result as string });
+          reader.readAsDataURL(file);
+        })
+      ));
+      const resp = await fetch('/api/images', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountId: 'local', images: imageData }),
+        signal: AbortSignal.timeout(60000),
+      });
+      if (!resp.ok) throw new Error(`Upload failed: HTTP ${resp.status}`);
+      const data = await resp.json();
+      if (data.readCommand) {
+        const cur = inputRef.current;
+        setInput((cur ? cur + '\n' : '') + data.readCommand);
+        // Focus textarea after inserting link
+        setTimeout(() => textareaRef.current?.focus(), 50);
+      }
+    } catch (err: any) {
+      console.warn('[ChatInput] Paste image upload error:', err.message);
+    } finally {
+      setPasteUploading(false);
+    }
+  }, [setInput, textareaRef]);
 
   // Fetch templates on mount
   const loadTemplates = useCallback(() => {
@@ -220,8 +269,29 @@ export default function ChatInput({
         </div>
       )}
 
-      {/* Input Row - Textarea + Send */}
+      {/* Input Row - Paste Zone + Textarea + Send */}
       <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
+        {/* Image paste zone — click then Cmd+V */}
+        <div
+          ref={pasteZoneRef}
+          tabIndex={0}
+          onPaste={handleImagePaste}
+          onClick={() => pasteZoneRef.current?.focus()}
+          onFocus={(e) => { e.currentTarget.style.borderColor = '#A855F7'; e.currentTarget.style.color = '#A855F7'; }}
+          onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--tn-border)'; e.currentTarget.style.color = 'var(--tn-text-muted)'; }}
+          title="Hier klicken, dann Cmd+V um Bild einzufuegen"
+          style={{
+            width: 36, minHeight: 48, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: pasteUploading ? 'rgba(168,85,247,0.15)' : 'var(--tn-bg)',
+            border: `1px solid ${pasteUploading ? '#A855F7' : 'var(--tn-border)'}`,
+            borderRadius: 4, cursor: 'pointer', outline: 'none',
+            fontSize: 16, color: pasteUploading ? '#A855F7' : 'var(--tn-text-muted)',
+            transition: 'border-color 0.2s, color 0.2s',
+            flexShrink: 0,
+          }}
+        >
+          {pasteUploading ? '\u23F3' : '\uD83D\uDCCB'}
+        </div>
         <textarea
           ref={textareaRef}
           value={input}
@@ -232,12 +302,12 @@ export default function ChatInput({
               onSend();
             }
           }}
-          placeholder={planMode ? 'Aufgabe beschreiben... (Plan-Modus)' : 'Nachricht... (Enter = Senden)'}
+          placeholder={pasteUploading ? 'Bild wird hochgeladen...' : planMode ? 'Aufgabe beschreiben... (Plan-Modus)' : 'Nachricht... (Enter = Senden)'}
           rows={2}
           style={{
             flex: 1, resize: 'vertical', padding: '6px 10px', fontSize: 13,
             background: 'var(--tn-bg)', color: 'var(--tn-text)',
-            border: `1px solid ${planMode ? '#F59E0B' : 'var(--tn-border)'}`, borderRadius: 4,
+            border: `1px solid ${pasteUploading ? '#A855F7' : planMode ? '#F59E0B' : 'var(--tn-border)'}`, borderRadius: 4,
             fontFamily: 'inherit', maxHeight: 120, minHeight: 48,
           }}
         />

@@ -20,6 +20,7 @@ interface Conversation {
   status: 'ongoing' | 'completed';
   streamingId: string | null;
   model: string;
+  assignedModel?: string;
   messageCount: number;
   updatedAt: string;
   createdAt: string;
@@ -201,11 +202,12 @@ function AccountDots({ accounts }: { accounts: ProjectGroup['accounts'] }) {
 }
 
 // --- Session Card (compact, attention-based) ---
-function SessionCard({ conv, isSelected, onClick, checked, onCheck, onActivate, onFinish, onDelete, panelLabel, expanded, snippet }: {
+function SessionCard({ conv, isSelected, onClick, checked, onCheck, onActivate, onFinish, onHardKill, onDelete, panelLabel, expanded, snippet }: {
   conv: Conversation; isSelected: boolean; onClick: () => void;
   checked?: boolean; onCheck?: (checked: boolean) => void;
   onActivate?: (conv: Conversation) => void;
   onFinish?: (conv: Conversation) => void;
+  onHardKill?: (conv: Conversation) => void;
   onDelete?: (conv: Conversation) => void;
   panelLabel?: string;
   expanded?: boolean;
@@ -285,6 +287,16 @@ function SessionCard({ conv, isSelected, onClick, checked, onCheck, onActivate, 
               padding: '0px 5px', borderRadius: 3, flexShrink: 0, lineHeight: 1,
             }}>&#10003;</button>
         )}
+        {onHardKill && conv.status === 'ongoing' && (
+          <button onClick={(e) => { e.stopPropagation(); onHardKill(conv); }}
+            title="HARD KILL — Alle Prozesse sofort beenden (inkl. Zombies)"
+            style={{
+              background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.5)',
+              color: '#EF4444', cursor: 'pointer', fontSize: 9,
+              padding: '1px 5px', borderRadius: 3, flexShrink: 0, lineHeight: 1.2,
+              fontWeight: 700, letterSpacing: 0.5,
+            }}>KILL</button>
+        )}
         {onDelete && (
           <button onClick={(e) => { e.stopPropagation(); onDelete(conv); }}
             title="Konversation loeschen"
@@ -314,7 +326,12 @@ function SessionCard({ conv, isSelected, onClick, checked, onCheck, onActivate, 
             {snippet}
           </div>
           <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginTop: 4 }}>
-            {conv.model ? conv.model.split('-').slice(0, 2).join('-') : ''} &middot; {conv.status}
+            {conv.assignedModel === 'opus'
+              ? <span style={{ color: '#bb9af7', fontWeight: 600 }}>OPUS</span>
+              : conv.assignedModel === 'sonnet'
+              ? <span>Sonnet</span>
+              : conv.model ? conv.model.split('-').slice(0, 2).join('-') : ''
+            } &middot; {conv.status}
           </div>
         </div>
       )}
@@ -575,11 +592,12 @@ function CommanderPanel({ onClose }: { onClose: () => void }) {
 // --- New Conversation Dialog ---
 function NewConversationDialog({ projects, onStart, onClose }: {
   projects: Array<{ id: string; name: string; workDir: string }>;
-  onStart: (accountId: string, workDir: string, subject: string, message: string) => void;
+  onStart: (accountId: string, workDir: string, subject: string, message: string, model: string) => void;
   onClose: () => void;
 }) {
-  const [accountId, setAccountId] = useState('rafael');
+  const [accountId, setAccountId] = useState('engelmann');
   const [projectId, setProjectId] = useState(projects[0]?.id || '');
+  const [model, setModel] = useState<'sonnet' | 'opus'>('opus');
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
   const subjectRef = useRef<HTMLInputElement>(null);
@@ -589,7 +607,7 @@ function NewConversationDialog({ projects, onStart, onClose }: {
     e.preventDefault();
     if (!subject.trim() || !message.trim()) return;
     const proj = projects.find(p => p.id === projectId);
-    onStart(accountId, proj?.workDir || '/root/projekte', subject.trim(), message.trim());
+    onStart(accountId, proj?.workDir || '/root/projekte', subject.trim(), message.trim(), model);
   }
 
   const inputStyle: React.CSSProperties = {
@@ -612,6 +630,11 @@ function NewConversationDialog({ projects, onStart, onClose }: {
         <label style={{ fontSize: 11, color: 'var(--tn-text-muted)', display: 'block', marginBottom: 4 }}>Workspace</label>
         <select value={projectId} onChange={e => setProjectId(e.target.value)} style={inputStyle}>
           {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+        <label style={{ fontSize: 11, color: 'var(--tn-text-muted)', display: 'block', marginBottom: 4 }}>Modell</label>
+        <select value={model} onChange={e => setModel(e.target.value as 'sonnet' | 'opus')} style={inputStyle}>
+          <option value="sonnet">Sonnet (Standard)</option>
+          <option value="opus">Opus (Premium)</option>
         </select>
         <label style={{ fontSize: 11, color: 'var(--tn-text-muted)', display: 'block', marginBottom: 4 }}>Betreff *</label>
         <input ref={subjectRef} value={subject} onChange={e => setSubject(e.target.value)} placeholder="z.B. API Bridge refactoring" style={inputStyle} />
@@ -753,13 +776,7 @@ export default function MissionControl({ projectId }: MissionControlProps) {
   const prevScoresRef = useRef<Map<string, number>>(new Map());
 
   const displayedConvs = useMemo(() => {
-    const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
-    const active = projectFiltered.filter(c =>
-      // manualFinished always wins — Rafael's explicit close
-      !c.manualFinished &&
-      // Show if ongoing OR recent 24h
-      (c.status === 'ongoing' || new Date(c.updatedAt).getTime() > cutoff24h)
-    );
+    const active = projectFiltered.filter(c => !c.manualFinished);
     const prevOrder = prevOrderRef.current;
     const prevScores = prevScoresRef.current;
 
@@ -803,8 +820,7 @@ export default function MissionControl({ projectId }: MissionControlProps) {
   }, [projectFiltered, scoreOf]);
 
   const finishedConvs = useMemo(() => {
-    const cutoff48h = Date.now() - 48 * 60 * 60 * 1000;
-    return projectFiltered.filter(c => c.manualFinished && new Date(c.updatedAt).getTime() > cutoff48h)
+    return projectFiltered.filter(c => c.manualFinished)
       .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
   }, [projectFiltered]);
 
@@ -883,10 +899,10 @@ export default function MissionControl({ projectId }: MissionControlProps) {
       .catch((err) => { console.warn('[MissionControl] handlePermission failed:', err); });
   }, []);
 
-  const handleNewConversation = useCallback((accountId: string, wd: string, subject: string, message: string) => {
+  const handleNewConversation = useCallback((accountId: string, wd: string, subject: string, message: string, model: string) => {
     if ((window as any).__cuiServerAlive === false) { console.warn('[MissionControl] handleNewConversation skipped: server not alive'); return; }
     fetch(`${API}/mission/start`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ accountId, workDir: wd, subject, message }),
+      body: JSON.stringify({ accountId, workDir: wd, subject, message, model }),
       signal: AbortSignal.timeout(15000),
     }).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); setShowNewDialog(false); setTimeout(fetchConversations, 2000); })
       .catch((err) => { console.warn('[MissionControl] handleNewConversation failed:', err); });
@@ -994,6 +1010,17 @@ export default function MissionControl({ projectId }: MissionControlProps) {
       signal: AbortSignal.timeout(15000),
     }).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); setTimeout(fetchConversations, 500); })
       .catch((err) => { console.warn('[MissionControl] handleFinish failed:', err); });
+  }, [fetchConversations]);
+
+  const handleHardKill = useCallback((conv: Conversation) => {
+    if ((window as any).__cuiServerAlive === false) { console.warn('[MissionControl] handleHardKill skipped: server not alive'); return; }
+    if (!confirm(`HARD KILL: "${conv.customName || conv.summary?.slice(0, 40) || conv.sessionId}" — Alle Prozesse sofort beenden?`)) return;
+    fetch(`${API}/mission/conversation/${conv.sessionId}/hard-kill`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(15000),
+    }).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(data => { console.log(`[MissionControl] Hard-kill: ${data.killed} processes killed`); setTimeout(fetchConversations, 500); })
+      .catch((err) => { console.warn('[MissionControl] handleHardKill failed:', err); });
   }, [fetchConversations]);
 
   const handleDelete = useCallback((conv: Conversation) => {
@@ -1278,6 +1305,7 @@ export default function MissionControl({ projectId }: MissionControlProps) {
                   onCheck={(checked) => toggleCheck(conv, checked)}
                   onActivate={handleActivateSingle}
                   onFinish={handleFinish}
+                  onHardKill={handleHardKill}
                   panelLabel={panelMap.get(conv.sessionId)}
                   expanded={showPreviews}
                   snippet={snippets.get(conv.sessionId)}
@@ -1312,9 +1340,17 @@ export default function MissionControl({ projectId }: MissionControlProps) {
             <>
               {groups.map(group => {
                 const groupActive = group.conversations.filter(c => !c.manualFinished);
-                const cutoff48hGroup = Date.now() - 48 * 60 * 60 * 1000;
-                const groupFinished = group.conversations.filter(c => c.manualFinished && new Date(c.updatedAt).getTime() > cutoff48hGroup);
-                const sortedActive = sortByPriority(groupActive);
+                const groupFinished = group.conversations.filter(c => c.manualFinished);
+                const sortedActive = [...groupActive].sort((a, b) => {
+                  const scoreOf = (c: any) => {
+                    if (c.attentionState === "needs_attention") return 4;
+                    if (c.streamingId || c.attentionState === "working") return 3;
+                    if (c.status === "ongoing") return 2;
+                    return 1;
+                  };
+                  const diff = scoreOf(b) - scoreOf(a);
+                  return diff !== 0 ? diff : new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+                });
                 return (
                   <div key={group.name} style={{ marginBottom: 4 }}>
                     {/* Project group header */}
@@ -1343,6 +1379,7 @@ export default function MissionControl({ projectId }: MissionControlProps) {
                           onCheck={(checked) => toggleCheck(conv, checked)}
                           onActivate={handleActivateSingle}
                           onFinish={handleFinish}
+                          onHardKill={handleHardKill}
                           panelLabel={panelMap.get(conv.sessionId)}
                           expanded={showPreviews}
                           snippet={snippets.get(conv.sessionId)}

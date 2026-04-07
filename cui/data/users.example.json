@@ -1,0 +1,49 @@
+{
+  "version": "1.0",
+  "users": [
+    {
+      "id": "rafael",
+      "name": "Rafael Engelmann",
+      "email": "rafael@werkingflow.com",
+      "passwordHash": "CHANGE_ME",
+      "role": "admin",
+      "claudeAccountId": "rafael",
+      "allowedPanels": "*",
+      "allowedWorkspaces": "*",
+      "canGitPush": true,
+      "canApproveEdits": true,
+      "active": true
+    },
+    {
+      "id": "david",
+      "name": "David Wimmesberger",
+      "email": "david@wimmesberger.at",
+      "passwordHash": "CHANGE_ME",
+      "role": "product-owner",
+      "claudeAccountId": "david",
+      "allowedPanels": [
+        "cui-lite", "chat", "browser", "preview", "notes",
+        "mission", "qa-dashboard", "architecture"
+      ],
+      "allowedWorkspaces": ["werking-energy"],
+      "canGitPush": true,
+      "canApproveEdits": true,
+      "active": true
+    },
+    {
+      "id": "herbert",
+      "name": "Herbert Teufel",
+      "email": "herbert@teufel.at",
+      "passwordHash": "CHANGE_ME",
+      "role": "fachpartner",
+      "claudeAccountId": "herbert",
+      "allowedPanels": [
+        "cui-lite", "chat", "browser", "preview", "notes"
+      ],
+      "allowedWorkspaces": ["werkingsafety"],
+      "canGitPush": false,
+      "canApproveEdits": false,
+      "active": true
+    }
+  ]
+}

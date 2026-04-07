@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import mermaid from 'mermaid';
 import { resilientFetch } from '../../utils/resilientFetch';
+import { getPathConfig, buildQuickDirs, loadPathConfig } from '../../utils/paths';
 
 // Initialize mermaid once with dark theme
 mermaid.initialize({
@@ -159,19 +160,8 @@ interface FilePreviewProps {
 
 const API = '/api';
 
-// Quick navigation shortcuts
-const QUICK_DIRS: Array<{ label: string; path: string; color?: string }> = [
-  { label: 'business', path: '/root/projekte/werkingflow/business', color: '#e0af68' },
-  { label: 'shared', path: '/root/projekte/werkingflow/business/shared' },
-  { label: 'sales', path: '/root/projekte/werkingflow/business/sales' },
-  { label: 'finance', path: '/root/projekte/werkingflow/business/finance' },
-  { label: 'marketing', path: '/root/projekte/werkingflow/business/marketing' },
-  { label: 'customer', path: '/root/projekte/werkingflow/business/customer-success' },
-  { label: 'legal', path: '/root/projekte/werkingflow/business/legal' },
-  { label: 'foerderung', path: '/root/projekte/werkingflow/business/foerderung' },
-  { label: 'team', path: '/root/projekte/orchestrator/team', color: '#7aa2f7' },
-  { label: 'worklists', path: '/root/projekte/orchestrator/team/worklists' },
-];
+// Quick navigation shortcuts (loaded from server config)
+const QUICK_DIRS: Array<{ label: string; path: string; color?: string }> = buildQuickDirs(getPathConfig());
 
 export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
   const [currentDir, setCurrentDir] = useState(watchPath ?? '');
@@ -181,6 +171,23 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
   const [inputPath, setInputPath] = useState(watchPath ?? '');
   const [stageLoading, setStageLoading] = useState(false);
   const [stageSuccess, setStageSuccess] = useState(false);
+
+  // Markdown render mode: 'preview' = ReactMarkdown (dark), 'html' = WerkING branded HTML (light)
+  const [mdView, setMdView] = useState<'preview' | 'html'>('preview');
+
+  // Persistent font size (stored in localStorage)
+  const [fontSize, setFontSize] = useState<number>(() => {
+    try { return parseInt(localStorage.getItem('cui-filepreview-fontsize') || '14', 10); } catch { return 14; }
+  });
+  const changeFontSize = (delta: number) => {
+    setFontSize(prev => {
+      const next = Math.max(9, Math.min(28, prev + delta));
+      try { localStorage.setItem('cui-filepreview-fontsize', String(next)); } catch {}
+      return next;
+    });
+  };
+  const [mdHtml, setMdHtml] = useState<string>('');
+  const [mdHtmlLoading, setMdHtmlLoading] = useState(false);
 
   // CLAUDE mode state
   const [mode, setMode] = useState<'browse' | 'claude'>('browse');
@@ -207,6 +214,9 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
 
   const loadFile = useCallback(async (filePath: string) => {
     if ((window as any).__cuiServerAlive === false) return;
+    // Reset rendered HTML cache when loading a new file
+    setMdHtml('');
+    setMdView('preview');
     const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
     const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'ico'];
     const pdfExts = ['pdf'];
@@ -466,68 +476,136 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
     }
 
     if (ext === '.md' || ext === '.mdx') {
+      const loadRenderedHtml = async () => {
+        if (mdHtml) return; // already loaded for this file
+        setMdHtmlLoading(true);
+        try {
+          const res = await resilientFetch(`${API}/file/render-md?path=${encodeURIComponent(selectedFile.path)}`);
+          if (!res.ok) throw new Error(await res.text());
+          const html = await res.text();
+          setMdHtml(html);
+        } catch (err: any) {
+          setMdHtml(`<html><body style="font-family:sans-serif;padding:40px;color:#e53e3e"><h2>Render Error</h2><pre>${err.message}</pre></body></html>`);
+        } finally {
+          setMdHtmlLoading(false);
+        }
+      };
+
+      // Auto-load rendered HTML when view is 'html' (default)
+      if (mdView === 'html' && !mdHtml && !mdHtmlLoading) {
+        loadRenderedHtml();
+      }
+
       return (
-        <div
-          style={{
-            flex: 1,
-            overflow: 'auto',
-            padding: '20px 32px',
-            fontSize: 14,
-            lineHeight: 1.7,
-            color: 'var(--tn-text)',
-            maxWidth: '900px',
-            margin: '0 auto',
-          }}
-          className="markdown-preview"
-        >
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={{
-              h1: ({node, ...props}) => <h1 style={{fontSize: '28px', fontWeight: '700', color: 'var(--tn-text)', marginTop: '32px', marginBottom: '16px', borderBottom: '2px solid var(--tn-border)', paddingBottom: '8px'}} {...props} />,
-              h2: ({node, ...props}) => <h2 style={{fontSize: '22px', fontWeight: '600', color: 'var(--tn-text)', marginTop: '24px', marginBottom: '12px'}} {...props} />,
-              h3: ({node, ...props}) => <h3 style={{fontSize: '18px', fontWeight: '600', color: 'var(--tn-blue)', marginTop: '20px', marginBottom: '10px'}} {...props} />,
-              p: ({node, ...props}) => <p style={{marginBottom: '14px', color: 'var(--tn-text-subtle)'}} {...props} />,
-              ul: ({node, ...props}) => <ul style={{marginLeft: '20px', marginBottom: '14px', listStyleType: 'disc'}} {...props} />,
-              ol: ({node, ...props}) => <ol style={{marginLeft: '20px', marginBottom: '14px'}} {...props} />,
-              li: ({node, ...props}) => <li style={{marginBottom: '6px', color: 'var(--tn-text-subtle)'}} {...props} />,
-              code: ({node, inline, ...props}: any) => inline
-                ? <code style={{background: 'var(--tn-bg-highlight)', padding: '2px 6px', borderRadius: '3px', fontSize: '13px', fontFamily: 'monospace', color: 'var(--tn-blue)'}} {...props} />
-                : <code style={{display: 'block', background: 'var(--tn-bg-dark)', padding: '12px', borderRadius: '6px', fontSize: '13px', fontFamily: 'monospace', overflow: 'auto', marginBottom: '14px', border: '1px solid var(--tn-border)'}} {...props} />,
-              table: ({node, ...props}) => <table style={{width: '100%', borderCollapse: 'collapse', marginBottom: '20px', fontSize: '13px'}} {...props} />,
-              thead: ({node, ...props}) => <thead style={{background: 'var(--tn-bg-highlight)', borderBottom: '2px solid var(--tn-border)'}} {...props} />,
-              th: ({node, ...props}) => <th style={{padding: '10px 12px', textAlign: 'left', fontWeight: '600', borderBottom: '1px solid var(--tn-border)'}} {...props} />,
-              td: ({node, ...props}) => <td style={{padding: '8px 12px', borderBottom: '1px solid var(--tn-border)'}} {...props} />,
-              blockquote: ({node, ...props}) => <blockquote style={{borderLeft: '4px solid var(--tn-blue)', paddingLeft: '16px', marginLeft: '0', marginBottom: '14px', color: 'var(--tn-text-muted)', fontStyle: 'italic'}} {...props} />,
-              hr: ({node, ...props}) => <hr style={{border: 'none', borderTop: '1px solid var(--tn-border)', margin: '24px 0'}} {...props} />,
-              a: ({node, href, ...props}) => {
-                // In CLAUDE mode, make local file links clickable
-                if (mode === 'claude' && href && !href.startsWith('http') && selectedFile) {
-                  // Resolve relative path from the current file's directory
-                  let resolved = href;
-                  if (href.startsWith('/')) {
-                    resolved = href;
-                  } else if (href.startsWith('refs/')) {
-                    resolved = `/home/claude-user/.claude/${href}`;
-                  } else {
-                    const dir = selectedFile.path.replace(/\/[^/]+$/, '');
-                    resolved = `${dir}/${href}`;
-                  }
-                  return (
-                    <a
-                      style={{color: 'var(--tn-purple)', textDecoration: 'underline', cursor: 'pointer'}}
-                      onClick={(e) => { e.preventDefault(); loadFile(resolved); }}
-                      title={resolved}
-                      {...props}
-                    />
-                  );
-                }
-                return <a style={{color: 'var(--tn-blue)', textDecoration: 'none'}} href={href} {...props} />;
-              },
-              strong: ({node, ...props}) => <strong style={{fontWeight: '600', color: 'var(--tn-text)'}} {...props} />,
-            }}
-          >
-            {content}
-          </ReactMarkdown>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          {/* Toggle Bar */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 4,
+            padding: '4px 12px', borderBottom: '1px solid var(--tn-border)',
+            background: 'var(--tn-bg)', flexShrink: 0,
+          }}>
+            <button
+              onClick={() => { setMdView('preview'); }}
+              title="Dark Mode Markdown Rendering"
+              style={{
+                padding: '2px 8px', fontSize: 10, borderRadius: 3, cursor: 'pointer',
+                background: mdView === 'preview' ? 'var(--tn-bg-highlight)' : 'transparent',
+                border: mdView === 'preview' ? '1px solid var(--tn-border)' : '1px solid transparent',
+                color: mdView === 'preview' ? 'var(--tn-blue)' : 'var(--tn-text-muted)',
+                fontWeight: mdView === 'preview' ? 600 : 400,
+              }}
+            >
+              Dark
+            </button>
+            <button
+              onClick={() => { setMdView('html'); loadRenderedHtml(); }}
+              title="WerkING Report Style (heller Hintergrund)"
+              style={{
+                padding: '2px 8px', fontSize: 10, borderRadius: 3, cursor: 'pointer',
+                background: mdView === 'html' ? 'var(--tn-bg-highlight)' : 'transparent',
+                border: mdView === 'html' ? '1px solid var(--tn-border)' : '1px solid transparent',
+                color: mdView === 'html' ? '#DEC15E' : 'var(--tn-text-muted)',
+                fontWeight: mdView === 'html' ? 600 : 400,
+              }}
+            >
+              WerkING
+            </button>
+            {mdHtmlLoading && (
+              <span style={{ marginLeft: 8, fontSize: 10, color: 'var(--tn-text-muted)' }}>Rendering…</span>
+            )}
+          </div>
+
+          {/* Content */}
+          {mdView === 'html' ? (
+            <iframe
+              srcDoc={mdHtml || '<html><body style="font-family:sans-serif;padding:40px;color:#718096;text-align:center"><p>Wird gerendert…</p></body></html>'}
+              style={{ flex: 1, border: 'none', width: '100%', background: 'white' }}
+              sandbox="allow-scripts allow-same-origin"
+            />
+          ) : (
+            <div
+              style={{
+                flex: 1,
+                overflow: 'auto',
+                padding: '20px 32px',
+                fontSize,
+                lineHeight: 1.7,
+                color: 'var(--tn-text)',
+                maxWidth: '100%',
+                boxSizing: 'border-box',
+                overflowWrap: 'break-word',
+                wordBreak: 'break-word',
+              }}
+              className="markdown-preview"
+            >
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  h1: ({node, ...props}) => <h1 style={{fontSize: '28px', fontWeight: '700', color: 'var(--tn-text)', marginTop: '32px', marginBottom: '16px', borderBottom: '2px solid var(--tn-border)', paddingBottom: '8px'}} {...props} />,
+                  h2: ({node, ...props}) => <h2 style={{fontSize: '22px', fontWeight: '600', color: 'var(--tn-text)', marginTop: '24px', marginBottom: '12px'}} {...props} />,
+                  h3: ({node, ...props}) => <h3 style={{fontSize: '18px', fontWeight: '600', color: 'var(--tn-blue)', marginTop: '20px', marginBottom: '10px'}} {...props} />,
+                  p: ({node, ...props}) => <p style={{marginBottom: '14px', color: 'var(--tn-text-subtle)'}} {...props} />,
+                  ul: ({node, ...props}) => <ul style={{marginLeft: '20px', marginBottom: '14px', listStyleType: 'disc'}} {...props} />,
+                  ol: ({node, ...props}) => <ol style={{marginLeft: '20px', marginBottom: '14px'}} {...props} />,
+                  li: ({node, ...props}) => <li style={{marginBottom: '6px', color: 'var(--tn-text-subtle)'}} {...props} />,
+                  code: ({node, inline, ...props}: any) => inline
+                    ? <code style={{background: 'var(--tn-bg-highlight)', padding: '2px 6px', borderRadius: '3px', fontSize: '13px', fontFamily: 'monospace', color: 'var(--tn-blue)'}} {...props} />
+                    : <code style={{display: 'block', background: 'var(--tn-bg-dark)', padding: '12px', borderRadius: '6px', fontSize: '13px', fontFamily: 'monospace', overflow: 'auto', marginBottom: '14px', border: '1px solid var(--tn-border)'}} {...props} />,
+                  table: ({node, ...props}) => <div style={{overflowX: 'auto', marginBottom: '20px'}}><table style={{width: '100%', borderCollapse: 'collapse', fontSize: '13px', tableLayout: 'auto'}} {...props} /></div>,
+                  thead: ({node, ...props}) => <thead style={{background: 'var(--tn-bg-highlight)', borderBottom: '2px solid var(--tn-border)'}} {...props} />,
+                  th: ({node, ...props}) => <th style={{padding: '10px 12px', textAlign: 'left', fontWeight: '600', borderBottom: '1px solid var(--tn-border)'}} {...props} />,
+                  td: ({node, ...props}) => <td style={{padding: '8px 12px', borderBottom: '1px solid var(--tn-border)', wordBreak: 'break-word', maxWidth: '300px'}} {...props} />,
+                  blockquote: ({node, ...props}) => <blockquote style={{borderLeft: '4px solid var(--tn-blue)', paddingLeft: '16px', marginLeft: '0', marginBottom: '14px', color: 'var(--tn-text-muted)', fontStyle: 'italic'}} {...props} />,
+                  hr: ({node, ...props}) => <hr style={{border: 'none', borderTop: '1px solid var(--tn-border)', margin: '24px 0'}} {...props} />,
+                  a: ({node, href, ...props}) => {
+                    if (mode === 'claude' && href && !href.startsWith('http') && selectedFile) {
+                      let resolved = href;
+                      if (href.startsWith('/')) {
+                        resolved = href;
+                      } else if (href.startsWith('refs/')) {
+                        resolved = `${getPathConfig().claudeUserHome}/.claude/${href}`;
+                      } else {
+                        const dir = selectedFile.path.replace(/\/[^/]+$/, '');
+                        resolved = `${dir}/${href}`;
+                      }
+                      return (
+                        <a
+                          style={{color: 'var(--tn-purple)', textDecoration: 'underline', cursor: 'pointer'}}
+                          onClick={(e) => { e.preventDefault(); loadFile(resolved); }}
+                          title={resolved}
+                          {...props}
+                        />
+                      );
+                    }
+                    return <a style={{color: 'var(--tn-blue)', textDecoration: 'none'}} href={href} {...props} />;
+                  },
+                  strong: ({node, ...props}) => <strong style={{fontWeight: '600', color: 'var(--tn-text)'}} {...props} />,
+                }}
+              >
+                {content}
+              </ReactMarkdown>
+            </div>
+          )}
         </div>
       );
     }
@@ -537,11 +615,21 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
     }
 
     if (ext === '.html' || ext === '.htm') {
+      // Resolve relative src/href paths in HTML to API-served absolute URLs
+      // so that images, stylesheets, and other assets load correctly in srcDoc iframes
+      const htmlDir = selectedFile.path.replace(/\/[^/]+$/, '');
+      const processedContent = content.replace(
+        /(src|href)\s*=\s*"(?!https?:\/\/|data:|\/api\/|#|mailto:)([^"]+)"/g,
+        (_match: string, attr: string, relPath: string) => {
+          const absPath = `${htmlDir}/${relPath}`;
+          return `${attr}="${API}/file?path=${encodeURIComponent(absPath)}"`;
+        }
+      );
       return (
         <iframe
-          srcDoc={content}
+          srcDoc={processedContent}
           style={{ flex: 1, border: 'none', width: '100%', background: 'white' }}
-          sandbox="allow-scripts"
+          sandbox="allow-scripts allow-same-origin"
         />
       );
     }
@@ -551,7 +639,7 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
       try { formatted = JSON.stringify(JSON.parse(content), null, 2); } catch {}
       return (
         <pre style={{
-          flex: 1, overflow: 'auto', padding: 12, fontSize: 12,
+          flex: 1, overflow: 'auto', padding: 12, fontSize,
           color: 'var(--tn-text-subtle)', fontFamily: "'JetBrains Mono', monospace",
           whiteSpace: 'pre-wrap', wordBreak: 'break-word',
         }}>
@@ -562,7 +650,7 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
 
     return (
       <pre style={{
-        flex: 1, overflow: 'auto', padding: 12, fontSize: 12,
+        flex: 1, overflow: 'auto', padding: 12, fontSize,
         color: 'var(--tn-text-subtle)', fontFamily: "'JetBrains Mono', monospace",
         whiteSpace: 'pre-wrap', wordBreak: 'break-word',
       }}>
@@ -694,7 +782,7 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
         </div>
 
         {/* Content Area */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
           {selectedFile && (
             <div style={{
               display: 'flex', alignItems: 'center', gap: 8,
@@ -704,6 +792,43 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
               <span style={{ flex: 1, color: 'var(--tn-text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {selectedFile.path}
               </span>
+              {/* Font Size Controls */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 2, marginRight: 4 }}>
+                <button
+                  onClick={() => changeFontSize(-1)}
+                  style={{
+                    width: 18, height: 18, fontSize: 12, lineHeight: '16px',
+                    background: 'none', border: '1px solid var(--tn-border)', borderRadius: 3,
+                    color: 'var(--tn-text-muted)', cursor: 'pointer', padding: 0,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}
+                  title="Schrift kleiner"
+                >A</button>
+                <span style={{ fontSize: 9, color: 'var(--tn-text-muted)', minWidth: 18, textAlign: 'center' }}>{fontSize}</span>
+                <button
+                  onClick={() => changeFontSize(1)}
+                  style={{
+                    width: 18, height: 18, fontSize: 14, lineHeight: '16px', fontWeight: 700,
+                    background: 'none', border: '1px solid var(--tn-border)', borderRadius: 3,
+                    color: 'var(--tn-text-muted)', cursor: 'pointer', padding: 0,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}
+                  title="Schrift groesser"
+                >A</button>
+              </div>
+              <a
+                href={`${API}/file/download?path=${encodeURIComponent(selectedFile.path)}`}
+                download
+                style={{
+                  padding: '2px 8px', fontSize: 10, borderRadius: 3,
+                  background: 'var(--tn-green)',
+                  color: 'white', border: 'none', cursor: 'pointer',
+                  textDecoration: 'none', display: 'inline-block',
+                }}
+                title="Download file"
+              >
+                Download
+              </a>
               {stageDir && (
                 <button
                   onClick={stageFile}
