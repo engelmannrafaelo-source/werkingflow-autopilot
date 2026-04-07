@@ -126,6 +126,13 @@ export function persistSessionStates() {
   } catch (err) { console.warn('[State] Failed to persist session states:', err instanceof Error ? err.message : err); }
 }
 
+// Sessions that were working->idle on restore — candidates for auto-continue check
+const _restoredWorkingSessions: Array<{ sessionId: string; accountId: string }> = [];
+
+export function getRestoredWorkingSessions(): Array<{ sessionId: string; accountId: string }> {
+  return [..._restoredWorkingSessions];
+}
+
 export function restoreSessionStates() {
   if (!existsSync(SESSION_STATES_FILE)) return;
   try {
@@ -138,12 +145,17 @@ export function restoreSessionStates() {
       // (the CUI binary process was likely killed or finished during restart)
       if (val.state === "working") {
         sessionStates.set(key, { ...val, state: "idle", reason: "done", since: now });
+        // Track for post-init auto-continue check
+        const sessionId = val.sessionId || key;
+        if (val.accountId) {
+          _restoredWorkingSessions.push({ sessionId, accountId: val.accountId });
+        }
       } else {
         sessionStates.set(key, val);
       }
     }
     const restored = sessionStates.size;
-    if (restored > 0) console.log(`[SessionState] Restored ${restored} states from disk (working->idle)`);
+    if (restored > 0) console.log(`[SessionState] Restored ${restored} states from disk (working->idle), ${_restoredWorkingSessions.length} candidates for auto-continue`);
   } catch (err) {
     console.log(`[SessionState] Failed to restore states: ${err}`);
   }

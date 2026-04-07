@@ -15,7 +15,7 @@ import type { ChildProcess } from 'child_process';
 import { promises as fsp, createReadStream, existsSync, readFileSync, writeSync } from 'fs';
 import { createInterface } from 'readline';
 import type { ConvAttentionState, AttentionReason, SessionState, ToolExecutionInfo } from './shared/types.js';
-import { IS_LOCAL_MODE } from './state.js';
+import { IS_LOCAL_MODE, getRestoredWorkingSessions } from './state.js';
 import { hasIncompleteToolUse, getOriginalCwd } from './shared/jsonl.js';
 
 // --- Account Configuration ---
@@ -119,6 +119,9 @@ export function initClaudeCli(deps: {
       .then(() => {
         console.log('[ClaudeCLI] Reconnect done. Orphan cleanup scheduled in 30s (grace period).');
         setTimeout(() => cleanupOrphanProcesses(), 30_000);
+        // Auto-continue sessions that were working when server went down
+        // Delay to allow JSONL files to be accessible after reconnect
+        setTimeout(() => checkRestoredSessionsAutoContinue(), 5_000);
       })
       .catch(err => {
         console.error('[ClaudeCLI] reconnect failed:', err instanceof Error ? err.message : err);
@@ -404,6 +407,51 @@ function handleStdoutLine(line: string, entry: ClaudeProcess): { sessionId?: str
     return result;
   } catch {
     return {};
+  }
+}
+
+// --- Auto-Continue on Server Restart ---
+
+/**
+ * After server restart, check sessions that were working->idle and auto-continue
+ * those that have incomplete tool_use (interrupted mid-execution).
+ */
+async function checkRestoredSessionsAutoContinue(): Promise<void> {
+  const candidates = getRestoredWorkingSessions();
+  if (candidates.length === 0) return;
+
+  console.log(`[AutoContinue] Checking ${candidates.length} restored sessions for incomplete tool_use`);
+
+  for (const { sessionId, accountId } of candidates) {
+    try {
+      if (!hasIncompleteToolUse(sessionId)) {
+        console.log(`[AutoContinue] Restored session ${sessionId.slice(0, 8)}: no incomplete tool_use, skipping`);
+        continue;
+      }
+
+      const retryCount = (_autoContinueCount.get(sessionId) || 0) + 1;
+      if (retryCount > AUTO_CONTINUE_MAX_RETRIES) {
+        console.warn(`[AutoContinue] Restored session ${sessionId.slice(0, 8)}: max retries would be exceeded, skipping`);
+        continue;
+      }
+      _autoContinueCount.set(sessionId, retryCount);
+
+      const workDir = getOriginalCwd(sessionId) || '/root/orchestrator/workspaces/diverse';
+      console.log(`[AutoContinue] Restored session ${sessionId.slice(0, 8)}: incomplete tool_use detected, auto-continuing (attempt ${retryCount}/${AUTO_CONTINUE_MAX_RETRIES})`);
+
+      _setSessionState(sessionId, accountId, 'working', undefined, sessionId);
+      _broadcast({ type: 'cui-state', cuiId: accountId, sessionId, state: 'processing' });
+
+      const res = await startConversation(accountId, '', workDir, sessionId);
+      if (!res.ok) {
+        console.error(`[AutoContinue] Restored session ${sessionId.slice(0, 8)}: resume failed: ${res.error}`);
+        _setSessionState(sessionId, accountId, 'idle', 'done', sessionId);
+        _broadcast({ type: 'cui-state', cuiId: accountId, sessionId, state: 'done' });
+      }
+    } catch (err) {
+      console.error(`[AutoContinue] Restored session ${sessionId.slice(0, 8)}: error: ${err instanceof Error ? err.message : err}`);
+      _setSessionState(sessionId, accountId, 'idle', 'done', sessionId);
+    }
   }
 }
 
