@@ -11,7 +11,7 @@
 import { Router } from 'express';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'fs';
 import { randomUUID } from 'crypto';
-import { join, basename, relative } from 'path';
+import { join, basename, dirname, relative } from 'path';
 import { load as yamlLoad } from 'js-yaml';
 import { PATHS } from '../config/paths.js';
 import { parseDiffs } from '../lib/diff-parser.js';
@@ -48,6 +48,7 @@ interface ChatSession {
 // Disk-persisted session state (survives server restarts)
 interface PersistedSession {
   session_id: string;
+  title: string;
   created_at: number;
   updated_at: number;
   token_count: number;
@@ -70,11 +71,20 @@ function readPersistedSession(): PersistedSession | null {
   } catch { return null; }
 }
 
+function deriveSessionTitle(conversation: ChatMessage[]): string {
+  const firstUserMsg = conversation.find(m => m.role === 'user');
+  if (!firstUserMsg) return 'Neue Session';
+  // Take first 60 chars of the first user message as title
+  const raw = firstUserMsg.content.replace(/\n/g, ' ').trim();
+  return raw.length > 60 ? raw.slice(0, 57) + '…' : raw;
+}
+
 function writePersistedSession(session: ChatSession): void {
   // conversation = history minus the first 2 pre-seeded context messages
   const conversation = session.history.slice(2);
   const data: PersistedSession = {
     session_id: session.session_id,
+    title: deriveSessionTitle(conversation),
     created_at: session.created_at,
     updated_at: Date.now(),
     token_count: session.token_count,
@@ -183,6 +193,46 @@ function readTempFiles(tempDir: string): Array<{ name: string; content: string }
 const SKIP_DIR = /^(_archive|archive|archiv|_archiv|reports|_reports)$/i;
 const SKIP_FILE_EXT = /\.(html|log)$/i;
 const SKIP_FILE_NAME = /^(readme|CLAUDE)/i;
+
+/** Render the business directory tree as indented text for context injection */
+function renderFileTreeText(absBase: string, relDir: string, indent: number = 0): string {
+  const fullDir = join(absBase, relDir);
+  let entries: ReturnType<typeof readdirSync>;
+  try {
+    entries = readdirSync(fullDir, { withFileTypes: true });
+  } catch {
+    return '';
+  }
+
+  const lines: string[] = [];
+  const prefix = '  '.repeat(indent);
+
+  // Sort: dirs first, then files
+  const sorted = [...entries].sort((a, b) => {
+    if (a.isDirectory() && !b.isDirectory()) return -1;
+    if (!a.isDirectory() && b.isDirectory()) return 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  for (const entry of sorted) {
+    if (entry.name.startsWith('.')) continue;
+    const relPath = relDir ? `${relDir}/${entry.name}` : entry.name;
+
+    if (entry.isDirectory()) {
+      if (SKIP_DIR.test(entry.name)) continue;
+      const children = renderFileTreeText(absBase, relPath, indent + 1);
+      if (!children) continue;
+      lines.push(`${prefix}${entry.name}/`);
+      lines.push(children);
+    } else if (entry.isFile()) {
+      if (SKIP_FILE_EXT.test(entry.name)) continue;
+      if (SKIP_FILE_NAME.test(entry.name)) continue;
+      lines.push(`${prefix}${entry.name}`);
+    }
+  }
+
+  return lines.join('\n');
+}
 
 function buildFileTree(absBase: string, relDir: string, kernSet: Set<string>): TreeNode[] {
   const fullDir = join(absBase, relDir);
@@ -351,6 +401,137 @@ router.post('/session/end', (_req, res) => {
   res.json({ ok: true });
 });
 
+// --- GET /sessions — list all archived sessions ---
+router.get('/sessions', (_req, res) => {
+  try {
+    mkdirSync(SESSION_LOG_DIR, { recursive: true });
+    const files = readdirSync(SESSION_LOG_DIR).filter(f => f.endsWith('.json')).sort().reverse();
+    const sessions: Array<{
+      id: string;
+      title: string;
+      created_at: number;
+      updated_at: number;
+      turns: number;
+      filename: string;
+    }> = [];
+
+    for (const file of files) {
+      try {
+        const raw = readFileSync(join(SESSION_LOG_DIR, file), 'utf-8');
+        const data = JSON.parse(raw) as PersistedSession;
+        sessions.push({
+          id: data.session_id,
+          title: data.title || deriveSessionTitle(data.conversation),
+          created_at: data.created_at,
+          updated_at: data.updated_at,
+          turns: data.conversation.length,
+          filename: file,
+        });
+      } catch {
+        // skip corrupt files
+      }
+    }
+
+    res.json({ sessions });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- POST /session/new — archive current + start fresh ---
+router.post('/session/new', (_req, res) => {
+  try {
+    // Archive current active session if it exists and has conversation
+    const persisted = readPersistedSession();
+    if (persisted && persisted.session_id && persisted.conversation && persisted.conversation.length > 0) {
+      // Ensure title is set before archiving
+      if (!persisted.title) {
+        persisted.title = deriveSessionTitle(persisted.conversation);
+      }
+      SESSION_STORE.delete(persisted.session_id);
+      archiveSession(persisted);
+      console.log(`[BusinessAngel] Session archived before new: ${persisted.session_id}`);
+    } else if (persisted?.session_id) {
+      // Empty session — just clear it
+      SESSION_STORE.delete(persisted.session_id);
+    }
+
+    // Clear active session file
+    writeFileSync(ACTIVE_SESSION_PATH, '', 'utf-8');
+
+    res.json({ ok: true, archived: !!(persisted?.conversation?.length) });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- POST /session/load/:id — load a specific archived session ---
+router.post('/session/load/:id', (req, res) => {
+  try {
+    const targetId = req.params.id;
+    if (!targetId) {
+      res.status(400).json({ error: 'session id required' });
+      return;
+    }
+
+    mkdirSync(SESSION_LOG_DIR, { recursive: true });
+    const files = readdirSync(SESSION_LOG_DIR).filter(f => f.endsWith('.json'));
+
+    let found: PersistedSession | null = null;
+    let foundFile = '';
+    for (const file of files) {
+      try {
+        const raw = readFileSync(join(SESSION_LOG_DIR, file), 'utf-8');
+        const data = JSON.parse(raw) as PersistedSession;
+        if (data.session_id === targetId) {
+          found = data;
+          foundFile = file;
+          break;
+        }
+      } catch {
+        // skip
+      }
+    }
+
+    if (!found) {
+      res.status(404).json({ error: `Session not found: ${targetId}` });
+      return;
+    }
+
+    // Archive current active session first (if exists and has content)
+    const current = readPersistedSession();
+    if (current && current.session_id && current.conversation && current.conversation.length > 0) {
+      if (!current.title) {
+        current.title = deriveSessionTitle(current.conversation);
+      }
+      SESSION_STORE.delete(current.session_id);
+      archiveSession(current);
+      console.log(`[BusinessAngel] Current session archived before load: ${current.session_id}`);
+    } else if (current?.session_id) {
+      SESSION_STORE.delete(current.session_id);
+    }
+
+    // Write the loaded session as the new active session
+    writeFileSync(ACTIVE_SESSION_PATH, JSON.stringify(found, null, 2), 'utf-8');
+
+    console.log(`[BusinessAngel] Session loaded from archive: ${targetId} (${foundFile})`);
+
+    res.json({
+      ok: true,
+      session_id: found.session_id,
+      title: found.title || deriveSessionTitle(found.conversation),
+      created_at: found.created_at,
+      updated_at: found.updated_at,
+      conversation: found.conversation,
+      conversation_turns: found.conversation.length,
+      token_count: found.token_count,
+      files_loaded: found.files_loaded,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/load', async (req, res) => {
   try {
     const { zusatz = [], extra_files = [], restore = false } = req.body as {
@@ -468,14 +649,34 @@ REGELN:
 - Erfinde keine Zahlen, Konditionen, Personen oder Deals
 - Wenn du etwas nicht weißt: sag es direkt
 - Wenn Rafael sagt "bau die Diffs": schreibe Edit-Befehle für die betroffenen Dateien
-  Format pro Änderung:
+  Format für Änderungen an bestehenden Dateien:
     FILE: <relativer Pfad ab business/>
-    OLD: <exakter Originaltext>
-    NEW: <neuer Text>
-- Keine ganzen Dokumente umschreiben — nur was sich wirklich ändert`;
+    OLD:
+    <VOLLSTÄNDIGER Abschnitt exakt wie er im Dokument steht — von der ## Überschrift bis zur nächsten ## Überschrift>
+    NEW:
+    <VOLLSTÄNDIGER aktualisierter Abschnitt — gleiche Struktur, nur mit den Änderungen eingearbeitet>
+  Format für NEUE Dateien (noch nicht existierend):
+    FILE: <relativer Pfad ab business/>
+    OLD:
+    NEW:
+    <Vollständiger Inhalt der neuen Datei>
+- KRITISCH für OLD bei Änderungen: Immer den GANZEN Abschnitt kopieren (Überschrift + Inhalt + Leerzeilen), nie nur einzelne Zeilen
+- KRITISCH für NEW: Den gleichen vollständigen Abschnitt mit allen Änderungen — kein Text weglassen
+- Bei neuen Dateien: OLD leer lassen, NEW enthält den kompletten Dateiinhalt
+- Nur die betroffenen Abschnitte liefern, nicht das gesamte Dokument
+- PFADE: Der <dateibaum> Block enthält die aktuelle Ordnerstruktur. Verwende IMMER existierende Pfade und Namenskonventionen daraus. Für neue Dateien: orientiere dich am Namensschema der Nachbar-Dateien im gleichen Ordner.`;
+
+    // Build file tree text for context injection (so Angel knows all paths)
+    const fileTreeText = renderFileTreeText(BUSINESS_DIR, '');
+    const fileTreeTokens = estimateTokens(fileTreeText);
+    console.log(`[BusinessAngel] File tree injected (~${fileTreeTokens} tokens)`);
 
     // Context wrapped in <documents> tags — clearly not part of the conversation
     const contextMessage = `<documents>
+
+<dateibaum description="Aktuelle Ordnerstruktur von /root/projekte/werkingflow-business/ — verwende diese Pfade wenn du neue Dateien erstellst oder bestehende referenzierst">
+${fileTreeText}
+</dateibaum>
 
 <kern_business_docs>
 ${kernSections.join('\n\n---\n\n')}
@@ -619,7 +820,20 @@ router.post('/apply-diffs', (req, res) => {
     for (const diff of resolvedDiffs) {
       const absPath = join(BUSINESS_DIR, diff.file);
 
-      // Validate file exists
+      // New file: OLD is empty → create file with NEW content
+      if (!diff.old.trim()) {
+        if (existsSync(absPath)) {
+          failed.push({ file: diff.file, reason: 'NEW FILE: file already exists (use OLD/NEW diff to modify)' });
+          continue;
+        }
+        if (dry_run) { applied.push(diff.file); continue; }
+        ensureDir(dirname(absPath));
+        writeFileSync(absPath, diff.newText, 'utf-8');
+        applied.push(diff.file);
+        continue;
+      }
+
+      // Existing file: validate it exists
       if (!existsSync(absPath)) {
         failed.push({ file: diff.file, reason: 'File not found' });
         continue;
@@ -627,9 +841,42 @@ router.post('/apply-diffs', (req, res) => {
 
       const current = readFileSync(absPath, 'utf-8');
 
-      // Validate old text exists exactly in file
-      if (!current.includes(diff.old)) {
-        failed.push({ file: diff.file, reason: 'OLD text not found in file (exact match required)' });
+      // Normalize: trim trailing spaces per line (AI often produces slightly different whitespace in tables)
+      const normalizeWs = (s: string) =>
+        s.replace(/\r\n/g, '\n').split('\n').map(l => l.trimEnd()).join('\n');
+
+      // Try to build the replacement — prefer exact match, fall back to normalized match, then section-level
+      let updated: string | null = null;
+
+      if (current.includes(diff.old)) {
+        // 1. Exact match: straight replace (first occurrence)
+        updated = current.replace(diff.old, diff.newText);
+      } else {
+        // 2. Normalized match: trim trailing whitespace from each line before comparing
+        const normCurrent = normalizeWs(current);
+        const normOld = normalizeWs(diff.old);
+        if (normCurrent.includes(normOld)) {
+          updated = normCurrent.replace(normOld, normalizeWs(diff.newText));
+        } else {
+          // 3. Section-level replace: if OLD is a bare ## heading, replace from that heading
+          // to the next heading of same or higher level
+          const headingMatch = diff.old.trim().match(/^(#{1,6})\s+(.+)$/);
+          if (headingMatch) {
+            const level = headingMatch[1].length;
+            // Regex: from this heading to next heading of same/higher level (or EOF)
+            const escapedHeading = diff.old.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const sectionRe = new RegExp(
+              `(${escapedHeading}[\\s\\S]*?)(?=\\n#{1,${level}} |\\n#{1,${level}}\\t|$)`,
+            );
+            if (sectionRe.test(normCurrent)) {
+              updated = normCurrent.replace(sectionRe, normalizeWs(diff.newText).trimEnd() + '\n');
+            }
+          }
+        }
+      }
+
+      if (updated === null) {
+        failed.push({ file: diff.file, reason: 'OLD text not found in file (exact match and section-level both failed)' });
         continue;
       }
 
@@ -647,8 +894,6 @@ router.post('/apply-diffs', (req, res) => {
         : backupPath;
       writeFileSync(finalBackupPath, current, 'utf-8');
 
-      // Apply diff (replace first occurrence)
-      const updated = current.replace(diff.old, diff.newText);
       writeFileSync(absPath, updated, 'utf-8');
 
       applied.push(diff.file);

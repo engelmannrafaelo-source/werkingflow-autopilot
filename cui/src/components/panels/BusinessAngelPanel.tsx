@@ -5,6 +5,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { diffLines } from 'diff';
 import { markdownComponents } from './cui/ChatMessages';
 
 // --- Types ---
@@ -53,6 +54,15 @@ interface LoadResult {
 interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
+}
+
+interface SessionListItem {
+  id: string;
+  title: string;
+  created_at: number;
+  updated_at: number;
+  turns: number;
+  filename: string;
 }
 
 interface DiffCard {
@@ -124,6 +134,10 @@ function parseDiffsClient(text: string): Array<{ file: string; old: string; newT
   }
 
   // ── Format 2: legacy FILE:/OLD:/NEW: ─────────────────────────────
+  // NOTE: We split on FILE: first so each block only contains one diff.
+  // The regex /^NEW:\s*([\s\S]*?)(?=^FILE:\s*|$)/m is BROKEN — with /m,
+  // $ matches end of any line so the non-greedy match captures only line 1.
+  // Fix: parse line-by-line to correctly extract multiline OLD/NEW blocks.
   if (results.length === 0) {
     const blocks = text.split(/^FILE:\s*/m).filter(b => b.trim());
     for (const block of blocks) {
@@ -131,12 +145,34 @@ function parseDiffsClient(text: string): Array<{ file: string; old: string; newT
       if (fileLineEnd === -1) continue;
       const filePath = block.slice(0, fileLineEnd).trim();
       const rest = block.slice(fileLineEnd + 1);
-      const oldMatch = rest.match(/^OLD:\s*([\s\S]*?)(?=^NEW:\s*)/m);
-      const newMatch = rest.match(/^NEW:\s*([\s\S]*?)(?=^FILE:\s*|$)/m);
-      if (!oldMatch || !newMatch) continue;
-      const oldText = oldMatch[1].trimEnd();
-      const newText = newMatch[1].trimEnd();
-      if (!filePath || oldText === undefined || newText === undefined) continue;
+
+      const lines = rest.split('\n');
+      let oldLineIdx = -1, newLineIdx = -1;
+      for (let i = 0; i < lines.length; i++) {
+        if (oldLineIdx === -1 && /^OLD:\s*/.test(lines[i])) oldLineIdx = i;
+        if (newLineIdx === -1 && /^NEW:\s*/.test(lines[i])) newLineIdx = i;
+      }
+      if (oldLineIdx === -1 || newLineIdx === -1) continue;
+
+      // OLD: inline part + lines up to NEW:
+      const oldInline = lines[oldLineIdx].replace(/^OLD:\s*/, '');
+      const oldBody = lines.slice(oldLineIdx + 1, newLineIdx).join('\n');
+      const oldText = (oldInline + (oldBody ? '\n' + oldBody : '')).trimEnd();
+
+      // NEW: inline part + all remaining lines
+      // Strip trailing separator/header junk from the end (--- and ## DIFF N: patterns)
+      const newInline = lines[newLineIdx].replace(/^NEW:\s*/, '');
+      const newBodyLines = lines.slice(newLineIdx + 1);
+      while (newBodyLines.length > 0) {
+        const last = newBodyLines[newBodyLines.length - 1].trim();
+        if (last === '' || last === '---' || /^##\s+DIFF\s+\d+:/.test(last)) {
+          newBodyLines.pop();
+        } else break;
+      }
+      const newBody = newBodyLines.join('\n');
+      const newText = (newInline + (newBody ? '\n' + newBody : '')).trimEnd();
+
+      if (!filePath || !oldText) continue;
       results.push({ file: filePath, old: oldText, newText });
     }
   }
@@ -144,11 +180,6 @@ function parseDiffsClient(text: string): Array<{ file: string; old: string; newT
   return results;
 }
 
-function truncate(text: string, maxLines = 4): { text: string; truncated: boolean } {
-  const lines = text.split('\n');
-  if (lines.length <= maxLines) return { text, truncated: false };
-  return { text: lines.slice(0, maxLines).join('\n'), truncated: true };
-}
 
 // Count all files in tree that are selected
 function countSelectedInTree(nodes: TreeNode[], selected: Set<string>): number {
@@ -403,6 +434,12 @@ export default function BusinessAngelPanel() {
   const [startError, setStartError] = useState('');
   const [activeSessionInfo, setActiveSessionInfo] = useState<{ session_id: string; created_at: number; conversation_turns: number; in_memory: boolean } | null>(null);
 
+  // Session list
+  const [sessionList, setSessionList] = useState<SessionListItem[]>([]);
+  const [sessionListOpen, setSessionListOpen] = useState(false);
+  const [sessionListLoading, setSessionListLoading] = useState(false);
+  const [loadingSessionId, setLoadingSessionId] = useState<string | null>(null);
+
   // Chat
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
@@ -418,6 +455,23 @@ export default function BusinessAngelPanel() {
   const [pasteOpen, setPasteOpen] = useState(false);
   const [rawPasteText, setRawPasteText] = useState('');
   const diffRef = useRef<HTMLDivElement>(null);
+
+  // View mode + diff editing
+  const [activeView, setActiveView] = useState<'chat' | 'diffs'>('chat');
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editBuffer, setEditBuffer] = useState('');
+
+  // File content cache for full-file diff view
+  const [fileContents, setFileContents] = useState<Record<string, string>>({});
+  const fetchFileContent = useCallback(async (filePath: string) => {
+    if (fileContents[filePath] !== undefined) return;
+    try {
+      const r = await fetch(`/api/business-angel/file-preview?path=${encodeURIComponent(filePath)}`);
+      if (!r.ok) return;
+      const data = await r.json();
+      setFileContents(prev => ({ ...prev, [filePath]: data.content ?? '' }));
+    } catch { /* ignore */ }
+  }, [fileContents]);
 
   // --- Load data ---
 
@@ -521,6 +575,21 @@ export default function BusinessAngelPanel() {
             content: `_(Dokumente neu geladen · ${data.files_loaded} Dateien · ~${Math.round(data.token_count / 1000)}k Tokens${excludedNote})_`,
           },
         ]);
+        // Re-inject diffs from the last assistant message that contains diffs
+        const assistantMsgs = (data.conversation as Array<{role: string; content: string}>)
+          .filter(m => m.role === 'assistant');
+        for (let i = assistantMsgs.length - 1; i >= 0; i--) {
+          const parsed = parseDiffsClient(assistantMsgs[i].content);
+          if (parsed.length > 0) {
+            setDiffCards(parsed.map(d => ({
+              id: Math.random().toString(36).slice(2),
+              file: d.file, old: d.old, newText: d.newText, rawHunk: d.rawHunk,
+              status: 'unchecked' as const,
+              oldExpanded: false, newExpanded: false,
+            })));
+            break; // only inject from the most recent message that has diffs
+          }
+        }
       } else {
         setChatMessages([{
           role: 'assistant',
@@ -539,6 +608,60 @@ export default function BusinessAngelPanel() {
     setSession(null);
     setChatMessages([]);
     setActiveSessionInfo(null);
+  };
+
+  // --- Session Management ---
+
+  const fetchSessionList = async () => {
+    setSessionListLoading(true);
+    try {
+      const resp = await fetch('/api/business-angel/sessions');
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      setSessionList(data.sessions ?? []);
+    } catch {
+      setSessionList([]);
+    } finally {
+      setSessionListLoading(false);
+    }
+  };
+
+  const newSession = async () => {
+    setStarting(true);
+    setStartError('');
+    try {
+      // Archive current session + clear
+      await fetch('/api/business-angel/session/new', { method: 'POST' });
+      setSession(null);
+      setChatMessages([]);
+      setDiffCards([]);
+      setActiveSessionInfo(null);
+      setContextCollapsed(false);
+      // Start fresh session with currently selected files
+      await startSession(false);
+    } catch (e: unknown) {
+      setStartError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  const loadArchivedSession = async (sessionId: string) => {
+    setLoadingSessionId(sessionId);
+    try {
+      const resp = await fetch(`/api/business-angel/session/load/${sessionId}`, { method: 'POST' });
+      if (!resp.ok) {
+        const data = await resp.json();
+        throw new Error(data.error || `HTTP ${resp.status}`);
+      }
+      // Now restore via /load with restore=true (re-injects context + loads conversation)
+      await startSession(true);
+      setSessionListOpen(false);
+    } catch (e: unknown) {
+      setStartError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoadingSessionId(null);
+    }
   };
 
   // --- Chat ---
@@ -592,7 +715,15 @@ export default function BusinessAngelPanel() {
         oldExpanded: false, newExpanded: false,
       })),
     ]);
+    setActiveView('diffs'); // auto-switch to diffs view when new diffs arrive
   };
+
+  const updateNewText = (id: string, text: string) =>
+    setDiffCards(prev => prev.map(c => c.id === id ? { ...c, newText: text } : c));
+
+  const startEdit = (card: DiffCard) => { setEditingId(card.id); setEditBuffer(card.newText); };
+  const saveEdit  = (id: string)    => { updateNewText(id, editBuffer); setEditingId(null); setEditBuffer(''); };
+  const cancelEdit = ()             => { setEditingId(null); setEditBuffer(''); };
 
   const parsePasted = () => {
     if (!rawPasteText.trim()) return;
@@ -734,8 +865,33 @@ export default function BusinessAngelPanel() {
 
       {/* ── Header ── */}
       <div style={S.header}>
-        <h2 style={S.h2}>Business Angel</h2>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: '6px', alignItems: 'center' }}>
+        <h2 style={S.h2}>🤝 Business Angel</h2>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: '4px', alignItems: 'center' }}>
+          {session && (
+            <>
+              {/* Tab: Chat */}
+              <button
+                style={{
+                  ...S.btn, padding: '3px 10px', fontSize: '11px', borderRadius: '6px',
+                  background: activeView === 'chat' ? 'var(--tn-purple, #bb9af7)' : 'transparent',
+                  color: activeView === 'chat' ? '#1a1b26' : 'var(--tn-text-muted)',
+                  border: activeView === 'chat' ? 'none' : '1px solid rgba(255,255,255,0.12)',
+                }}
+                onClick={() => setActiveView('chat')}
+              >💬 Chat</button>
+              {/* Tab: Diffs */}
+              <button
+                style={{
+                  ...S.btn, padding: '3px 10px', fontSize: '11px', borderRadius: '6px',
+                  background: activeView === 'diffs' ? 'var(--tn-cyan, #7dcfff)' : 'transparent',
+                  color: activeView === 'diffs' ? '#1a1b26' : diffCards.length > 0 ? 'var(--tn-cyan, #7dcfff)' : 'var(--tn-text-muted)',
+                  border: activeView === 'diffs' ? 'none' : '1px solid rgba(255,255,255,0.12)',
+                  fontWeight: diffCards.length > 0 ? 700 : 400,
+                }}
+                onClick={() => setActiveView('diffs')}
+              >📝 Diffs{diffCards.length > 0 ? ` (${diffCards.length})` : ''}</button>
+            </>
+          )}
           {session && (
             <button
               style={{
@@ -928,14 +1084,58 @@ export default function BusinessAngelPanel() {
         <div style={S.section}>
           {!session ? (
             <>
-              <button
-                style={{ ...S.btn, ...S.btnPrimary, width: '100%', opacity: starting ? 0.6 : 1 }}
-                onClick={() => startSession(false)}
-                disabled={starting}
-              >
-                {starting ? 'Lade…' : `Session starten · ${formatTokens(totalTokens)}`}
-              </button>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <button
+                  style={{ ...S.btn, ...S.btnPrimary, flex: 1, opacity: starting ? 0.6 : 1 }}
+                  onClick={() => startSession(false)}
+                  disabled={starting}
+                >
+                  {starting ? 'Lade…' : `Session starten · ${formatTokens(totalTokens)}`}
+                </button>
+                <button
+                  style={{ ...S.btn, ...S.btnGhost, padding: '4px 10px', fontSize: '11px' }}
+                  onClick={() => { setSessionListOpen(v => !v); if (!sessionListOpen) fetchSessionList(); }}
+                  title="Frühere Sessions anzeigen"
+                >
+                  📋
+                </button>
+              </div>
               {startError && <div style={S.errMsg}>{startError}</div>}
+
+              {/* Session list dropdown */}
+              {sessionListOpen && (
+                <div style={{
+                  marginTop: '6px', border: '1px solid var(--tn-border, rgba(255,255,255,0.1))',
+                  borderRadius: '4px', background: 'var(--tn-surface, #1e2030)',
+                  maxHeight: '200px', overflowY: 'auto' as const,
+                }}>
+                  <div style={{ padding: '5px 8px', fontSize: '10px', fontWeight: 600, color: 'var(--tn-text-muted)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                    Frühere Sessions {sessionListLoading && '…'}
+                  </div>
+                  {sessionList.length === 0 && !sessionListLoading && (
+                    <div style={{ padding: '8px', fontSize: '11px', color: 'var(--tn-text-muted)', textAlign: 'center' as const }}>Keine archivierten Sessions</div>
+                  )}
+                  {sessionList.map(s => (
+                    <div
+                      key={s.id}
+                      style={{
+                        padding: '5px 8px', cursor: loadingSessionId ? 'default' : 'pointer',
+                        borderBottom: '1px solid rgba(255,255,255,0.04)',
+                        opacity: loadingSessionId === s.id ? 0.6 : 1,
+                        background: loadingSessionId === s.id ? 'rgba(187,154,247,0.08)' : undefined,
+                      }}
+                      onClick={() => { if (!loadingSessionId) loadArchivedSession(s.id); }}
+                    >
+                      <div style={{ fontSize: '11px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }}>
+                        {loadingSessionId === s.id ? 'Lade…' : s.title}
+                      </div>
+                      <div style={{ fontSize: '9px', color: 'var(--tn-text-muted)', marginTop: '1px' }}>
+                        {new Date(s.created_at).toLocaleDateString('de-DE')} · {s.turns} Nachrichten
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </>
           ) : (
             <>
@@ -946,10 +1146,62 @@ export default function BusinessAngelPanel() {
                   {session.temp_files.length > 0 && ` · Temp: ${session.temp_files.join(', ')}`}
                 </div>
               </div>
-              <button style={{ ...S.btn, ...S.btnGhost, padding: '4px 8px', fontSize: '11px' }}
-                onClick={endSession}>
-                Session beenden
-              </button>
+              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                <button
+                  style={{ ...S.btn, ...S.btnPrimary, padding: '4px 10px', fontSize: '11px' }}
+                  onClick={newSession}
+                  disabled={starting}
+                  title="Aktuelle Session archivieren und neue starten"
+                >
+                  {starting ? '…' : '+ Neue Session'}
+                </button>
+                <button
+                  style={{ ...S.btn, ...S.btnGhost, padding: '4px 10px', fontSize: '11px' }}
+                  onClick={() => { setSessionListOpen(v => !v); if (!sessionListOpen) fetchSessionList(); }}
+                  title="Frühere Sessions anzeigen"
+                >
+                  📋 Sessions
+                </button>
+                <button style={{ ...S.btn, ...S.btnGhost, padding: '4px 8px', fontSize: '11px', marginLeft: 'auto' }}
+                  onClick={endSession}>
+                  Session beenden
+                </button>
+              </div>
+
+              {/* Session list dropdown (within active session) */}
+              {sessionListOpen && (
+                <div style={{
+                  marginTop: '6px', border: '1px solid var(--tn-border, rgba(255,255,255,0.1))',
+                  borderRadius: '4px', background: 'var(--tn-surface, #1e2030)',
+                  maxHeight: '200px', overflowY: 'auto' as const,
+                }}>
+                  <div style={{ padding: '5px 8px', fontSize: '10px', fontWeight: 600, color: 'var(--tn-text-muted)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                    Frühere Sessions {sessionListLoading && '…'}
+                  </div>
+                  {sessionList.length === 0 && !sessionListLoading && (
+                    <div style={{ padding: '8px', fontSize: '11px', color: 'var(--tn-text-muted)', textAlign: 'center' as const }}>Keine archivierten Sessions</div>
+                  )}
+                  {sessionList.map(s => (
+                    <div
+                      key={s.id}
+                      style={{
+                        padding: '5px 8px', cursor: loadingSessionId ? 'default' : 'pointer',
+                        borderBottom: '1px solid rgba(255,255,255,0.04)',
+                        opacity: loadingSessionId === s.id ? 0.6 : 1,
+                        background: loadingSessionId === s.id ? 'rgba(187,154,247,0.08)' : undefined,
+                      }}
+                      onClick={() => { if (!loadingSessionId) loadArchivedSession(s.id); }}
+                    >
+                      <div style={{ fontSize: '11px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }}>
+                        {loadingSessionId === s.id ? 'Lade…' : s.title}
+                      </div>
+                      <div style={{ fontSize: '9px', color: 'var(--tn-text-muted)', marginTop: '1px' }}>
+                        {new Date(s.created_at).toLocaleDateString('de-DE')} · {s.turns} Nachrichten
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </>
           )}
         </div>
@@ -957,8 +1209,225 @@ export default function BusinessAngelPanel() {
         </>)}
         </div>}
 
+        {/* ── Diffs Fullscreen View ── */}
+        {session && activeView === 'diffs' && (
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column' as const, minHeight: 0, overflow: 'hidden' }}>
+            {/* Sticky action bar */}
+            <div style={{
+              display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0,
+              padding: '6px 0 8px', borderBottom: '1px solid rgba(255,255,255,0.07)',
+              flexWrap: 'wrap' as const,
+            }}>
+              <span style={{ fontSize: '11px', color: 'var(--tn-text-muted)', flex: 1 }}>
+                {diffCards.filter(d => d.status === 'ok').length}/{diffCards.length} bereit
+                {appliedCount > 0 && ` · ${appliedCount} applied`}
+                {pendingCount > 0 && ` · ${pendingCount} ausstehend`}
+              </span>
+              {applyError && <span style={{ color: 'var(--tn-red,#f7768e)', fontSize: '11px' }}>{applyError}</span>}
+              <button style={{ ...S.btn, ...S.btnGhost, padding: '4px 10px', fontSize: '11px' }}
+                onClick={validateAll} disabled={validating}>
+                {validating ? '…' : '✓ Alle validieren'}
+              </button>
+              {okCount > 0 && (
+                <button style={{ ...S.btn, ...S.btnGreen, padding: '4px 10px', fontSize: '11px' }}
+                  onClick={applyAll} disabled={applyingAll}>
+                  {applyingAll ? '…' : `▶ Anwenden (${okCount})`}
+                </button>
+              )}
+              {appliedCount > 0 && (
+                <button style={{ ...S.btn, ...S.btnGhost, padding: '4px 8px', fontSize: '11px', opacity: 0.6 }}
+                  onClick={() => setDiffCards(prev => prev.filter(d => d.status !== 'applied' && d.status !== 'skipped'))}>
+                  ✕ Erledigte entfernen
+                </button>
+              )}
+            </div>
+
+            {/* Scrollable feed — all diffs open, no inner scrollbars */}
+            <div style={{ flex: 1, overflowY: 'auto' as const, paddingBottom: '24px' }}>
+              <style>{mdStyles}</style>
+
+              {diffCards.length === 0 ? (
+                <div style={{ padding: '48px 0', textAlign: 'center' as const, color: 'var(--tn-text-muted)', fontSize: '13px' }}>
+                  Keine Diffs — im Chat «bau die Diffs» sagen
+                </div>
+              ) : diffCards.map((card, idx) => {
+                // Trigger file fetch for full-file diff view
+                if (fileContents[card.file] === undefined && card.old.trim()) fetchFileContent(card.file);
+                const isEditing = editingId === card.id;
+                const isDone = card.status === 'applied' || card.status === 'skipped';
+                const borderColor = card.status === 'ok' ? 'rgba(158,206,106,0.35)'
+                  : card.status === 'error' ? 'rgba(247,118,142,0.35)'
+                  : card.status === 'applied' ? 'rgba(122,162,247,0.25)'
+                  : 'rgba(255,255,255,0.08)';
+                return (
+                  <div key={card.id} style={{
+                    marginTop: idx === 0 ? '12px' : '20px',
+                    border: `1px solid ${borderColor}`,
+                    borderRadius: '8px', overflow: 'hidden',
+                    opacity: isDone ? 0.45 : 1,
+                    transition: 'opacity 0.2s',
+                  }}>
+                    {/* ── Card header ── */}
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: '8px',
+                      padding: '7px 12px',
+                      background: 'rgba(255,255,255,0.04)',
+                      borderBottom: `1px solid ${borderColor}`,
+                    }}>
+                      <span style={{
+                        fontFamily: 'monospace', fontSize: '11px', flex: 1,
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
+                        color: 'var(--tn-blue,#7aa2f7)',
+                      }} title={card.file}>{card.file}</span>
+
+                      {card.status === 'error' && card.reason && (
+                        <span style={{ fontSize: '10px', color: 'var(--tn-red,#f7768e)', flexShrink: 0 }} title={card.reason}>⚠ {card.reason.slice(0, 40)}</span>
+                      )}
+
+                      <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0 }}>
+                        {/* Accept / status toggle */}
+                        <button
+                          title={card.status === 'ok' ? 'Akzeptiert — klicken zum Anwenden' : card.status === 'applied' ? 'Angewendet' : 'Akzeptieren'}
+                          style={{
+                            ...S.btn,
+                            padding: '3px 12px', fontSize: '12px', borderRadius: '6px',
+                            background: card.status === 'ok' ? 'rgba(158,206,106,0.2)' : card.status === 'applied' ? 'rgba(122,162,247,0.2)' : 'rgba(255,255,255,0.06)',
+                            color: card.status === 'ok' ? 'var(--tn-green,#9ece6a)' : card.status === 'applied' ? 'var(--tn-blue,#7aa2f7)' : 'var(--tn-text-muted)',
+                            border: `1px solid ${card.status === 'ok' ? 'rgba(158,206,106,0.4)' : card.status === 'applied' ? 'rgba(122,162,247,0.3)' : 'rgba(255,255,255,0.12)'}`,
+                          }}
+                          onClick={() => card.status === 'ok' ? applyOne(card.id) : card.status === 'unchecked' || card.status === 'error' ? validateAll() : undefined}
+                        >
+                          {card.status === 'applied' ? '✓ Applied' : card.status === 'ok' ? '✓ Apply' : card.status === 'error' ? '✗ Fehler' : card.status === 'skipped' ? '— Skip' : '⬜ Prüfen'}
+                        </button>
+                        {!isDone && (
+                          <button style={{ ...S.btn, ...S.btnGhost, padding: '3px 7px', fontSize: '11px', opacity: 0.6 }}
+                            title="Überspringen" onClick={() => skipDiff(card.id)}>—</button>
+                        )}
+                        <button style={{ ...S.btn, ...S.btnGhost, padding: '3px 7px', fontSize: '11px', color: 'rgba(247,118,142,0.6)' }}
+                          title="Entfernen" onClick={() => removeDiff(card.id)}>✕</button>
+                      </div>
+                    </div>
+
+                    {/* ── Full-file side-by-side diff — complete text, scrollable ── */}
+                    {(() => {
+                      const isNew = !card.old.trim();
+                      const fullFile = fileContents[card.file];
+
+                      // Build left/right full-file content
+                      const normalize = (s: string) => s.replace(/\r\n/g, '\n').split('\n').map(l => l.trimEnd()).join('\n');
+                      const leftFull = isNew ? '' : (fullFile ?? card.old);
+                      const rightFull = isNew ? card.newText : (() => {
+                        if (!fullFile) return card.newText;
+                        const n = normalize(fullFile);
+                        const nOld = normalize(card.old);
+                        const nNew = normalize(card.newText);
+                        return n.includes(nOld) ? n.replace(nOld, nNew) : card.newText;
+                      })();
+
+                      // Compute line-level diff
+                      type LineEntry = { text: string; type: 'removed'|'added'|'unchanged' };
+                      const leftLines: LineEntry[] = [];
+                      const rightLines: LineEntry[] = [];
+                      const chunks = diffLines(leftFull, rightFull);
+                      for (const chunk of chunks) {
+                        const lines = chunk.value.replace(/\n$/, '').split('\n');
+                        if (chunk.removed) {
+                          lines.forEach(l => { leftLines.push({ text: l, type: 'removed' }); rightLines.push({ text: '\u00a0', type: 'unchanged' }); });
+                        } else if (chunk.added) {
+                          lines.forEach(l => { leftLines.push({ text: '\u00a0', type: 'unchanged' }); rightLines.push({ text: l, type: 'added' }); });
+                        } else {
+                          lines.forEach(l => { leftLines.push({ text: l, type: 'unchanged' }); rightLines.push({ text: l, type: 'unchanged' }); });
+                        }
+                      }
+
+                      const lineStyle = (type: LineEntry['type']): React.CSSProperties => ({
+                        fontFamily: 'monospace', fontSize: '11px', lineHeight: 1.55,
+                        whiteSpace: 'pre-wrap' as const, wordBreak: 'break-word' as const,
+                        padding: '0 8px',
+                        background: type === 'removed' ? 'rgba(247,118,142,0.18)'
+                          : type === 'added' ? 'rgba(158,206,106,0.18)' : 'transparent',
+                        color: type === 'removed' ? 'rgba(247,118,142,0.9)'
+                          : type === 'added' ? 'rgba(158,206,106,0.9)' : 'var(--tn-text-muted)',
+                      });
+                      const colHdr = (label: string, clr: string, extra?: React.ReactNode) => (
+                        <div style={{ padding: '3px 8px', fontSize: '9px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' as const, color: clr, borderBottom: `1px solid ${clr}22`, display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0, position: 'sticky' as const, top: 0, zIndex: 1, background: 'var(--tn-bg,#1a1b26)' }}>
+                          {label}{extra}
+                        </div>
+                      );
+
+                      const renderAllLines = (lines: LineEntry[]) => {
+                        if (!lines.length) return <div key="empty" style={{ padding: '8px', fontSize: '11px', color: 'rgba(255,255,255,0.2)', fontFamily: 'monospace' }}>Lade…</div>;
+                        return lines.map((l, i) => {
+                          const prefix = l.type === 'removed' ? '− ' : l.type === 'added' ? '+ ' : '\u00a0\u00a0';
+                          return <div key={i} style={lineStyle(l.type)}>{prefix}{l.text}</div>;
+                        });
+                      };
+
+                      return (
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', minHeight: '60px', maxHeight: '70vh' }}>
+                          {/* LEFT — full old text, scrollable */}
+                          <div style={{ borderRight: '1px solid rgba(255,255,255,0.07)', background: 'rgba(247,118,142,0.02)', overflowY: 'auto' as const, maxHeight: '70vh', display: 'flex', flexDirection: 'column' as const }}>
+                            {colHdr('Vorher', 'rgba(247,118,142,0.55)')}
+                            {isNew
+                              ? <div style={{ padding: '8px', fontSize: '11px', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic', fontFamily: 'monospace' }}>— neue Datei —</div>
+                              : <div style={{ padding: '4px 0' }}>{renderAllLines(leftLines)}</div>
+                            }
+                          </div>
+                          {/* RIGHT — full new text, scrollable, editable */}
+                          <div style={{ background: 'rgba(158,206,106,0.02)', display: 'flex', flexDirection: 'column' as const, overflowY: 'auto' as const, maxHeight: '70vh' }}>
+                            {colHdr('Nachher', 'rgba(158,206,106,0.55)',
+                              !isDone && <button style={{ marginLeft: 'auto', fontSize: '9px', opacity: 0.45, background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', padding: '0 2px' }} onClick={() => setEditingId(editingId === card.id ? null : card.id)} title="Bearbeiten">✎</button>
+                            )}
+                            {editingId === card.id ? (
+                              <textarea autoFocus value={card.newText} onChange={e => updateNewText(card.id, e.target.value)} onBlur={() => setEditingId(null)}
+                                style={{ flex: 1, display: 'block', width: '100%', minHeight: '300px', resize: 'vertical' as const, background: 'transparent', border: 'none', outline: 'none', color: '#c0caf5', fontFamily: 'monospace', fontSize: '11px', lineHeight: 1.55, padding: '4px 8px', boxSizing: 'border-box' as const }} />
+                            ) : (
+                              <div style={{ padding: '4px 0', cursor: isDone ? 'default' : 'text' }} onClick={() => !isDone && setEditingId(card.id)}>
+                                {isNew
+                                  ? card.newText.replace(/\n$/, '').split('\n').map((l, i) => <div key={i} style={lineStyle('added')}>+ {l || '\u00a0'}</div>)
+                                  : renderAllLines(rightLines)
+                                }
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                );
+              })}
+
+              {/* Diffs manuell einfügen */}
+              <div style={{ marginTop: '24px', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '12px' }}>
+                <div style={{ ...S.secLabel, cursor: 'pointer' }} onClick={() => setPasteOpen(v => !v)}>
+                  <span style={{ fontSize: '9px', width: '10px' }}>{pasteOpen ? '▾' : '▸'}</span>
+                  Diffs manuell einfügen
+                </div>
+                {pasteOpen && (
+                  <div style={{ marginTop: '6px' }}>
+                    <textarea
+                      style={{
+                        width: '100%', minHeight: '80px', resize: 'vertical' as const,
+                        background: 'var(--tn-surface,#1e2030)',
+                        border: '1px solid rgba(255,255,255,0.1)',
+                        borderRadius: '4px', color: 'var(--tn-text)',
+                        fontFamily: 'monospace', fontSize: '11px', padding: '6px',
+                        boxSizing: 'border-box' as const,
+                      }}
+                      value={rawPasteText}
+                      onChange={e => setRawPasteText(e.target.value)}
+                    />
+                    <button style={{ ...S.btn, ...S.btnGhost, padding: '3px 8px', fontSize: '11px', marginTop: '4px' }}
+                      onClick={parsePasted} disabled={!rawPasteText.trim()}>Parsen & hinzufügen</button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ── Chat ── */}
-        {session && (
+        {session && activeView === 'chat' && (
           <div style={{ ...S.section, flex: 1, display: 'flex', flexDirection: 'column' as const, minHeight: 0 }}>
             {!chatOnly && <div style={S.divider} />}
             <div style={{ display: 'flex', alignItems: 'center', marginBottom: '6px' }}>
@@ -966,9 +1435,9 @@ export default function BusinessAngelPanel() {
               {diffCards.length > 0 && (
                 <span
                   style={{ ...S.badge('var(--tn-cyan,#7dcfff)'), marginLeft: '8px', cursor: 'pointer' }}
-                  onClick={() => diffRef.current?.scrollIntoView({ behavior: 'smooth' })}
+                  onClick={() => setActiveView('diffs')}
                 >
-                  {diffCards.length} Diff{diffCards.length !== 1 ? 's' : ''} ↓
+                  {diffCards.length} Diff{diffCards.length !== 1 ? 's' : ''} → ansehen
                 </span>
               )}
             </div>
@@ -1007,166 +1476,6 @@ export default function BusinessAngelPanel() {
             {chatError && <div style={S.errMsg}>{chatError}</div>}
           </div>
         )}
-
-        {/* ── Diff Preview ── */}
-        {!chatOnly && <div ref={diffRef} style={{ ...S.section, flexShrink: 0, overflowY: diffsCollapsed ? 'hidden' as const : 'auto' as const, maxHeight: diffsCollapsed ? undefined : '220px' }}>
-          <div
-            style={{
-              display: 'flex', alignItems: 'center', gap: '6px',
-              padding: '5px 10px', marginBottom: diffsCollapsed ? 0 : '8px',
-              background: diffsCollapsed ? 'var(--tn-surface, #1e2030)' : 'rgba(122,162,247,0.06)',
-              border: '1px solid var(--tn-border, rgba(255,255,255,0.08))',
-              borderRadius: '4px', cursor: 'pointer', userSelect: 'none' as const,
-            }}
-            onClick={() => setDiffsCollapsed(v => !v)}
-          >
-            <span style={{ fontSize: '10px', transition: 'transform 0.15s', transform: diffsCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▾</span>
-            <span style={{ fontWeight: 600, fontSize: '12px' }}>
-              Diffs
-              {diffCards.length > 0 && (
-                <span style={{ color: 'var(--tn-text-muted)', fontWeight: 400, marginLeft: '6px', fontSize: '11px' }}>
-                  {okCount > 0 && `${okCount} ok `}{pendingCount > 0 && `${pendingCount} ungeprüft `}{appliedCount > 0 && `${appliedCount} applied`}
-                </span>
-              )}
-            </span>
-            <div style={{ marginLeft: 'auto', display: 'flex', gap: '5px' }}>
-              {pendingCount > 0 && (
-                <button style={{ ...S.btn, ...S.btnGhost, padding: '3px 8px', fontSize: '11px', opacity: validating ? 0.6 : 1 }}
-                  onClick={validateAll} disabled={validating}>
-                  {validating ? '…' : 'Validate'}
-                </button>
-              )}
-              {okCount > 0 && (
-                <button style={{ ...S.btn, ...S.btnGreen, padding: '3px 8px', fontSize: '11px', opacity: applyingAll ? 0.6 : 1 }}
-                  onClick={applyAll} disabled={applyingAll}>
-                  {applyingAll ? '…' : `Apply All (${okCount})`}
-                </button>
-              )}
-              {appliedCount > 0 && (
-                <button style={{ ...S.btn, ...S.btnGhost, padding: '3px 8px', fontSize: '11px' }}
-                  onClick={() => setDiffCards(prev => prev.filter(d => d.status !== 'applied' && d.status !== 'skipped'))}>
-                  Clear
-                </button>
-              )}
-            </div>
-          </div>
-
-          {!diffsCollapsed && (<>
-          {applyError && <div style={{ ...S.errMsg, marginBottom: '6px' }}>{applyError}</div>}
-
-          {diffCards.length === 0 ? (
-            <div style={{ color: 'var(--tn-text-muted)', fontSize: '11px' }}>
-              Noch keine Diffs — sag dem Angel "bau die Diffs"
-            </div>
-          ) : diffCards.map(card => {
-            const oldT = truncate(card.old, 4);
-            const newT = truncate(card.newText, 4);
-            return (
-              <div key={card.id} style={{ ...S.diffCard, opacity: card.status === 'applied' || card.status === 'skipped' ? 0.45 : 1 }}>
-                <div style={S.diffHead}>
-                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }} title={card.file}>
-                    {card.file}
-                  </span>
-                  <span style={S.statusBadge(card.status)}>{statusLabel(card.status)}</span>
-                  {card.status === 'error' && card.reason && (
-                    <span style={{ color: 'var(--tn-red,#f7768e)', fontSize: '10px' }} title={card.reason}>⚠</span>
-                  )}
-                  <div style={{ display: 'flex', gap: '3px' }}>
-                    {card.status === 'ok' && (
-                      <button style={{ ...S.btn, ...S.btnGreen, padding: '2px 7px', fontSize: '10px' }} onClick={() => applyOne(card.id)}>Apply</button>
-                    )}
-                    {card.status !== 'applied' && (
-                      <button style={{ ...S.btn, ...S.btnGhost, padding: '2px 5px', fontSize: '10px' }} onClick={() => skipDiff(card.id)}>—</button>
-                    )}
-                    <button style={{ ...S.btn, ...S.btnGhost, padding: '2px 5px', fontSize: '10px', color: 'var(--tn-red,#f7768e)' }} onClick={() => removeDiff(card.id)}>✕</button>
-                  </div>
-                </div>
-                {card.rawHunk ? (
-                  // Git-style unified diff
-                  <div style={{
-                    fontFamily: 'monospace', fontSize: '11px',
-                    borderTop: '1px solid rgba(255,255,255,0.08)',
-                    overflowX: 'auto',
-                    maxHeight: card.oldExpanded ? undefined : '160px',
-                    overflow: card.oldExpanded ? 'visible' : 'hidden',
-                  }}>
-                    {card.rawHunk.split('\n').map((line, i) => {
-                      const isRemoved = line.startsWith('-') && !line.startsWith('---');
-                      const isAdded = line.startsWith('+') && !line.startsWith('+++');
-                      const isHunk = line.startsWith('@@');
-                      const isHeader = line.startsWith('---') || line.startsWith('+++');
-                      const bg = isRemoved ? 'rgba(247,118,142,0.13)' : isAdded ? 'rgba(158,206,106,0.13)' : isHunk ? 'rgba(122,162,247,0.10)' : 'transparent';
-                      const color = isRemoved ? 'var(--tn-red,#f7768e)' : isAdded ? 'var(--tn-green,#9ece6a)' : isHunk ? 'var(--tn-blue,#7aa2f7)' : isHeader ? 'var(--tn-text-muted)' : 'var(--tn-text)';
-                      return (
-                        <div key={i} style={{ background: bg, color, padding: '0 8px', whiteSpace: 'pre-wrap' as const, wordBreak: 'break-all' as const, lineHeight: '1.5' }}>
-                          {line || '\u00a0'}
-                        </div>
-                      );
-                    })}
-                    {card.rawHunk.split('\n').length > 10 && (
-                      <div style={{ cursor: 'pointer', fontSize: '10px', opacity: 0.6, padding: '2px 8px', background: 'var(--tn-surface2,rgba(255,255,255,0.05))' }} onClick={() => toggleExpand(card.id, 'old')}>
-                        {card.oldExpanded ? '▲ einklappen' : '▼ vollständig anzeigen'}
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  // Legacy OLD/NEW blocks
-                  <>
-                    <div style={S.diffBlock('old')}>
-                      <div style={S.diffLabel}>OLD</div>
-                      {card.oldExpanded ? card.old : oldT.text}
-                      {oldT.truncated && (
-                        <div style={{ cursor: 'pointer', fontSize: '10px', opacity: 0.6, marginTop: '2px' }} onClick={() => toggleExpand(card.id, 'old')}>
-                          {card.oldExpanded ? '▲' : '▼ mehr…'}
-                        </div>
-                      )}
-                    </div>
-                    <div style={S.diffBlock('new')}>
-                      <div style={S.diffLabel}>NEW</div>
-                      {card.newExpanded ? card.newText : newT.text}
-                      {newT.truncated && (
-                        <div style={{ cursor: 'pointer', fontSize: '10px', opacity: 0.6, marginTop: '2px' }} onClick={() => toggleExpand(card.id, 'new')}>
-                          {card.newExpanded ? '▲' : '▼ mehr…'}
-                        </div>
-                      )}
-                    </div>
-                  </>
-                )}
-              </div>
-            );
-          })}
-
-          {/* Manuell einfügen */}
-          <div
-            style={{ ...S.secLabel, cursor: 'pointer', marginTop: '6px' }}
-            onClick={() => setPasteOpen(v => !v)}
-          >
-            <span style={{ fontSize: '9px', width: '10px' }}>{pasteOpen ? '▾' : '▸'}</span>
-            Diffs manuell einfügen
-          </div>
-          {pasteOpen && (
-            <div>
-              <textarea
-                style={{
-                  width: '100%', minHeight: '70px', resize: 'vertical' as const,
-                  background: 'var(--tn-surface,#1e2030)',
-                  border: '1px solid var(--tn-border,rgba(255,255,255,0.1))',
-                  borderRadius: '4px', color: 'var(--tn-text)',
-                  fontFamily: 'monospace', fontSize: '11px', padding: '5px',
-                  boxSizing: 'border-box' as const,
-                }}
-                placeholder={'--- a/sales/PIPELINE.md\n+++ b/sales/PIPELINE.md\n@@ -5,3 +5,3 @@\n Kontext-Zeile\n-alter Text\n+neuer Text\n Kontext-Zeile'}
-                value={rawPasteText}
-                onChange={e => setRawPasteText(e.target.value)}
-              />
-              <button
-                style={{ ...S.btn, ...S.btnGhost, padding: '3px 8px', fontSize: '11px', marginTop: '4px' }}
-                onClick={parsePasted} disabled={!rawPasteText.trim()}
-              >Parsen & hinzufügen</button>
-            </div>
-          )}
-          </>)}
-        </div>}
 
       </div>
     </div>
