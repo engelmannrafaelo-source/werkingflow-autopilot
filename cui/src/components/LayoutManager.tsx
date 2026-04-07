@@ -1013,6 +1013,21 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
             setTabRenderTick(t => t + 1);
           }
         }
+        // Bulk session state init (WS reconnect recovery)
+        if (msg.type === "session-states-init" && msg.states) {
+          const states = msg.states as Record<string, { state: string; reason?: string; sessionId?: string }>;
+          let changed = false;
+          for (const [key, val] of Object.entries(states)) {
+            const sid = val.sessionId || key;
+            const mapped = val.state === "working" ? "working" : val.state === "needs_attention" ? "needs_attention" : "idle";
+            const prev = sessionStatesRef.current.get(sid);
+            if (!prev || prev.state !== mapped || prev.reason !== val.reason) {
+              sessionStatesRef.current.set(sid, { state: mapped, reason: val.reason });
+              changed = true;
+            }
+          }
+          if (changed) setTabRenderTick(t => t + 1);
+        }
         // Pause state: suppress needs_attention indicator
         if (msg.type === 'conv-paused' && msg.sessionId) {
           if (msg.paused) {

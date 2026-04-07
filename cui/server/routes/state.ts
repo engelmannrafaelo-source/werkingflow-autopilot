@@ -283,15 +283,16 @@ _intervals.push(setInterval(() => {
 export function broadcast(data: Record<string, unknown>) {
   const type = data.type as string;
 
-  // Track CUI states in workspace state store
+  // Track CUI states in workspace state store (per session, not per account)
   if (type === 'cui-state' && data.cuiId && data.state) {
-    const id = data.cuiId as string;
+    const sessionId = (data.sessionId as string) || (data.cuiId as string);
     const state = data.state as string;
-    workspaceState.cuiStates[id] = state;
-    // Dedup: skip if same state was broadcast for this cuiId within last 2s
-    const prev = _lastBroadcast[id];
+    workspaceState.cuiStates[sessionId] = state;
+    // Dedup: skip if same state was broadcast for this session within last 2s
+    const dedupKey = 'cui:' + sessionId;
+    const prev = _lastBroadcast[dedupKey];
     if (prev && prev.state === state && Date.now() - prev.at < 2000) { _broadcastDropped++; return; }
-    _lastBroadcast[id] = { state, at: Date.now() };
+    _lastBroadcast[dedupKey] = { state, at: Date.now() };
   }
 
   // Dedup cui-response-ready: skip if last state is already 'done'
@@ -379,6 +380,12 @@ export function initWebSocket(
 
     // Register for Document Manager broadcasts
     registerWebSocketClient(ws);
+
+    // Send initial session states to new client (fixes stale state after reconnect)
+    try {
+      const states = getSessionStates();
+      ws.send(JSON.stringify({ type: "session-states-init", states }));
+    } catch { /* ignore send errors on fresh connections */ }
 
     ws.on('message', (raw: Buffer) => {
       let msg: any;

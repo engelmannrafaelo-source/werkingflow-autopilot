@@ -118,6 +118,9 @@ export function initClaudeCli(deps: {
 
   // Start heartbeat for tool execution tracking
   startToolHeartbeat();
+
+  // Start stale state reconciliation (detects stuck "working" sessions)
+  startStaleStateReconciliation();
 }
 
 // --- Tool Execution Heartbeat ---
@@ -701,6 +704,48 @@ function attachStdoutReader(
   });
 }
 
+// --- Stale State Reconciliation ---
+// Periodically check if "working" sessions are actually still alive/active.
+// Fixes stuck "arbeitet" (working) state after server restarts or missed events.
+
+let _staleReconcileInterval: ReturnType<typeof setInterval> | null = null;
+
+function startStaleStateReconciliation() {
+  if (_staleReconcileInterval) return;
+  _staleReconcileInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [key, state] of _sessionStates) {
+      if (state.state !== 'working') continue;
+      // Check if process is actually alive
+      const entry = activeProcesses.get(key);
+      if (!entry) {
+        // Session not in active map but state says "working" — stale
+        console.log(`[StaleCheck] ${key.slice(0, 8)}: working but not in activeProcesses -> idle/done`);
+        _setSessionState(key, state.accountId, 'idle', 'done', state.sessionId || key);
+        _broadcast({ type: 'cui-state', cuiId: state.accountId, sessionId: state.sessionId || key, state: 'done' });
+        continue;
+      }
+      // For persistent processes, verify the actual PID is alive
+      if (entry.mode === 'persistent') {
+        try {
+          process.kill(entry.claudePid, 0);
+        } catch {
+          console.log(`[StaleCheck] ${key.slice(0, 8)}: working but PID ${entry.claudePid} dead -> idle/done`);
+          _setSessionState(key, state.accountId, 'idle', 'done', state.sessionId || key);
+          _broadcast({ type: 'cui-state', cuiId: state.accountId, sessionId: state.sessionId || key, state: 'done' });
+          // Cleanup the dead entry
+          activeProcesses.delete(key);
+          continue;
+        }
+      }
+      // If working for more than 15 minutes without any stdout event, flag as potentially stale
+      if (now - state.since > 15 * 60 * 1000) {
+        console.log(`[StaleCheck] ${key.slice(0, 8)}: working for ${((now - state.since) / 60000).toFixed(0)}min (still alive, keeping state)`);
+      }
+    }
+  }, 30000); // Every 30 seconds
+}
+
 // --- Handle persistent process exit ---
 
 function handlePersistentExit(entry: PersistentProcess, key: string) {
@@ -818,9 +863,9 @@ async function reconnectExistingSessions(): Promise<void> {
 
 async function detectLastState(stdoutPath: string): Promise<{ state: ConvAttentionState; reason?: AttentionReason }> {
   try {
-    // Read last ~10KB of file
+    // Read last ~50KB for better state detection (stream_event lines can be verbose)
     const stat = await fsp.stat(stdoutPath);
-    const readSize = Math.min(stat.size, 10240);
+    const readSize = Math.min(stat.size, 51200);
     const fd = await fsp.open(stdoutPath, 'r');
     const buf = Buffer.alloc(readSize);
     await fd.read(buf, 0, readSize, Math.max(0, stat.size - readSize));
@@ -829,10 +874,12 @@ async function detectLastState(stdoutPath: string): Promise<{ state: ConvAttenti
     const text = buf.toString('utf8');
     const lines = text.split('\n').filter(l => l.trim());
 
-    // Walk backwards to find last meaningful event
+    // Walk backwards to find last meaningful event (skip streaming noise)
     for (let i = lines.length - 1; i >= 0; i--) {
       try {
         const obj = JSON.parse(lines[i]);
+        // Skip non-meaningful event types
+        if (obj.type === 'stream_event' || obj.type === 'rate_limit_event') continue;
         if (obj.type === 'result' && obj.subtype !== 'error') return { state: 'idle', reason: 'done' };
         if (obj.type === 'result' && obj.subtype === 'error') return { state: 'needs_attention', reason: 'context_overflow' };
         if (obj.type === 'system' && obj.subtype === 'rate_limit') return { state: 'idle', reason: 'rate_limit' };

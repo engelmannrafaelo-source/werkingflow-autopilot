@@ -191,6 +191,21 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
             }
           }
 
+          // Bulk session state init (sent on WS connect for state recovery)
+          if (msg.type === "session-states-init" && msg.states) {
+            const states = msg.states as Record<string, { state: string; reason?: string; sessionId?: string }>;
+            let changed = false;
+            for (const [key, val] of Object.entries(states)) {
+              const sid = val.sessionId || key;
+              const prev = sessionStatesRef.current.get(sid);
+              if (!prev || prev.state !== val.state || prev.reason !== val.reason) {
+                sessionStatesRef.current.set(sid, { state: val.state as any, reason: val.reason as any, since: Date.now() });
+                changed = true;
+              }
+            }
+            if (changed) setSessionStatesTick(t => t + 1);
+          }
+
           // Dispatch to all subscribers
           for (const handler of handlersRef.current) {
             try { handler(msg); } catch (err) {
