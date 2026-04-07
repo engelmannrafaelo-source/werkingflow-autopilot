@@ -7,6 +7,7 @@ import { watch } from 'chokidar';
 import type { WebSocket } from 'ws';
 import type { SessionState, ConvAttentionState, AttentionReason, PanelVisibility } from './state.js';
 import * as convMeta from './shared/conv-metadata.js';
+import { getOrphanCleanupStatus, killOrphanProcesses, getActiveProcesses } from './claude-cli.js';
 
 const execAsync = promisify(exec);
 
@@ -132,7 +133,20 @@ export default function createControlRouter(deps: ControlDeps): Router {
       wsClients: clients.size,
       accounts: ACCOUNT_CONFIG.map(a => ({ id: a.id, label: a.label, home: a.home })),
       frontendConnected: clients.size > 0,
+      orphanCleanup: getOrphanCleanupStatus(),
+      activeProcesses: getActiveProcesses().length,
     });
+  });
+
+
+  // Kill orphan wrapper processes (manual trigger)
+  router.post('/control/kill-orphans', async (_req: Request, res: Response) => {
+    try {
+      const result = await killOrphanProcesses();
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'unknown' });
+    }
   });
 
   router.get('/control/state', (_req: Request, res: Response) => {

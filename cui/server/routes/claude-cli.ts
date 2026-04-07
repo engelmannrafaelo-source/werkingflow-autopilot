@@ -109,9 +109,11 @@ export function initClaudeCli(deps: {
 
   // On remote: reconnect to surviving persistent processes
   if (!IS_LOCAL_MODE) {
-    reconnectExistingSessions().catch(err => {
-      console.error('[ClaudeCLI] reconnect failed:', err instanceof Error ? err.message : err);
-    });
+    reconnectExistingSessions()
+      .then(() => cleanupOrphanProcesses())
+      .catch(err => {
+        console.error('[ClaudeCLI] reconnect failed:', err instanceof Error ? err.message : err);
+      });
   }
 
   console.log(`[ClaudeCLI] Initialized (${ACCOUNT_CONFIG.length} accounts, local=${IS_LOCAL_MODE})`);
@@ -1182,6 +1184,84 @@ export function getActivePid(sessionId: string): number | null {
   const entry = activeProcesses.get(sessionId);
   if (!entry) return null;
   return entry.mode === 'direct' ? entry.proc.pid ?? null : entry.claudePid;
+}
+
+
+// --- Orphan Process Detection & Cleanup ---
+
+let _lastOrphanCleanup: { killed: number; timestamp: number } | null = null;
+
+async function cleanupOrphanProcesses(): Promise<void> {
+  try {
+    // Find all cui-session-wrapper PIDs via ps
+    let psOutput = '';
+    try {
+      psOutput = execSync('ps -eo pid,args --no-headers', { encoding: 'utf8', timeout: 5000 });
+    } catch { return; }
+
+    const wrapperPids: Array<{ pid: number; sessionId: string }> = [];
+    for (const line of psOutput.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed.includes('cui-session-wrapper')) continue;
+      const match = trimmed.match(/^(\d+)\s+/);
+      if (!match) continue;
+      const pid = parseInt(match[1], 10);
+      const parts = trimmed.split(/\s+/);
+      const wIdx = parts.findIndex(p => p.includes('cui-session-wrapper'));
+      const sessionId = wIdx >= 0 && parts[wIdx + 1] ? parts[wIdx + 1] : '';
+      wrapperPids.push({ pid, sessionId });
+    }
+
+    // Find orphans: wrapper PIDs not tracked by activeProcesses
+    const trackedPids = new Set<number>();
+    for (const [, entry] of activeProcesses) {
+      if (entry.mode === 'persistent') trackedPids.add((entry as PersistentProcess).wrapperPid);
+    }
+
+    const orphans = wrapperPids.filter(w => !trackedPids.has(w.pid));
+
+    if (orphans.length === 0) {
+      console.log('[OrphanCleanup] No orphan wrapper processes found');
+      _lastOrphanCleanup = { killed: 0, timestamp: Date.now() };
+      return;
+    }
+
+    console.log(`[OrphanCleanup] Found ${orphans.length} orphan wrapper(s), killing...`);
+    let killed = 0;
+    for (const orphan of orphans) {
+      try {
+        // Kill wrapper process group (kills wrapper + claude child)
+        process.kill(-orphan.pid, 9);
+        killed++;
+        console.log(`[OrphanCleanup] Killed wrapper PID ${orphan.pid} (session=${orphan.sessionId.slice(0, 12)})`);
+      } catch {
+        try { process.kill(orphan.pid, 9); killed++; } catch { /* already dead */ }
+      }
+    }
+
+    // Clean up PID files for orphans
+    for (const orphan of orphans) {
+      if (orphan.sessionId) {
+        for (const ext of ['.pid', '.fifo', '.meta', '.stderr']) {
+          try { await fsp.unlink(`${FIFO_DIR}/${orphan.sessionId}${ext}`); } catch { /* ignore */ }
+        }
+      }
+    }
+
+    _lastOrphanCleanup = { killed, timestamp: Date.now() };
+    console.log(`[OrphanCleanup] Cleaned up ${killed} orphan process(es)`);
+  } catch (err) {
+    console.error('[OrphanCleanup] Error:', err instanceof Error ? err.message : err);
+  }
+}
+
+export function getOrphanCleanupStatus(): { killed: number; timestamp: number } | null {
+  return _lastOrphanCleanup;
+}
+
+export async function killOrphanProcesses(): Promise<{ found: number; killed: number }> {
+  await cleanupOrphanProcesses();
+  return { found: _lastOrphanCleanup?.killed ?? 0, killed: _lastOrphanCleanup?.killed ?? 0 };
 }
 
 export function getActiveProcesses(): Array<{

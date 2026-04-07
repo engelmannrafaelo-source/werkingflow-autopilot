@@ -35,6 +35,7 @@ export default function AllChatsView({ onNavigateToProject, isVisible = true }: 
   const [failedSessions, setFailedSessions] = useState<Set<string>>(new Set());
   const [localFinished, setLocalFinished] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
+  const [orphanInfo, setOrphanInfo] = useState<{ killed: number; activeProcesses: number } | null>(null);
   const [page, setPage] = useState(0);
   const [compactInputBar, setCompactInputBar] = useState(() => {
     try { return localStorage.getItem("cui-allchats-compact") === "true"; } catch { return false; }
@@ -60,6 +61,11 @@ export default function AllChatsView({ onNavigateToProject, isVisible = true }: 
 
   useEffect(() => {
     fetchChats();
+    // Fetch orphan/process info
+    fetch('/api/control/health', { signal: AbortSignal.timeout(5000) })
+      .then(r => r.json())
+      .then(d => setOrphanInfo({ killed: d.orphanCleanup?.killed ?? 0, activeProcesses: d.activeProcesses ?? 0 }))
+      .catch(() => {});
   }, [fetchChats]);
 
   // Refresh only on manual action (Retry/Aktualisieren button), not on visibility change
@@ -116,7 +122,29 @@ export default function AllChatsView({ onNavigateToProject, isVisible = true }: 
       }}>
         <span style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginRight: 6 }}>
           {visibleChats.length} Chats
+          {orphanInfo && orphanInfo.activeProcesses > 0 && (
+            <span style={{ marginLeft: 4, color: 'var(--tn-green)', opacity: 0.7 }}>
+              | {orphanInfo.activeProcesses} proc
+            </span>
+          )}
+          {orphanInfo && orphanInfo.killed > 0 && (
+            <span style={{ marginLeft: 4, color: 'var(--tn-yellow)', opacity: 0.7 }}>
+              | {orphanInfo.killed} orphans cleaned
+            </span>
+          )}
         </span>
+        <button
+          onClick={async () => {
+            try {
+              const r = await fetch('/api/control/kill-orphans', { method: 'POST', signal: AbortSignal.timeout(10000) });
+              const d = await r.json();
+              setOrphanInfo(prev => prev ? { ...prev, killed: d.killed } : null);
+              fetchChats();
+            } catch {}
+          }}
+          style={{ marginLeft: 'auto', padding: '1px 6px', fontSize: 9, border: '1px solid var(--tn-border)', borderRadius: 3, background: 'transparent', color: 'var(--tn-text-muted)', cursor: 'pointer', opacity: 0.6 }}
+          title="Scan and kill orphan wrapper/claude processes"
+        >Cleanup</button>
         {totalPages > 1 && Array.from({ length: totalPages }, (_, i) => {
           const start = i * MAX_VISIBLE_PANELS + 1;
           const end = Math.min((i + 1) * MAX_VISIBLE_PANELS, visibleChats.length);
