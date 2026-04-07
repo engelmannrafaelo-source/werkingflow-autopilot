@@ -108,9 +108,13 @@ export function initClaudeCli(deps: {
   }
 
   // On remote: reconnect to surviving persistent processes
+  // Grace period before orphan cleanup: give all wrappers time to be recognized
   if (!IS_LOCAL_MODE) {
     reconnectExistingSessions()
-      .then(() => cleanupOrphanProcesses())
+      .then(() => {
+        console.log('[ClaudeCLI] Reconnect done. Orphan cleanup scheduled in 30s (grace period).');
+        setTimeout(() => cleanupOrphanProcesses(), 30_000);
+      })
       .catch(err => {
         console.error('[ClaudeCLI] reconnect failed:', err instanceof Error ? err.message : err);
       });
@@ -1219,38 +1223,62 @@ async function cleanupOrphanProcesses(): Promise<void> {
       if (entry.mode === 'persistent') trackedPids.add((entry as PersistentProcess).wrapperPid);
     }
 
-    const orphans = wrapperPids.filter(w => !trackedPids.has(w.pid));
+    const untracked = wrapperPids.filter(w => !trackedPids.has(w.pid));
 
-    if (orphans.length === 0) {
+    if (untracked.length === 0) {
       console.log('[OrphanCleanup] No orphan wrapper processes found');
       _lastOrphanCleanup = { killed: 0, timestamp: Date.now() };
       return;
     }
 
-    console.log(`[OrphanCleanup] Found ${orphans.length} orphan wrapper(s), killing...`);
+    // SAFETY: Only kill wrappers whose Claude child process is actually dead.
+    // A wrapper with a live Claude child is NOT an orphan — it just wasn't reconnected yet.
+    console.log(`[OrphanCleanup] Found ${untracked.length} untracked wrapper(s), verifying...`);
     let killed = 0;
-    for (const orphan of orphans) {
+    let spared = 0;
+    for (const wrapper of untracked) {
+      // Check if the wrapper's Claude child is alive
+      let childAlive = false;
       try {
-        // Kill wrapper process group (kills wrapper + claude child)
-        process.kill(-orphan.pid, 9);
-        killed++;
-        console.log(`[OrphanCleanup] Killed wrapper PID ${orphan.pid} (session=${orphan.sessionId.slice(0, 12)})`);
-      } catch {
-        try { process.kill(orphan.pid, 9); killed++; } catch { /* already dead */ }
+        const children = execSync(`pgrep -P ${wrapper.pid} 2>/dev/null`, { encoding: 'utf8', timeout: 3000 }).trim();
+        if (children) {
+          childAlive = true;
+        }
+      } catch { /* no children or pgrep failed */ }
+
+      if (childAlive) {
+        // Claude child is alive — DO NOT KILL. Log and attempt late reconnect instead.
+        spared++;
+        console.log(`[OrphanCleanup] SPARED wrapper PID ${wrapper.pid} (session=${wrapper.sessionId.slice(0, 12)}) — Claude child still alive`);
+        continue;
       }
+
+      // Claude child is dead — this is a true orphan wrapper, safe to kill
+      try {
+        process.kill(wrapper.pid, 'SIGTERM');
+        killed++;
+        console.log(`[OrphanCleanup] Killed dead wrapper PID ${wrapper.pid} (session=${wrapper.sessionId.slice(0, 12)})`);
+      } catch { /* already dead */ }
     }
 
-    // Clean up PID files for orphans
-    for (const orphan of orphans) {
-      if (orphan.sessionId) {
+    // Clean up PID files only for killed orphans (not spared ones)
+    for (const wrapper of untracked) {
+      // Only clean up if Claude child was dead (i.e., not spared)
+      let childAlive = false;
+      try {
+        const children = execSync(`pgrep -P ${wrapper.pid} 2>/dev/null`, { encoding: 'utf8', timeout: 3000 }).trim();
+        if (children) childAlive = true;
+      } catch { /* */ }
+
+      if (!childAlive && wrapper.sessionId) {
         for (const ext of ['.pid', '.fifo', '.meta', '.stderr']) {
-          try { await fsp.unlink(`${FIFO_DIR}/${orphan.sessionId}${ext}`); } catch { /* ignore */ }
+          try { await fsp.unlink(`${FIFO_DIR}/${wrapper.sessionId}${ext}`); } catch { /* ignore */ }
         }
       }
     }
 
     _lastOrphanCleanup = { killed, timestamp: Date.now() };
-    console.log(`[OrphanCleanup] Cleaned up ${killed} orphan process(es)`);
+    console.log(`[OrphanCleanup] Done: ${killed} killed, ${spared} spared (alive). ${activeProcesses.size} tracked sessions.`);
   } catch (err) {
     console.error('[OrphanCleanup] Error:', err instanceof Error ? err.message : err);
   }
