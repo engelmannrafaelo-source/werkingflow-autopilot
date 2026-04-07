@@ -442,7 +442,7 @@ function AppContent() {
 
     const now = Date.now();
     for (const conv of convCacheRef.current) {
-      if (conv.status !== 'ongoing') continue;
+      if (conv.status !== 'ongoing' && !conv.attentionState) continue;
       // Sub-sessions belong to the sub-sessions workspace for attention tracking
       const projId = conv.isSubSession
         ? 'sub-sessions'

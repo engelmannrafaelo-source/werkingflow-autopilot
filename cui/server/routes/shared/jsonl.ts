@@ -81,7 +81,7 @@ export function ensureJsonlForAccount(sessionId: string, targetAccountId: string
 // For a 100MB file: 93ms -> 0.1ms (930x speedup).
 // mtime cache: only re-reads files that changed since last scan.
 
-type JsonlMetaResult = { summary: string; model: string; messageCount: number; createdAt: string; updatedAt: string };
+type JsonlMetaResult = { summary: string; model: string; messageCount: number; createdAt: string; updatedAt: string; lastRole?: string };
 const _metaCache = new Map<string, { mtimeMs: number; size: number; meta: JsonlMetaResult }>();
 
 /** Clear metadata cache (useful after unstick/compact operations) */
@@ -133,6 +133,7 @@ export function readJsonlMetadata(filePath: string): JsonlMetaResult | null {
     let model = '';
     let createdAt = '';
     let firstUserText = '';
+    let lastRole = '';
 
     // Parse head lines (get createdAt, first user message for summary fallback)
     const headLines = headStr.split('\n').filter(l => l.trim());
@@ -147,6 +148,7 @@ export function readJsonlMetadata(filePath: string): JsonlMetaResult | null {
             Array.isArray(c) ? c.filter((b: any) => b.type === 'text').map((b: any) => b.text).join(' ').slice(0, 200) : '';
         }
         if (obj.message?.model && obj.message.model !== '<synthetic>') model = obj.message.model;
+          if (obj.message?.role === 'user' || obj.message?.role === 'assistant') lastRole = obj.message.role;
       } catch { /* partial line at boundary — skip */ }
     }
 
@@ -171,7 +173,7 @@ export function readJsonlMetadata(filePath: string): JsonlMetaResult | null {
     // Roughly 40-60% of lines are user/assistant messages
     const messageCount = Math.max(1, Math.round(estimatedLines * 0.5));
 
-    const meta: JsonlMetaResult = { summary, model, messageCount, createdAt, updatedAt };
+    const meta: JsonlMetaResult = { summary, model, messageCount, createdAt, updatedAt, lastRole: lastRole || undefined };
     _metaCache.set(filePath, { mtimeMs: stat.mtimeMs, size: fileSize, meta });
     return meta;
   } catch {
@@ -190,6 +192,7 @@ function _readJsonlMetadataFull(filePath: string, updatedAt: string): JsonlMetaR
     let messageCount = 0;
     let createdAt = '';
     let firstUserText = '';
+    let lastRole = "";
 
     for (const line of lines) {
       try {
@@ -210,7 +213,7 @@ function _readJsonlMetadataFull(filePath: string, updatedAt: string): JsonlMetaR
     }
 
     if (!summary && firstUserText) summary = firstUserText;
-    return { summary, model, messageCount, createdAt, updatedAt };
+    return { summary, model, messageCount, createdAt, updatedAt, lastRole: lastRole || undefined };
   } catch {
     return null;
   }

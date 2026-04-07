@@ -468,9 +468,15 @@ async function fetchConvList() {
         const decodedPath = '/' + dirname.replace(/^-/, '').replace(/-/g, '/');
         // Determine account from active process, default to first scanned account
         const activeAcctId = claudeCli.getActiveAccountId(sessionId);
-        const effectiveAccount = activeAcctId
-          ? claudeCli.ACCOUNT_CONFIG.find(a => a.id === activeAcctId) || account
-          : account;
+        const storedAcctId = convMeta.getAssignment(sessionId);
+        // Migrate old account IDs from pre-April-2026 rename
+        const ACCT_MIGRATION: Record<string, string> = { rafael: "engelmann", engelmann: "gmail" };
+        const migratedAcctId = storedAcctId ? (ACCT_MIGRATION[storedAcctId] ?? storedAcctId) : "";
+        const resolvedAcctId = activeAcctId || migratedAcctId;
+        const effectiveAccount = resolvedAcctId
+          ? claudeCli.ACCOUNT_CONFIG.find(a => a.id === resolvedAcctId)
+          : undefined;
+        if (!effectiveAccount) continue; // skip unassigned — no silent fallback
         results.push({
           sessionId,
           accountId: effectiveAccount.id,
@@ -486,6 +492,7 @@ async function fetchConvList() {
           messageCount: meta.messageCount || 0,
           updatedAt: meta.updatedAt || '',
           createdAt: meta.createdAt || '',
+          _lastRole: meta.lastRole || '',
         });
       }
     }
@@ -522,13 +529,20 @@ async function fetchConvList() {
       (conv as any).attentionState = stateInfo.state;
       (conv as any).attentionReason = stateInfo.reason;
       (conv as any).toolInfo = stateInfo.toolInfo;
+    } else if (conv.status !== 'ongoing' && conv._lastRole === 'assistant') {
+      // Auto-recover: last message from assistant + no active process = needs attention
+      (conv as any).attentionState = 'needs_attention';
+      (conv as any).attentionReason = 'waiting';
     }
   }
 
+  // Finished conversations: clear attention (user clicked Finish)
   const finished = convMeta.getAllFinished();
   for (const conv of deduped) {
     if (finished[conv.sessionId]) {
       (conv as any).manualFinished = true;
+      (conv as any).attentionState = undefined;
+      (conv as any).attentionReason = undefined;
     }
   }
 
