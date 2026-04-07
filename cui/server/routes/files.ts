@@ -340,7 +340,19 @@ export default function createFilesRouter(deps: FilesDeps): Router {
       res.status(400).json({ error: 'invalid projectId: only alphanumeric, dash, underscore allowed' });
       return;
     }
-    const dir = join(ACTIVE_DIR, projectId);
+    // Use workDir from project config if available, fallback to internal active dir
+    let dir = join(ACTIVE_DIR, projectId);
+    try {
+      const configPath = join(DATA_DIR, 'projects', `${projectId}.json`);
+      if (existsSync(configPath)) {
+        const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+        if (config.workDir && existsSync(config.workDir)) {
+          dir = config.workDir;
+        }
+      }
+    } catch {
+      // fallback to default ACTIVE_DIR path
+    }
     mkdirSync(dir, { recursive: true });
     res.json({ path: dir });
   });
