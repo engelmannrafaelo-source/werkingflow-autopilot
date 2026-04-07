@@ -1173,6 +1173,8 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       const errMsg: Message = { role: 'system', content: `Netzwerkfehler: ${errText}`, timestamp: new Date().toISOString() };
       pendingSystemMsgsRef.current.push(errMsg);
       setMessages(prev => [...prev, errMsg]);
+      // Restore user input so the message is not lost
+      if (!overrideMessage) setInput(msg);
     }
     setIsLoading(false);
     // Invalidate hash so next poll always applies state (user just sent a message)
