@@ -7,6 +7,7 @@ import { watch } from 'chokidar';
 import type { WebSocket } from 'ws';
 import type { SessionState, ConvAttentionState, AttentionReason, PanelVisibility } from './state.js';
 import * as convMeta from './shared/conv-metadata.js';
+import { findJsonlPathAllAccounts } from './shared/jsonl.js';
 import { getOrphanCleanupStatus, killOrphanProcesses, getActiveProcesses } from './claude-cli.js';
 
 const execAsync = promisify(exec);
@@ -706,6 +707,128 @@ export default function createControlRouter(deps: ControlDeps): Router {
     });
 
     res.json({ chats, total: chats.length });
+  });
+
+  // ============================================================
+  // Digest API — Last N messages for all active sessions in one call
+  // Usage: GET /api/digest?lines=20&active_only=true
+  // ============================================================
+
+  router.get('/digest', async (req: Request, res: Response) => {
+    const maxLines = Math.min(Math.max(parseInt(req.query.lines as string) || 20, 1), 200);
+    const activeOnly = req.query.active_only !== 'false'; // default true
+
+    // 1. Get active chats via internal call
+    let chats: Array<{ sessionId: string; projectName: string; accountId: string; processStatus?: string; wrapperCount?: number; attentionState?: string; attentionReason?: string }> = [];
+    try {
+      const resp = await fetch(`http://localhost:${process.env.PORT || 4005}/api/all-active-chats`, { signal: AbortSignal.timeout(5000) });
+      const data = await resp.json();
+      chats = data.chats || [];
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to fetch active chats' });
+      return;
+    }
+
+    // Filter to sessions with live wrappers if active_only
+    if (activeOnly) {
+      chats = chats.filter(c => (c.wrapperCount ?? 0) > 0);
+    }
+
+    // 2. For each session, read last N messages from JSONL
+    const sessions: Array<Record<string, unknown>> = [];
+
+    for (const chat of chats) {
+      const found = findJsonlPathAllAccounts(chat.sessionId);
+      if (!found) {
+        sessions.push({
+          sessionId: chat.sessionId,
+          project: chat.projectName,
+          accountId: chat.accountId,
+          status: chat.attentionState || 'unknown',
+          reason: chat.attentionReason || '',
+          wrapperCount: chat.wrapperCount || 0,
+          recent: [],
+          error: 'JSONL not found',
+        });
+        continue;
+      }
+
+      try {
+        const rawLines = readFileSync(found.path, 'utf8').split('\n').filter(l => l.trim());
+        const messages: Array<{ role: string; text: string; at: string }> = [];
+
+        for (const line of rawLines) {
+          try {
+            const obj = JSON.parse(line);
+
+            if (obj.type === 'user' && obj.message?.content) {
+              let text = '';
+              const content = obj.message.content;
+              if (typeof content === 'string') {
+                text = content;
+              } else if (Array.isArray(content)) {
+                text = content.filter((b: any) => b.type === 'text').map((b: any) => b.text).join(' ');
+              }
+              // Skip system-injected context
+              if (!text || text.startsWith('<task-notification>') || text.startsWith('<system-reminder>') || text.startsWith('<session-context>')) continue;
+              // Strip [KONTEXT...] and [TEAM] headers — keep only the actual user message
+              const cleanLines = text.split('\n').filter(l => {
+                const t = l.trim();
+                if (!t) return false;
+                if (t.startsWith('[KONTEXT:') || t.startsWith('[PEERS:') || t.startsWith('[TEAM]') || t.startsWith('[MODEL-CONTROL:')) return false;
+                if (t.startsWith('# Team Context') || t.startsWith('_Stand:')) return false;
+                return true;
+              });
+              const cleanText = cleanLines.join('\n').trim();
+              if (!cleanText) continue;
+
+              const ts = obj.timestamp ? obj.timestamp.slice(11, 16) : '?';
+              messages.push({ role: 'user', text: cleanText.slice(0, 500), at: ts });
+
+            } else if (obj.type === 'assistant' && obj.message?.content) {
+              const parts = Array.isArray(obj.message.content) ? obj.message.content : [];
+              const textParts = parts.filter((b: any) => b.type === 'text').map((b: any) => b.text).join(' ').trim();
+              if (!textParts) continue;
+
+              const ts = obj.timestamp ? obj.timestamp.slice(11, 16) : '?';
+              messages.push({ role: 'assistant', text: textParts.slice(0, 500), at: ts });
+            }
+          } catch { /* skip corrupt lines */ }
+        }
+
+        const recent = messages.slice(-maxLines);
+        const lastActivity = recent.length > 0 ? recent[recent.length - 1].at : '?';
+
+        sessions.push({
+          sessionId: chat.sessionId,
+          project: chat.projectName,
+          accountId: chat.accountId,
+          status: chat.attentionState || 'unknown',
+          reason: chat.attentionReason || '',
+          wrapperCount: chat.wrapperCount || 0,
+          lastActivity,
+          messageCount: messages.length,
+          recent,
+        });
+      } catch (err) {
+        sessions.push({
+          sessionId: chat.sessionId,
+          project: chat.projectName,
+          accountId: chat.accountId,
+          status: chat.attentionState || 'unknown',
+          reason: chat.attentionReason || '',
+          wrapperCount: chat.wrapperCount || 0,
+          recent: [],
+          error: (err as Error).message,
+        });
+      }
+    }
+
+    res.json({
+      sessions,
+      total: sessions.length,
+      generated: new Date().toISOString(),
+    });
   });
 
   // ============================================================
