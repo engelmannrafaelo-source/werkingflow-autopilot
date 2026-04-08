@@ -67,6 +67,7 @@ export default function ImageDrop() {
 
   const upload = async () => {
     if (!images.length) return;
+    if ((window as any).__cuiServerAlive === false) return;
     setUploading(true);
     setError('');
     try {
@@ -77,10 +78,11 @@ export default function ImageDrop() {
           accountId,
           images: images.map(img => ({ name: img.name, data: img.preview })),
         }),
+        signal: AbortSignal.timeout(60000),
       });
       if (!resp.ok) {
-        const err = await resp.json();
-        throw new Error(err.error || 'Upload failed');
+        const errBody = await resp.json();
+        throw new Error(errBody.error || `[ImageDrop] upload failed: HTTP ${resp.status}`);
       }
       const data: UploadResult = await resp.json();
       setResult(data);
@@ -90,11 +92,16 @@ export default function ImageDrop() {
           await copyToClipboard(data.readCommand);
           setCopied(true);
           setTimeout(() => setCopied(false), 3000);
-        } catch {}
+        } catch (clipErr) {
+          console.warn('[ImageDrop] clipboard copy failed:', clipErr);
+        }
       }
     } catch (err: any) {
-      const msg = err.message === "Failed to fetch"
-        ? "Upload fehlgeschlagen (Verbindung abgebrochen). Bilder evtl. zu gross — versuche kleinere Bilder oder einzeln hochladen."
+      console.warn('[ImageDrop] upload error:', err);
+      const msg = err.name === 'TimeoutError' || err.message?.includes('signal')
+        ? "Upload-Timeout (60s). Bilder evtl. zu gross — versuche kleinere Bilder oder einzeln hochladen."
+        : err.message === "Failed to fetch"
+        ? "Upload fehlgeschlagen (Verbindung abgebrochen)."
         : err.message;
       setError(msg);
     } finally {

@@ -14,6 +14,9 @@ cd "$SCRIPT_DIR/.."
 # Load environment variables
 [ -f /home/claude-user/.bashrc ] && source /home/claude-user/.bashrc || true
 
+# Set NODE_ENV for build-guard.js
+export NODE_ENV=production
+
 # Read configuration from app-config.json
 if [ ! -f "app-config.json" ]; then
     echo "❌ ERROR: app-config.json not found!"

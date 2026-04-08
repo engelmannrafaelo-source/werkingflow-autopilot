@@ -3,7 +3,6 @@
 
 /data
 /dist
-/dist-old
 /node_modules
 /.git
 *.log

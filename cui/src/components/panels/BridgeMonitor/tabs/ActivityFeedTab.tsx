@@ -33,13 +33,19 @@ export default function ActivityFeedTab() {
   const containerRef = useRef<HTMLDivElement>(null);
 
   const fetchData = useCallback(async () => {
+    if ((window as any).__cuiServerAlive !== true) return;
     setError('');
     try {
-      const res = await fetch('/api/bridge/metrics/activity?limit=100');
+      const res = await fetch('/api/bridge/metrics/activity?limit=100', { signal: AbortSignal.timeout(10000) });
       if (!res.ok) throw new Error(await res.text());
       const result = await res.json();
+      // API returns {sessions: [...]} but component expects {requests: [...]}
+      if (result.sessions && !result.requests) {
+        result.requests = result.sessions;
+      }
       setData(result);
     } catch (err: any) {
+      // Error state shown in UI via setError
       setError(err.message);
     } finally {
       setLoading(false);
@@ -53,7 +59,7 @@ export default function ActivityFeedTab() {
     return () => clearInterval(interval);
   }, [fetchData, autoRefresh]);
 
-  const filteredRequests = data?.requests.filter((req) => {
+  const filteredRequests = (data?.requests ?? []).filter((req) => {
     if (filter.user && !req.user.toLowerCase().includes(filter.user.toLowerCase())) return false;
     if (filter.app && !req.app.toLowerCase().includes(filter.app.toLowerCase())) return false;
     if (filter.model && !req.model.toLowerCase().includes(filter.model.toLowerCase())) return false;
@@ -62,15 +68,17 @@ export default function ActivityFeedTab() {
   });
 
   const formatLatency = (ms: number) => {
-    if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
-    return `${ms}ms`;
+    const safeMs = ms ?? 0;
+    if (safeMs >= 1000) return `${(safeMs / 1000).toFixed(1)}s`;
+    return `${safeMs}ms`;
   };
 
   return (
-    <div style={{ padding: 12, height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <div data-ai-id="bridge-activity-tab" style={{ padding: 12, height: '100%', display: 'flex', flexDirection: 'column' }}>
       {/* Header */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+      <div data-ai-id="bridge-activity-filters" style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
         <input
+          data-ai-id="bridge-activity-filter-user"
           type="text"
           placeholder="Filter user..."
           value={filter.user}
@@ -87,6 +95,7 @@ export default function ActivityFeedTab() {
           }}
         />
         <input
+          data-ai-id="bridge-activity-filter-app"
           type="text"
           placeholder="Filter app..."
           value={filter.app}
@@ -103,6 +112,7 @@ export default function ActivityFeedTab() {
           }}
         />
         <input
+          data-ai-id="bridge-activity-filter-model"
           type="text"
           placeholder="Filter model..."
           value={filter.model}
@@ -119,6 +129,7 @@ export default function ActivityFeedTab() {
           }}
         />
         <select
+          data-ai-id="bridge-activity-filter-status"
           value={filter.status}
           onChange={(e) => setFilter({ ...filter, status: e.target.value })}
           style={{
@@ -137,7 +148,7 @@ export default function ActivityFeedTab() {
           <option value="timeout">Timeout</option>
         </select>
         <div style={{ flex: 1 }} />
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: 'var(--tn-text-muted)' }}>
+        <label data-ai-id="bridge-activity-auto-refresh-toggle" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: 'var(--tn-text-muted)' }}>
           <input
             type="checkbox"
             checked={autoRefresh}
@@ -146,6 +157,7 @@ export default function ActivityFeedTab() {
           Auto-refresh (5s)
         </label>
         <button
+          data-ai-id="bridge-activity-refresh-button"
           onClick={fetchData}
           style={{
             padding: '4px 12px',
@@ -163,6 +175,7 @@ export default function ActivityFeedTab() {
 
       {error && (
         <div
+          data-ai-id="bridge-activity-error"
           style={{
             padding: '6px 10px',
             fontSize: 11,
@@ -177,16 +190,17 @@ export default function ActivityFeedTab() {
       )}
 
       {loading && !data && (
-        <div style={{ padding: 40, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>
+        <div data-ai-id="bridge-activity-loading" style={{ padding: 40, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>
           Loading...
         </div>
       )}
 
       {/* Request Feed */}
       {data && (
-        <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <div data-ai-id="bridge-activity-feed-container" style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           {/* Table Header */}
           <div
+            data-ai-id="bridge-activity-table-header"
             style={{
               display: 'grid',
               gridTemplateColumns: '140px 80px 120px 140px 100px 70px 70px 80px 70px',
@@ -213,6 +227,7 @@ export default function ActivityFeedTab() {
 
           {/* Scrollable Request List */}
           <div
+            data-ai-id="bridge-activity-table-body"
             ref={containerRef}
             style={{
               flex: 1,
@@ -225,6 +240,7 @@ export default function ActivityFeedTab() {
               filteredRequests.map((req, idx) => (
                 <div
                   key={req.id}
+                  data-ai-id={`bridge-activity-request-row-${req.id}`}
                   style={{
                     display: 'grid',
                     gridTemplateColumns: '140px 80px 120px 140px 100px 70px 70px 80px 70px',
@@ -250,10 +266,10 @@ export default function ActivityFeedTab() {
                   </div>
                   <div style={{ color: 'var(--tn-text-muted)' }}>{req.provider}</div>
                   <div style={{ color: 'var(--tn-purple, #bb9af7)', textAlign: 'right' }}>
-                    {req.tokens.toLocaleString()}
+                    {(req.tokens ?? 0).toLocaleString()}
                   </div>
                   <div style={{ color: 'var(--tn-green)', textAlign: 'right' }}>
-                    €{req.cost.toFixed(3)}
+                    €{(req.cost ?? 0).toFixed(3)}
                   </div>
                   <div
                     style={{
@@ -269,7 +285,7 @@ export default function ActivityFeedTab() {
                 </div>
               ))
             ) : (
-              <div style={{ padding: 40, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 11 }}>
+              <div data-ai-id="bridge-activity-no-results" style={{ padding: 40, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 11 }}>
                 {filter.user || filter.app || filter.model || filter.status
                   ? 'No requests match current filters'
                   : 'No recent requests'}
@@ -279,6 +295,7 @@ export default function ActivityFeedTab() {
 
           {/* Footer Stats */}
           <div
+            data-ai-id="bridge-activity-footer-stats"
             style={{
               marginTop: 8,
               padding: '8px 12px',
@@ -289,13 +306,13 @@ export default function ActivityFeedTab() {
               fontSize: 10,
             }}
           >
-            <div>
+            <div data-ai-id="bridge-activity-stats-showing">
               <span style={{ color: 'var(--tn-text-muted)' }}>Showing:</span>{' '}
               <span style={{ fontWeight: 600, color: 'var(--tn-text)' }}>
                 {filteredRequests?.length || 0}
               </span>
             </div>
-            <div>
+            <div data-ai-id="bridge-activity-stats-total">
               <span style={{ color: 'var(--tn-text-muted)' }}>Total:</span>{' '}
               <span style={{ fontWeight: 600, color: 'var(--tn-text)' }}>{data.total}</span>
             </div>

@@ -70,21 +70,23 @@ export default function VirtualOffice({ projectId, workDir }: VirtualOfficeProps
 
   // Fetch agent status
   const loadAgents = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
-      const res = await fetch(`${API}/agents/claude/status`);
-      if (!res.ok) throw new Error('Failed to load agents');
+      const res = await fetch(`${API}/agents/claude/status`, { signal: AbortSignal.timeout(20000) });
+      if (!res.ok) throw new Error(`agents/claude/status ${res.status}`);
       const data = await res.json();
       setAgents(data.agents || []);
     } catch (err) {
-      console.error('Failed to load agents:', err);
+      console.warn('[VirtualOffice] loadAgents:', err);
     }
   }, []);
 
   // Fetch activity events from events.json
   const loadActivities = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
-      const res = await fetch(`${API}/team/events`);
-      if (!res.ok) throw new Error('Failed to load events');
+      const res = await fetch(`${API}/team/events`, { signal: AbortSignal.timeout(20000) });
+      if (!res.ok) throw new Error(`team/events ${res.status}`);
       const data = await res.json();
 
       // events.json has { events: [...] }
@@ -99,17 +101,17 @@ export default function VirtualOffice({ projectId, workDir }: VirtualOfficeProps
 
       setActivities(sorted);
     } catch (err) {
-      console.error('Failed to load activities:', err);
-      // Keep existing activities or set empty
+      console.warn('[VirtualOffice] loadActivities:', err);
     }
   }, []);
 
   // Fetch action items (approvals, pending reviews, etc.)
   const loadActionItems = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
       const [pendingRes, recommendationsRes] = await Promise.all([
-        fetch(`${API}/agents/business/pending`),
-        fetch(`${API}/agents/recommendations`).catch(() => ({ ok: false }))
+        fetch(`${API}/agents/business/pending`, { signal: AbortSignal.timeout(20000) }),
+        fetch(`${API}/agents/recommendations`, { signal: AbortSignal.timeout(20000) }).catch(() => ({ ok: false } as Response))
       ]);
 
       const items: ActionItem[] = [];
@@ -166,7 +168,7 @@ export default function VirtualOffice({ projectId, workDir }: VirtualOfficeProps
 
       setActionItems(items);
     } catch (err) {
-      console.error('Failed to load action items:', err);
+      console.warn('[VirtualOffice] loadActionItems:', err);
     }
   }, []);
 
@@ -195,7 +197,7 @@ export default function VirtualOffice({ projectId, workDir }: VirtualOfficeProps
         const event: ActivityEvent = JSON.parse(e.data);
         setActivities(prev => [event, ...prev].slice(0, 20)); // Keep last 20
       } catch (err) {
-        console.error('Failed to parse activity event:', err);
+        console.warn('[VirtualOffice] parse activity event:', err);
       }
     };
 

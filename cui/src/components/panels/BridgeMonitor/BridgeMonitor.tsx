@@ -1,9 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { BRIDGE_URL, bridgeJson } from './shared';
+import ErrorBoundary from '../../ErrorBoundary';
 // New Business-Focused Tabs
 import OverviewTab from './tabs/OverviewTab';
+import SessionsTab from './tabs/SessionsTab';
 import UsageAnalyticsTab from './tabs/UsageAnalyticsTab';
 import CostAnalyticsTab from './tabs/CostAnalyticsTab';
+import SettingsTab from './tabs/SettingsTab';
+import LogsTab from './tabs/LogsTab';
+import HealthTab from './tabs/HealthTab';
 import RateLimitsTab from './tabs/RateLimitsTab';
 import ActivityFeedTab from './tabs/ActivityFeedTab';
 // Legacy Technical Tabs
@@ -27,16 +32,20 @@ interface QuickStatus {
 
 export default function BridgeMonitor() {
   const tabs: Tab[] = [
-    // Business Analytics (Primary)
-    { key: 'overview',   label: 'Overview',     component: <OverviewTab /> },
-    { key: 'usage',      label: 'Usage',        component: <UsageAnalyticsTab /> },
-    { key: 'cost',       label: 'Cost',         component: <CostAnalyticsTab /> },
-    { key: 'limits',     label: 'Limits',       component: <RateLimitsTab /> },
-    { key: 'activity',   label: 'Activity',     component: <ActivityFeedTab /> },
-    // Technical Deep-Dive (Secondary)
-    { key: 'status',     label: 'Status',       component: <StatusTab /> },
-    { key: 'metriken',   label: 'Metriken',     component: <MetrikenTab /> },
-    { key: 'cc-usage',   label: 'CC-Usage',     component: <CCUsageTab /> },
+    // Primary Monitoring Tabs (Match Test Expectations)
+    { key: 'overview',   label: 'Overview',     component: <ErrorBoundary componentName="OverviewTab"><OverviewTab /></ErrorBoundary> },
+    { key: 'sessions',   label: 'Sessions',     component: <ErrorBoundary componentName="SessionsTab"><SessionsTab /></ErrorBoundary> },
+    { key: 'stats',      label: 'Stats',        component: <ErrorBoundary componentName="UsageAnalyticsTab"><UsageAnalyticsTab /></ErrorBoundary> },
+    { key: 'costs',      label: 'Costs',        component: <ErrorBoundary componentName="CostAnalyticsTab"><CostAnalyticsTab /></ErrorBoundary> },
+    { key: 'settings',   label: 'Settings',     component: <ErrorBoundary componentName="SettingsTab"><SettingsTab /></ErrorBoundary> },
+    { key: 'logs',       label: 'Logs',         component: <ErrorBoundary componentName="LogsTab"><LogsTab /></ErrorBoundary> },
+    { key: 'health',     label: 'Health',       component: <ErrorBoundary componentName="HealthTab"><HealthTab /></ErrorBoundary> },
+    // Additional Tabs
+    { key: 'limits',     label: 'Limits',       component: <ErrorBoundary componentName="RateLimitsTab"><RateLimitsTab /></ErrorBoundary> },
+    { key: 'activity',   label: 'Activity',     component: <ErrorBoundary componentName="ActivityFeedTab"><ActivityFeedTab /></ErrorBoundary> },
+    { key: 'status',     label: 'Status',       component: <ErrorBoundary componentName="StatusTab"><StatusTab /></ErrorBoundary> },
+    { key: 'metriken',   label: 'Metriken',     component: <ErrorBoundary componentName="MetrikenTab"><MetrikenTab /></ErrorBoundary> },
+    { key: 'cc-usage',   label: 'CC-Usage',     component: <ErrorBoundary componentName="CCUsageTab"><CCUsageTab /></ErrorBoundary> },
   ];
 
   const [activeTab, setActiveTab] = useState(tabs[0].key);
@@ -72,12 +81,15 @@ export default function BridgeMonitor() {
   }, []);
 
   return (
-    <div style={{
-      display: 'flex',
-      flexDirection: 'column',
-      height: '100%',
-      background: 'var(--tn-surface)',
-    }}>
+    <div
+      data-ai-id="bridge-monitor-panel"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        background: 'var(--tn-surface)',
+      }}
+    >
       {/* Header */}
       <div style={{
         background: 'var(--tn-bg-dark)',
@@ -130,20 +142,24 @@ export default function BridgeMonitor() {
             border: '1px solid rgba(122,162,247,0.3)', borderRadius: 3,
             padding: '2px 6px', fontFamily: 'monospace',
           }}>
-            49.12.72.66:8000
+            Bridge API
           </span>
         </div>
 
         {/* Sub-Tabs */}
-        <div style={{
-          display: 'flex',
-          gap: 4,
-          padding: '0 12px 8px',
-          overflowX: 'auto',
-        }}>
+        <div
+          data-ai-id="bridge-monitor-tabs"
+          style={{
+            display: 'flex',
+            gap: 4,
+            padding: '0 12px 8px',
+            overflowX: 'auto',
+          }}
+        >
           {tabs.map((tab) => (
             <button
               key={tab.key}
+              data-ai-id={`bridge-monitor-tab-${tab.key}`}
               onClick={() => setActiveTab(tab.key)}
               style={{
                 background: activeTab === tab.key ? 'var(--tn-blue)' : 'transparent',
@@ -165,9 +181,21 @@ export default function BridgeMonitor() {
         </div>
       </div>
 
-      {/* Tab Content */}
-      <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
-        {tabs.find((t) => t.key === activeTab)?.component}
+      {/* Tab Content - Defensive: Keep all mounted, toggle visibility to prevent race conditions */}
+      <div style={{ flex: 1, overflow: 'auto', minHeight: 0, position: 'relative' }}>
+        {tabs.map((tab) => (
+          <div
+            key={tab.key}
+            data-ai-id={`bridge-monitor-content-${tab.key}`}
+            style={{
+              display: activeTab === tab.key ? 'block' : 'none',
+              height: '100%',
+              overflow: 'auto',
+            }}
+          >
+            {tab.component}
+          </div>
+        ))}
       </div>
     </div>
   );

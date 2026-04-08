@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Infisical Panel Test</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      padding: 20px;
+      background: #0a0a0a;
+      color: #e0e0e0;
+    }
+    .test-section {
+      margin: 20px 0;
+      padding: 15px;
+      border: 1px solid #333;
+      border-radius: 8px;
+      background: #1a1a1a;
+    }
+    .test-result {
+      padding: 10px;
+      margin: 10px 0;
+      border-radius: 4px;
+    }
+    .success {
+      background: #1a3a1a;
+      border: 1px solid #2d5a2d;
+      color: #4ade80;
+    }
+    .error {
+      background: #3a1a1a;
+      border: 1px solid #5a2d2d;
+      color: #f87171;
+    }
+    .loading {
+      background: #1a2a3a;
+      border: 1px solid #2d4a5a;
+      color: #60a5fa;
+    }
+    h2 {
+      color: #60a5fa;
+      margin-top: 0;
+    }
+    button {
+      background: #2563eb;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      margin: 5px;
+    }
+    button:hover {
+      background: #1d4ed8;
+    }
+    pre {
+      background: #0a0a0a;
+      padding: 10px;
+      border-radius: 4px;
+      overflow-x: auto;
+      font-size: 12px;
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 10px;
+      margin: 15px 0;
+    }
+    .stat-card {
+      background: #1a1a1a;
+      border: 1px solid #333;
+      padding: 15px;
+      border-radius: 6px;
+    }
+    .stat-label {
+      color: #888;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .stat-value {
+      font-size: 24px;
+      font-weight: 600;
+      margin-top: 5px;
+    }
+  </style>
+</head>
+<body>
+  <h1>🔐 Infisical Panel Test Suite</h1>
+
+  <div class="test-section">
+    <h2>Layer 1: Backend API Tests</h2>
+    <button onclick="testBackendAPI()">Run Backend Tests</button>
+    <div id="backend-results"></div>
+  </div>
+
+  <div class="test-section">
+    <h2>Layer 2: Data Fetching Tests</h2>
+    <button onclick="testDataFetching()">Run Data Fetch Tests</button>
+    <div id="fetch-results"></div>
+  </div>
+
+  <div class="test-section">
+    <h2>Layer 3: Component Rendering Tests</h2>
+    <button onclick="testComponentRendering()">Run Render Tests</button>
+    <div id="render-results"></div>
+  </div>
+
+  <div class="test-section">
+    <h2>Layer 4: End-to-End Integration</h2>
+    <button onclick="testE2E()">Run Full E2E Test</button>
+    <div id="e2e-results"></div>
+  </div>
+
+  <script>
+    const API_BASE = 'http://localhost:4005';
+
+    function showResult(containerId, message, type = 'success') {
+      const container = document.getElementById(containerId);
+      const div = document.createElement('div');
+      div.className = `test-result ${type}`;
+      div.textContent = message;
+      container.appendChild(div);
+    }
+
+    function showJSON(containerId, data) {
+      const container = document.getElementById(containerId);
+      const pre = document.createElement('pre');
+      pre.textContent = JSON.stringify(data, null, 2);
+      container.appendChild(pre);
+    }
+
+    async function testBackendAPI() {
+      const container = document.getElementById('backend-results');
+      container.innerHTML = '<div class="test-result loading">Running backend tests...</div>';
+
+      try {
+        // Test 1: Projects endpoint
+        const projectsResp = await fetch(`${API_BASE}/api/infisical/projects`);
+        if (!projectsResp.ok) throw new Error(`Projects API failed: ${projectsResp.status}`);
+        const projects = await projectsResp.json();
+
+        container.innerHTML = '';
+        showResult('backend-results', `✅ Projects API: ${projects.projects.length} projects found`, 'success');
+        showJSON('backend-results', projects);
+
+        // Test 2: Infrastructure endpoint
+        const infraResp = await fetch(`${API_BASE}/api/infisical/infrastructure`);
+        if (!infraResp.ok) throw new Error(`Infrastructure API failed: ${infraResp.status}`);
+        const infra = await infraResp.json();
+
+        showResult('backend-results', `✅ Infrastructure API: Server at ${infra.server}`, 'success');
+        showJSON('backend-results', infra);
+
+      } catch (error) {
+        container.innerHTML = '';
+        showResult('backend-results', `❌ Backend test failed: ${error.message}`, 'error');
+      }
+    }
+
+    async function testDataFetching() {
+      const container = document.getElementById('fetch-results');
+      container.innerHTML = '<div class="test-result loading">Testing data fetching...</div>';
+
+      try {
+        const start = performance.now();
+
+        // Parallel fetch test
+        const [projectsResp, infraResp] = await Promise.all([
+          fetch(`${API_BASE}/api/infisical/projects`),
+          fetch(`${API_BASE}/api/infisical/infrastructure`)
+        ]);
+
+        const [projects, infra] = await Promise.all([
+          projectsResp.json(),
+          infraResp.json()
+        ]);
+
+        const duration = (performance.now() - start).toFixed(2);
+
+        container.innerHTML = '';
+        showResult('fetch-results', `✅ Parallel fetch completed in ${duration}ms`, 'success');
+        showResult('fetch-results', `✅ Data integrity: ${projects.projects.length} projects, ${infra.syncTargets.vercel.length} Vercel + ${infra.syncTargets.railway.length} Railway`, 'success');
+
+      } catch (error) {
+        container.innerHTML = '';
+        showResult('fetch-results', `❌ Fetch test failed: ${error.message}`, 'error');
+      }
+    }
+
+    async function testComponentRendering() {
+      const container = document.getElementById('render-results');
+      container.innerHTML = '<div class="test-result loading">Testing component rendering...</div>';
+
+      try {
+        // Fetch data
+        const projectsResp = await fetch(`${API_BASE}/api/infisical/projects`);
+        const infraResp = await fetch(`${API_BASE}/api/infisical/infrastructure`);
+
+        const projects = await projectsResp.json();
+        const infra = await infraResp.json();
+
+        // Create mock component render
+        const statsDiv = document.createElement('div');
+        statsDiv.className = 'stats';
+
+        const totalProjects = projects.projects.length;
+        const succeededProjects = projects.projects.filter(p => p.status === 'succeeded').length;
+        const vercelTargets = infra.syncTargets.vercel.length;
+        const railwayTargets = infra.syncTargets.railway.length;
+
+        statsDiv.innerHTML = `
+          <div class="stat-card">
+            <div class="stat-label">Total Projects</div>
+            <div class="stat-value">${totalProjects}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Synced Successfully</div>
+            <div class="stat-value" style="color: #4ade80">${succeededProjects}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Vercel Targets</div>
+            <div class="stat-value" style="color: #60a5fa">${vercelTargets}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Railway Targets</div>
+            <div class="stat-value" style="color: #a855f7">${railwayTargets}</div>
+          </div>
+        `;
+
+        container.innerHTML = '';
+        showResult('render-results', '✅ Component render test passed', 'success');
+        container.appendChild(statsDiv);
+
+        // Test project cards rendering
+        const projectsList = document.createElement('div');
+        projectsList.style.marginTop = '20px';
+        projects.projects.forEach(project => {
+          const card = document.createElement('div');
+          card.className = 'stat-card';
+          card.innerHTML = `
+            <div style="font-weight: 600; margin-bottom: 5px;">${project.name}</div>
+            <div style="font-size: 12px; color: #888;">${project.syncTarget}</div>
+            <div style="margin-top: 10px; padding: 4px 8px; display: inline-block; background: #1a3a1a; color: #4ade80; border-radius: 4px; font-size: 11px;">
+              ✓ ${project.status}
+            </div>
+          `;
+          projectsList.appendChild(card);
+        });
+        container.appendChild(projectsList);
+
+      } catch (error) {
+        container.innerHTML = '';
+        showResult('render-results', `❌ Render test failed: ${error.message}`, 'error');
+      }
+    }
+
+    async function testE2E() {
+      const container = document.getElementById('e2e-results');
+      container.innerHTML = '<div class="test-result loading">Running full E2E test...</div>';
+
+      const results = [];
+      let passedTests = 0;
+      let totalTests = 0;
+
+      try {
+        // Test 1: API Availability
+        totalTests++;
+        try {
+          const resp = await fetch(`${API_BASE}/api/infisical/projects`);
+          if (resp.ok) {
+            passedTests++;
+            results.push({ test: 'API Availability', status: 'passed' });
+          } else {
+            results.push({ test: 'API Availability', status: 'failed', error: `Status ${resp.status}` });
+          }
+        } catch (e) {
+          results.push({ test: 'API Availability', status: 'failed', error: e.message });
+        }
+
+        // Test 2: Data Structure Validation
+        totalTests++;
+        try {
+          const resp = await fetch(`${API_BASE}/api/infisical/projects`);
+          const data = await resp.json();
+          if (data.projects && Array.isArray(data.projects) && data.projects.length > 0) {
+            passedTests++;
+            results.push({ test: 'Data Structure', status: 'passed' });
+          } else {
+            results.push({ test: 'Data Structure', status: 'failed', error: 'Invalid data structure' });
+          }
+        } catch (e) {
+          results.push({ test: 'Data Structure', status: 'failed', error: e.message });
+        }
+
+        // Test 3: Project Properties
+        totalTests++;
+        try {
+          const resp = await fetch(`${API_BASE}/api/infisical/projects`);
+          const data = await resp.json();
+          const firstProject = data.projects[0];
+          if (firstProject.id && firstProject.name && firstProject.syncTarget && firstProject.status) {
+            passedTests++;
+            results.push({ test: 'Project Properties', status: 'passed' });
+          } else {
+            results.push({ test: 'Project Properties', status: 'failed', error: 'Missing required properties' });
+          }
+        } catch (e) {
+          results.push({ test: 'Project Properties', status: 'failed', error: e.message });
+        }
+
+        // Test 4: Infrastructure Data
+        totalTests++;
+        try {
+          const resp = await fetch(`${API_BASE}/api/infisical/infrastructure`);
+          const data = await resp.json();
+          if (data.server && data.webUI && data.syncTargets) {
+            passedTests++;
+            results.push({ test: 'Infrastructure Data', status: 'passed' });
+          } else {
+            results.push({ test: 'Infrastructure Data', status: 'failed', error: 'Missing infrastructure data' });
+          }
+        } catch (e) {
+          results.push({ test: 'Infrastructure Data', status: 'failed', error: e.message });
+        }
+
+        // Test 5: Response Time
+        totalTests++;
+        try {
+          const start = performance.now();
+          await fetch(`${API_BASE}/api/infisical/projects`);
+          const duration = performance.now() - start;
+          if (duration < 1000) {
+            passedTests++;
+            results.push({ test: 'Response Time', status: 'passed', detail: `${duration.toFixed(2)}ms` });
+          } else {
+            results.push({ test: 'Response Time', status: 'failed', error: `Too slow: ${duration.toFixed(2)}ms` });
+          }
+        } catch (e) {
+          results.push({ test: 'Response Time', status: 'failed', error: e.message });
+        }
+
+        // Display results
+        container.innerHTML = '';
+
+        const summary = document.createElement('div');
+        summary.className = `test-result ${passedTests === totalTests ? 'success' : 'error'}`;
+        summary.innerHTML = `
+          <strong>E2E Test Summary:</strong> ${passedTests}/${totalTests} tests passed
+        `;
+        container.appendChild(summary);
+
+        results.forEach(result => {
+          const resultDiv = document.createElement('div');
+          resultDiv.className = `test-result ${result.status === 'passed' ? 'success' : 'error'}`;
+          resultDiv.innerHTML = `
+            ${result.status === 'passed' ? '✅' : '❌'} ${result.test}
+            ${result.detail ? `<br><small>${result.detail}</small>` : ''}
+            ${result.error ? `<br><small>Error: ${result.error}</small>` : ''}
+          `;
+          container.appendChild(resultDiv);
+        });
+
+      } catch (error) {
+        container.innerHTML = '';
+        showResult('e2e-results', `❌ E2E test failed: ${error.message}`, 'error');
+      }
+    }
+  </script>
+</body>
+</html>

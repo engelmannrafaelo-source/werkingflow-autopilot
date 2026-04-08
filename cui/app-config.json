@@ -2,10 +2,17 @@
   "app_id": "cui",
   "app_name": "CUI Workspace",
   "ports": {
+    "user": 4005,
+    "test": null,
     "local": 4005,
     "staging": null,
     "production": null,
     "proxy_range": [5001, 5004]
+  },
+  "urls": {
+    "local": "http://localhost:4005",
+    "staging": null,
+    "production": null
   },
   "build": {
     "command": "npm run build",

@@ -1,7 +1,9 @@
 // Persona Document List - Shows primary/secondary documents for a persona
 // Created: 2026-02-19
+// Updated: 2026-02-28 - Added document viewer modal
 
 import { useState, useEffect } from 'react';
+import DocumentViewerModal from '../modals/DocumentViewerModal';
 
 interface DocumentKnowledge {
   path: string;
@@ -21,6 +23,7 @@ export default function PersonaDocumentList({ personaId, personaName }: PersonaD
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [viewingDocument, setViewingDocument] = useState<string | null>(null);
 
   useEffect(() => {
     loadPersonaDocuments();
@@ -33,16 +36,17 @@ export default function PersonaDocumentList({ personaId, personaName }: PersonaD
   }, [personaId]);
 
   async function loadPersonaDocuments() {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
       setLoading(true);
-      const response = await fetch(`/api/team/knowledge/persona/${personaId}`);
+      const response = await fetch(`/api/team/knowledge/persona/${personaId}`, { signal: AbortSignal.timeout(20000) });
 
-      if (!response.ok) throw new Error('Failed to load persona documents');
+      if (!response.ok) throw new Error(`[PersonaDocs] load documents failed: HTTP ${response.status}`);
 
       const data = await response.json();
       setData(data);
     } catch (err: any) {
-      console.error('[PersonaDocumentList] Load error:', err);
+      console.warn('[PersonaDocs] load documents error:', err);
       setError(err.message);
     } finally {
       setLoading(false);
@@ -72,53 +76,62 @@ export default function PersonaDocumentList({ personaId, personaName }: PersonaD
   }
 
   return (
-    <div className="persona-document-list" style={{ padding: '1rem' }}>
-      <h3 style={{ fontSize: 14, marginBottom: '1rem', color: 'var(--tn-text)' }}>
-        {personaName}'s Documents ({data.stats.total})
-      </h3>
+    <>
+      <div className="persona-document-list" style={{ padding: '1rem' }}>
+        <h3 style={{ fontSize: 14, marginBottom: '1rem', color: 'var(--tn-text)' }}>
+          {personaName}'s Documents ({data.stats.total})
+        </h3>
 
-      {data.documents.primary.length > 0 && (
-        <div style={{ marginBottom: '1.5rem' }}>
-          <h4
-            style={{
-              fontSize: 12,
-              color: 'var(--tn-text-muted)',
-              marginBottom: '0.5rem',
-              textTransform: 'uppercase',
-              letterSpacing: '0.5px',
-            }}
-          >
-            Primary ({data.documents.primary.length})
-          </h4>
-          {data.documents.primary.map((doc: DocumentKnowledge) => (
-            <DocumentItem key={doc.path} doc={doc} relevance="primary" />
-          ))}
-        </div>
-      )}
+        {data.documents.primary.length > 0 && (
+          <div style={{ marginBottom: '1.5rem' }}>
+            <h4
+              style={{
+                fontSize: 12,
+                color: 'var(--tn-text-muted)',
+                marginBottom: '0.5rem',
+                textTransform: 'uppercase',
+                letterSpacing: '0.5px',
+              }}
+            >
+              Primary ({data.documents.primary.length})
+            </h4>
+            {data.documents.primary.map((doc: DocumentKnowledge) => (
+              <DocumentItem key={doc.path} doc={doc} relevance="primary" onClick={() => setViewingDocument(doc.path)} />
+            ))}
+          </div>
+        )}
 
-      {data.documents.secondary.length > 0 && (
-        <div>
-          <h4
-            style={{
-              fontSize: 12,
-              color: 'var(--tn-text-muted)',
-              marginBottom: '0.5rem',
-              textTransform: 'uppercase',
-              letterSpacing: '0.5px',
-            }}
-          >
-            Secondary ({data.documents.secondary.length})
-          </h4>
-          {data.documents.secondary.map((doc: DocumentKnowledge) => (
-            <DocumentItem key={doc.path} doc={doc} relevance="secondary" />
-          ))}
-        </div>
+        {data.documents.secondary.length > 0 && (
+          <div>
+            <h4
+              style={{
+                fontSize: 12,
+                color: 'var(--tn-text-muted)',
+                marginBottom: '0.5rem',
+                textTransform: 'uppercase',
+                letterSpacing: '0.5px',
+              }}
+            >
+              Secondary ({data.documents.secondary.length})
+            </h4>
+            {data.documents.secondary.map((doc: DocumentKnowledge) => (
+              <DocumentItem key={doc.path} doc={doc} relevance="secondary" onClick={() => setViewingDocument(doc.path)} />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {viewingDocument && (
+        <DocumentViewerModal
+          documentPath={viewingDocument}
+          onClose={() => setViewingDocument(null)}
+        />
       )}
-    </div>
+    </>
   );
 }
 
-function DocumentItem({ doc, relevance }: { doc: DocumentKnowledge; relevance: string }) {
+function DocumentItem({ doc, relevance, onClick }: { doc: DocumentKnowledge; relevance: string; onClick: () => void }) {
   const relevanceColor =
     relevance === 'primary'
       ? { bg: 'rgba(16,185,129,0.1)', border: '#10b981', text: '#10b981' }
@@ -126,6 +139,7 @@ function DocumentItem({ doc, relevance }: { doc: DocumentKnowledge; relevance: s
 
   return (
     <div
+      onClick={onClick}
       style={{
         background: 'var(--tn-bg-secondary)',
         border: '1px solid var(--tn-border)',
@@ -133,6 +147,16 @@ function DocumentItem({ doc, relevance }: { doc: DocumentKnowledge; relevance: s
         padding: '0.75rem',
         marginBottom: '0.5rem',
         fontSize: 11,
+        cursor: 'pointer',
+        transition: 'all 0.2s ease',
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = 'var(--tn-bg-dark)';
+        e.currentTarget.style.borderColor = '#7aa2f7';
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = 'var(--tn-bg-secondary)';
+        e.currentTarget.style.borderColor = 'var(--tn-border)';
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>

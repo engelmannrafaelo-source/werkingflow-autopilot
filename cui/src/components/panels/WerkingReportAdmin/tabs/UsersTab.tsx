@@ -42,6 +42,7 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
   const [creating, setCreating] = useState(false);
 
   const fetchUsers = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {
@@ -49,12 +50,13 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
         offset: offset.toString(),
         limit: limit.toString(),
       });
-      const res = await fetch(`/api/admin/wr/users?${params}`);
+      const res = await fetch(`/api/admin/wr/users?${params}`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setUsers(data.users || []);
       setTotal(data.total || 0);
     } catch (err: any) {
+      console.warn('[WRUsers] fetchUsers:', err);
       setError(err.message);
     } finally {
       setLoading(false);
@@ -66,12 +68,14 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
   }, [fetchUsers, envMode]);
 
   const handleApprove = async (userId: string) => {
+    if ((window as any).__cuiServerAlive === false) return;
     setProcessingIds(prev => new Set(prev).add(userId));
     try {
-      const res = await fetch(`/api/admin/wr/users/${userId}/approve`, { method: 'POST' });
+      const res = await fetch(`/api/admin/wr/users/${userId}/approve`, { method: 'POST', signal: AbortSignal.timeout(15000) });
       if (!res.ok) throw new Error(await res.text());
       await fetchUsers();
     } catch (err: any) {
+      console.warn('[WRUsers] handleApprove:', err);
       alert(`Failed to approve: ${err.message}`);
     } finally {
       setProcessingIds(prev => { const next = new Set(prev); next.delete(userId); return next; });
@@ -79,12 +83,14 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
   };
 
   const handleVerify = async (userId: string) => {
+    if ((window as any).__cuiServerAlive === false) return;
     setProcessingIds(prev => new Set(prev).add(userId));
     try {
-      const res = await fetch(`/api/admin/wr/users/${userId}/verify`, { method: 'POST' });
+      const res = await fetch(`/api/admin/wr/users/${userId}/verify`, { method: 'POST', signal: AbortSignal.timeout(15000) });
       if (!res.ok) throw new Error(await res.text());
       await fetchUsers();
     } catch (err: any) {
+      console.warn('[WRUsers] handleVerify:', err);
       alert(`Failed to verify: ${err.message}`);
     } finally {
       setProcessingIds(prev => { const next = new Set(prev); next.delete(userId); return next; });
@@ -96,6 +102,7 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
       setError('Email and password are required');
       return;
     }
+    if ((window as any).__cuiServerAlive === false) return;
     setCreating(true);
     setError('');
     try {
@@ -108,6 +115,7 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
           name: newName,
           role: newRole,
         }),
+        signal: AbortSignal.timeout(15000),
       });
       if (!res.ok) {
         const data = await res.json();
@@ -120,6 +128,7 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
       setShowCreate(false);
       await fetchUsers();
     } catch (err: any) {
+      console.warn('[WRUsers] handleCreate:', err);
       setError(`Create failed: ${err.message}`);
     } finally {
       setCreating(false);
@@ -128,15 +137,17 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
 
   const handleDelete = async (userId: string, email: string) => {
     if (!confirm(`Delete user "${email}"? This cannot be undone.`)) return;
+    if ((window as any).__cuiServerAlive === false) return;
     setProcessingIds(prev => new Set(prev).add(userId));
     try {
-      const res = await fetch(`/api/admin/wr/users/${userId}`, { method: 'DELETE' });
+      const res = await fetch(`/api/admin/wr/users/${userId}`, { method: 'DELETE', signal: AbortSignal.timeout(15000) });
       if (!res.ok) {
         const data = await res.json();
         throw new Error(data.error || `HTTP ${res.status}`);
       }
       await fetchUsers();
     } catch (err: any) {
+      console.warn('[WRUsers] handleDelete:', err);
       alert(`Delete failed: ${err.message}`);
     } finally {
       setProcessingIds(prev => { const next = new Set(prev); next.delete(userId); return next; });
@@ -145,9 +156,10 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
 
   const handleImpersonate = async (userId: string, email: string) => {
     if (!confirm(`Start impersonation session as "${email}"?`)) return;
+    if ((window as any).__cuiServerAlive === false) return;
     setProcessingIds(prev => new Set(prev).add(userId));
     try {
-      const res = await fetch(`/api/admin/wr/users/${userId}/impersonate`, { method: 'POST' });
+      const res = await fetch(`/api/admin/wr/users/${userId}/impersonate`, { method: 'POST', signal: AbortSignal.timeout(15000) });
       if (!res.ok) {
         const data = await res.json();
         throw new Error(data.error || `HTTP ${res.status}`);
@@ -157,6 +169,7 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
       const expiresAt = data.session?.expiresAt ? new Date(data.session.expiresAt).toLocaleString('de-DE') : 'unknown';
       alert(`Impersonation session started!\n\nSession ID: ${sessionId}\nTarget: ${email}\nExpires: ${expiresAt}\n\nSession is now active.`);
     } catch (err: any) {
+      console.warn('[WRUsers] handleImpersonate:', err);
       alert(`Impersonation failed: ${err.message}`);
     } finally {
       setProcessingIds(prev => { const next = new Set(prev); next.delete(userId); return next; });
@@ -228,13 +241,13 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
   };
 
   return (
-    <div style={{ padding: 12 }}>
+    <div data-ai-id="wr-users-tab" style={{ padding: 12 }}>
       {/* Search and Filter Bar */}
-      <div style={{ display: 'flex', gap: 6, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+      <div data-ai-id="wr-users-filter-bar" style={{ display: 'flex', gap: 6, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
         {/* Quick Filter Buttons */}
-        <span style={{ fontSize: 11, color: 'var(--tn-text-muted)', fontWeight: 600 }}>Quick:</span>
+        <span data-ai-id="wr-users-quick-label" style={{ fontSize: 11, color: 'var(--tn-text-muted)', fontWeight: 600 }}>Quick:</span>
         {(['all', 'pending', 'unverified'] as FilterType[]).map(f => (
-          <button key={f} onClick={() => setFilter(f)} style={{
+          <button key={f} data-ai-id={`wr-users-quick-${f}`} data-active={filter === f} onClick={() => setFilter(f)} style={{
             padding: '3px 10px', borderRadius: 3, fontSize: 10, fontWeight: 600, cursor: 'pointer',
             background: filter === f ? 'rgba(122,162,247,0.2)' : 'var(--tn-bg)',
             border: `1px solid ${filter === f ? 'var(--tn-blue)' : 'var(--tn-border)'}`,
@@ -267,13 +280,13 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
           }))}
           filename="users"
         />
-        <button onClick={() => setShowCreate(!showCreate)} style={{
+        <button data-ai-id="wr-users-create-btn" data-active={showCreate} onClick={() => setShowCreate(!showCreate)} style={{
           padding: '4px 12px', borderRadius: 3, fontSize: 10, fontWeight: 600, cursor: 'pointer',
           background: showCreate ? 'var(--tn-red)' : 'var(--tn-green)', border: 'none', color: '#fff',
         }}>
           {showCreate ? 'Cancel' : '+ New User'}
         </button>
-        <button onClick={fetchUsers} style={{
+        <button data-ai-id="wr-users-refresh-btn" onClick={fetchUsers} style={{
           padding: '3px 10px', borderRadius: 3, fontSize: 10, cursor: 'pointer',
           background: 'var(--tn-bg)', border: '1px solid var(--tn-border)', color: 'var(--tn-text-muted)',
         }}>Refresh</button>
@@ -281,11 +294,11 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
 
       {/* Create User Form */}
       {showCreate && (
-        <div style={{
+        <div data-ai-id="wr-users-create-form" style={{
           background: 'var(--tn-bg-dark)', border: '1px solid var(--tn-green)', borderRadius: 6,
           padding: 12, marginBottom: 12,
         }}>
-          <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--tn-green)', marginBottom: 8 }}>Create New User (Supabase Auth)</div>
+          <div data-ai-id="wr-users-create-title" style={{ fontSize: 11, fontWeight: 600, color: 'var(--tn-green)', marginBottom: 8 }}>Create New User (Supabase Auth)</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 80px auto', gap: 8, alignItems: 'end' }}>
             <div>
               <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginBottom: 3 }}>Email *</div>
@@ -306,7 +319,7 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
                 <option value="admin">Admin</option>
               </select>
             </div>
-            <button onClick={handleCreate} disabled={creating || !newEmail.trim() || !newPassword.trim()} style={{
+            <button data-ai-id="wr-users-create-submit" onClick={handleCreate} disabled={creating || !newEmail.trim() || !newPassword.trim()} style={{
               padding: '5px 14px', borderRadius: 3, fontSize: 10, fontWeight: 600,
               cursor: creating ? 'not-allowed' : 'pointer',
               background: 'var(--tn-green)', border: 'none', color: '#fff', opacity: creating ? 0.5 : 1,
@@ -319,14 +332,14 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
 
       {/* Error */}
       {error && (
-        <div style={{ padding: '4px 8px', fontSize: 11, color: 'var(--tn-red)', background: 'rgba(247,118,142,0.1)', borderRadius: 3, marginBottom: 8 }}>
+        <div data-ai-id="wr-users-error" style={{ padding: '4px 8px', fontSize: 11, color: 'var(--tn-red)', background: 'rgba(247,118,142,0.1)', borderRadius: 3, marginBottom: 8 }}>
           {error}
         </div>
       )}
 
       {/* Loading */}
       {loading && (
-        <div style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>Loading...</div>
+        <div data-ai-id="wr-users-loading" style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>Loading...</div>
       )}
 
       {/* Pagination Controls - Top */}
@@ -342,7 +355,7 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
 
       {/* User Count */}
       {!loading && (
-        <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6, marginTop: 6 }}>
+        <div data-ai-id="wr-users-count" style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6, marginTop: 6 }}>
           {filteredUsers.length} user(s) shown
           {filter !== 'all' && ` (quick: ${filter})`}
           {search && ` matching "${search}"`}
@@ -353,13 +366,13 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
 
       {/* User List */}
       {!loading && filteredUsers.length === 0 && (
-        <div style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 11 }}>No users found</div>
+        <div data-ai-id="wr-users-empty" style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 11 }}>No users found</div>
       )}
 
       {!loading && filteredUsers.length > 0 && (
-        <div>
+        <div data-ai-id="wr-users-table">
           {/* Table Header */}
-          <div style={{
+          <div data-ai-id="wr-users-table-header" style={{
             display: 'grid', gridTemplateColumns: '1fr 120px 100px 60px 60px 60px 180px',
             gap: 8, padding: '6px 10px', background: 'var(--tn-bg-dark)', borderRadius: 4,
             fontSize: 10, fontWeight: 600, color: 'var(--tn-text-muted)', marginBottom: 4,
@@ -371,7 +384,7 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
           {filteredUsers.map(user => {
             const isProcessing = processingIds.has(user.id);
             return (
-              <div key={user.id} style={{
+              <div key={user.id} data-ai-id={`wr-users-row-${user.id}`} style={{
                 display: 'grid', gridTemplateColumns: '1fr 120px 100px 60px 60px 60px 180px',
                 gap: 8, padding: '8px 10px', borderBottom: '1px solid var(--tn-border)',
                 fontSize: 11, alignItems: 'center', opacity: isProcessing ? 0.5 : 1,
@@ -409,24 +422,24 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
                     color: user.emailVerified ? 'var(--tn-green)' : 'var(--tn-red)',
                   }}>{user.emailVerified ? 'Yes' : 'No'}</span>
                 </div>
-                <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+                <div data-ai-id={`wr-users-actions-${user.id}`} style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
                   {!user.approved && (
-                    <button onClick={() => handleApprove(user.id)} disabled={isProcessing} style={{
+                    <button data-ai-id={`wr-users-approve-${user.id}`} onClick={() => handleApprove(user.id)} disabled={isProcessing} style={{
                       padding: '3px 6px', borderRadius: 3, fontSize: 9, cursor: isProcessing ? 'not-allowed' : 'pointer',
                       background: 'var(--tn-green)', border: 'none', color: '#fff', fontWeight: 600,
                     }}>{isProcessing ? '...' : 'Approve'}</button>
                   )}
                   {user.approved && !user.emailVerified && (
-                    <button onClick={() => handleVerify(user.id)} disabled={isProcessing} style={{
+                    <button data-ai-id={`wr-users-verify-${user.id}`} onClick={() => handleVerify(user.id)} disabled={isProcessing} style={{
                       padding: '3px 6px', borderRadius: 3, fontSize: 9, cursor: isProcessing ? 'not-allowed' : 'pointer',
                       background: 'var(--tn-blue)', border: 'none', color: '#fff', fontWeight: 600,
                     }}>{isProcessing ? '...' : 'Verify'}</button>
                   )}
-                  <button onClick={() => handleImpersonate(user.id, user.email)} disabled={isProcessing} style={{
+                  <button data-ai-id={`wr-users-impersonate-${user.id}`} onClick={() => handleImpersonate(user.id, user.email)} disabled={isProcessing} style={{
                     padding: '3px 6px', borderRadius: 3, fontSize: 9, cursor: isProcessing ? 'not-allowed' : 'pointer',
                     background: 'var(--tn-blue)', border: 'none', color: '#fff', fontWeight: 600,
                   }}>{isProcessing ? '...' : 'Impersonate'}</button>
-                  <button onClick={() => handleDelete(user.id, user.email)} disabled={isProcessing} style={{
+                  <button data-ai-id={`wr-users-delete-${user.id}`} onClick={() => handleDelete(user.id, user.email)} disabled={isProcessing} style={{
                     padding: '3px 6px', borderRadius: 3, fontSize: 9, cursor: isProcessing ? 'not-allowed' : 'pointer',
                     background: 'rgba(247,118,142,0.15)', border: '1px solid rgba(247,118,142,0.3)',
                     color: 'var(--tn-red)', fontWeight: 600,

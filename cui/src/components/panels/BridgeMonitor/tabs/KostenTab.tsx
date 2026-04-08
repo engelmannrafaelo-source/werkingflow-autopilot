@@ -107,20 +107,20 @@ export default function KostenTab() {
                 <StatCard
                   label="Kosten"
                   value={formatEur(tenantUsage.current_month.cost_usd)}
-                  sub={`≈ $${tenantUsage.current_month.cost_usd.toFixed(2)} USD`}
+                  sub={`≈ $${(tenantUsage.current_month.cost_usd ?? 0).toFixed(2)} USD`}
                   color="var(--tn-orange)"
                 />
                 <StatCard
                   label="Token-Usage"
-                  value={`${tenantUsage.usage_percent.tokens.toFixed(1)}%`}
+                  value={`${(tenantUsage.usage_percent.tokens ?? 0).toFixed(1)}%`}
                   sub={formatTokens(tenantUsage.current_month.tokens_used)}
-                  color={tenantUsage.usage_percent.tokens > 80 ? 'var(--tn-red)' : 'var(--tn-blue)'}
+                  color={(tenantUsage.usage_percent.tokens ?? 0) > 80 ? 'var(--tn-red)' : 'var(--tn-blue)'}
                 />
                 <StatCard
                   label="Budget"
-                  value={`${tenantUsage.usage_percent.budget.toFixed(1)}%`}
-                  sub={`Limit: €${tenantUsage.limits.budget_limit_eur}`}
-                  color={tenantUsage.usage_percent.budget > 80 ? 'var(--tn-red)' : 'var(--tn-green)'}
+                  value={`${(tenantUsage.usage_percent.budget ?? 0).toFixed(1)}%`}
+                  sub={`Limit: €${tenantUsage.limits.budget_limit_eur ?? 0}`}
+                  color={(tenantUsage.usage_percent.budget ?? 0) > 80 ? 'var(--tn-red)' : 'var(--tn-green)'}
                 />
                 <StatCard
                   label="Erlaubt"
@@ -137,7 +137,7 @@ export default function KostenTab() {
               <StatCard
                 label="Gesamtkosten"
                 value={formatEur(totalCostUsd)}
-                sub={`≈ $${totalCostUsd.toFixed(2)} USD`}
+                sub={`≈ $${(totalCostUsd ?? 0).toFixed(2)} USD`}
                 color="var(--tn-orange)"
               />
               <StatCard label="Input-Tokens" value={formatTokens(totalInputTokens)} sub="prompt" />
@@ -203,8 +203,8 @@ export default function KostenTab() {
                   borderBottom: '1px solid var(--tn-border)', alignItems: 'center',
                 }}>
                   <div style={{ color: 'var(--tn-text)' }}>{p.label}</div>
-                  <div style={{ textAlign: 'right', color: 'var(--tn-text-muted)', fontFamily: 'monospace' }}>${p.input.toFixed(2)}</div>
-                  <div style={{ textAlign: 'right', color: 'var(--tn-text-muted)', fontFamily: 'monospace' }}>${p.output.toFixed(2)}</div>
+                  <div style={{ textAlign: 'right', color: 'var(--tn-text-muted)', fontFamily: 'monospace' }}>${(p.input ?? 0).toFixed(2)}</div>
+                  <div style={{ textAlign: 'right', color: 'var(--tn-text-muted)', fontFamily: 'monospace' }}>${(p.output ?? 0).toFixed(2)}</div>
                 </div>
               ))}
             </div>

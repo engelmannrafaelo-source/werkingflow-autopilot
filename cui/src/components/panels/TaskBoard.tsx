@@ -43,12 +43,13 @@ export default function TaskBoard({ personaId }: TaskBoardProps) {
   }, [personaId]);
 
   async function loadTasks() {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
       setLoading(true);
 
       // Load from demo data API (tasks.json)
-      const response = await fetch(`${API}/team/task-board`);
-      if (!response.ok) throw new Error('Failed to load tasks');
+      const response = await fetch(`${API}/team/task-board`, { signal: AbortSignal.timeout(20000) });
+      if (!response.ok) throw new Error(`[TaskBoard] load tasks failed: HTTP ${response.status}`);
 
       const rawTasks = await response.json();
 
@@ -72,48 +73,56 @@ export default function TaskBoard({ personaId }: TaskBoardProps) {
 
       setTasks(filtered);
     } catch (err: any) {
-      console.error('[TaskBoard] Load error:', err);
+      console.warn('[TaskBoard] load tasks error:', err);
     } finally {
       setLoading(false);
     }
   }
 
   async function updateTaskStatus(taskId: string, status: Task['status']) {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
-      await fetch(`${API}/team/tasks/${taskId}`, {
+      const res = await fetch(`${API}/team/tasks/${taskId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status }),
+        signal: AbortSignal.timeout(15000),
       });
+      if (!res.ok) throw new Error(`[TaskBoard] update task failed: HTTP ${res.status}`);
       loadTasks();
     } catch (err: any) {
-      console.error('[TaskBoard] Update error:', err);
+      console.warn('[TaskBoard] update task error:', err);
     }
   }
 
   async function createTask() {
     if (!newTask.title.trim()) return;
+    if ((window as any).__cuiServerAlive === false) return;
 
     try {
-      await fetch(`${API}/team/tasks`, {
+      const res = await fetch(`${API}/team/tasks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newTask),
+        signal: AbortSignal.timeout(15000),
       });
+      if (!res.ok) throw new Error(`[TaskBoard] create task failed: HTTP ${res.status}`);
       setNewTask({ title: '', description: '', assignee: personaId || '', priority: 'medium' });
       setShowNewTask(false);
       loadTasks();
     } catch (err: any) {
-      console.error('[TaskBoard] Create error:', err);
+      console.warn('[TaskBoard] create task error:', err);
     }
   }
 
   async function deleteTask(taskId: string) {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
-      await fetch(`${API}/team/tasks/${taskId}`, { method: 'DELETE' });
+      const res = await fetch(`${API}/team/tasks/${taskId}`, { method: 'DELETE', signal: AbortSignal.timeout(15000) });
+      if (!res.ok) throw new Error(`[TaskBoard] delete task failed: HTTP ${res.status}`);
       loadTasks();
     } catch (err: any) {
-      console.error('[TaskBoard] Delete error:', err);
+      console.warn('[TaskBoard] delete task error:', err);
     }
   }
 

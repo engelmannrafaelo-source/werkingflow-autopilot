@@ -20,7 +20,7 @@ Dev Server (100.121.161.109) — SINGLE INSTANCE
 │
 ├── CUI binaries via PM2 (:4001, :4002, :4003)
 ├── Dev Server Watchdog (:9090)
-├── Next.js apps (:3004-:3012 user, :3104-:3112 test)
+├── Next.js apps (:3004-:3010 single-port architecture)
 └── AI-Bridge (49.12.72.66:8000 — public IP)
 
 Mac (thin client)

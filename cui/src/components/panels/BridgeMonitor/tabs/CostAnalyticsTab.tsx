@@ -28,14 +28,16 @@ export default function CostAnalyticsTab() {
   const [error, setError] = useState('');
 
   const fetchData = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/bridge/metrics/cost');
+      const res = await fetch('/api/bridge/metrics/cost', { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(await res.text());
       const result = await res.json();
       setData(result);
     } catch (err: any) {
+      console.warn('[BridgeCost] fetch cost data failed:', err);
       setError(err.message);
     } finally {
       setLoading(false);
@@ -64,8 +66,9 @@ export default function CostAnalyticsTab() {
     return num.toString();
   };
 
-  const statCard = (label: string, value: string | number, color: string, icon?: string) => (
+  const statCard = (label: string, value: string | number, color: string, icon?: string, aiId?: string) => (
     <div
+      data-ai-id={aiId}
       style={{
         padding: '12px 16px',
         background: 'var(--tn-bg-dark)',
@@ -91,18 +94,19 @@ export default function CostAnalyticsTab() {
         {icon && <span>{icon}</span>}
         {label}
       </div>
-      <div style={{ fontSize: 20, fontWeight: 700, color }}>{value}</div>
+      <div data-ai-id={aiId ? `${aiId}-value` : undefined} style={{ fontSize: 20, fontWeight: 700, color }}>{value}</div>
     </div>
   );
 
   return (
-    <div style={{ padding: 12 }}>
+    <div data-ai-id="bridge-cost-tab" style={{ padding: 12 }}>
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0, color: 'var(--tn-text)' }}>
+      <div data-ai-id="bridge-cost-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <h3 data-ai-id="bridge-cost-title" style={{ fontSize: 14, fontWeight: 600, margin: 0, color: 'var(--tn-text)' }}>
           Cost Analytics
         </h3>
         <button
+          data-ai-id="bridge-cost-refresh-button"
           onClick={fetchData}
           style={{
             padding: '3px 10px',
@@ -121,6 +125,7 @@ export default function CostAnalyticsTab() {
       {/* Error */}
       {error && (
         <div
+          data-ai-id="bridge-cost-error"
           style={{
             padding: '6px 10px',
             fontSize: 11,
@@ -136,7 +141,7 @@ export default function CostAnalyticsTab() {
 
       {/* Loading */}
       {loading && !data && (
-        <div style={{ padding: 40, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>
+        <div data-ai-id="bridge-cost-loading" style={{ padding: 40, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>
           Loading...
         </div>
       )}
@@ -144,30 +149,34 @@ export default function CostAnalyticsTab() {
       {/* Overview Stats */}
       {data && (
         <>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 20 }}>
+          <div data-ai-id="bridge-cost-stats-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 20 }}>
             {statCard(
               'Total Cost (USD)',
-              `$${data.estimated_cost_usd.toFixed(2)}`,
+              `$${(data.estimated_cost_usd ?? 0).toFixed(2)}`,
               'var(--tn-green)',
-              '💰'
+              '💰',
+              'bridge-cost-total-usd-stat'
             )}
             {statCard(
               'Total Tokens',
               formatNumber(data.estimated_tokens),
               'var(--tn-blue)',
-              '🔢'
+              '🔢',
+              'bridge-cost-total-tokens-stat'
             )}
             {statCard(
               'Total Requests',
               formatNumber(data.total_requests),
               'var(--tn-purple, #bb9af7)',
-              '📊'
+              '📊',
+              'bridge-cost-total-requests-stat'
             )}
           </div>
 
           {/* Note */}
           {data.note && (
             <div
+              data-ai-id="bridge-cost-note"
               style={{
                 padding: '8px 12px',
                 fontSize: 10,
@@ -185,10 +194,11 @@ export default function CostAnalyticsTab() {
           {/* Cost Breakdown Chart */}
           {getChartData().length > 0 ? (
             <>
-              <div style={{ marginBottom: 20 }}>
+              <div data-ai-id="bridge-cost-chart-section" style={{ marginBottom: 20 }}>
                 <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--tn-text)', marginBottom: 8 }}>
                   COST BY MODEL
                 </div>
+                <div data-ai-id="bridge-cost-chart">
                 <ResponsiveContainer width="100%" height={200}>
                   <BarChart data={getChartData()} margin={{ top: 0, right: 10, left: 0, bottom: 0 }}>
                     <XAxis dataKey="model" tick={{ fontSize: 9, fill: 'var(--tn-text-muted)' }} />
@@ -211,10 +221,11 @@ export default function CostAnalyticsTab() {
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
+                </div>
               </div>
 
               {/* Detailed Table */}
-              <div>
+              <div data-ai-id="bridge-cost-breakdown-table">
                 <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--tn-text)', marginBottom: 8 }}>
                   DETAILED BREAKDOWN
                 </div>
@@ -240,6 +251,7 @@ export default function CostAnalyticsTab() {
                 {getChartData().map((entry, idx) => (
                   <div
                     key={idx}
+                    data-ai-id={`bridge-cost-breakdown-row-${entry.model}`}
                     style={{
                       display: 'grid',
                       gridTemplateColumns: '1fr 100px 100px 100px',
@@ -260,7 +272,7 @@ export default function CostAnalyticsTab() {
                       {formatNumber(entry.tokens)}
                     </div>
                     <div style={{ color: 'var(--tn-green)' }}>
-                      ${entry.cost.toFixed(4)}
+                      ${(entry.cost ?? 0).toFixed(4)}
                     </div>
                   </div>
                 ))}
@@ -268,6 +280,7 @@ export default function CostAnalyticsTab() {
             </>
           ) : (
             <div
+              data-ai-id="bridge-cost-no-data"
               style={{
                 padding: 40,
                 textAlign: 'center',
@@ -282,8 +295,8 @@ export default function CostAnalyticsTab() {
           )}
 
           {/* Timestamp */}
-          <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', textAlign: 'right', marginTop: 20 }}>
-            Last updated: {new Date(data.timestamp).toLocaleString()}
+          <div data-ai-id="bridge-cost-timestamp" style={{ fontSize: 9, color: 'var(--tn-text-muted)', textAlign: 'right', marginTop: 20 }}>
+            Last updated: {data.timestamp ? new Date(data.timestamp).toLocaleString() : 'N/A'}
           </div>
         </>
       )}

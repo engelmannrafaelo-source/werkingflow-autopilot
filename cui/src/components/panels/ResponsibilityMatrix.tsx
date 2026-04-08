@@ -19,13 +19,14 @@ export default function ResponsibilityMatrix() {
   }, []);
 
   async function loadMatrix() {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
-      const res = await fetch(`${API}/agents/team/structure`);
-      if (!res.ok) throw new Error('Failed to load matrix');
+      const res = await fetch(`${API}/agents/team/structure`, { signal: AbortSignal.timeout(20000) });
+      if (!res.ok) throw new Error(`[ResponsibilityMatrix] load matrix failed: HTTP ${res.status}`);
       const data = await res.json();
       setMatrix(data.raciMatrix || []);
     } catch (err) {
-      console.error('Failed to load matrix:', err);
+      console.warn('[ResponsibilityMatrix] load matrix error:', err);
     } finally {
       setLoading(false);
     }

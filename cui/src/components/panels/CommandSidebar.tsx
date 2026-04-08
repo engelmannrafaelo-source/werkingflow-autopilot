@@ -104,10 +104,14 @@ function AgentsSection({
 
   async function handleTrigger(e: React.MouseEvent, id: string) {
     e.stopPropagation();
+    if ((window as any).__cuiServerAlive === false) return;
     setTriggering(id);
     try {
-      await fetch(`${API}/agents/trigger/${id}`, { method: 'POST' });
+      const r = await fetch(`${API}/agents/trigger/${id}`, { method: 'POST', signal: AbortSignal.timeout(15000) });
+      if (!r.ok) throw new Error(`trigger ${id} failed: ${r.status}`);
       onTrigger(id);
+    } catch (err) {
+      console.warn('[CommandSidebar] handleTrigger:', err);
     } finally {
       setTimeout(() => setTriggering(null), 3000);
     }
@@ -151,10 +155,14 @@ function AgentDetailSection({ agent }: { agent: AgentStatus }) {
   const [entries, setEntries] = useState<MemoryEntry[]>([]);
 
   useEffect(() => {
-    fetch(`${API}/agents/memory/${agent.persona_id}?n=5`)
-      .then(r => r.json())
+    if ((window as any).__cuiServerAlive === false) return;
+    fetch(`${API}/agents/memory/${agent.persona_id}?n=5`, { signal: AbortSignal.timeout(20000) })
+      .then(r => {
+        if (!r.ok) throw new Error(`memory fetch failed: ${r.status}`);
+        return r.json();
+      })
       .then(d => setEntries(d.entries ?? []))
-      .catch(() => {});
+      .catch(err => console.warn('[CommandSidebar] AgentDetailSection memory:', err));
   }, [agent.persona_id, agent.last_run]);
 
   if (!entries.length) return <div style={{ fontSize: 11, color: 'var(--tn-text-subtle)', padding: '4px 0' }}>Kein Memory-Log.</div>;
@@ -185,18 +193,26 @@ function BriefSection({ agentPersonaId }: { agentPersonaId: string }) {
   const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
-    fetch(`${API}/agents/briefs`)
-      .then(r => r.json())
+    if ((window as any).__cuiServerAlive === false) return;
+    fetch(`${API}/agents/briefs`, { signal: AbortSignal.timeout(20000) })
+      .then(r => {
+        if (!r.ok) throw new Error(`briefs list failed: ${r.status}`);
+        return r.json();
+      })
       .then(d => {
         const briefs = d.briefs ?? [];
         if (briefs.length > 0) {
           setBriefName(briefs[0].name);
-          return fetch(`${API}/agents/brief/${briefs[0].name}`).then(r => r.text());
+          return fetch(`${API}/agents/brief/${briefs[0].name}`, { signal: AbortSignal.timeout(20000) })
+            .then(r => {
+              if (!r.ok) throw new Error(`brief content failed: ${r.status}`);
+              return r.text();
+            });
         }
         return null;
       })
       .then(text => text && setContent(text))
-      .catch(() => {});
+      .catch(err => console.warn('[CommandSidebar] BriefSection load:', err));
   }, [agentPersonaId]);
 
   if (!content) return <div style={{ fontSize: 10, color: 'var(--tn-text-subtle)' }}>Noch kein Brief.</div>;
@@ -225,13 +241,17 @@ function InboxSection({ agents }: { agents: AgentStatus[] }) {
   const [allMessages, setAllMessages] = useState<{ persona: string; from: string; date: string }[]>([]);
 
   useEffect(() => {
+    if ((window as any).__cuiServerAlive === false) return;
     const personasToCheck = ['birgit-bauer', 'vera-vertrieb', 'mira-marketing', 'max-weber', 'otto-operations'];
     Promise.all(
       personasToCheck.map(id =>
-        fetch(`${API}/agents/inbox/${id}`)
-          .then(r => r.json())
+        fetch(`${API}/agents/inbox/${id}`, { signal: AbortSignal.timeout(20000) })
+          .then(r => {
+            if (!r.ok) throw new Error(`inbox ${id} failed: ${r.status}`);
+            return r.json();
+          })
           .then(d => (d.messages ?? []).map((m: InboxMessage) => ({ persona: id, from: m.from, date: m.date })))
-          .catch(() => [])
+          .catch(err => { console.warn('[CommandSidebar] InboxSection fetch:', err); return []; })
       )
     ).then(results => {
       const flat = results.flat().sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
@@ -272,14 +292,19 @@ function ApprovalsSection({ approvals, onApproved }: { approvals: Approval[]; on
   const [processing, setProcessing] = useState<number | null>(null);
 
   async function handle(index: number, execute: boolean) {
+    if ((window as any).__cuiServerAlive === false) return;
     setProcessing(index);
     try {
-      await fetch(`${API}/agents/approve`, {
+      const r = await fetch(`${API}/agents/approve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ index, execute }),
+        signal: AbortSignal.timeout(15000),
       });
+      if (!r.ok) throw new Error(`approve failed: ${r.status}`);
       onApproved();
+    } catch (err) {
+      console.warn('[CommandSidebar] ApprovalsSection handle:', err);
     } finally {
       setProcessing(null);
     }
@@ -344,7 +369,7 @@ function LiveLogOverlay({ taskId, personaName, onClose }: { taskId: string; pers
         if (init) setLog(text);
         else setLog(prev => prev + text);
         if (text.includes('[DONE]')) setDone(true);
-      } catch { /**/ }
+      } catch (err) { console.warn('[CommandSidebar] LiveLogOverlay parse:', err); }
     };
     return () => es.close();
   }, [taskId]);
@@ -394,10 +419,14 @@ function PlanReviewModal({ planFile, personaName, personaId, task, onApprove, on
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`${API}/agents/claude/plan/${planFile}`)
-      .then(r => r.ok ? r.text() : 'Plan konnte nicht geladen werden.')
+    if ((window as any).__cuiServerAlive === false) return;
+    fetch(`${API}/agents/claude/plan/${planFile}`, { signal: AbortSignal.timeout(20000) })
+      .then(r => {
+        if (!r.ok) throw new Error(`plan fetch failed: ${r.status}`);
+        return r.text();
+      })
       .then(c => { setPlanContent(c); setLoading(false); })
-      .catch(() => { setPlanContent('Fehler beim Laden.'); setLoading(false); });
+      .catch(err => { console.warn('[CommandSidebar] PlanReviewModal load:', err); setPlanContent('Fehler beim Laden.'); setLoading(false); });
   }, [planFile]);
 
   return (
@@ -436,8 +465,10 @@ function PersonaTaggingPanel() {
   }, []);
 
   async function loadStatus() {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
-      const res = await fetch(`${API}/persona-tags/status`);
+      const res = await fetch(`${API}/persona-tags/status`, { signal: AbortSignal.timeout(20000) });
+      if (!res.ok) throw new Error(`persona-tags status failed: ${res.status}`);
       const data = await res.json();
       setAppStatus(data);
       const taggedApps = Object.values(data).filter((app: any) => app.has_tags).length;
@@ -447,17 +478,20 @@ function PersonaTaggingPanel() {
       } else {
         setMessage('Noch keine Tags generiert');
       }
-    } catch {
+    } catch (err) {
+      console.warn('[CommandSidebar] PersonaTaggingPanel loadStatus:', err);
       setMessage('Status konnte nicht geladen werden');
     }
   }
 
   async function handleUpdate() {
+    if ((window as any).__cuiServerAlive === false) return;
     setStatus('updating');
     setMessage('Starte Update...');
 
     try {
-      const res = await fetch(`${API}/persona-tags/update`, { method: 'POST' });
+      const res = await fetch(`${API}/persona-tags/update`, { method: 'POST', signal: AbortSignal.timeout(15000) });
+      if (!res.ok) throw new Error(`persona-tags update failed: ${res.status}`);
       const data = await res.json();
 
       if (data.status === 'started') {
@@ -465,26 +499,31 @@ function PersonaTaggingPanel() {
 
         // Poll for completion
         const pollInterval = setInterval(async () => {
+          if ((window as any).__cuiServerAlive === false) return;
           try {
-            const statusRes = await fetch(`${API}/persona-tags/status`);
+            const statusRes = await fetch(`${API}/persona-tags/status`, { signal: AbortSignal.timeout(20000) });
+            if (!statusRes.ok) throw new Error(`persona-tags poll failed: ${statusRes.status}`);
             const statusData = await statusRes.json();
             const taggedApps = Object.values(statusData).filter((app: any) => app.has_tags).length;
             setMessage(`${taggedApps}/4 apps tagged...`);
             setAppStatus(statusData);
-          } catch { /**/ }
+          } catch (err) {
+            console.warn('[CommandSidebar] PersonaTaggingPanel poll:', err);
+          }
         }, 5000);
 
         // Stop polling after 30s
         setTimeout(() => {
           clearInterval(pollInterval);
           setStatus('success');
-          setMessage('✅ Update complete!');
+          setMessage('Update complete!');
           loadStatus();
         }, 30000);
       }
     } catch (err: any) {
+      console.warn('[CommandSidebar] PersonaTaggingPanel handleUpdate:', err);
       setStatus('error');
-      setMessage('❌ Error: ' + err.message);
+      setMessage('Error: ' + err.message);
     }
   }
 
@@ -507,7 +546,7 @@ function PersonaTaggingPanel() {
           fontSize: 11,
           fontWeight: 600,
           background: status === 'updating' ? 'rgba(124,58,237,0.1)' : 'rgba(124,58,237,0.2)',
-          color: status === 'updating' ? '#a78bfa' : '#c4b5fd',
+          color: status === 'updating' ? 'var(--tn-purple-dim)' : '#c4b5fd',
           border: '1px solid rgba(124,58,237,0.4)',
           borderRadius: 6,
           cursor: status === 'updating' ? 'not-allowed' : 'pointer',
@@ -556,10 +595,15 @@ function ClaudeAgentsPanel() {
   const [customTask, setCustomTask] = useState<{ id: string; text: string } | null>(null);
 
   const load = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
-      const d = await fetch(`${API}/agents/claude/status`).then(r => r.json());
+      const r = await fetch(`${API}/agents/claude/status`, { signal: AbortSignal.timeout(20000) });
+      if (!r.ok) throw new Error(`claude/status failed: ${r.status}`);
+      const d = await r.json();
       setAgents(d.agents ?? []);
-    } catch { /**/ }
+    } catch (err) {
+      console.warn('[CommandSidebar] ClaudeAgentsPanel load:', err);
+    }
   }, []);
 
   useEffect(() => {
@@ -570,29 +614,36 @@ function ClaudeAgentsPanel() {
   }, [load, agents.some(a => a.status === 'working')]);
 
   async function runAgent(id: string, name: string, task?: string, mode: 'plan' | 'execute' = 'plan', planId?: string) {
+    if ((window as any).__cuiServerAlive === false) return;
     setTriggering(id);
     setCustomTask(null);
     try {
       const body: Record<string, string> = { persona_id: id, mode };
       if (task) body.task = task;
       if (planId) body.plan_id = planId;
-      const r = await fetch(`${API}/agents/claude/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json());
+      const res = await fetch(`${API}/agents/claude/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(15000) });
+      if (!res.ok) throw new Error(`claude/run failed: ${res.status}`);
+      const r = await res.json();
       if (r.task_id) {
         setActiveLog({ taskId: r.task_id, name, mode: r.mode ?? 'plan', planFile: r.plan_file });
         // Poll log for completion to show plan review
         if (r.mode === 'plan') {
           const checkComplete = setInterval(async () => {
+            if ((window as any).__cuiServerAlive === false) return;
             try {
-              const log = await fetch(`${API}/agents/claude/log/${r.task_id}`).then(async r => {
-                // Simplified: just read last 200 chars from log endpoint (we can't parse SSE easily here)
-                return '';
-              });
-            } catch { /**/ }
+              const logRes = await fetch(`${API}/agents/claude/log/${r.task_id}`, { signal: AbortSignal.timeout(20000) });
+              if (!logRes.ok) throw new Error(`claude/log poll failed: ${logRes.status}`);
+              // Simplified: just read last 200 chars from log endpoint (we can't parse SSE easily here)
+            } catch (err) {
+              console.warn('[CommandSidebar] ClaudeAgentsPanel log poll:', err);
+            }
           }, 3000);
           setTimeout(() => clearInterval(checkComplete), 120000); // Stop after 2min
         }
       }
       await load();
+    } catch (err) {
+      console.warn('[CommandSidebar] ClaudeAgentsPanel runAgent:', err);
     } finally {
       setTimeout(() => setTriggering(null), 2000);
     }
@@ -694,23 +745,47 @@ export default function CommandSidebar({ onPersonaAgentSelect }: CommandSidebarP
   const [businessPendingCount, setBusinessPendingCount] = useState(0);
 
   const loadStatus = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
       const [statusRes, approvalsRes] = await Promise.all([
-        fetch(`${API}/agents/status`).then(r => r.json()),
-        fetch(`${API}/agents/approvals`).then(r => r.json()),
+        fetch(`${API}/agents/status`, { signal: AbortSignal.timeout(20000) }).then(r => {
+          if (!r.ok) throw new Error(`agents/status failed: ${r.status}`);
+          return r.json();
+        }),
+        fetch(`${API}/agents/approvals`, { signal: AbortSignal.timeout(20000) }).then(r => {
+          if (!r.ok) throw new Error(`agents/approvals failed: ${r.status}`);
+          return r.json();
+        }),
       ]);
       setAgents(statusRes.agents ?? []);
       setApprovals(approvalsRes.approvals ?? []);
-    } catch { /**/ }
+    } catch (err) {
+      console.warn('[CommandSidebar] loadStatus:', err);
+    }
   }, []);
 
   useEffect(() => {
     loadStatus();
     // Also load business pending count
-    fetch(`${API}/agents/business/pending`).then(r => r.json()).then(d => setBusinessPendingCount((d.pending ?? []).length)).catch(() => {});
+    if ((window as any).__cuiServerAlive !== false) {
+      fetch(`${API}/agents/business/pending`, { signal: AbortSignal.timeout(20000) })
+        .then(r => {
+          if (!r.ok) throw new Error(`business/pending failed: ${r.status}`);
+          return r.json();
+        })
+        .then(d => setBusinessPendingCount((d.pending ?? []).length))
+        .catch(err => console.warn('[CommandSidebar] business/pending initial:', err));
+    }
     const iv = setInterval(() => {
+      if ((window as any).__cuiServerAlive === false) return;
       loadStatus();
-      fetch(`${API}/agents/business/pending`).then(r => r.json()).then(d => setBusinessPendingCount((d.pending ?? []).length)).catch(() => {});
+      fetch(`${API}/agents/business/pending`, { signal: AbortSignal.timeout(20000) })
+        .then(r => {
+          if (!r.ok) throw new Error(`business/pending poll failed: ${r.status}`);
+          return r.json();
+        })
+        .then(d => setBusinessPendingCount((d.pending ?? []).length))
+        .catch(err => console.warn('[CommandSidebar] business/pending poll:', err));
     }, 30000);
     return () => clearInterval(iv);
   }, [loadStatus]);

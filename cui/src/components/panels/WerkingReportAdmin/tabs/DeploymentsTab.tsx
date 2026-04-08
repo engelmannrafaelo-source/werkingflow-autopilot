@@ -27,12 +27,13 @@ export default function DeploymentsTab({ envMode }: { envMode?: string }) {
   const [restarting, setRestarting] = useState(false);
 
   const fetchAll = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {
       const [depsRes, bridgeRes] = await Promise.all([
-        fetch('/api/ops/deployments').catch(() => null),
-        fetch('/api/admin/wr/health').catch(() => null),
+        fetch('/api/ops/deployments', { signal: AbortSignal.timeout(20000) }).catch(() => null),
+        fetch('/api/admin/wr/health', { signal: AbortSignal.timeout(20000) }).catch(() => null),
       ]);
       if (depsRes?.ok) {
         const data = await depsRes.json();
@@ -46,6 +47,7 @@ export default function DeploymentsTab({ envMode }: { envMode?: string }) {
         setBridgeHealth(await bridgeRes.json());
       }
     } catch (err: any) {
+      console.warn('[WRDeploy] fetchAll:', err);
       setError(err.message);
     } finally {
       setLoading(false);
@@ -56,18 +58,21 @@ export default function DeploymentsTab({ envMode }: { envMode?: string }) {
 
   const handleDeploy = async (projectName: string) => {
     if (!confirm(`Trigger production deployment for "${projectName}"?`)) return;
+    if ((window as any).__cuiServerAlive === false) return;
     setDeploying(projectName);
     try {
       const res = await fetch('/api/admin/wr/deploy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ project: projectName }),
+        signal: AbortSignal.timeout(15000),
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       alert(data.message || 'Deploy triggered!');
       setTimeout(fetchAll, 3000);
     } catch (err: any) {
+      console.warn('[WRDeploy] handleDeploy:', err);
       alert(`Deploy failed: ${err.message}`);
     } finally {
       setDeploying(null);
@@ -76,18 +81,21 @@ export default function DeploymentsTab({ envMode }: { envMode?: string }) {
 
   const handleHetznerRestart = async () => {
     if (!confirm('Restart AI-Bridge containers on Hetzner?')) return;
+    if ((window as any).__cuiServerAlive === false) return;
     setRestarting(true);
     try {
       const res = await fetch('/api/admin/wr/hetzner/restart', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
+        signal: AbortSignal.timeout(15000),
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       alert(data.message || 'Restart triggered!');
       setTimeout(fetchAll, 5000);
     } catch (err: any) {
+      console.warn('[WRDeploy] handleHetznerRestart:', err);
       alert(`Restart failed: ${err.message}`);
     } finally {
       setRestarting(false);
@@ -110,30 +118,30 @@ export default function DeploymentsTab({ envMode }: { envMode?: string }) {
   };
 
   return (
-    <div style={{ padding: 12 }}>
-      <div style={{ display: 'flex', gap: 6, marginBottom: 12, alignItems: 'center' }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--tn-text)', flex: 1 }}>Deployments & Infrastructure</span>
-        <button onClick={fetchAll} style={{
+    <div data-ai-id="wr-deployments-tab" style={{ padding: 12 }}>
+      <div data-ai-id="wr-deployments-header" style={{ display: 'flex', gap: 6, marginBottom: 12, alignItems: 'center' }}>
+        <span data-ai-id="wr-deployments-title" style={{ fontSize: 12, fontWeight: 600, color: 'var(--tn-text)', flex: 1 }}>Deployments & Infrastructure</span>
+        <button data-ai-id="wr-deployments-refresh-btn" onClick={fetchAll} style={{
           padding: '3px 10px', borderRadius: 3, fontSize: 10, cursor: 'pointer',
           background: 'var(--tn-bg)', border: '1px solid var(--tn-border)', color: 'var(--tn-text-muted)',
         }}>Refresh</button>
       </div>
 
-      {error && <div style={{ padding: '4px 8px', fontSize: 11, color: 'var(--tn-red)', background: 'rgba(247,118,142,0.1)', borderRadius: 3, marginBottom: 8 }}>{error}</div>}
-      {loading && <div style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>Loading...</div>}
+      {error && <div data-ai-id="wr-deployments-error" style={{ padding: '4px 8px', fontSize: 11, color: 'var(--tn-red)', background: 'rgba(247,118,142,0.1)', borderRadius: 3, marginBottom: 8 }}>{error}</div>}
+      {loading && <div data-ai-id="wr-deployments-loading" style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>Loading...</div>}
 
       {!loading && (
         <>
           {/* Vercel Deployments */}
-          <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase' }}>Vercel Apps</div>
-          <div style={{ marginBottom: 16 }}>
+          <div data-ai-id="wr-deployments-vercel-title" style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase' }}>Vercel Apps</div>
+          <div data-ai-id="wr-deployments-vercel-list" style={{ marginBottom: 16 }}>
             {deployments.length === 0 ? (
-              <div style={{ padding: 12, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 11, background: 'var(--tn-bg-dark)', borderRadius: 6 }}>
+              <div data-ai-id="wr-deployments-vercel-empty" style={{ padding: 12, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 11, background: 'var(--tn-bg-dark)', borderRadius: 6 }}>
                 No deployment data (VERCEL_TOKEN not set?)
               </div>
             ) : (
               deployments.map(dep => (
-                <div key={dep.name} style={{
+                <div key={dep.name} data-ai-id={`wr-deployments-vercel-${dep.name}`} data-state={dep.state} style={{
                   display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
                   background: 'var(--tn-bg-dark)', border: '1px solid var(--tn-border)',
                   borderRadius: 6, marginBottom: 6,
@@ -183,8 +191,8 @@ export default function DeploymentsTab({ envMode }: { envMode?: string }) {
           </div>
 
           {/* AI-Bridge / Hetzner */}
-          <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase' }}>AI-Bridge (Hetzner)</div>
-          <div style={{
+          <div data-ai-id="wr-deployments-bridge-title" style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase' }}>AI-Bridge (Hetzner)</div>
+          <div data-ai-id="wr-deployments-bridge-panel" data-status={bridgeHealth?.status} style={{
             padding: 12, background: 'var(--tn-bg-dark)', border: '1px solid var(--tn-border)',
             borderRadius: 6, marginBottom: 16,
           }}>
@@ -197,7 +205,7 @@ export default function DeploymentsTab({ envMode }: { envMode?: string }) {
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--tn-text)' }}>
                   AI-Bridge Server
-                  <span style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginLeft: 8, fontFamily: 'monospace' }}>49.12.72.66:8000</span>
+                  <span style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginLeft: 8, fontFamily: 'monospace' }}>Bridge API</span>
                 </div>
                 <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginTop: 2, display: 'flex', gap: 10 }}>
                   {bridgeHealth?.version && <span>v{bridgeHealth.version}</span>}
@@ -205,7 +213,7 @@ export default function DeploymentsTab({ envMode }: { envMode?: string }) {
                   {bridgeHealth?.uptime != null && <span>Uptime: {Math.round(bridgeHealth.uptime / 3600)}h</span>}
                 </div>
               </div>
-              <button onClick={handleHetznerRestart} disabled={restarting} style={{
+              <button data-ai-id="wr-deployments-bridge-restart-btn" onClick={handleHetznerRestart} disabled={restarting} style={{
                 padding: '5px 12px', borderRadius: 3, fontSize: 10, fontWeight: 600,
                 cursor: restarting ? 'not-allowed' : 'pointer',
                 background: 'rgba(224,175,104,0.15)', border: '1px solid rgba(224,175,104,0.3)',

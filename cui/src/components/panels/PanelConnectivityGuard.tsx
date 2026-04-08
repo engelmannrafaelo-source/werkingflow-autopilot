@@ -1,4 +1,4 @@
-import { useState, useEffect, ReactNode } from 'react';
+import { useState, useEffect, useRef, ReactNode } from 'react';
 
 interface PanelConnectivityGuardProps {
   children: ReactNode;
@@ -7,6 +7,8 @@ interface PanelConnectivityGuardProps {
   port?: number; // Optional for remote services
   startCommand: string;
 }
+
+const CONSECUTIVE_FAILURES_THRESHOLD = 3;
 
 export default function PanelConnectivityGuard({
   children,
@@ -17,11 +19,13 @@ export default function PanelConnectivityGuard({
 }: PanelConnectivityGuardProps) {
   const [isOnline, setIsOnline] = useState<boolean | null>(null); // null = checking
   const [lastCheck, setLastCheck] = useState<Date>(new Date());
+  const failCountRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
 
     const checkConnectivity = async () => {
+      if ((window as any).__cuiServerAlive === false) return;
       try {
         // Check if URL is external (not localhost/127.0.0.1)
         const isExternal = checkUrl.includes('://') && !checkUrl.includes('localhost') && !checkUrl.includes('127.0.0.1');
@@ -30,30 +34,38 @@ export default function PanelConnectivityGuard({
         if (isExternal) {
           // Use proxy for external URLs to bypass CORS
           const proxyUrl = `/api/health-check-proxy?url=${encodeURIComponent(checkUrl)}`;
-          const proxyResponse = await fetch(proxyUrl, { cache: 'no-store' });
+          const proxyResponse = await fetch(proxyUrl, { cache: 'no-store', signal: AbortSignal.timeout(10000) });
+          if (!proxyResponse.ok) throw new Error(`Proxy HTTP ${proxyResponse.status}`);
           const data = await proxyResponse.json();
           response = { ok: data.ok };
         } else {
           // Direct check for local URLs
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 3000);
-
           response = await fetch(checkUrl, {
             method: 'HEAD',
-            signal: controller.signal,
+            signal: AbortSignal.timeout(10000),
             cache: 'no-store'
           });
-
-          clearTimeout(timeoutId);
         }
 
         if (!cancelled) {
-          setIsOnline(response.ok);
+          if (response.ok) {
+            failCountRef.current = 0;
+            setIsOnline(true);
+          } else {
+            failCountRef.current++;
+            if (failCountRef.current >= CONSECUTIVE_FAILURES_THRESHOLD) {
+              setIsOnline(false);
+            }
+            // else: keep previous state (don't flicker to offline on single failure)
+          }
           setLastCheck(new Date());
         }
       } catch (err) {
         if (!cancelled) {
-          setIsOnline(false);
+          failCountRef.current++;
+          if (failCountRef.current >= CONSECUTIVE_FAILURES_THRESHOLD) {
+            setIsOnline(false);
+          }
           setLastCheck(new Date());
         }
       }
@@ -163,6 +175,7 @@ export default function PanelConnectivityGuard({
 
         <button
           onClick={() => {
+            failCountRef.current = 0;
             setIsOnline(null);
             setLastCheck(new Date());
           }}

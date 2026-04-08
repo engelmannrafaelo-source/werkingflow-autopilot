@@ -23,3 +23,5 @@ cui/dist/
 cui/dist-server/
 cui/data/uploads/
 cui/tsconfig.tsbuildinfo
+.env.server
+.env.*

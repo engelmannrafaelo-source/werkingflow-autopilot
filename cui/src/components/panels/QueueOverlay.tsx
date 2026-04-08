@@ -179,14 +179,31 @@ function ConvRow({ conv, onNavigate, onStop, onSetName }: {
 
 // --- Main Component ---
 export default function QueueOverlay({ accountId, projectId, workDir, useLocal, onNavigate, onStartNew, refreshSignal }: QueueOverlayProps) {
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Load cached conversations for instant display
+  const [conversations, setConversations] = useState<Conversation[]>(() => {
+    try {
+      const cached = localStorage.getItem(`cui-convs-${workDir || 'all'}`);
+      return cached ? JSON.parse(cached) : [];
+    } catch { return []; }
+  });
+  const [loading, setLoading] = useState(() => {
+    try { return !localStorage.getItem(`cui-convs-${workDir || 'all'}`); } catch { return true; }
+  });
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
   const [showCompleted, setShowCompleted] = useState(false);
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState('');
   const subjectRef = useRef<HTMLInputElement>(null);
+
+  // --- Start Templates ---
+  interface PromptTemplate { id: string; label: string; message: string; category: "reply" | "start"; subject?: string; order: number; createdAt: string; }
+  const [startTemplates, setStartTemplates] = useState<PromptTemplate[]>([]);
+  const [showStartTplForm, setShowStartTplForm] = useState(false);
+  const [newStartTplLabel, setNewStartTplLabel] = useState("");
+  const [newStartTplSubject, setNewStartTplSubject] = useState("");
+  const [newStartTplMessage, setNewStartTplMessage] = useState("");
+  const [editingStartTpl, setEditingStartTpl] = useState<PromptTemplate | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval>>(null);
 
   useEffect(() => { ensureStyles(); }, []);
@@ -196,8 +213,9 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
   // Fetch conversations
   const lastCountRef = useRef(-1);
   const fetchConversations = useCallback(() => {
-    fetch(`${API}/mission/conversations`)
-      .then(r => r.json())
+    if ((window as any).__cuiServerAlive === false) { setLoading(false); return; }
+    fetch(`${API}/mission/conversations`, { signal: AbortSignal.timeout(10000) })
+      .then(r => { if (!r.ok) throw new Error('fetch failed'); return r.json(); })
       .then(data => {
         const convs: Conversation[] = data.conversations || [];
         const REMOTE_IDS = new Set(['rafael', 'engelmann', 'office']);
@@ -207,16 +225,14 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
           ? workDir.slice(REMOTE_WS_PREFIX.length).replace(/\/$/, '')
           : '';
         const filtered = convs.filter(c => {
-          if (useLocal) {
-            if (c.accountId !== 'local') return false;
-          } else if (REMOTE_IDS.has(accountId)) {
-            if (!REMOTE_IDS.has(c.accountId)) return false;
-          } else {
-            if (c.accountId !== accountId) return false;
-          }
+          // Show conversations from ALL accounts (no account filtering)
+          // Only filter local vs remote: in local mode hide remote, in remote mode hide local
+          if (useLocal && c.accountId !== 'local') return false;
+          if (!useLocal && c.accountId === 'local') return false;
           if (workDir) {
-            const pp = c.projectPath || '';
-            if (pp === workDir || pp.startsWith(workDir + '/')) return true;
+            const pp = (c.projectPath || '').replace(/\/$/, '');
+            const wd = workDir.replace(/\/$/, '');
+            if (pp === wd || pp.startsWith(wd + '/')) return true;
             if (wsName && (pp.includes(LOCAL_WS_PREFIX_MATCH + wsName) || pp.endsWith('/' + wsName))) return true;
             return false;
           }
@@ -229,9 +245,11 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
         }
         setConversations(filtered);
         setLoading(false);
+        // Cache for instant load next time
+        try { localStorage.setItem(`cui-convs-${workDir || 'all'}`, JSON.stringify(filtered.slice(0, 20))); } catch {}
       })
-      .catch(() => setLoading(false));
-  }, [accountId, workDir, useLocal]);
+      .catch((err) => { console.warn('[QueueOverlay] fetchConversations:', err); setLoading(false); });
+  }, [workDir, useLocal]); // accountId intentionally excluded — conversations are shown for ALL accounts
 
   useEffect(() => {
     fetchConversations();
@@ -239,9 +257,12 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [fetchConversations]);
 
-  // Refresh when parent signals via WS (replaces redundant WebSocket connection)
+  // Refresh when parent signals via WS — debounced to prevent request floods
   useEffect(() => {
-    if (refreshSignal && refreshSignal > 0) fetchConversations();
+    if (refreshSignal && refreshSignal > 0) {
+      const timeout = setTimeout(fetchConversations, 2000);
+      return () => clearTimeout(timeout);
+    }
   }, [refreshSignal, fetchConversations]);
 
   // Split conversations
@@ -259,6 +280,67 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
   );
 
   // Start new conversation
+
+  // --- Fetch Start Templates ---
+  useEffect(() => {
+    if ((window as any).__cuiServerAlive !== true) return;
+    fetch('/api/prompt-templates', { signal: AbortSignal.timeout(10000) })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data) return;
+        const start = (data.templates || []).filter((t: PromptTemplate) => t.category === 'start');
+        start.sort((a: PromptTemplate, b: PromptTemplate) => a.order - b.order);
+        setStartTemplates(start);
+      })
+      .catch(() => { /* templates load lazily */ });
+  }, []);
+
+  const handleSaveStartTemplate = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
+    if (!newStartTplLabel.trim() || !newStartTplMessage.trim()) return;
+    try {
+      if (editingStartTpl) {
+        const resp = await fetch(`/api/prompt-templates/${editingStartTpl.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ label: newStartTplLabel, message: newStartTplMessage, subject: newStartTplSubject, category: 'start' }),
+          signal: AbortSignal.timeout(15000),
+        });
+        if (!resp.ok) throw new Error(`PUT prompt-templates ${resp.status}`);
+        const data = await resp.json();
+        setStartTemplates(prev => prev.map(t => t.id === data.template.id ? data.template : t));
+      } else {
+        const resp = await fetch('/api/prompt-templates', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ label: newStartTplLabel, message: newStartTplMessage, subject: newStartTplSubject, category: 'start' }),
+          signal: AbortSignal.timeout(15000),
+        });
+        if (!resp.ok) throw new Error(`POST prompt-templates ${resp.status}`);
+        const data = await resp.json();
+        setStartTemplates(prev => [...prev, data.template]);
+      }
+    } catch (err) {
+      console.warn('[QueueOverlay] handleSaveStartTemplate:', err);
+    }
+    setShowStartTplForm(false);
+    setEditingStartTpl(null);
+    setNewStartTplLabel('');
+    setNewStartTplSubject('');
+    setNewStartTplMessage('');
+  }, [newStartTplLabel, newStartTplSubject, newStartTplMessage, editingStartTpl]);
+
+  const handleDeleteStartTemplate = useCallback(async (id: string) => {
+    if ((window as any).__cuiServerAlive === false) return;
+    try {
+      const resp = await fetch(`/api/prompt-templates/${id}`, { method: 'DELETE', signal: AbortSignal.timeout(15000) });
+      if (!resp.ok) throw new Error(`DELETE prompt-templates ${resp.status}`);
+      setStartTemplates(prev => prev.filter(t => t.id !== id));
+    } catch (err) {
+      console.warn('[QueueOverlay] handleDeleteStartTemplate:', err);
+    }
+  }, []);
+
   const handleStart = useCallback(async () => {
     if (!subject.trim() || !message.trim() || starting) return;
     setStarting(true);
@@ -275,16 +357,23 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
 
   // Stop conversation
   const handleStop = useCallback((conv: Conversation) => {
-    fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}/stop`, { method: 'POST' })
-      .then(() => setTimeout(fetchConversations, 1000)).catch(() => {});
+    if ((window as any).__cuiServerAlive === false) return;
+    fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}/stop`, { method: 'POST', signal: AbortSignal.timeout(15000) })
+      .then(r => { if (!r.ok) throw new Error(`stop ${r.status}`); })
+      .then(() => setTimeout(fetchConversations, 1000))
+      .catch((err) => console.warn('[QueueOverlay] handleStop:', err));
   }, [fetchConversations]);
 
   // Set custom name
   const handleSetName = useCallback((conv: Conversation, name: string) => {
+    if ((window as any).__cuiServerAlive === false) return;
     fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}/name`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ custom_name: name }),
-    }).then(() => setTimeout(fetchConversations, 500)).catch(() => {});
+      signal: AbortSignal.timeout(15000),
+    }).then(r => { if (!r.ok) throw new Error(`setName ${r.status}`); })
+      .then(() => setTimeout(fetchConversations, 500))
+      .catch((err) => console.warn('[QueueOverlay] handleSetName:', err));
   }, [fetchConversations]);
 
   return (
@@ -325,6 +414,38 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
           background: 'var(--tn-bg)', border: '1px solid var(--tn-border)',
           borderRadius: 6, padding: 10,
         }}>
+          {/* Start Template Chips */}
+          {startTemplates.length > 0 && !showStartTplForm && (
+            <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 6 }}>
+              {startTemplates.map(tpl => (
+                <button
+                  key={tpl.id}
+                  onClick={(e) => { if (e.altKey) { setEditingStartTpl(tpl); setNewStartTplLabel(tpl.label); setNewStartTplSubject(tpl.subject || ""); setNewStartTplMessage(tpl.message); setShowStartTplForm(true); return; } setSubject(tpl.subject || ""); setMessage(tpl.message); }}
+                  onContextMenu={(e) => { e.preventDefault(); if (confirm(`"${tpl.label}" löschen?`)) handleDeleteStartTemplate(tpl.id); }}
+                  title={`${tpl.subject ? tpl.subject + ": " : ""}${tpl.message}\n\nAlt+Klick = Bearbeiten | Rechtsklick = Löschen`}
+                  style={{ padding: "3px 8px", borderRadius: 3, fontSize: 10, cursor: "pointer", background: "rgba(59,130,246,0.08)", border: "1px solid rgba(59,130,246,0.2)", color: "var(--tn-blue)", whiteSpace: "nowrap", fontFamily: "inherit" }}
+                >
+                  {tpl.label}
+                </button>
+              ))}
+              <button
+                onClick={() => { setShowStartTplForm(true); setEditingStartTpl(null); setNewStartTplLabel(""); setNewStartTplSubject(""); setNewStartTplMessage(""); }}
+                title="Neues Start-Template"
+                style={{ padding: "3px 6px", borderRadius: 3, fontSize: 10, cursor: "pointer", background: "transparent", border: "1px dashed var(--tn-border)", color: "var(--tn-text-muted)", opacity: 0.5 }}
+              >
+                +
+              </button>
+            </div>
+          )}
+          {showStartTplForm && (
+            <div style={{ display: "flex", gap: 4, marginBottom: 6, flexWrap: "wrap" }}>
+              <input value={newStartTplLabel} onChange={e => setNewStartTplLabel(e.target.value)} placeholder="Label" style={{ width: 70, padding: "3px 6px", fontSize: 10, background: "var(--tn-bg)", color: "var(--tn-text)", border: "1px solid var(--tn-blue)", borderRadius: 3, fontFamily: "inherit" }} />
+              <input value={newStartTplSubject} onChange={e => setNewStartTplSubject(e.target.value)} placeholder="Betreff" style={{ width: 80, padding: "3px 6px", fontSize: 10, background: "var(--tn-bg)", color: "var(--tn-text)", border: "1px solid var(--tn-blue)", borderRadius: 3, fontFamily: "inherit" }} />
+              <input value={newStartTplMessage} onChange={e => setNewStartTplMessage(e.target.value)} placeholder="Nachricht" onKeyDown={e => { if (e.key === "Enter") handleSaveStartTemplate(); if (e.key === "Escape") { setShowStartTplForm(false); setEditingStartTpl(null); } }} style={{ flex: 1, minWidth: 120, padding: "3px 6px", fontSize: 10, background: "var(--tn-bg)", color: "var(--tn-text)", border: "1px solid var(--tn-blue)", borderRadius: 3, fontFamily: "inherit" }} />
+              <button onClick={handleSaveStartTemplate} disabled={!newStartTplLabel.trim() || !newStartTplMessage.trim()} style={{ padding: "3px 8px", borderRadius: 3, fontSize: 10, cursor: "pointer", background: newStartTplLabel.trim() && newStartTplMessage.trim() ? "var(--tn-blue)" : "var(--tn-border)", border: "none", color: "#fff", fontWeight: 600 }}>{editingStartTpl ? "Update" : "Save"}</button>
+              <button onClick={() => { setShowStartTplForm(false); setEditingStartTpl(null); }} style={{ padding: "3px 6px", borderRadius: 3, fontSize: 10, cursor: "pointer", background: "transparent", border: "1px solid var(--tn-border)", color: "var(--tn-text-muted)" }}>X</button>
+            </div>
+          )}
           <input
             ref={subjectRef}
             value={subject}

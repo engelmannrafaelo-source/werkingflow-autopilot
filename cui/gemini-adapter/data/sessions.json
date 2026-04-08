@@ -1,0 +1,70 @@
+{
+  "sessions": {
+    "fa95684a-7c6c-4b97-a3f3-20b98cb1af4a": {
+      "sessionId": "fa95684a-7c6c-4b97-a3f3-20b98cb1af4a",
+      "geminiSessionId": null,
+      "createdAt": "2026-03-04T06:28:55.318Z",
+      "updatedAt": "2026-03-04T06:29:20.721Z",
+      "workingDirectory": "/root/projekte",
+      "model": "gemini-2.5-flash",
+      "messageCount": 3,
+      "summary": "Sage kurz Hallo auf Deutsch. Maximal 1 Satz.",
+      "status": "completed"
+    },
+    "62392384-d547-427f-9a63-f9bf8ac342db": {
+      "sessionId": "62392384-d547-427f-9a63-f9bf8ac342db",
+      "geminiSessionId": "e40d04e2-17a5-48f9-927f-31cf0db98534",
+      "createdAt": "2026-03-04T06:32:48.464Z",
+      "updatedAt": "2026-03-04T06:33:01.403Z",
+      "workingDirectory": "/root/projekte",
+      "model": "gemini-2.5-flash",
+      "messageCount": 2,
+      "summary": "Sage Hallo auf Deutsch. Maximal 1 Satz.",
+      "status": "completed"
+    },
+    "b6f836af-b5d7-4914-91a5-1d839b1464fe": {
+      "sessionId": "b6f836af-b5d7-4914-91a5-1d839b1464fe",
+      "geminiSessionId": "ff58e181-bd9f-4331-a1f8-80cbd4848491",
+      "createdAt": "2026-03-04T06:33:30.970Z",
+      "updatedAt": "2026-03-04T06:33:59.955Z",
+      "workingDirectory": "/root/projekte",
+      "model": "auto-gemini-3",
+      "messageCount": 2,
+      "summary": "Was ist 2+2? Antworte nur die Zahl.",
+      "status": "completed"
+    },
+    "84b0f01e-e093-4342-99f2-cddfc7bdf49f": {
+      "sessionId": "84b0f01e-e093-4342-99f2-cddfc7bdf49f",
+      "geminiSessionId": "621182b5-ac60-486c-9161-10dad63f558c",
+      "createdAt": "2026-03-04T06:44:12.961Z",
+      "updatedAt": "2026-03-04T06:44:38.919Z",
+      "workingDirectory": "/root/orchestrator/workspaces/werking-energy",
+      "model": "auto-gemini-3",
+      "messageCount": 2,
+      "summary": "hey gemini - was weist du über meinen code und welches modell verwendest du gerade?",
+      "status": "completed"
+    },
+    "94d4a8a2-084a-4b2c-876e-2f3701a9417a": {
+      "sessionId": "94d4a8a2-084a-4b2c-876e-2f3701a9417a",
+      "geminiSessionId": "81bb4928-c82b-42fc-a053-4dc87642a59e",
+      "createdAt": "2026-03-04T06:44:44.680Z",
+      "updatedAt": "2026-03-04T06:45:02.824Z",
+      "workingDirectory": "/root/orchestrator/workspaces/werking-energy",
+      "model": "auto-gemini-3",
+      "messageCount": 2,
+      "summary": "hey gemini - was weist du über meinen code und welches modell verwendest du gerade?",
+      "status": "completed"
+    },
+    "048fde42-d57e-4579-bda8-0738c2e6ff94": {
+      "sessionId": "048fde42-d57e-4579-bda8-0738c2e6ff94",
+      "geminiSessionId": "9183d8f6-4075-4eff-b19f-da36b70769ce",
+      "createdAt": "2026-03-04T06:45:10.843Z",
+      "updatedAt": "2026-03-04T06:45:39.930Z",
+      "workingDirectory": "/root/orchestrator/workspaces/werking-energy",
+      "model": "auto-gemini-3",
+      "messageCount": 2,
+      "summary": "hey gemini - was weist du über meinen code und welches modell verwendest du gerade?",
+      "status": "completed"
+    }
+  }
+}

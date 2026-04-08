@@ -26,6 +26,14 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: true,
-    minify: false,
+    minify: 'esbuild',
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'recharts': ['recharts'],
+          'flexlayout': ['flexlayout-react'],
+        },
+      },
+    },
   },
 });

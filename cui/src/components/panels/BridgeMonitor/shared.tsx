@@ -1,10 +1,13 @@
-import React from 'react';
 
 // ─── Config ─────────────────────────────────────────────────────────
-export const BRIDGE_URL = 'http://49.12.72.66:8000';
+// Bridge URL — routed through CUI server proxy (browser can't reach bridge IP directly)
+export const BRIDGE_URL = '/api/bridge-proxy';
 
-// Internal admin API key - this CUI is a local Electron admin tool, not a public frontend
-const API_KEY = '967bf3159a351578f3fafda1e361fd7d4ae32d3c2ff8ee82428bf1ab364c4745';
+// Bridge API key — loaded from server-injected global, not hardcoded
+// API key injected by CUI server at page load (not hardcoded in source)
+const API_KEY = typeof window !== 'undefined'
+  ? (window as any).__CUI_BRIDGE_API_KEY__ || ''
+  : '';
 
 export function authHeaders(): Record<string, string> {
   return { 'Authorization': `Bearer ${API_KEY}` };
@@ -30,7 +33,11 @@ export async function bridgeFetch(path: string, opts?: RequestInit & { timeout?:
 /** Fetch JSON with auth. Throws on non-ok or parse failure. */
 export async function bridgeJson<T = any>(path: string, opts?: RequestInit & { timeout?: number }): Promise<T> {
   const res = await bridgeFetch(path, opts);
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text().catch(() => 'unknown')}`);
+  if (!res.ok) {
+    const body = await res.text().catch(() => 'unknown');
+    // Rethrown — caller handles error state
+    throw new Error(`HTTP ${res.status}: ${body}`);
+  }
   return res.json();
 }
 
@@ -95,25 +102,31 @@ export function SectionFlat({ title, children }: { title: string; children: Reac
   );
 }
 
-export function StatCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
+export function StatCard({ label, value, sub, color, aiId }: { label: string; value: string; sub?: string; color?: string; aiId?: string }) {
   return (
-    <div style={{
-      background: 'var(--tn-bg-dark)', border: '1px solid var(--tn-border)', borderRadius: 6,
-      padding: '10px 12px', flex: '1 1 0', minWidth: 100,
-    }}>
+    <div
+      data-ai-id={aiId}
+      style={{
+        background: 'var(--tn-bg-dark)', border: '1px solid var(--tn-border)', borderRadius: 6,
+        padding: '10px 12px', flex: '1 1 0', minWidth: 100,
+      }}
+    >
       <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 4 }}>{label}</div>
-      <div style={{ fontSize: 18, fontWeight: 700, color: color ?? 'var(--tn-text)', fontFamily: 'monospace' }}>{value}</div>
+      <div data-ai-id={aiId ? `${aiId}-value` : undefined} style={{ fontSize: 18, fontWeight: 700, color: color ?? 'var(--tn-text)', fontFamily: 'monospace' }}>{value}</div>
       {sub && <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginTop: 2 }}>{sub}</div>}
     </div>
   );
 }
 
 export function Meter({ value, max, color }: { value: number; max: number; color: string }) {
-  const pct = max > 0 ? Math.min(100, Math.round((value / max) * 100)) : 0;
+  // Defensive: handle undefined/null values
+  const safeValue = value ?? 0;
+  const safeMax = max ?? 0;
+  const pct = safeMax > 0 ? Math.min(100, Math.round((safeValue / safeMax) * 100)) : 0;
   return (
     <div style={{ marginTop: 4 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-        <span style={{ fontSize: 9, color: 'var(--tn-text-muted)' }}>{value.toFixed(1)} / {max.toFixed(1)}</span>
+        <span style={{ fontSize: 9, color: 'var(--tn-text-muted)' }}>{safeValue.toFixed(1)} / {safeMax.toFixed(1)}</span>
         <span style={{ fontSize: 9, color, fontWeight: 700 }}>{pct}%</span>
       </div>
       <div style={{ height: 5, background: 'var(--tn-border)', borderRadius: 3, overflow: 'hidden' }}>
@@ -149,12 +162,16 @@ export function Toolbar({ lastRefresh, loading, onRefresh, autoRefresh }: {
   autoRefresh?: number;
 }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+    <div
+      data-ai-id="bridge-monitor-toolbar"
+      style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}
+    >
       <span style={{ fontSize: 10, color: 'var(--tn-text-muted)' }}>
         {lastRefresh ? `Aktualisiert: ${lastRefresh.toLocaleTimeString('de-AT')}` : 'Wird geladen...'}
         {autoRefresh && <span style={{ marginLeft: 8, opacity: 0.6 }}>• Auto-Refresh alle {autoRefresh}s</span>}
       </span>
       <button
+        data-ai-id="bridge-monitor-refresh-button"
         onClick={onRefresh}
         disabled={loading}
         style={{
@@ -187,7 +204,8 @@ export function LoadingSpinner({ text }: { text: string }) {
 
 // ─── Formatting Helpers ─────────────────────────────────────────────
 
-export function formatTokens(n: number): string {
+export function formatTokens(n: number | undefined | null): string {
+  if (n == null || isNaN(n)) return '0';
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return String(n);
@@ -201,7 +219,8 @@ export function formatDuration(seconds: number): string {
   return `${m}m ${s}s`;
 }
 
-export function formatNumber(n: number): string {
+export function formatNumber(n: number | undefined | null): string {
+  if (n == null) return '0';
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return String(n);
@@ -215,4 +234,15 @@ export function timeAgo(dateStr: string): string {
   const hours = Math.floor(mins / 60);
   if (hours < 24) return `vor ${hours}h`;
   return `vor ${Math.floor(hours / 24)}d`;
+}
+
+export function timeAgoEn(iso: string | null): string {
+  if (!iso) return 'Never';
+  const ms = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(ms / 60000);
+  if (m < 1) return 'Just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
 }

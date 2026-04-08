@@ -69,10 +69,11 @@ export default function SystemHealthTab({ envMode }: { envMode?: string }) {
   }, []);
 
   const fetchHealth = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/admin/wr/system-health');
+      const res = await fetch('/api/admin/wr/system-health', { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: SystemHealthResponse = await res.json();
       setHealth(data);
@@ -86,8 +87,9 @@ export default function SystemHealthTab({ envMode }: { envMode?: string }) {
           latencyMs: svc.latencyMs,
         });
       });
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err) {
+      console.warn('[WRSystemHealth] fetch failed:', err);
+      setError(err instanceof Error ? err.message : 'Failed to check system health');
     } finally {
       setLoading(false);
     }
@@ -237,9 +239,10 @@ export default function SystemHealthTab({ envMode }: { envMode?: string }) {
   );
 
   return (
-    <div style={{ padding: 12 }}>
+    <div data-ai-id="wr-system-health-tab" style={{ padding: 12 }}>
       {/* Header + Actions */}
       <div
+        data-ai-id="wr-system-health-header"
         style={{
           display: 'flex',
           justifyContent: 'space-between',
@@ -248,7 +251,7 @@ export default function SystemHealthTab({ envMode }: { envMode?: string }) {
         }}
       >
         <div>
-          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--tn-text)' }}>
+          <div data-ai-id="wr-system-health-title" style={{ fontSize: 12, fontWeight: 700, color: 'var(--tn-text)' }}>
             System Health Monitor
           </div>
           {lastCheck && (
@@ -258,6 +261,7 @@ export default function SystemHealthTab({ envMode }: { envMode?: string }) {
           )}
         </div>
         <button
+          data-ai-id="wr-system-health-check-btn"
           onClick={fetchHealth}
           disabled={loading}
           style={{
@@ -279,6 +283,7 @@ export default function SystemHealthTab({ envMode }: { envMode?: string }) {
       {/* Error Alert */}
       {error && (
         <div
+          data-ai-id="wr-system-health-error"
           style={{
             padding: '6px 10px',
             fontSize: 11,
@@ -295,6 +300,8 @@ export default function SystemHealthTab({ envMode }: { envMode?: string }) {
       {/* Overall Status */}
       {health && (
         <div
+          data-ai-id="wr-system-health-overall"
+          data-status={health.ok ? 'ok' : 'error'}
           style={{
             padding: 12,
             background: health.ok ? 'rgba(158,206,106,0.1)' : 'rgba(247,118,142,0.1)',
@@ -318,6 +325,7 @@ export default function SystemHealthTab({ envMode }: { envMode?: string }) {
       {/* Service Grid */}
       {!loading && health && (
         <div
+          data-ai-id="wr-system-health-services"
           style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
@@ -331,6 +339,7 @@ export default function SystemHealthTab({ envMode }: { envMode?: string }) {
       {/* Loading State */}
       {loading && !health && (
         <div
+          data-ai-id="wr-system-health-loading"
           style={{
             padding: 40,
             textAlign: 'center',

@@ -1,19 +1,40 @@
-import { useState, useCallback, useEffect, useRef, memo } from 'react';
+import { useState, useCallback, useEffect, useRef, memo, useMemo } from 'react';
 import { type Project, ACCOUNTS } from '../types';
+import { useAuth } from '../contexts/AuthContext';
 
 interface ProjectTabsProps {
   projects: Project[];
   activeId: string;
-  attention?: Set<string>;
+  attention?: Record<string, 'working' | 'needs_attention' | 'idle'>;
   onSelect: (id: string) => void;
   onNew: () => void;
   onEdit: (id: string) => void;
   onDelete: (id: string) => void;
   missionActive?: boolean;
   onMissionClick?: () => void;
+  allChatsActive?: boolean;
+  onAllChatsClick?: () => void;
+  isMobile?: boolean;
 }
 
 type SyncState = 'idle' | 'syncing' | 'done' | 'error';
+
+// --- Mode Detection (from Electron preload or URL param) ---
+type CuiMode = 'remote' | 'local' | 'dev';
+const MODE_COLORS: Record<CuiMode, string> = {
+  remote: '#e0af68',  // orange — remote server
+  local: '#9ece6a',   // green — local copy
+  dev: '#bb9af7',     // purple — development
+};
+function detectCuiMode(): CuiMode {
+  // URL param set by main.cjs is most reliable (preload may not get argv in sandbox)
+  const fromUrl = new URLSearchParams(window.location.search).get('mode');
+  if (fromUrl === 'local' || fromUrl === 'dev' || fromUrl === 'remote') return fromUrl;
+  const fromElectron = (window as any).electronAPI?.mode;
+  if (fromElectron) return fromElectron as CuiMode;
+  return 'remote';
+}
+const CUI_MODE = detectCuiMode();
 
 // --- Account Usage Types ---
 interface UsageAccount {
@@ -61,15 +82,15 @@ function UsagePill({ account }: { account: UsageAccount }) {
   const weeklyColor = usagePctColor(weeklyPct);
   const sessionColor = usagePctColor(sessionPct);
 
-  const sessionReset = s ? shortenReset(s.currentSession.resetIn) : '';
   const weeklyReset = s ? shortenReset(s.weeklyAllModels.resetDate) : '';
+  const sessionReset = s ? shortenReset(s.currentSession.resetIn) : '';
 
   const tooltip = s
     ? [
         account.accountName,
-        `Aktuelle Sitzung: ${sessionPct}%${s.currentSession.resetIn ? ` (${s.currentSession.resetIn})` : ''}`,
-        `Weekly (alle): ${weeklyPct}% — ${s.weeklyAllModels.resetDate}`,
-        `Weekly (Sonnet): ${s.weeklySonnet.percent}% — ${s.weeklySonnet.resetDate}`,
+        `Sitzung: ${sessionPct}% ${s.currentSession.resetIn || ''}`,
+        `Weekly: ${weeklyPct}% ${s.weeklyAllModels.resetDate || ''}`,
+        `Sonnet: ${s.weeklySonnet.percent}% ${s.weeklySonnet.resetDate || ''}`,
         s.extraUsage.percent > 0 ? `Extra: ${s.extraUsage.spent} / ${s.extraUsage.limit}` : null,
       ].filter(Boolean).join('\n')
     : `${account.accountName}: Keine Daten`;
@@ -80,8 +101,8 @@ function UsagePill({ account }: { account: UsageAccount }) {
       style={{
         display: 'flex',
         alignItems: 'center',
-        gap: 4,
-        padding: '2px 6px',
+        gap: 3,
+        padding: '2px 5px',
         borderRadius: 4,
         background: account.status === 'critical'
           ? 'rgba(247,118,142,0.12)'
@@ -89,7 +110,7 @@ function UsagePill({ account }: { account: UsageAccount }) {
             ? 'rgba(224,175,104,0.08)'
             : 'rgba(255,255,255,0.03)',
         border: `1px solid ${account.status === 'critical' ? 'rgba(247,118,142,0.4)' : 'rgba(255,255,255,0.06)'}`,
-        cursor: 'default',
+        cursor: 'default', flexShrink: 0,
         WebkitAppRegion: 'no-drag',
       } as React.CSSProperties}
     >
@@ -97,52 +118,56 @@ function UsagePill({ account }: { account: UsageAccount }) {
         {shortName}
       </span>
       {s ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 1, width: 44 }}>
-          {/* Weekly bar + reset */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-            <div style={{ flex: 1, height: 3, background: 'rgba(255,255,255,0.08)', borderRadius: 1.5, overflow: 'hidden' }}>
+        <>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 1, width: 36 }}>
+            <div style={{ height: 3, background: 'rgba(255,255,255,0.08)', borderRadius: 1.5, overflow: 'hidden' }}>
               <div style={{ height: '100%', width: `${Math.min(100, weeklyPct)}%`, background: weeklyColor, borderRadius: 1.5, transition: 'width 0.5s ease' }} />
             </div>
-          </div>
-          {/* Session bar + reset */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-            <div style={{ flex: 1, height: 2, background: 'rgba(255,255,255,0.06)', borderRadius: 1, overflow: 'hidden' }}>
+            <div style={{ height: 2, background: 'rgba(255,255,255,0.06)', borderRadius: 1, overflow: 'hidden' }}>
               <div style={{ height: '100%', width: `${Math.min(100, sessionPct)}%`, background: sessionColor, borderRadius: 1, transition: 'width 0.5s ease' }} />
             </div>
           </div>
-        </div>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 0, lineHeight: 1 }}>
+            <span style={{ fontSize: 8, fontWeight: 600, fontFamily: 'monospace', color: weeklyColor, whiteSpace: 'nowrap' }}>
+              {weeklyPct}% <span style={{ opacity: 0.6, fontWeight: 400 }}>{weeklyReset}</span>
+            </span>
+            <span style={{ fontSize: 7, fontFamily: 'monospace', color: sessionColor, opacity: 0.7, whiteSpace: 'nowrap' }}>
+              {sessionPct}% <span style={{ fontWeight: 400 }}>{sessionReset}</span>
+            </span>
+          </div>
+        </>
       ) : (
         <span style={{ fontSize: 8, color: 'var(--tn-text-muted)', opacity: 0.5 }}>?</span>
-      )}
-      {s && (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 0, lineHeight: 1 }}>
-          <span style={{ fontSize: 7, fontWeight: 600, fontFamily: 'monospace', color: weeklyColor, whiteSpace: 'nowrap' }}>
-            {weeklyPct}% {weeklyReset && <span style={{ opacity: 0.6, fontWeight: 400 }}>{weeklyReset}</span>}
-          </span>
-          {sessionReset && (
-            <span style={{ fontSize: 6, fontFamily: 'monospace', color: sessionColor, opacity: 0.7, whiteSpace: 'nowrap' }}>
-              {sessionPct}% {sessionReset}
-            </span>
-          )}
-        </div>
       )}
     </div>
   );
 }
 
 // --- Usage Bars (all accounts) ---
+const USAGE_CACHE_KEY = 'cui-usage-accounts';
+
+function loadCachedAccounts(): UsageAccount[] {
+  try {
+    const raw = localStorage.getItem(USAGE_CACHE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
 function UsageBars() {
-  const [accounts, setAccounts] = useState<UsageAccount[]>([]);
+  const [accounts, setAccounts] = useState<UsageAccount[]>(loadCachedAccounts);
   const pollRef = useRef<ReturnType<typeof setInterval>>(null);
 
   const fetchUsage = useCallback(() => {
-    fetch('/api/claude-code/stats-v2')
+    if ((window as any).__cuiServerAlive !== true) return;
+    fetch('/api/claude-code/stats-v2', { signal: AbortSignal.timeout(12000) })
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (!data?.accounts) return;
-        setAccounts(data.accounts.filter((a: UsageAccount) => a.accountId !== 'local'));
+        const filtered = data.accounts.filter((a: UsageAccount) => a.accountId !== 'local');
+        setAccounts(filtered);
+        try { localStorage.setItem(USAGE_CACHE_KEY, JSON.stringify(filtered)); } catch { /* quota */ }
       })
-      .catch(() => {});
+      .catch(() => { /* server not ready or timeout — cached data stays visible */ });
   }, []);
 
   useEffect(() => {
@@ -154,7 +179,7 @@ function UsageBars() {
   if (accounts.length === 0) return null;
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginRight: 8 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginRight: 8, flexShrink: 0 }}>
       {accounts.map(acc => <UsagePill key={acc.accountId} account={acc} />)}
     </div>
   );
@@ -167,15 +192,22 @@ function SyncthingToggle() {
   const [toggling, setToggling] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval>>(null);
 
+  const syncUnavailableRef = useRef(false);
   const fetchStatus = useCallback(() => {
-    fetch('/api/syncthing/status')
-      .then(r => r.ok ? r.json() : null)
+    if ((window as any).__cuiServerAlive !== true) return;
+    if (syncUnavailableRef.current) return; // Syncthing not running — stop polling
+    fetch('/api/syncthing/status', { signal: AbortSignal.timeout(10000) })
+      .then(r => {
+        if (r.status === 502) { syncUnavailableRef.current = true; return null; } // Syncthing offline (evening-only)
+        if (!r.ok) return null;
+        return r.json();
+      })
       .then(data => {
         if (!data) return;
         setPaused(data.paused);
         if (data.lastSyncAt) setLastSync(data.lastSyncAt);
       })
-      .catch(() => setPaused(null));
+      .catch(() => { /* timeout on slow connections */ });
   }, []);
 
   useEffect(() => {
@@ -185,16 +217,18 @@ function SyncthingToggle() {
   }, [fetchStatus]);
 
   const toggle = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     if (toggling || paused === null) return;
     setToggling(true);
     try {
       const endpoint = paused ? '/api/syncthing/resume' : '/api/syncthing/pause';
-      const res = await fetch(endpoint, { method: 'POST' });
-      if (res.ok) {
-        const data = await res.json();
-        setPaused(data.paused);
-      }
-    } catch {}
+      const res = await fetch(endpoint, { method: 'POST', signal: AbortSignal.timeout(15000) });
+      if (!res.ok) throw new Error(`syncthing toggle ${res.status}`);
+      const data = await res.json();
+      setPaused(data.paused);
+    } catch (err) {
+      console.warn('[ProjectTabs] syncthingToggle:', err);
+    }
     setToggling(false);
   }, [paused, toggling]);
 
@@ -240,12 +274,13 @@ function SyncthingToggle() {
   );
 }
 
-export default memo(function ProjectTabs({ projects, activeId, attention, onSelect, onNew, onEdit, onDelete, missionActive, onMissionClick }: ProjectTabsProps) {
+export default memo(function ProjectTabs({ projects, activeId, attention, onSelect, onNew, onEdit, onDelete, missionActive, onMissionClick, allChatsActive, onAllChatsClick, isMobile }: ProjectTabsProps) {
   const [syncState, setSyncState] = useState<SyncState>('idle');
   const [syncDetail, setSyncDetail] = useState('');
   const [pendingCount, setPendingCount] = useState(0);
   const [allLive, setAllLive] = useState(false);
   const [panelHealth, setPanelHealth] = useState<{ running: number; total: number; missing: string[] } | null>(null);
+  const { user, authEnabled, logout } = useAuth();
 
   // Listen for update-available notifications via WebSocket (forwarded by App.tsx)
   useEffect(() => {
@@ -258,26 +293,32 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
       } catch { /* ignore */ }
     }
     window.addEventListener('message', handleMessage);
-    // Also check on mount
-    fetch('/api/cui-sync/pending').then(r => r.json()).then(d => {
-      if (d.count > 0) setPendingCount(d.count);
-    }).catch(() => {});
+    // Also check on mount (delayed to allow WS to connect first)
+    setTimeout(() => {
+      if ((window as any).__cuiServerAlive === false) return;
+      fetch('/api/cui-sync/pending', { signal: AbortSignal.timeout(10000) })
+        .then(r => { if (!r.ok) throw new Error(`cui-sync/pending ${r.status}`); return r.json(); })
+        .then(d => { if (d?.count > 0) setPendingCount(d.count); })
+        .catch((err) => { console.warn('[ProjectTabs] fetchPending:', err); });
+    }, 2000);
     return () => window.removeEventListener('message', handleMessage);
   }, []);
 
   const handleSync = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     if (syncState === 'syncing') return;
     setSyncState('syncing');
     setSyncDetail('Building...');
     try {
-      const resp = await fetch('/api/cui-sync', { method: 'POST' });
+      const resp = await fetch('/api/cui-sync', { method: 'POST', signal: AbortSignal.timeout(15000) });
       const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || 'Sync failed');
+      if (!resp.ok) throw new Error(data.error || `cui-sync ${resp.status}`);
       setSyncState('done');
       setSyncDetail(data.build || 'ok');
       setPendingCount(0);
       setTimeout(() => window.location.reload(), 3000);
     } catch (err: any) {
+      console.warn('[ProjectTabs] handleSync:', err);
       setSyncState('error');
       setSyncDetail(err.message.slice(0, 60));
       setTimeout(() => { setSyncState('idle'); setSyncDetail(''); }, 5000);
@@ -285,27 +326,28 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
   }, [syncState]);
 
   const checkPanelHealth = useCallback(async () => {
+    if ((window as any).__cuiServerAlive !== true) return;
     try {
-      const resp = await fetch('/api/panel-health');
+      const resp = await fetch('/api/panel-health', { signal: AbortSignal.timeout(12000) });
+      if (!resp.ok) return;
       const data = await resp.json();
       setPanelHealth({
         running: data.running,
         total: data.total,
         missing: data.panels.filter((p: any) => !p.running).map((p: any) => p.name)
       });
-    } catch {
-      setPanelHealth(null);
-    }
+    } catch { /* timeout on slow connections */ }
   }, []);
 
   const handleStartPanels = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     if (syncState === 'syncing') return;
     setSyncState('syncing');
     setSyncDetail('Starting panels...');
     try {
-      const resp = await fetch('/api/start-all-panels', { method: 'POST' });
+      const resp = await fetch('/api/start-all-panels', { method: 'POST', signal: AbortSignal.timeout(15000) });
       const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || 'Failed to start panels');
+      if (!resp.ok) throw new Error(data.error || `start-all-panels ${resp.status}`);
       setSyncState('done');
       setSyncDetail(data.message || 'Panels starting');
       // Re-check health after 10s
@@ -315,6 +357,7 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
         setSyncDetail('');
       }, 10000);
     } catch (err: any) {
+      console.warn('[ProjectTabs] handleStartPanels:', err);
       setSyncState('error');
       setSyncDetail(err.message.slice(0, 60));
       setTimeout(() => { setSyncState('idle'); setSyncDetail(''); }, 5000);
@@ -329,17 +372,30 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
   }, [checkPanelHealth]);
 
   const handleRebuild = useCallback(async () => {
+    if ((window as any).__cuiServerAlive === false) return;
     if (syncState === 'syncing') return;
     setSyncState('syncing');
     setSyncDetail('Rebuilding frontend...');
     try {
-      const resp = await fetch('/api/rebuild-frontend', { method: 'POST' });
+      // SECURITY: Include auth token (Herbert's Recommendation #2)
+      const rebuildToken = (window as any).CUI_REBUILD_TOKEN || '';
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (rebuildToken) {
+        headers['Authorization'] = `Bearer ${rebuildToken}`;
+      }
+
+      const resp = await fetch('/api/rebuild-frontend', {
+        method: 'POST',
+        headers,
+        signal: AbortSignal.timeout(15000)
+      });
       const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || 'Rebuild failed');
+      if (!resp.ok) throw new Error(data.error || `rebuild-frontend ${resp.status}`);
       setSyncState('done');
       setSyncDetail(data.detail || 'ok');
       setTimeout(() => window.location.reload(), 2000);
     } catch (err: any) {
+      console.warn('[ProjectTabs] handleRebuild:', err);
       setSyncState('error');
       setSyncDetail(err.message.slice(0, 60));
       setTimeout(() => { setSyncState('idle'); setSyncDetail(''); }, 5000);
@@ -355,18 +411,110 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
 
   const hasPending = pendingCount > 0 && syncState === 'idle';
 
+  // Sort projects: needs_attention first, then working, then idle, then no status
+  const sortedProjects = useMemo(() => {
+    const scoreFn = (p: Project) => {
+      const state = attention?.[p.id];
+      if (state === 'needs_attention') return 0; // highest priority (show first)
+      if (state === 'working') return 1;
+      if (state === 'idle') return 2;
+      return 3; // no status
+    };
+    return [...projects].sort((a, b) => scoreFn(a) - scoreFn(b));
+  }, [projects, attention]);
+
+  // --- Mobile: compact header with project dropdown ---
+  if (isMobile) {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '6px 12px',
+          background: 'var(--tn-bg-dark)',
+          borderBottom: '1px solid var(--tn-border)',
+          minHeight: 40,
+          flexShrink: 0,
+        }}
+      >
+        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--tn-blue)' }}>CUI</span>
+        <span
+          style={{
+            fontSize: 8,
+            fontWeight: 700,
+            color: '#1a1b26',
+            background: MODE_COLORS[CUI_MODE],
+            padding: '1px 5px',
+            borderRadius: 3,
+            textTransform: 'uppercase',
+            letterSpacing: '0.5px',
+          }}
+        >
+          {CUI_MODE}
+        </span>
+        <select
+          value={activeId}
+          onChange={(e) => onSelect(e.target.value)}
+          style={{
+            flex: 1,
+            background: 'var(--tn-surface)',
+            color: 'var(--tn-text)',
+            border: '1px solid var(--tn-border)',
+            borderRadius: 6,
+            padding: '5px 8px',
+            fontSize: 13,
+            minHeight: 32,
+          }}
+        >
+          {projects.map(p => (
+            <option key={p.id} value={p.id}>{p.name}</option>
+          ))}
+        </select>
+        {onAllChatsClick && (
+          <button
+            onClick={onAllChatsClick}
+            style={{
+              background: allChatsActive ? 'rgba(122,162,247,0.15)' : 'var(--tn-surface)',
+              color: allChatsActive ? 'var(--tn-blue)' : 'var(--tn-text-muted)',
+              border: `1px solid ${allChatsActive ? 'var(--tn-blue)' : 'var(--tn-border)'}`,
+              borderRadius: 6,
+              padding: '5px 10px',
+              fontSize: 12,
+              fontWeight: allChatsActive ? 700 : 500,
+              cursor: 'pointer',
+              minHeight: 32,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {allChatsActive ? 'X' : 'AC'}
+          </button>
+        )}
+      </div>
+    );
+  }
+
   return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        background: 'var(--tn-bg-dark)',
+        borderTop: `2px solid ${MODE_COLORS[CUI_MODE]}`,
+        borderBottom: '1px solid var(--tn-border)',
+        flexShrink: 0,
+      } as React.CSSProperties}
+    >
+    {/* Row 1: Project tabs */}
     <div
       style={{
         display: 'flex',
         alignItems: 'center',
         gap: 2,
-        padding: '0 8px 0 80px',
-        background: 'var(--tn-bg-dark)',
-        borderBottom: '1px solid var(--tn-border)',
-        height: 36,
-        flexShrink: 0,
+        padding: '2px 8px 2px 80px',
+        minHeight: 30,
         WebkitAppRegion: 'drag',
+        flexWrap: 'wrap',
       } as React.CSSProperties}
     >
       <span
@@ -374,11 +522,31 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
           fontSize: 13,
           fontWeight: 600,
           color: 'var(--tn-blue)',
-          marginRight: 12,
+          marginRight: 4,
           whiteSpace: 'nowrap',
         }}
       >
-        CUI Workspace
+        CUI
+      </span>
+      <span
+        title={CUI_MODE === 'local'
+          ? 'LOCAL MODE\n\nProjekte: ~/.cui/local-data/projects/\nLayouts: ~/.cui/local-data/layouts/\nWorkspaces: ~/Projects/{id}\nChats: Remote (CUI Binary)'
+          : 'REMOTE MODE\n\nProjekte: data/projects/\nLayouts: data/layouts/\nWorkspaces: /root/orchestrator/workspaces/\nChats: /home/claude-user/.cui-account{1-4}/'}
+        style={{
+          fontSize: 10,
+          fontWeight: 700,
+          color: '#1a1b26',
+          background: MODE_COLORS[CUI_MODE],
+          padding: '1px 6px',
+          borderRadius: 4,
+          marginRight: 12,
+          textTransform: 'uppercase',
+          letterSpacing: '0.5px',
+          whiteSpace: 'nowrap',
+          cursor: 'help',
+        }}
+      >
+        {CUI_MODE}
       </span>
 
       {/* Mission Control - permanent tab */}
@@ -412,44 +580,102 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
         </div>
       )}
 
-      <div style={{ width: 1, height: 16, background: 'var(--tn-border)', marginRight: 4, opacity: 0.4 }} />
-
-      {projects.map((p, idx) => (
+      {/* All Chats - permanent tab */}
+      {onAllChatsClick && (
         <div
-          key={p.id}
           style={{
             display: 'flex',
             alignItems: 'center',
-            background: p.id === activeId ? 'var(--tn-surface)' : 'transparent',
-            borderBottom: p.id === activeId ? '2px solid var(--tn-blue)' : '2px solid transparent',
+            background: allChatsActive ? 'var(--tn-surface)' : 'transparent',
+            borderBottom: allChatsActive ? '2px solid #7aa2f7' : '2px solid transparent',
+            borderRadius: '4px 4px 0 0',
+            marginRight: 4,
+          }}
+        >
+          <button
+            onClick={onAllChatsClick}
+            title="All Chats (Cmd+`)"
+            style={{
+              background: 'none',
+              color: allChatsActive ? '#7aa2f7' : 'var(--tn-text-muted)',
+              border: 'none',
+              padding: '6px 12px',
+              fontSize: 12,
+              cursor: 'pointer',
+              fontWeight: allChatsActive ? 700 : 400,
+              WebkitAppRegion: 'no-drag',
+            } as React.CSSProperties}
+          >
+            AC
+          </button>
+        </div>
+      )}
+
+      <div style={{ width: 1, height: 16, background: 'var(--tn-border)', marginRight: 4, opacity: 0.4, flexShrink: 0 }} />
+
+      {/* Project tabs — wrap to multiple rows */}
+      <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', minWidth: 0, flex: '1 1 0', gap: 1 }}>
+      {sortedProjects.map((p) => {
+        const origIdx = projects.indexOf(p);
+        return (
+        <div
+          key={p.id}
+          ref={p.id === activeId ? (el) => { el?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } : undefined}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            background: attention?.[p.id] === 'needs_attention'
+              ? 'rgba(255, 158, 100, 0.25)'
+              : attention?.[p.id] === 'working'
+                ? 'rgba(158, 206, 106, 0.18)'
+                : p.id === activeId ? 'var(--tn-surface)' : 'transparent',
+            borderBottom: attention?.[p.id] === 'needs_attention'
+              ? '3px solid #ff9e64'
+              : attention?.[p.id] === 'working'
+                ? '3px solid #9ece6a'
+                : p.id === activeId ? '2px solid var(--tn-blue)' : '2px solid transparent',
             borderRadius: '4px 4px 0 0',
             transition: 'all 0.15s',
+            flexShrink: 0,
           }}
         >
           <button
             onClick={() => onSelect(p.id)}
             onDoubleClick={(e) => { e.preventDefault(); onEdit(p.id); }}
-            title={`${p.name} — ${p.workDir}\nDoppelklick zum Bearbeiten${idx < 9 ? `\nCmd+${idx + 1}` : ''}`}
+            title={`${p.name} — ${p.workDir}\nDoppelklick zum Bearbeiten${origIdx < 9 ? `\nCmd+${origIdx + 1}` : ''}`}
             style={{
               background: 'none',
               color: p.id === activeId ? 'var(--tn-text)' : 'var(--tn-text-muted)',
               border: 'none',
-              padding: '6px 10px 6px 14px',
-              fontSize: 12,
+              padding: '4px 8px 4px 10px',
+              fontSize: 11,
               cursor: 'pointer',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
               WebkitAppRegion: 'no-drag',
             } as React.CSSProperties}
           >
-            {attention?.has(p.id) && p.id !== activeId && (
+            {attention?.[p.id] && p.id !== activeId && (
               <span style={{
-                width: 6, height: 6, borderRadius: '50%',
-                background: '#e0af68',
+                width: 7, height: 7, borderRadius: '50%',
+                background: attention[p.id] === 'needs_attention' ? '#ff9e64'
+                  : attention[p.id] === 'working' ? '#9ece6a'
+                  : '#565f89',
+                boxShadow: attention[p.id] === 'needs_attention'
+                  ? '0 0 8px #ff9e64aa, 0 0 3px #ff9e64'
+                  : attention[p.id] === 'working'
+                  ? '0 0 6px #9ece6a88'
+                  : 'none',
                 display: 'inline-block', marginRight: 5, flexShrink: 0,
+                animation: attention[p.id] === 'needs_attention' ? 'pulse-attention 0.8s ease-in-out infinite'
+                  : attention[p.id] === 'working' ? 'pulse 1.5s ease-in-out infinite'
+                  : 'none',
               }} />
             )}
-            {idx < 9 && (
+            {origIdx < 9 && (
               <span style={{ fontSize: 9, opacity: 0.4, marginRight: 4, fontFamily: 'monospace' }}>
-                {idx + 1}
+                {origIdx + 1}
               </span>
             )}
             {p.name}
@@ -479,7 +705,8 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
             </button>
           )}
         </div>
-      ))}
+        );
+      })}
 
       <button
         onClick={onNew}
@@ -493,108 +720,99 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
           cursor: 'pointer',
           borderRadius: 4,
           marginLeft: 4,
+          flexShrink: 0,
           WebkitAppRegion: 'no-drag',
         } as React.CSSProperties}
       >
         + Projekt
       </button>
+      </div>{/* end project tabs scrollable area */}
 
-      {/* Spacer */}
-      <div style={{ flex: 1 }} />
+    </div>{/* end Row 1 */}
 
-      {/* Account Usage Bars */}
+    {/* Row 2: Account usage pills + toolbar */}
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '2px 8px',
+        borderTop: '1px solid rgba(255,255,255,0.04)',
+        flexWrap: 'wrap',
+        WebkitAppRegion: 'no-drag',
+      } as React.CSSProperties}
+    >
+      {/* Account Usage Bars — always first, always visible */}
       <UsageBars />
 
-      {/* Syncthing toggle */}
+      {/* Divider */}
+      <div style={{ width: 1, height: 14, background: 'var(--tn-border)', opacity: 0.3 }} />
+
+      {/* Toolbar buttons */}
       <SyncthingToggle />
 
-      {/* All Live toggle - switches all visible chats to 2s polling */}
       <button
         onClick={() => {
           const newState = !allLive;
           setAllLive(newState);
           window.dispatchEvent(new CustomEvent('cui-all-live', { detail: { live: newState } }));
         }}
-        title={allLive ? 'Live-Modus fuer alle Chats aus (zurueck zu 15s)' : 'Live-Modus fuer alle Chats an (2s Polling)'}
+        title={allLive ? 'Live-Modus aus (Static: WS Events only)' : 'Live-Modus fuer alle Chats (Echtzeit-Streaming)'}
         style={{
-          background: allLive ? 'rgba(239,68,68,0.15)' : 'none',
-          border: `1px solid ${allLive ? '#EF4444' : 'var(--tn-border)'}`,
-          color: allLive ? '#EF4444' : 'var(--tn-text-muted)',
-          padding: '3px 10px',
-          fontSize: 10,
+          background: allLive ? 'rgba(168,85,247,0.15)' : 'none',
+          border: `1px solid ${allLive ? '#A855F7' : 'var(--tn-border)'}`,
+          color: allLive ? '#A855F7' : 'var(--tn-text-muted)',
+          padding: '2px 6px',
+          fontSize: 9,
           fontWeight: allLive ? 700 : 400,
           cursor: 'pointer',
-          borderRadius: 4,
-          WebkitAppRegion: 'no-drag',
+          borderRadius: 3,
           whiteSpace: 'nowrap',
-          transition: 'all 0.2s',
-          marginRight: 6,
         } as React.CSSProperties}
       >
-        {allLive ? '● Live' : '○ Live'}
+        {allLive ? '\u25CF Live' : '\u23F8 Static'}
       </button>
 
-      {/* Panel Health Indicator + Start Button */}
       {panelHealth && panelHealth.missing.length > 0 && (
-        <>
-          <button
-            onClick={handleStartPanels}
-            disabled={syncState === 'syncing'}
-            title={`${panelHealth.missing.length} panel(s) offline:\n${panelHealth.missing.join('\n')}\n\nClick to start all missing panels`}
-            style={{
-              background: 'rgba(239,68,68,0.15)',
-              border: '1px solid #EF4444',
-              color: '#EF4444',
-              padding: '3px 10px',
-              fontSize: 10,
-              fontWeight: 600,
-              cursor: syncState === 'syncing' ? 'wait' : 'pointer',
-              borderRadius: 4,
-              WebkitAppRegion: 'no-drag',
-              whiteSpace: 'nowrap',
-              transition: 'all 0.2s',
-              marginRight: 6,
-            } as React.CSSProperties}
-          >
-            ▶ Start {panelHealth.missing.length} Panel{panelHealth.missing.length > 1 ? 's' : ''}
-          </button>
-          <div
-            style={{
-              fontSize: 10,
-              color: 'var(--tn-text-muted)',
-              marginRight: 6,
-              opacity: 0.6
-            }}
-          >
-            ({panelHealth.running}/{panelHealth.total} online)
-          </div>
-        </>
+        <button
+          onClick={handleStartPanels}
+          disabled={syncState === 'syncing'}
+          title={`${panelHealth.missing.length} panel(s) offline:\n${panelHealth.missing.join('\n')}\n\nClick to start all missing panels`}
+          style={{
+            background: 'rgba(239,68,68,0.15)',
+            border: '1px solid #EF4444',
+            color: '#EF4444',
+            padding: '2px 6px',
+            fontSize: 9,
+            fontWeight: 600,
+            cursor: syncState === 'syncing' ? 'wait' : 'pointer',
+            borderRadius: 3,
+            whiteSpace: 'nowrap',
+          } as React.CSSProperties}
+        >
+          {panelHealth.missing.length}P offline
+        </button>
       )}
 
-      {/* Rebuild button - triggers frontend rebuild only */}
       <button
         onClick={handleRebuild}
         disabled={syncState === 'syncing'}
-        title="Rebuild CUI frontend (npm run build + restart server)\n\nNote: This only rebuilds CUI, not panel backends"
+        title="Rebuild CUI frontend (npm run build + restart server)"
         style={{
           background: 'none',
           border: '1px solid var(--tn-border)',
           color: 'var(--tn-text-muted)',
-          padding: '3px 10px',
-          fontSize: 10,
+          padding: '2px 6px',
+          fontSize: 9,
           fontWeight: 600,
           cursor: syncState === 'syncing' ? 'wait' : 'pointer',
-          borderRadius: 4,
-          WebkitAppRegion: 'no-drag',
+          borderRadius: 3,
           whiteSpace: 'nowrap',
-          transition: 'all 0.2s',
-          marginRight: 6,
         } as React.CSSProperties}
       >
-        🔨 Rebuild
+        Rebuild
       </button>
 
-      {/* Nuclear cache refresh - clears all browser caches and reloads everything */}
       <button
         onClick={async () => {
           if ('serviceWorker' in navigator) {
@@ -619,21 +837,17 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
           background: 'none',
           border: '1px solid var(--tn-border)',
           color: 'var(--tn-text-muted)',
-          padding: '3px 10px',
-          fontSize: 10,
+          padding: '2px 6px',
+          fontSize: 9,
           fontWeight: 600,
           cursor: 'pointer',
-          borderRadius: 4,
-          WebkitAppRegion: 'no-drag',
+          borderRadius: 3,
           whiteSpace: 'nowrap',
-          transition: 'all 0.2s',
-          marginRight: 6,
         } as React.CSSProperties}
       >
-        ☢ Cache
+        Cache
       </button>
 
-      {/* Sync button - shows update badge when changes detected */}
       <button
         onClick={handleSync}
         disabled={syncState === 'syncing'}
@@ -647,15 +861,12 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
           background: hasPending ? 'rgba(224,175,104,0.15)' : syncState === 'syncing' ? 'rgba(59,130,246,0.15)' : 'none',
           border: `1px solid ${hasPending ? '#e0af68' : syncState === 'idle' ? 'var(--tn-border)' : syncColors[syncState]}`,
           color: hasPending ? '#e0af68' : syncColors[syncState],
-          padding: '3px 10px',
-          fontSize: 10,
+          padding: '2px 6px',
+          fontSize: 9,
           fontWeight: 600,
           cursor: syncState === 'syncing' ? 'wait' : 'pointer',
-          borderRadius: 4,
-          WebkitAppRegion: 'no-drag',
+          borderRadius: 3,
           whiteSpace: 'nowrap',
-          transition: 'all 0.2s',
-          position: 'relative',
         } as React.CSSProperties}
       >
         {syncState === 'idle' && !hasPending && 'Sync'}
@@ -665,15 +876,72 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
         {syncState === 'error' && 'Sync Error'}
       </button>
 
-      {/* Sync detail tooltip */}
       {syncDetail && syncState !== 'idle' && (
-        <span style={{
-          fontSize: 9, color: syncColors[syncState], maxWidth: 150,
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>
-          {syncDetail}
-        </span>
+        <span style={{ fontSize: 8, color: syncColors[syncState] }}>{syncDetail}</span>
       )}
+
+      <button
+        onClick={() => {
+          // Clear flexlayout cache for active project so auto-layout starts fresh
+          Object.keys(localStorage).forEach(k => {
+            if (k.startsWith('cui-layout-')) localStorage.removeItem(k);
+          });
+          // Dispatch manual auto-layout trigger to LayoutManager
+          window.dispatchEvent(new CustomEvent('cui-auto-layout', { detail: { projectId: activeId } }));
+        }}
+        title="Layout automatisch anordnen (löscht Layout-Cache + ordnet Panels neu an)"
+        style={{
+          background: 'none',
+          border: '1px solid var(--tn-border)',
+          color: 'var(--tn-text-muted)',
+          padding: '2px 6px',
+          fontSize: 9,
+          fontWeight: 600,
+          cursor: 'pointer',
+          borderRadius: 3,
+          whiteSpace: 'nowrap',
+        } as React.CSSProperties}
+      >
+        Layout
+      </button>
+
+      {/* Spacer */}
+      <div style={{ flex: 1 }} />
+
+      {/* User badge + logout (only when auth enabled) */}
+      {authEnabled && user && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 4,
+          padding: '2px 6px',
+          background: 'rgba(122,162,247,0.1)',
+          border: '1px solid rgba(122,162,247,0.3)',
+          borderRadius: 3,
+          fontSize: 9,
+          color: '#7aa2f7',
+          whiteSpace: 'nowrap',
+        }}>
+          <span style={{ fontWeight: 600 }}>{user.name}</span>
+          <button
+            onClick={() => logout()}
+            title="Abmelden"
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#f7768e',
+              cursor: 'pointer',
+              padding: '0 2px',
+              fontSize: 9,
+              fontWeight: 600,
+              lineHeight: 1,
+            }}
+          >
+            X
+          </button>
+        </div>
+      )}
+    </div>
     </div>
   );
 });

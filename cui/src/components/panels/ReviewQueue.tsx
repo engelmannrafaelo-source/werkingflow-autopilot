@@ -52,20 +52,22 @@ export default function ReviewQueue() {
   }
 
   async function loadReviews() {
+    if ((window as any).__cuiServerAlive === false) return;
     try {
       setLoading(true);
-      const response = await fetch(`${API}/team/reviews`);
+      const response = await fetch(`${API}/team/reviews`, { signal: AbortSignal.timeout(20000) });
       if (!response.ok) throw new Error('Failed to load reviews');
       const data = await response.json();
       setReviews(data);
     } catch (err: any) {
-      console.error('[ReviewQueue] Load error:', err);
+      console.warn('[ReviewQueue] load reviews:', err);
     } finally {
       setLoading(false);
     }
   }
 
   async function approveReview(id: string) {
+    if ((window as any).__cuiServerAlive === false) return;
     if (!confirm('Approve this document edit? This will write the file and create a git commit.')) {
       return;
     }
@@ -73,7 +75,8 @@ export default function ReviewQueue() {
     try {
       setProcessing(true);
       const response = await fetch(`${API}/team/reviews/${id}/approve`, {
-        method: 'POST'
+        method: 'POST',
+        signal: AbortSignal.timeout(15000),
       });
 
       if (!response.ok) {
@@ -84,7 +87,7 @@ export default function ReviewQueue() {
       // Success - list will auto-update via WebSocket
       setSelectedReview(null);
     } catch (err: any) {
-      console.error('[ReviewQueue] Approve error:', err);
+      console.warn('[ReviewQueue] approve:', err);
       alert(`Error approving review: ${err.message}`);
     } finally {
       setProcessing(false);
@@ -92,6 +95,7 @@ export default function ReviewQueue() {
   }
 
   async function rejectReview(id: string) {
+    if ((window as any).__cuiServerAlive === false) return;
     if (!confirm('Reject this document edit? This cannot be undone.')) {
       return;
     }
@@ -99,7 +103,8 @@ export default function ReviewQueue() {
     try {
       setProcessing(true);
       const response = await fetch(`${API}/team/reviews/${id}/reject`, {
-        method: 'POST'
+        method: 'POST',
+        signal: AbortSignal.timeout(15000),
       });
 
       if (!response.ok) {
@@ -110,7 +115,7 @@ export default function ReviewQueue() {
       // Success - list will auto-update via WebSocket
       setSelectedReview(null);
     } catch (err: any) {
-      console.error('[ReviewQueue] Reject error:', err);
+      console.warn('[ReviewQueue] reject:', err);
       alert(`Error rejecting review: ${err.message}`);
     } finally {
       setProcessing(false);
