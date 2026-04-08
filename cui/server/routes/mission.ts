@@ -214,6 +214,83 @@ export function initMissionRouter(deps: MissionDeps) {
     await injectSubSessionResult(sessionId, parentSessionId);
   });
 
+  // Rate-limit auto-account-switch: when a session hits rate_limit,
+  // automatically switch to the least-loaded account and respawn.
+  const RATE_LIMIT_SWITCH_DELAY_MS = 5_000; // Wait 5s before switching (debounce)
+  const _rateLimitSwitchPending = new Set<string>(); // Prevent double-switch
+
+  onSessionStateChange(async (sessionId, state, reason) => {
+    if (reason !== 'rate_limit' && reason !== 'overloaded') return;
+    if (_rateLimitSwitchPending.has(sessionId)) return;
+    // Don't auto-switch finished or sub-sessions (sub-sessions are managed by parent)
+    if (convMeta.isFinished(sessionId) || convMeta.isSubSession(sessionId)) return;
+
+    _rateLimitSwitchPending.add(sessionId);
+    console.log(`[AutoSwitch] ${sessionId.slice(0, 8)}: rate-limited, checking for better account in ${RATE_LIMIT_SWITCH_DELAY_MS / 1000}s...`);
+
+    setTimeout(async () => {
+      try {
+        // Re-check: still rate-limited?
+        const currentState = getSessionStates()[sessionId];
+        if (currentState?.reason !== 'rate_limit' && currentState?.reason !== 'overloaded') {
+          console.log(`[AutoSwitch] ${sessionId.slice(0, 8)}: no longer rate-limited, skipping switch`);
+          return;
+        }
+
+        const currentAccountId = convMeta.getAssignment(sessionId) || currentState?.accountId || '';
+
+        // Find best available account
+        let bestAccount = '';
+        try {
+          const resp = await fetch(`http://localhost:${process.env.PORT || 4005}/api/claude-code/best-account`, { signal: AbortSignal.timeout(3000) });
+          if (resp.ok) {
+            const data = await resp.json() as any;
+            const accounts = data.accounts || [];
+            // Pick best account that is available AND not the current one
+            const better = accounts.find((a: any) => a.available && a.accountId !== currentAccountId);
+            if (better) bestAccount = better.accountId;
+          }
+        } catch { /* best-account API failed, skip */ }
+
+        if (!bestAccount) {
+          console.log(`[AutoSwitch] ${sessionId.slice(0, 8)}: no better account available (all critical or same), waiting for rate-limit to expire`);
+          broadcast({ type: 'conv-rate-limit-no-switch', sessionId, currentAccountId, reason: 'no available account' });
+          return;
+        }
+
+        console.log(`[AutoSwitch] ${sessionId.slice(0, 8)}: switching ${currentAccountId} → ${bestAccount}`);
+
+        // Stop current process
+        await claudeCli.stopConversation(sessionId);
+
+        // Ensure JSONL accessible from new account
+        ensureJsonlForAccount(sessionId, bestAccount);
+
+        // Update metadata
+        convMeta.saveAssignment(sessionId, bestAccount);
+
+        // Respawn under new account
+        const workDir = convMeta.getWorkDir(sessionId) || '';
+        const model = convMeta.getModel(sessionId) || '';
+        const result = await claudeCli.startConversation(bestAccount, 'continue', workDir, sessionId, model);
+
+        if (result.ok) {
+          console.log(`[AutoSwitch] ${sessionId.slice(0, 8)}: switched to ${bestAccount} successfully`);
+          broadcast({ type: 'conv-account-switched', sessionId, fromAccount: currentAccountId, toAccount: bestAccount, reason: 'rate_limit' });
+          invalidateConvCache();
+        } else {
+          console.warn(`[AutoSwitch] ${sessionId.slice(0, 8)}: respawn under ${bestAccount} failed: ${result.error}`);
+          // Restore original assignment
+          convMeta.saveAssignment(sessionId, currentAccountId);
+        }
+      } catch (err) {
+        console.warn(`[AutoSwitch] Error for ${sessionId.slice(0, 8)}:`, (err as Error).message);
+      } finally {
+        _rateLimitSwitchPending.delete(sessionId);
+      }
+    }, RATE_LIMIT_SWITCH_DELAY_MS);
+  });
+
   // Sub-session progress polling: periodically check running sub-sessions
   // and notify parent sessions with a brief status update.
   const SUB_PROGRESS_INTERVAL_MS = 60_000;
