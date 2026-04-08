@@ -197,8 +197,13 @@ export default function ScenariosTab() {
 
 function StatusBadge({ status }: { status: string }) {
   const colors: Record<string, { bg: string; text: string; label: string }> = {
+    PASS: { bg: 'rgba(158, 206, 106, 0.15)', text: 'var(--tn-green)', label: '✓' },
     passed: { bg: 'rgba(158, 206, 106, 0.15)', text: 'var(--tn-green)', label: '✓' },
+    FAIL: { bg: 'rgba(236, 72, 153, 0.15)', text: 'var(--tn-red)', label: '✗' },
+    ERROR: { bg: 'rgba(236, 72, 153, 0.15)', text: 'var(--tn-red)', label: '✗' },
     failed: { bg: 'rgba(236, 72, 153, 0.15)', text: 'var(--tn-red)', label: '✗' },
+    PARTIAL: { bg: 'rgba(224, 175, 104, 0.15)', text: 'var(--tn-orange)', label: '~' },
+    PENDING: { bg: 'rgba(150, 150, 150, 0.15)', text: 'var(--tn-text-muted)', label: '—' },
     running: { bg: 'rgba(122, 162, 247, 0.15)', text: 'var(--tn-blue)', label: '↻' },
     'never-run': { bg: 'rgba(150, 150, 150, 0.15)', text: 'var(--tn-text-muted)', label: '—' },
     unknown: { bg: 'rgba(150, 150, 150, 0.15)', text: 'var(--tn-text-muted)', label: '?' }
