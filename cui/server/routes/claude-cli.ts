@@ -16,7 +16,7 @@ import { promises as fsp, createReadStream, existsSync, readFileSync, writeSync 
 import { createInterface } from 'readline';
 import type { ConvAttentionState, AttentionReason, SessionState, ToolExecutionInfo } from './shared/types.js';
 import { IS_LOCAL_MODE, getRestoredWorkingSessions } from './state.js';
-import { hasIncompleteToolUse, getOriginalCwd, diagnoseSessionHealth } from './shared/jsonl.js';
+import { hasIncompleteToolUse, getOriginalCwd } from './shared/jsonl.js';
 
 // --- Account Configuration ---
 // Account mapping (ID = label = consistent):
@@ -119,8 +119,7 @@ export function initClaudeCli(deps: {
   if (!IS_LOCAL_MODE) {
     reconnectExistingSessions()
       .then(() => {
-        console.log('[ClaudeCLI] Reconnect done. Orphan cleanup scheduled in 30s (grace period).');
-        setTimeout(() => cleanupOrphanProcesses(), 30_000);
+        console.log('[ClaudeCLI] Reconnect done. Sessions re-attached from OS processes.');
         // Auto-continue sessions that were working when server went down
         // Delay to allow JSONL files to be accessible after reconnect
         setTimeout(() => checkRestoredSessionsAutoContinue(), 5_000);
@@ -135,11 +134,8 @@ export function initClaudeCli(deps: {
   // Start heartbeat for tool execution tracking
   startToolHeartbeat();
 
-  // Start stale state reconciliation (detects stuck "working" sessions)
+  // Start stale state reconciliation (detects stuck "working" state when process is dead)
   startStaleStateReconciliation();
-
-  // Start auto-recovery monitor (rate-limit switch + dead-session restart)
-  startAutoRecoveryMonitor();
 }
 
 // --- Tool Execution Heartbeat ---
@@ -525,14 +521,11 @@ export async function startConversation(
     _autoContinueCount.delete(resumeSessionId);
   }
 
-  // Kill ALL existing processes for this session (in-memory AND OS-level orphans)
-  if (resumeSessionId) {
-    if (activeProcesses.has(resumeSessionId)) {
-      console.log(`[ClaudeCLI] Killing existing process for session ${resumeSessionId.slice(0, 8)} before resume (in-memory)`);
-      await stopConversation(resumeSessionId);
-    }
-    // Also kill any OS-level orphans not tracked in activeProcesses (e.g. after server restart)
-    await killExistingOsProcesses(resumeSessionId);
+  // If we already track this session in-memory, stop it before re-spawning.
+  // We do NOT kill OS-level processes we don't track — they may have background tasks.
+  if (resumeSessionId && activeProcesses.has(resumeSessionId)) {
+    console.log(`[ClaudeCLI] Detaching existing tracked process for session ${resumeSessionId.slice(0, 8)} before resume`);
+    await stopConversation(resumeSessionId);
   }
 
   // Build CLI args
@@ -865,252 +858,13 @@ function startStaleStateReconciliation() {
   }, 30000); // Every 30 seconds
 }
 
-// --- Auto-Restart + Auto-Account-Switch Monitor ---
-// Periodically checks for sessions that:
-// 1. Are rate-limited → switch to a less-loaded account and restart
-// 2. Died mid-task (not finished, process dead) → restart on same or different account
+// Auto-recovery REMOVED: CUI is a view layer, not a session manager.
+// Sessions are only started/stopped manually. No automatic killing or restarting.
 
-let _autoRecoveryInterval: ReturnType<typeof setInterval> | null = null;
-const AUTO_RECOVERY_INTERVAL_MS = 60_000; // Check every 60s
-const _recoveryAttempts = new Map<string, number>();
-const MAX_RECOVERY_ATTEMPTS = 3;
+// killExistingOsProcesses REMOVED: CUI never kills processes automatically.
+// killOrphanedClaudeProcesses REMOVED: Only manual kill via UI/API.
 
-function startAutoRecoveryMonitor() {
-  if (_autoRecoveryInterval) return;
-  if (IS_LOCAL_MODE) return; // Only on remote
-
-  _autoRecoveryInterval = setInterval(async () => {
-    try {
-      await runAutoRecovery();
-    } catch (err) {
-      console.warn('[AutoRecovery] Error:', err instanceof Error ? err.message : err);
-    }
-  }, AUTO_RECOVERY_INTERVAL_MS);
-  console.log('[AutoRecovery] Monitor started (every 60s)');
-}
-
-async function runAutoRecovery(): Promise<void> {
-  // Load finished sessions to exclude them
-  let finishedSessions: Record<string, boolean> = {};
-  try {
-    const resp = await fetch(`http://localhost:${process.env.PORT || 4005}/api/mission/conversations?fresh=true`, { signal: AbortSignal.timeout(5000) });
-    if (resp.ok) {
-      const data = await resp.json() as any;
-      for (const c of (data.conversations || [])) {
-        if (c.manualFinished) finishedSessions[c.sessionId] = true;
-      }
-    }
-  } catch { /* use empty */ }
-
-  // Find sessions that need recovery
-  const candidates: Array<{ sessionId: string; accountId: string; reason: string; details: string }> = [];
-
-  for (const [key, state] of _sessionStates) {
-    const sid = state.sessionId || key;
-    if (finishedSessions[sid]) continue; // Skip finished sessions
-    const isProcessAlive = activeProcesses.has(sid);
-
-    // Case 1: State already flagged as rate_limit or overloaded
-    if (state.reason === 'rate_limit' || state.reason === 'overloaded') {
-      candidates.push({ sessionId: sid, accountId: state.accountId, reason: state.reason, details: `state.reason=${state.reason}` });
-      continue;
-    }
-
-    // Case 2: Process dead + not finished → deep JSONL diagnosis
-    if (!isProcessAlive && state.state === 'idle') {
-      const diagnosis = diagnoseSessionHealth(sid);
-      if (diagnosis.needsRecovery) {
-        console.log(`[AutoRecovery] ${sid.slice(0, 8)}: JSONL diagnosis → ${diagnosis.reason}: ${diagnosis.details}`);
-        candidates.push({ sessionId: sid, accountId: state.accountId, reason: diagnosis.reason, details: diagnosis.details });
-      }
-    }
-  }
-
-  if (candidates.length === 0) return;
-
-  // Fetch best account info
-  let bestAccountId = 'werking';
-  let accountStatuses: Record<string, string> = {};
-  try {
-    const resp = await fetch(`http://localhost:${process.env.PORT || 4005}/api/claude-code/best-account`, { signal: AbortSignal.timeout(3000) });
-    if (resp.ok) {
-      const data = await resp.json() as any;
-      bestAccountId = data.bestAccount || 'werking';
-      for (const a of (data.accounts || [])) {
-        accountStatuses[a.accountId] = a.status;
-      }
-    }
-  } catch { /* use defaults */ }
-
-  for (const { sessionId, accountId, reason, details } of candidates) {
-    const attempts = (_recoveryAttempts.get(sessionId) || 0) + 1;
-    if (attempts > MAX_RECOVERY_ATTEMPTS) {
-      if (attempts === MAX_RECOVERY_ATTEMPTS + 1) {
-        console.log(`[AutoRecovery] ${sessionId.slice(0, 8)}: max attempts (${MAX_RECOVERY_ATTEMPTS}) reached, giving up`);
-        _recoveryAttempts.set(sessionId, attempts); // prevent further logging
-      }
-      continue;
-    }
-    _recoveryAttempts.set(sessionId, attempts);
-
-    // Determine target account
-    let targetAccount = accountId;
-    if (reason === 'rate_limit' || reason === 'overloaded') {
-      // Switch to best available account
-      if (accountStatuses[accountId] === 'critical' || reason === 'overloaded') {
-        targetAccount = bestAccountId;
-        console.log(`[AutoRecovery] ${sessionId.slice(0, 8)}: ${reason} on ${accountId} → switching to ${targetAccount} (attempt ${attempts}/${MAX_RECOVERY_ATTEMPTS})`);
-      } else {
-        console.log(`[AutoRecovery] ${sessionId.slice(0, 8)}: ${reason} on ${accountId}, retrying same (attempt ${attempts}/${MAX_RECOVERY_ATTEMPTS})`);
-      }
-    } else {
-      console.log(`[AutoRecovery] ${sessionId.slice(0, 8)}: ${reason} (${details}), restarting on ${accountId} (attempt ${attempts}/${MAX_RECOVERY_ATTEMPTS})`);
-    }
-
-    // If switching accounts, update the assignment
-    if (targetAccount !== accountId) {
-      try {
-        const assignResp = await fetch(`http://localhost:${process.env.PORT || 4005}/api/mission/conversation/${sessionId}/assign`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ accountId: targetAccount }),
-          signal: AbortSignal.timeout(5000),
-        });
-        if (!assignResp.ok) {
-          console.warn(`[AutoRecovery] ${sessionId.slice(0, 8)}: account assign failed`);
-          continue;
-        }
-      } catch (err) {
-        console.warn(`[AutoRecovery] ${sessionId.slice(0, 8)}: account assign error:`, err instanceof Error ? err.message : err);
-        continue;
-      }
-    }
-
-    // Restart the session
-    const workDir = getOriginalCwd(sessionId) || '/root/orchestrator/workspaces/diverse';
-    _setSessionState(sessionId, targetAccount, 'working', undefined, sessionId);
-    _broadcast({ type: 'cui-state', cuiId: targetAccount, sessionId, state: 'processing' });
-    _broadcast({ type: 'auto-recovery', sessionId, accountId: targetAccount, reason, attempt: attempts });
-
-    try {
-      const res = await startConversation(targetAccount, '', workDir, sessionId);
-      if (!res.ok) {
-        console.error(`[AutoRecovery] ${sessionId.slice(0, 8)}: restart failed: ${res.error}`);
-        _setSessionState(sessionId, targetAccount, 'idle', 'done', sessionId);
-        _broadcast({ type: 'cui-state', cuiId: targetAccount, sessionId, state: 'done' });
-      } else {
-        console.log(`[AutoRecovery] ${sessionId.slice(0, 8)}: restarted successfully on ${targetAccount}`);
-      }
-    } catch (err) {
-      console.error(`[AutoRecovery] ${sessionId.slice(0, 8)}: restart error:`, err instanceof Error ? err.message : err);
-      _setSessionState(sessionId, targetAccount, 'idle', 'done', sessionId);
-    }
-  }
-}
-
-/**
- * Kill ALL OS-level processes for a given sessionId.
- * Finds cui-session-wrapper and claude processes by grepping the process table.
- * This is the nuclear option — used before spawning to prevent duplicate wrappers.
- */
-async function killExistingOsProcesses(sessionId: string): Promise<number> {
-  try {
-    // Find all wrapper PIDs for this session
-    const result = execSync(
-      `ps -eo pid,args 2>/dev/null | grep "cui-session-wrapper ${sessionId}" | grep -v grep | awk '{print $1}' || true`,
-      { encoding: 'utf8', timeout: 5000 }
-    ).trim();
-
-    const wrapperPids = result.split('\n').filter(Boolean).map(Number).filter(p => p > 0);
-    if (wrapperPids.length === 0) return 0;
-
-    let killed = 0;
-    for (const wpid of wrapperPids) {
-      // Kill entire process tree (wrapper + claude child + tail children)
-      try {
-        const tree = execSync(
-          `pstree -p ${wpid} 2>/dev/null | grep -oP '\\(\\K[0-9]+(?=\\))' || true`,
-          { encoding: 'utf8', timeout: 3000 }
-        ).trim();
-        const allPids = tree.split('\n').filter(Boolean).map(Number).filter(p => p > 0);
-        if (allPids.length > 0) {
-          execSync(`kill -9 ${allPids.join(' ')} 2>/dev/null || true`, { timeout: 3000 });
-          killed += allPids.length;
-        }
-      } catch {
-        // pstree failed, kill wrapper directly
-        try { process.kill(wpid, 'SIGKILL'); killed++; } catch { /* already dead */ }
-      }
-    }
-
-    if (killed > 0) {
-      console.log(`[ClaudeCLI] killExistingOsProcesses(${sessionId.slice(0, 8)}): killed ${killed} processes (${wrapperPids.length} wrappers)`);
-    }
-    return killed;
-  } catch (err) {
-    console.warn(`[ClaudeCLI] killExistingOsProcesses error:`, err instanceof Error ? err.message : err);
-    return 0;
-  }
-}
-
-/**
- * Kill ALL orphaned claude processes (parent=systemd, i.e. PPID=1).
- * Returns count of killed processes.
- */
-function killOrphanedClaudeProcesses(): number {
-  try {
-    const result = execSync(
-      `ps -eo pid,ppid,comm 2>/dev/null | awk '$3 == "claude" && $2 == "1" {print $1}' || true`,
-      { encoding: 'utf8', timeout: 5000 }
-    ).trim();
-    const orphanPids = result.split('\n').filter(Boolean).map(Number).filter(p => p > 0);
-    if (orphanPids.length === 0) return 0;
-
-    // Kill each orphan's tree
-    let killed = 0;
-    for (const pid of orphanPids) {
-      try {
-        const tree = execSync(
-          `pstree -p ${pid} 2>/dev/null | grep -oP '\\(\\K[0-9]+(?=\\))' || true`,
-          { encoding: 'utf8', timeout: 3000 }
-        ).trim();
-        const allPids = tree.split('\n').filter(Boolean).map(Number).filter(p => p > 0);
-        if (allPids.length > 0) {
-          execSync(`kill -9 ${allPids.join(' ')} 2>/dev/null || true`, { timeout: 3000 });
-          killed += allPids.length;
-        }
-      } catch {
-        try { process.kill(pid, 'SIGKILL'); killed++; } catch { /* */ }
-      }
-    }
-
-    if (killed > 0) console.log(`[ClaudeCLI] Killed ${killed} orphaned claude processes (${orphanPids.length} orphans)`);
-    return killed;
-  } catch {
-    return 0;
-  }
-}
-
-/** Kill a stuck process and remove from activeProcesses */
-function killAndCleanup(key: string, entry: ClaudeProcess) {
-  try {
-    if (entry.mode === 'persistent') {
-      // Kill the Claude process
-      try { process.kill(entry.claudePid, 'SIGKILL'); } catch { /* already dead */ }
-      // Kill the wrapper
-      try { process.kill(entry.wrapperPid, 'SIGKILL'); } catch { /* already dead */ }
-      // Kill tail
-      try { entry.tailProc?.kill('SIGKILL'); } catch { /* already dead */ }
-      entry.fifoFd?.close().catch(() => {});
-      entry.fifoFd = null;
-    } else {
-      try { entry.proc?.kill('SIGKILL'); } catch { /* already dead */ }
-    }
-  } catch (err) {
-    console.warn(`[StaleCheck] killAndCleanup error for ${key.slice(0, 8)}: ${err instanceof Error ? err.message : err}`);
-  }
-  activeProcesses.delete(key);
-}
+// killAndCleanup REMOVED: No automatic killing of processes.
 
 // --- Handle persistent process exit ---
 
@@ -1555,150 +1309,17 @@ export function getActivePid(sessionId: string): number | null {
 }
 
 
-// --- Orphan Process Detection & Cleanup ---
-
-let _lastOrphanCleanup: { killed: number; timestamp: number } | null = null;
-
-async function cleanupOrphanProcesses(): Promise<void> {
-  try {
-    // Find all cui-session-wrapper PIDs via ps
-    let psOutput = '';
-    try {
-      psOutput = execSync('ps -eo pid,args --no-headers', { encoding: 'utf8', timeout: 5000 });
-    } catch { return; }
-
-    const wrapperPids: Array<{ pid: number; sessionId: string }> = [];
-    for (const line of psOutput.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed.includes('cui-session-wrapper')) continue;
-      const match = trimmed.match(/^(\d+)\s+/);
-      if (!match) continue;
-      const pid = parseInt(match[1], 10);
-      const parts = trimmed.split(/\s+/);
-      const wIdx = parts.findIndex(p => p.includes('cui-session-wrapper'));
-      const sessionId = wIdx >= 0 && parts[wIdx + 1] ? parts[wIdx + 1] : '';
-      wrapperPids.push({ pid, sessionId });
-    }
-
-    // Find orphans: wrapper PIDs not tracked by activeProcesses
-    const trackedPids = new Set<number>();
-    for (const [, entry] of activeProcesses) {
-      if (entry.mode === 'persistent') trackedPids.add((entry as PersistentProcess).wrapperPid);
-    }
-
-    const untracked = wrapperPids.filter(w => !trackedPids.has(w.pid));
-
-    if (untracked.length === 0) {
-      console.log('[OrphanCleanup] No orphan wrapper processes found');
-      _lastOrphanCleanup = { killed: 0, timestamp: Date.now() };
-      return;
-    }
-
-    // PHASE 1: Kill wrappers whose Claude child is dead (true orphans)
-    // PHASE 2: Kill DUPLICATE wrappers per session (keep only the tracked one)
-    console.log(`[OrphanCleanup] Found ${untracked.length} untracked wrapper(s), verifying...`);
-    let killed = 0;
-    let spared = 0;
-
-    // Also check ALL wrappers (including tracked) for duplicates per session
-    const allWrappersBySession = new Map<string, Array<{ pid: number; tracked: boolean }>>();
-    for (const w of wrapperPids) {
-      if (!w.sessionId) continue;
-      const list = allWrappersBySession.get(w.sessionId) || [];
-      list.push({ pid: w.pid, tracked: trackedPids.has(w.pid) });
-      allWrappersBySession.set(w.sessionId, list);
-    }
-
-    // Log duplicate wrappers but DO NOT kill them here.
-    // Duplicates are prevented at spawn time (killExistingOsProcesses in startConversation).
-    // Existing duplicates with live children may have background tasks — killing is dangerous.
-    for (const [sessionId, wrappers] of allWrappersBySession) {
-      if (wrappers.length > 1) {
-        console.log(`[OrphanCleanup] Session ${sessionId.slice(0, 12)}: ${wrappers.length} wrappers (duplicates logged, not killed — use startConversation to clean on next resume)`);
-      }
-    }
-
-    // Kill untracked wrappers whose Claude child is dead
-    for (const wrapper of untracked) {
-      // Skip if already killed as duplicate above
-      try { process.kill(wrapper.pid, 0); } catch { continue; }
-
-      let childAlive = false;
-      try {
-        const children = execSync(`pgrep -P ${wrapper.pid} 2>/dev/null`, { encoding: 'utf8', timeout: 3000 }).trim();
-        if (children) childAlive = true;
-      } catch { /* no children or pgrep failed */ }
-
-      if (childAlive) {
-        spared++;
-        console.log(`[OrphanCleanup] SPARED wrapper PID ${wrapper.pid} (session=${wrapper.sessionId.slice(0, 12)}) — Claude child still alive`);
-        continue;
-      }
-
-      try {
-        process.kill(wrapper.pid, 'SIGTERM');
-        killed++;
-        console.log(`[OrphanCleanup] Killed dead wrapper PID ${wrapper.pid} (session=${wrapper.sessionId.slice(0, 12)})`);
-      } catch { /* already dead */ }
-    }
-
-    // Kill orphaned claude processes (parent=systemd/PID 1)
-    const orphanedKilled = killOrphanedClaudeProcesses();
-    killed += orphanedKilled;
-
-    // Also kill orphaned tail processes for non-existent sessions
-    try {
-      const tailOutput = execSync(
-        `ps -eo pid,args --no-headers 2>/dev/null | grep "tail.*cui-sessions" | grep -v grep || true`,
-        { encoding: 'utf8', timeout: 5000 }
-      ).trim();
-      const trackedSessions = new Set([...activeProcesses.keys()]);
-      let tailsKilled = 0;
-      for (const line of tailOutput.split('\n').filter(Boolean)) {
-        const pidMatch = line.trim().match(/^(\d+)/);
-        if (!pidMatch) continue;
-        const tailPid = parseInt(pidMatch[1], 10);
-        // Check if this tail belongs to any tracked session
-        const isTracked = [...activeProcesses.values()].some(
-          e => e.mode === 'persistent' && (e as PersistentProcess).tailProc?.pid === tailPid
-        );
-        if (!isTracked) {
-          try { process.kill(tailPid, 'SIGKILL'); tailsKilled++; } catch { /* */ }
-        }
-      }
-      if (tailsKilled > 0) {
-        console.log(`[OrphanCleanup] Killed ${tailsKilled} orphaned tail processes`);
-        killed += tailsKilled;
-      }
-    } catch { /* */ }
-
-    // Clean up stale files
-    for (const wrapper of untracked) {
-      try { process.kill(wrapper.pid, 0); continue; } catch { /* dead — clean up */ }
-      if (wrapper.sessionId) {
-        for (const ext of ['.pid', '.fifo', '.meta', '.stderr']) {
-          try { await fsp.unlink(`${FIFO_DIR}/${wrapper.sessionId}${ext}`); } catch { /* ignore */ }
-        }
-      }
-    }
-
-    _lastOrphanCleanup = { killed, timestamp: Date.now() };
-    console.log(`[OrphanCleanup] Done: ${killed} killed, ${spared} spared (alive). ${activeProcesses.size} tracked sessions.`);
-  } catch (err) {
-    console.error('[OrphanCleanup] Error:', err instanceof Error ? err.message : err);
-  }
-}
+// Orphan cleanup REMOVED: CUI is a view layer on Claude sessions.
+// JSONL files on disk = source of truth. No automatic process killing.
+// Sessions are only stopped manually via UI/API.
 
 export function getOrphanCleanupStatus(): { killed: number; timestamp: number } | null {
-  return _lastOrphanCleanup;
+  return null; // No-op: cleanup disabled
 }
 
 export async function killOrphanProcesses(): Promise<{ found: number; killed: number }> {
-  await cleanupOrphanProcesses();
-  return { found: _lastOrphanCleanup?.killed ?? 0, killed: _lastOrphanCleanup?.killed ?? 0 };
+  return { found: 0, killed: 0 }; // No-op: cleanup disabled
 }
-
-export { killExistingOsProcesses, killOrphanedClaudeProcesses };
 
 export function getActiveProcesses(): Array<{
   accountId: string;

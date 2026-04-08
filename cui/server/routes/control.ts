@@ -637,14 +637,37 @@ export default function createControlRouter(deps: ControlDeps): Router {
       console.warn('[AllChats] Failed to fetch conversations:', (err as Error).message);
     }
 
-    // 3. Enrich with attention states
+    // 3. Enrich with attention states + process-alive check
     const states = getSessionStates();
+    // Also check which sessions have a live OS process (wrapper running)
+    let liveWrapperSessions = new Set<string>();
+    try {
+      const { execSync } = await import('child_process');
+      const psOut = execSync('ps -eo args --no-headers 2>/dev/null | grep cui-session-wrapper | grep -v grep || true', { encoding: 'utf8', timeout: 5000 });
+      for (const line of psOut.split('\n').filter(Boolean)) {
+        // Extract session ID (first UUID-like arg after "cui-session-wrapper")
+        const match = line.match(/cui-session-wrapper\s+([0-9a-f-]{36})/);
+        if (match) liveWrapperSessions.add(match[1]);
+      }
+    } catch { /* ps failed — ignore */ }
+
     for (const chat of chats) {
+      // First check in-memory states (tracked sessions)
       for (const [_key, state] of Object.entries(states)) {
         if (state.sessionId === chat.sessionId) {
           chat.attentionState = state.state;
           chat.attentionReason = state.reason;
         }
+      }
+      // If no tracked state but OS process is alive, mark as working
+      if (!chat.attentionState && liveWrapperSessions.has(chat.sessionId)) {
+        chat.attentionState = 'working';
+        chat.attentionReason = '';
+      }
+      // If no tracked state and no OS process, mark as idle/done
+      if (!chat.attentionState) {
+        chat.attentionState = 'idle';
+        chat.attentionReason = 'done';
       }
     }
 
