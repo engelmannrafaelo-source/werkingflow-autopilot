@@ -525,16 +525,10 @@ export function hasIncompleteToolUse(sessionId: string): boolean {
           const content = obj.message.content;
           if (!Array.isArray(content) || content.length === 0) return false;
 
-          const hasToolUse = content.some((b: any) => b.type === 'tool_use');
-          if (!hasToolUse) return false;
-
-          // Check if there's meaningful text alongside tool_use
-          const hasText = content.some((b: any) =>
-            b.type === 'text' && typeof b.text === 'string' && b.text.trim().length > 0
-          );
-
-          // Incomplete = has tool_use but no meaningful text
-          return !hasText;
+          // Incomplete = last assistant message contains any tool_use block.
+          // Text alongside tool_use is normal (e.g. "Let me check:" + Bash call)
+          // — the session was still mid-execution and needs to be resumed.
+          return content.some((b: any) => b.type === 'tool_use');
         }
 
         // If we hit a user message first, the conversation ended properly
@@ -545,6 +539,108 @@ export function hasIncompleteToolUse(sessionId: string): boolean {
     return false;
   } catch {
     return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// diagnoseSessionHealth — comprehensive check if a dead session needs recovery
+// ---------------------------------------------------------------------------
+// Returns a diagnosis with reason why the session died and whether it should
+// be auto-recovered. More robust than hasIncompleteToolUse() alone.
+
+export type SessionDiagnosis = {
+  needsRecovery: boolean;
+  reason: 'incomplete_tool_use' | 'api_error' | 'overloaded' | 'rate_limit' | 'crash' | 'completed' | 'unknown';
+  details: string;
+  lastRole: string;
+  lastTimestamp?: string;
+};
+
+export function diagnoseSessionHealth(sessionId: string): SessionDiagnosis {
+  const found = findJsonlPathAllAccounts(sessionId);
+  if (!found) return { needsRecovery: false, reason: 'unknown', details: 'JSONL not found', lastRole: '' };
+
+  try {
+    const stat = statSync(found.path);
+    if (stat.size === 0) return { needsRecovery: false, reason: 'unknown', details: 'empty file', lastRole: '' };
+
+    // Read last 32KB for thorough analysis
+    const TAIL_SIZE = 32768;
+    const fd = openSync(found.path, 'r');
+    const readSize = Math.min(TAIL_SIZE, stat.size);
+    const buf = Buffer.alloc(readSize);
+    readSync(fd, buf, 0, readSize, stat.size - readSize);
+    closeSync(fd);
+
+    const tailStr = buf.toString('utf-8');
+    const lines = tailStr.split('\n').filter(l => l.trim());
+
+    // Parse last entries (up to 20)
+    const entries: any[] = [];
+    for (let i = lines.length - 1; i >= Math.max(0, lines.length - 20); i--) {
+      try { entries.unshift(JSON.parse(lines[i])); } catch { /* skip */ }
+    }
+
+    if (entries.length === 0) return { needsRecovery: false, reason: 'unknown', details: 'no parseable entries', lastRole: '' };
+
+    // Check for error patterns in the last entries
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const entry = entries[i];
+      const msg = entry.message;
+
+      // Check for API error messages
+      if (entry.isApiErrorMessage || entry.type === 'api_error') {
+        const errText = (typeof msg?.content === 'string' ? msg.content : JSON.stringify(msg?.content || '')).toLowerCase();
+        if (errText.includes('overloaded') || errText.includes('529')) {
+          return { needsRecovery: true, reason: 'overloaded', details: 'API overloaded (529)', lastRole: msg?.role || '', lastTimestamp: entry.timestamp };
+        }
+        if (errText.includes('rate') || errText.includes('429')) {
+          return { needsRecovery: true, reason: 'rate_limit', details: 'Rate limit hit', lastRole: msg?.role || '', lastTimestamp: entry.timestamp };
+        }
+        return { needsRecovery: true, reason: 'api_error', details: errText.slice(0, 100), lastRole: msg?.role || '', lastTimestamp: entry.timestamp };
+      }
+
+      // Check for error in assistant content
+      if (msg?.role === 'assistant' && Array.isArray(msg.content)) {
+        for (const block of msg.content) {
+          if (typeof block === 'object' && block.type === 'text') {
+            const text = (block.text || '').toLowerCase();
+            if (text.includes('api error: 529') || text.includes('overloaded_error')) {
+              return { needsRecovery: true, reason: 'overloaded', details: 'Overloaded error in output', lastRole: 'assistant', lastTimestamp: entry.timestamp };
+            }
+          }
+        }
+      }
+    }
+
+    // Find last meaningful message
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const entry = entries[i];
+      const msg = entry.message;
+      if (!msg?.role) continue;
+
+      if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+        // Check for incomplete tool_use
+        const hasToolUse = msg.content.some((b: any) => b.type === 'tool_use');
+        if (hasToolUse) {
+          return { needsRecovery: true, reason: 'incomplete_tool_use', details: 'Last assistant message has tool_use', lastRole: 'assistant', lastTimestamp: entry.timestamp };
+        }
+        // Has text content → session completed normally
+        const hasText = msg.content.some((b: any) => b.type === 'text' && b.text?.trim());
+        if (hasText) {
+          return { needsRecovery: false, reason: 'completed', details: 'Session ended with text response', lastRole: 'assistant', lastTimestamp: entry.timestamp };
+        }
+      }
+
+      if (msg.role === 'user') {
+        // Last message was from user but no assistant response → session crashed
+        return { needsRecovery: true, reason: 'crash', details: 'User message without assistant response', lastRole: 'user', lastTimestamp: entry.timestamp };
+      }
+    }
+
+    return { needsRecovery: false, reason: 'unknown', details: 'Could not determine state', lastRole: '' };
+  } catch (err) {
+    return { needsRecovery: false, reason: 'unknown', details: `Error: ${err instanceof Error ? err.message : err}`, lastRole: '' };
   }
 }
 

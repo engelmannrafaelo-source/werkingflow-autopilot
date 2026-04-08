@@ -162,33 +162,20 @@ export default function createControlRouter(deps: ControlDeps): Router {
     });
   });
 
-  // Shared auto-layout logic — used by project/switch and the standalone endpoint
-  async function runAutoLayout(projectId: string): Promise<{ triggered: boolean; reason?: string; total?: number; existing?: number; unassigned?: number }> {
-    const layoutPath = join(LAYOUTS_DIR, `${projectId}.json`);
-    if (!existsSync(layoutPath)) return { triggered: false, reason: 'no layout file' };
-
-    let layout: any;
-    try { layout = JSON.parse(readFileSync(layoutPath, 'utf8')); }
-    catch { return { triggered: false, reason: 'layout parse error' }; }
-
-    const cuiPanelSessions = new Set<string>();
-    function collectCuiSessions(node: any): void {
-      if (!node) return;
-      if (node.type === 'tab' && (node.component === 'cui' || node.component === 'cui-lite')) {
-        const sid = node.config?.initialSessionId || node.config?.sessionId;
-        if (sid) cuiPanelSessions.add(sid);
-      }
-      for (const child of node.children ?? []) collectCuiSessions(child);
-    }
-    collectCuiSessions(layout?.layout);
-
-    let conversations: Array<{ sessionId: string; accountId: string }> = [];
+  // --- Fetch active conversations for a workspace (shared helper) ---
+  async function getWorkspaceConversations(projectId: string): Promise<{
+    mainConvs: Array<{ sessionId: string; accountId: string; customName: string }>;
+    subConvs: Array<{ sessionId: string; accountId: string; customName: string }>;
+    error?: string;
+  }> {
+    const mainConvs: Array<{ sessionId: string; accountId: string; customName: string }> = [];
+    const subConvs: Array<{ sessionId: string; accountId: string; customName: string }> = [];
     try {
-      const convResp = await fetch(`http://localhost:${process.env.PORT || 4005}/api/mission/conversations`, {
-        signal: AbortSignal.timeout(5000),
+      const convResp = await fetch(`http://localhost:${process.env.PORT || 4005}/api/mission/conversations?fresh=true`, {
+        signal: AbortSignal.timeout(8000),
       });
-      if (!convResp.ok) throw new Error('conv fetch failed');
-      const convData = await convResp.json();
+      if (!convResp.ok) return { mainConvs, subConvs, error: 'conv fetch failed' };
+      const convData = await convResp.json() as any;
       const allConvs: any[] = convData.conversations || [];
 
       const projectFile = join(PROJECTS_DIR, `${projectId}.json`);
@@ -202,47 +189,155 @@ export default function createControlRouter(deps: ControlDeps): Router {
         } catch { /* ignore */ }
       }
 
-      conversations = allConvs.filter((c: any) => {
-        if (c.manualFinished) return false;
-        if (c.status && c.status !== 'ongoing') return false;
-        // Sub-sessions workspace: collect all sub-sessions regardless of their workDir
-        if (projectId === 'sub-sessions') return !!c.isSubSession;
-        // Normal workspace: match by workDir or project name, but exclude sub-sessions
-        if (c.isSubSession) return false;
-        if (projectWorkDir && c.projectPath === projectWorkDir) return true;
-        const cName = (c.projectName || '').toLowerCase().replace(/[^a-z0-9]/g, '-');
-        const pId = projectId.toLowerCase();
-        return cName === pId || cName.includes(pId) || pId.includes(cName) || (projectName && cName === projectName);
-      }).map((c: any) => ({ sessionId: c.sessionId, accountId: c.accountId || 'werking' }));
-    } catch { return { triggered: false, reason: 'conv fetch failed' }; }
+      for (const c of allConvs) {
+        if (c.manualFinished) continue;
+        if (c.status && c.status !== 'ongoing') continue;
 
-    const unassigned = conversations.filter(c => !cuiPanelSessions.has(c.sessionId));
+        let matches = false;
+        if (projectId === 'sub-sessions') {
+          matches = !!c.isSubSession;
+        } else {
+          if (projectWorkDir && c.projectPath === projectWorkDir) matches = true;
+          if (!matches) {
+            const cName = (c.projectName || '').toLowerCase().replace(/[^a-z0-9]/g, '-');
+            const pId = projectId.toLowerCase();
+            matches = cName === pId || cName.includes(pId) || pId.includes(cName) || (projectName && cName === projectName);
+          }
+        }
+        if (!matches) continue;
 
-    // Also check if any tabset has multiple stacked CUI panels → needs splitting
-    let hasStackedCuiPanels = false;
-    function checkStacked(node: any): void {
-      if (!node) return;
-      if (node.type === 'tabset' && Array.isArray(node.children)) {
-        const cuiTabs = node.children.filter((t: any) => t.type === 'tab' && (t.component === 'cui' || t.component === 'cui-lite'));
-        if (cuiTabs.length > 1) hasStackedCuiPanels = true;
+        const entry = { sessionId: c.sessionId, accountId: c.accountId || 'werking', customName: c.customName || c.summary?.slice(0, 40) || '' };
+        if (c.isSubSession) {
+          subConvs.push(entry);
+        } else {
+          mainConvs.push(entry);
+        }
       }
-      for (const child of node.children ?? []) checkStacked(child);
-    }
-    checkStacked(layout?.layout);
+    } catch { return { mainConvs, subConvs, error: 'conv fetch failed' }; }
+    return { mainConvs, subConvs };
+  }
 
-    if (unassigned.length === 0 && !hasStackedCuiPanels) {
-      return { triggered: false, reason: 'all conversations already have a panel', total: conversations.length, existing: cuiPanelSessions.size };
+  // --- Layout Status Check (READ-ONLY) ---
+  // Returns which sessions exist vs which are in the layout. NEVER modifies the layout.
+  async function checkLayoutStatus(projectId: string): Promise<{
+    total: number; inLayout: number; missing: number; subSessions: number;
+    missingSessions: Array<{ sessionId: string; customName: string }>;
+  }> {
+    const { mainConvs, subConvs } = await getWorkspaceConversations(projectId);
+
+    // Check which sessions are already in the layout
+    const layoutPath = join(LAYOUTS_DIR, `${projectId}.json`);
+    const cuiPanelSessions = new Set<string>();
+    try {
+      if (existsSync(layoutPath)) {
+        const layout = JSON.parse(readFileSync(layoutPath, 'utf8'));
+        function collectCuiSessions(node: any): void {
+          if (!node) return;
+          if (node.type === 'tab' && (node.component === 'cui' || node.component === 'cui-lite')) {
+            const sid = node.config?.initialSessionId || node.config?.sessionId;
+            if (sid) cuiPanelSessions.add(sid);
+          }
+          for (const child of node.children ?? []) collectCuiSessions(child);
+        }
+        collectCuiSessions(layout?.layout);
+      }
+    } catch { /* no layout or parse error */ }
+
+    const missingSessions = mainConvs.filter(c => !cuiPanelSessions.has(c.sessionId));
+
+    return {
+      total: mainConvs.length,
+      inLayout: mainConvs.length - missingSessions.length,
+      missing: missingSessions.length,
+      subSessions: subConvs.length,
+      missingSessions: missingSessions.map(c => ({ sessionId: c.sessionId, customName: c.customName })),
+    };
+  }
+
+  // --- Generate Layout (WRITE) — ONLY called by explicit Layout button click ---
+  // Generates a complete layout with ALL main sessions + sub-sessions panel + utilities
+  async function generateLayout(projectId: string): Promise<{ triggered: boolean; reason?: string; total?: number; subSessions?: number }> {
+    const { mainConvs, subConvs, error } = await getWorkspaceConversations(projectId);
+    if (error) return { triggered: false, reason: error };
+    if (mainConvs.length === 0 && subConvs.length === 0) {
+      return { triggered: false, reason: 'no active conversations for this workspace', total: 0 };
     }
 
-    if (hasStackedCuiPanels) {
-      broadcast({ type: 'control:split-cui-panels', projectId });
-      console.log(`[AutoLayout] ${projectId}: stacked CUI panels detected → split broadcast`);
+    let idCounter = 1;
+    const nextId = () => `#auto-${idCounter++}`;
+
+    const cuiTabs = mainConvs.map((c, i) => ({
+      type: 'tab' as const, id: nextId(),
+      name: c.customName || `Session ${i + 1}`,
+      component: 'cui',
+      config: { initialSessionId: c.sessionId, accountId: c.accountId },
+    }));
+
+    const utilityTabs = [
+      { type: 'tab' as const, id: nextId(), name: 'File Preview', component: 'preview', config: {} },
+      { type: 'tab' as const, id: nextId(), name: 'Notes', component: 'notes', config: {} },
+      { type: 'tab' as const, id: nextId(), name: 'Browser', component: 'browser', config: {} },
+      { type: 'tab' as const, id: nextId(), name: 'Images', component: 'images', config: {} },
+    ];
+    if (subConvs.length > 0) {
+      utilityTabs.push({ type: 'tab' as const, id: nextId(), name: 'Sub-Sessions', component: 'sub-sessions', config: {} });
     }
-    if (unassigned.length > 0) {
-      broadcast({ type: 'control:activate-conversations', plan: [{ projectId, conversations }] });
-      console.log(`[AutoLayout] ${projectId}: ${unassigned.length} unassigned convs → activate broadcast`);
+
+    let layoutChildren: any[];
+    if (cuiTabs.length <= 1) {
+      layoutChildren = [
+        { type: 'tabset', id: nextId(), weight: 60, children: cuiTabs.length > 0 ? cuiTabs : [{ type: 'tab', id: nextId(), name: 'CUI', component: 'cui', config: {} }] },
+        { type: 'tabset', id: nextId(), weight: 40, children: utilityTabs },
+      ];
+    } else if (cuiTabs.length === 2) {
+      layoutChildren = [
+        { type: 'row', id: nextId(), weight: 60, children: [
+          { type: 'tabset', id: nextId(), weight: 50, children: [cuiTabs[0]] },
+          { type: 'tabset', id: nextId(), weight: 50, children: [cuiTabs[1]] },
+        ]},
+        { type: 'tabset', id: nextId(), weight: 40, children: utilityTabs },
+      ];
+    } else {
+      const cuiTabsets = cuiTabs.map(tab => ({
+        type: 'tabset', id: nextId(), weight: Math.floor(100 / cuiTabs.length), children: [tab],
+      }));
+      layoutChildren = [
+        { type: 'row', id: nextId(), weight: 65, children: cuiTabsets },
+        { type: 'tabset', id: nextId(), weight: 35, children: utilityTabs },
+      ];
     }
-    return { triggered: true, total: conversations.length, existing: cuiPanelSessions.size, unassigned: unassigned.length, stacked: hasStackedCuiPanels };
+
+    const newLayout = { global: { splitterSize: 4 }, borders: [], layout: { type: 'row', id: nextId(), weight: 100, children: layoutChildren } };
+
+    const layoutPath = join(LAYOUTS_DIR, `${projectId}.json`);
+    let currentVersion = 0;
+    try {
+      if (existsSync(layoutPath)) {
+        const current = JSON.parse(readFileSync(layoutPath, 'utf8'));
+        currentVersion = (current._v || 0);
+      }
+    } catch { /* new file */ }
+
+    const layoutWithVersion = { ...newLayout, _v: currentVersion + 1 };
+    try { mkdirSync(LAYOUTS_DIR, { recursive: true }); } catch { /* exists */ }
+    writeFileSync(layoutPath, JSON.stringify(layoutWithVersion, null, 2));
+    broadcast({ type: 'control:apply-layout', projectId, layout: layoutWithVersion });
+    console.log(`[AutoLayout] ${projectId}: Generated fresh layout with ${mainConvs.length} main + ${subConvs.length} sub-sessions`);
+
+    return { triggered: true, total: mainConvs.length + subConvs.length, subSessions: subConvs.length };
+  }
+
+  // Backwards-compat wrapper — project/switch now only checks status, never overwrites
+  async function runAutoLayout(projectId: string): Promise<{ triggered: boolean; reason?: string; total?: number; existing?: number; unassigned?: number; subSessions?: number }> {
+    const status = await checkLayoutStatus(projectId);
+    return {
+      triggered: false,
+      reason: status.missing > 0 ? `${status.missing} sessions not in layout` : 'all sessions in layout',
+      total: status.total,
+      existing: status.inLayout,
+      unassigned: status.missing,
+      subSessions: status.subSessions,
+    };
   }
 
   router.post('/control/project/switch', async (req: Request, res: Response) => {
@@ -252,9 +347,12 @@ export default function createControlRouter(deps: ControlDeps): Router {
     if (!existsSync(projectFile)) { res.status(404).json({ error: `project ${projectId} not found` }); return; }
     workspaceState.activeProjectId = projectId;
     broadcast({ type: 'control:project-switch', projectId });
-    // Auto-layout: split panels if new conversations have no panel yet (fire & forget)
-    runAutoLayout(projectId).catch(err => console.warn('[AutoLayout] project/switch error:', err));
-    res.json({ ok: true, projectId });
+    // Auto-layout on project/switch: ensure all conversations get a panel
+    const layoutResult = await runAutoLayout(projectId);
+    if (layoutResult.triggered) {
+      console.log(`[ProjectSwitch] Auto-layout triggered for ${projectId}: ${layoutResult.unassigned} new panels`);
+    }
+    res.json({ ok: true, projectId, autoLayout: layoutResult });
   });
 
   router.post('/control/cui/reload', (req: Request, res: Response) => {
@@ -458,14 +556,20 @@ export default function createControlRouter(deps: ControlDeps): Router {
   // by the frontend after the split (saveLayoutRef called in activate-conversations handler).
   // ============================================================
 
+  // GET /api/control/layout-status?projectId=X — Read-only check: which sessions are missing from layout?
+  // Frontend uses this to color the Layout button (green = all good, orange = missing sessions)
+  router.get('/control/layout-status', async (req: Request, res: Response) => {
+    const projectId = req.query.projectId as string;
+    if (!projectId) { res.status(400).json({ error: 'projectId required' }); return; }
+    const status = await checkLayoutStatus(projectId);
+    res.json({ projectId, ...status });
+  });
+
+  // POST /api/control/auto-layout — EXPLICIT button click: generate fresh layout
   router.post('/control/auto-layout', async (req: Request, res: Response) => {
     const projectId: string = req.body.projectId || req.query.projectId as string;
     if (!projectId) { res.status(400).json({ error: 'projectId required' }); return; }
-    const result = await runAutoLayout(projectId);
-    if (!result.triggered && result.reason === 'no layout file') {
-      res.status(404).json({ error: `No layout for project: ${projectId}` });
-      return;
-    }
+    const result = await generateLayout(projectId);
     res.json({ projectId, ...result });
   });
 
@@ -509,6 +613,8 @@ export default function createControlRouter(deps: ControlDeps): Router {
       for (const conv of conversations) {
         const isFinishedConv = conv.manualFinished === true;
         if (isFinishedConv) continue;
+        // Sub-sessions have their own dedicated panel — hide from All Chats
+        if (conv.isSubSession) continue;
 
         // Show all non-finished conversations
         {

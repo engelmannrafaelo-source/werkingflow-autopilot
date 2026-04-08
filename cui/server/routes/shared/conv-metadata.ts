@@ -27,9 +27,11 @@ interface ConvMetadata {
   reviews: Record<string, string>;
   /** sessionIds that are sub-sessions (spawned by parent sessions) */
   subSessions: Record<string, boolean>;
+  /** subSessionId → parentSessionId (tracks which parent spawned this sub-session) */
+  parentSessions: Record<string, string>;
 }
 
-const EMPTY: ConvMetadata = { titles: {}, accounts: {}, workdirs: {}, finished: {}, lastPrompt: {}, models: {}, paused: {}, reviews: {}, subSessions: {} };
+const EMPTY: ConvMetadata = { titles: {}, accounts: {}, workdirs: {}, finished: {}, lastPrompt: {}, models: {}, paused: {}, reviews: {}, subSessions: {}, parentSessions: {} };
 
 let _data: ConvMetadata | null = null;
 let _filePath: string = '';
@@ -291,5 +293,27 @@ export function setSubSession(sessionId: string, isSub: boolean) {
   if (!data.subSessions) data.subSessions = {};
   if (isSub) data.subSessions[sessionId] = true;
   else delete data.subSessions[sessionId];
+  _scheduleSave();
+}
+
+// ---------------------------------------------------------------------------
+// Parent Sessions (subSessionId → parentSessionId)
+// ---------------------------------------------------------------------------
+
+export function getParentSessionId(subSessionId: string): string | undefined {
+  const data = _load();
+  return data.parentSessions?.[subSessionId];
+}
+
+export function setParentSession(subSessionId: string, parentSessionId: string) {
+  const data = _load();
+  if (!data.parentSessions) data.parentSessions = {};
+  data.parentSessions[subSessionId] = parentSessionId;
+  _scheduleSave();
+}
+
+export function deleteParentSession(subSessionId: string) {
+  const data = _load();
+  if (data.parentSessions) delete data.parentSessions[subSessionId];
   _scheduleSave();
 }

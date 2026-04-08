@@ -9,7 +9,7 @@ import { PATHS, BRIDGE_URL } from '../config/paths.js';
 import { bridgeChat } from '../lib/bridge-fetch.js';
 import type { AttentionReason, ConvAttentionState, SessionState, PanelVisibility } from './shared/types.js';
 import { logUserInput as sharedLogUserInput, atomicWriteFileSync } from './shared/utils.js';
-import { findJsonlPath, findJsonlPathAllAccounts, ensureJsonlForAccount, readJsonlMetadata, clearMetaCache, readConversationMessages, getOriginalCwd, extractConversationContext, unstickConversation, deepRepairJsonl, compactJsonlForResume } from './shared/jsonl.js';
+import { findJsonlPath, findJsonlPathAllAccounts, ensureJsonlForAccount, readJsonlMetadata, clearMetaCache, readConversationMessages, getOriginalCwd, extractConversationContext, unstickConversation, deepRepairJsonl, compactJsonlForResume, diagnoseSessionHealth } from './shared/jsonl.js';
 import * as convMeta from './shared/conv-metadata.js';
 import { updateAutoInjectSession, disableAutoInject } from './autoinject.js';
 
@@ -21,14 +21,14 @@ function isValidWorkDir(d: string): boolean {
   if (d === '/root/projekte' || d === '/root/projekte/') return false; // Guard: no bare root-projekte
   return d.startsWith("/root/projekte/") || d.startsWith("/root/orchestrator/") || d.startsWith("/home/claude-user") || d.startsWith("/opt/");
 }
-import { IS_LOCAL_MODE, onSessionStateChange } from './state.js';
+import { IS_LOCAL_MODE, onSessionStateChange, setSessionState } from './state.js';
 import * as claudeCli from './claude-cli.js';
 
 const execAsync = promisify(exec);
 
 // --- Constants ---
-const CONV_CACHE_TTL_MS = 15_000;
-const CONV_CACHE_STALE_TTL_MS = 60_000;
+const CONV_CACHE_TTL_MS = 5_000;     // Reduced from 15s — stale data was confusing users
+const CONV_CACHE_STALE_TTL_MS = 30_000;
 const MAX_TITLE_LENGTH = 60;
 const MAX_TAIL_MESSAGES = 500;
 const COMMANDER_CACHE_TTL_MS = 60_000;
@@ -129,6 +129,155 @@ export function initMissionRouter(deps: MissionDeps) {
     }
   });
 
+  // Sub-session completion handler: when a sub-session reaches done state,
+  // inject its result into the parent session and mark it finished.
+  // Includes retry logic (max 5 attempts, 30s delay) if parent is busy.
+  const SUB_INJECT_MAX_RETRIES = 5;
+  const SUB_INJECT_RETRY_DELAY_MS = 30_000;
+
+  async function injectSubSessionResult(sessionId: string, parentSessionId: string, attempt: number = 1) {
+    const subjectTitle = convMeta.getTitle(sessionId) || 'Sub-Session';
+    console.log(`[SubSession] ${sessionId.slice(0, 8)} → injecting into parent ${parentSessionId.slice(0, 8)} (attempt ${attempt}/${SUB_INJECT_MAX_RETRIES})`);
+
+    try {
+      // Extract last assistant message from sub-session JSONL
+      const found = findJsonlPathAllAccounts(sessionId);
+      let subResult = '';
+      if (found) {
+        const lines = readFileSync(found.path, 'utf8').trim().split('\n').filter(Boolean).reverse();
+        for (const line of lines) {
+          try {
+            const obj = JSON.parse(line);
+            if (obj.type === 'assistant' && obj.message?.content) {
+              const parts = Array.isArray(obj.message.content) ? obj.message.content : [];
+              const text = parts.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n').trim();
+              if (text) { subResult = text; break; }
+            }
+          } catch { /* skip malformed lines */ }
+        }
+      }
+
+      if (!subResult) {
+        console.warn(`[SubSession] No result found for sub-session ${sessionId.slice(0, 8)} — giving up`);
+        cleanupSubSession(sessionId);
+        return;
+      }
+
+      // Inject sub-session result into parent session
+      const parentAccountId = convMeta.getAssignment(parentSessionId) || claudeCli.ACCOUNT_CONFIG[0]?.id || 'werking';
+      const parentWorkDir = convMeta.getWorkDir(parentSessionId) || '';
+      const parentModel = convMeta.getModel(parentSessionId) || '';
+      const injectMessage = `[Sub-Session Ergebnis: ${subjectTitle}]\n\n${subResult}\n\nPruefe ob alles korrekt ist.`;
+
+      const result = await claudeCli.startConversation(parentAccountId, injectMessage, parentWorkDir, parentSessionId, parentModel);
+      if (result.ok) {
+        broadcast({ type: 'conv-subsession-complete', sessionId: parentSessionId, subSessionId: sessionId, result: subResult });
+        console.log(`[SubSession] Result injected into parent ${parentSessionId.slice(0, 8)} successfully`);
+        cleanupSubSession(sessionId);
+      } else {
+        console.warn(`[SubSession] Injection into parent failed: ${result.error}`);
+        if (attempt < SUB_INJECT_MAX_RETRIES) {
+          console.log(`[SubSession] Retrying in ${SUB_INJECT_RETRY_DELAY_MS / 1000}s...`);
+          setTimeout(() => injectSubSessionResult(sessionId, parentSessionId, attempt + 1), SUB_INJECT_RETRY_DELAY_MS);
+        } else {
+          console.warn(`[SubSession] All ${SUB_INJECT_MAX_RETRIES} retries exhausted for ${sessionId.slice(0, 8)} → parent ${parentSessionId.slice(0, 8)}. Giving up.`);
+          cleanupSubSession(sessionId);
+        }
+      }
+    } catch (err) {
+      console.warn(`[SubSession] Completion handler error (attempt ${attempt}): ${(err as Error).message}`);
+      if (attempt < SUB_INJECT_MAX_RETRIES) {
+        console.log(`[SubSession] Retrying in ${SUB_INJECT_RETRY_DELAY_MS / 1000}s...`);
+        setTimeout(() => injectSubSessionResult(sessionId, parentSessionId, attempt + 1), SUB_INJECT_RETRY_DELAY_MS);
+      } else {
+        console.warn(`[SubSession] All ${SUB_INJECT_MAX_RETRIES} retries exhausted for ${sessionId.slice(0, 8)}. Giving up.`);
+        cleanupSubSession(sessionId);
+      }
+    }
+  }
+
+  function cleanupSubSession(sessionId: string) {
+    convMeta.setFinished(sessionId, true);
+    convMeta.deleteParentSession(sessionId);
+    claudeCli.stopConversation(sessionId);
+    broadcast({ type: 'control:conversation-finished', sessionId, panelsToClose: [] });
+  }
+
+  onSessionStateChange(async (sessionId, state, reason) => {
+    // Only handle sub-sessions with a tracked parent
+    const parentSessionId = convMeta.getParentSessionId(sessionId);
+    if (!parentSessionId) return;
+
+    const isDone = (state === 'needs_attention' && reason === 'done') || (state === 'idle' && reason === 'done');
+    if (!isDone) return;
+
+    await injectSubSessionResult(sessionId, parentSessionId);
+  });
+
+  // Sub-session progress polling: periodically check running sub-sessions
+  // and notify parent sessions with a brief status update.
+  const SUB_PROGRESS_INTERVAL_MS = 60_000;
+  const _subProgressLastCheck = new Map<string, string>(); // sessionId → last snippet hash
+
+  setInterval(() => {
+    // Find all sub-sessions that have a parent and are still running (not finished)
+    const states = getSessionStates();
+    for (const [key, sState] of Object.entries(states)) {
+      const sessionId = sState.sessionId || key;
+      const parentSessionId = convMeta.getParentSessionId(sessionId);
+      if (!parentSessionId) continue;
+      if (convMeta.isFinished(sessionId)) continue;
+
+      // Only notify if sub-session is actively running
+      if (sState.state !== 'working') continue;
+
+      // Check if parent is idle (receptive to messages)
+      const parentState = states[parentSessionId];
+      if (!parentState || parentState.state !== 'idle') continue;
+
+      try {
+        const found = findJsonlPathAllAccounts(sessionId);
+        if (!found) continue;
+
+        // Get last assistant text snippet
+        const lines = readFileSync(found.path, 'utf8').trim().split('\n').filter(Boolean).reverse();
+        let snippet = '';
+        for (const line of lines) {
+          try {
+            const obj = JSON.parse(line);
+            if (obj.type === 'assistant' && obj.message?.content) {
+              const parts = Array.isArray(obj.message.content) ? obj.message.content : [];
+              const text = parts.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n').trim();
+              if (text) { snippet = text.slice(0, 200); break; }
+            }
+          } catch { /* skip */ }
+        }
+        if (!snippet) continue;
+
+        // Skip if snippet hasn't changed since last check
+        const lastSnippet = _subProgressLastCheck.get(sessionId);
+        if (lastSnippet === snippet) continue;
+        _subProgressLastCheck.set(sessionId, snippet);
+
+        const subjectTitle = convMeta.getTitle(sessionId) || 'Sub-Session';
+        const progressMsg = `[Sub-Session Status: ${subjectTitle}]\nArbeitet noch — aktuell bei:\n${snippet}...`;
+
+        const parentAccountId = convMeta.getAssignment(parentSessionId) || claudeCli.ACCOUNT_CONFIG[0]?.id || 'werking';
+        const parentWorkDir = convMeta.getWorkDir(parentSessionId) || '';
+        const parentModel = convMeta.getModel(parentSessionId) || '';
+
+        claudeCli.startConversation(parentAccountId, progressMsg, parentWorkDir, parentSessionId, parentModel).then(res => {
+          if (res.ok) {
+            console.log(`[SubSession] Progress update sent to parent ${parentSessionId.slice(0, 8)} for ${sessionId.slice(0, 8)}`);
+          }
+          // Silent fail on progress — it's optional
+        });
+      } catch {
+        // Progress polling is best-effort, don't crash
+      }
+    }
+  }, SUB_PROGRESS_INTERVAL_MS);
+
   // Warm up conversation cache on startup (async, non-blocking)
   setTimeout(async () => {
     try {
@@ -153,24 +302,9 @@ export function initMissionRouter(deps: MissionDeps) {
       if (autoFinished > 0) {
         console.log(`[Mission] Auto-finished ${autoFinished} stale conversations (>48h, not ongoing)`);
 
-  // Periodic zombie cleanup: kill CLI processes for finished conversations (every 5 min)
-  async function cleanupZombies() {
-    try {
-      const data = await fetchConvList();
-      const finished = convMeta.getAllFinished();
-      let killed = 0;
-      for (const conv of data.conversations) {
-        if (finished[conv.sessionId] && conv.status === 'ongoing') {
-          const stopped = await claudeCli.stopConversation(conv.sessionId);
-          if (stopped) { killed++; console.log(`[Zombie] Killed ${conv.sessionId.slice(0, 8)} (finished but still running)`); }
-        }
-      }
-      if (killed > 0) { invalidateConvCache(); console.log(`[Zombie] Cleaned up ${killed} zombie processes`); }
-    } catch (err: any) { console.warn('[Zombie] Cleanup error:', err?.message); }
-  }
-  // Initial cleanup after 10s, then every 5 minutes
-  setTimeout(cleanupZombies, 10000);
-  setInterval(cleanupZombies, 5 * 60 * 1000);
+  // Periodic zombie cleanup: DISABLED — was killing resumed sessions.
+  // Manual cleanup still available via POST /cleanup-zombies endpoint.
+  // TODO: Re-enable with safeguard: skip sessions with lastPrompt < 10min ago
         invalidateConvCache();
       }
     } catch (err) { console.warn('[Mission] Cache warmup failed:', err instanceof Error ? err.message : err); }
@@ -487,6 +621,7 @@ async function fetchConvList() {
           summary: meta.summary || '',
           customName: convMeta.getTitle(sessionId) || '',
           status: isRunning ? 'ongoing' : 'completed',
+          processAlive: isRunning,
           streamingId: null,
           model: meta.model || '',
           messageCount: meta.messageCount || 0,
@@ -581,23 +716,28 @@ const router = Router();
 router.get('/conversations', async (req, res) => {
   try {
   const filterProject = req.query.project as string | undefined;
+  const forceFresh = req.query.fresh === 'true';
   const now = Date.now();
   const age = now - _convCache.timestamp;
 
   let data: any = null;
 
-  if (_convCache.data) {
-    // ALWAYS serve cached data immediately (stale-forever strategy)
+  if (forceFresh || !_convCache.data) {
+    // Force fresh fetch: ?fresh=true or cold start
+    const fresh = await fetchConvList();
+    _convCache = { data: fresh, timestamp: Date.now(), refreshing: false };
+    data = fresh;
+  } else if (_convCache.data) {
+    // Serve cached data immediately
     data = _convCache.data;
 
-    // Trigger background refresh if stale (>15s)
+    // Trigger background refresh if stale (>5s)
     if (age > CONV_CACHE_TTL_MS && !_convCache.refreshing) {
       _convCache.refreshing = true;
       (async () => {
         try {
           const fresh = await fetchConvList();
           _convCache = { data: fresh, timestamp: Date.now(), refreshing: false };
-          // Notify connected clients that data refreshed
           broadcast({ type: 'conversations-refreshed', total: fresh.total });
         } catch (err) {
           console.warn('[Mission] Background conv cache refresh failed:', err instanceof Error ? err.message : err);
@@ -605,11 +745,6 @@ router.get('/conversations', async (req, res) => {
         }
       })();
     }
-  } else {
-    // First-ever call (cold start) — must block
-    const fresh = await fetchConvList();
-    _convCache = { data: fresh, timestamp: Date.now(), refreshing: false };
-    data = fresh;
   }
 
   // Apply project filter AFTER cache
@@ -863,6 +998,7 @@ router.post('/send', async (req, res) => {
         convMeta.setLastPrompt(sessionId);
         convMeta.setFinished(sessionId, false); // Auto-unfinish when message sent
         convMeta.saveAssignment(sessionId, accountId);
+        setSessionState(sessionId, accountId, 'working', undefined, sessionId); // Clear idle/done → working
         invalidateConvCache();
         res.json({ ok: true, sessionId, piped: true });
         return;
@@ -959,6 +1095,7 @@ router.post('/send', async (req, res) => {
   logUserInput({ type: 'send', accountId, workDir, message, sessionId: finalSessionId, result: 'ok' });
   logRawUserInput(resolvedWorkDir, finalSessionId, message);
   convMeta.saveAssignment(finalSessionId, accountId);
+  setSessionState(finalSessionId, accountId, 'working', undefined, finalSessionId); // Clear idle/done → working
   convMeta.saveWorkDir(finalSessionId, resolvedWorkDir);
   convMeta.setLastPrompt(finalSessionId);
   convMeta.setFinished(finalSessionId, false); // Auto-unfinish when message sent
@@ -1378,13 +1515,30 @@ Gueltige Modelle: opus, sonnet. Nur auf Opus eskalieren wenn Sonnet nicht ausrei
 
 router.post('/start', async (req, res) => {
   try {
-  const { accountId, workDir, subject, message, model } = req.body;
+  let { accountId, workDir, subject, message, model, parentSessionId } = req.body;
   const VALID_MODELS = ['opus', 'sonnet', 'haiku'];
   const resolvedModel = (model && VALID_MODELS.includes(model)) ? model : 'opus';
-  if (!accountId || !message) {
-    res.status(400).json({ error: 'accountId, message required' });
+  if (!message) {
+    res.status(400).json({ error: 'message required' });
     return;
   }
+
+  // Auto account selection: pick least-loaded account
+  if (!accountId || accountId === 'auto') {
+    try {
+      const bestResp = await fetch(`http://localhost:${process.env.PORT || 4005}/api/claude-code/best-account`, { signal: AbortSignal.timeout(3000) });
+      if (bestResp.ok) {
+        const bestData = await bestResp.json() as any;
+        accountId = bestData.bestAccount || 'werking';
+        console.log(`[Start] Auto-selected account: ${accountId} (weekly: ${bestData.accounts?.find((a: any) => a.accountId === accountId)?.weeklyPercent ?? '?'}%)`);
+      } else {
+        accountId = 'werking'; // fallback
+      }
+    } catch {
+      accountId = 'werking'; // fallback on error
+    }
+  }
+
   if (!claudeCli.getAccountConfig(accountId)) {
     res.status(400).json({ error: 'unknown account' }); return;
   }
@@ -1426,6 +1580,10 @@ router.post('/start', async (req, res) => {
   // Mark as sub-session if subject starts with [Sub]
   if (subject && subject.startsWith('[Sub]')) {
     convMeta.setSubSession(sessionId, true);
+    if (parentSessionId) {
+      convMeta.setParentSession(sessionId, parentSessionId);
+      console.log(`[SubSession] ${sessionId.slice(0, 8)} spawned by parent ${parentSessionId.slice(0, 8)}`);
+    }
   }
   invalidateConvCache();
 
@@ -1436,6 +1594,133 @@ router.post('/start', async (req, res) => {
   } catch (err: any) {
     console.warn('[Server] POST /api/mission/start error:', err);
     res.status(500).json({ error: 'Internal error' });
+  }
+});
+
+// 6b-health. Session health diagnostics — checks all active sessions for problems
+router.get('/session-health', async (req, res) => {
+  try {
+    const data = _convCache.data || await fetchConvList();
+    const allConvs: any[] = data.conversations || [];
+    const active = allConvs.filter((c: any) => !c.manualFinished);
+
+    const results = active.map((c: any) => {
+      const processAlive = claudeCli.isActive(c.sessionId);
+      const diagnosis = !processAlive ? diagnoseSessionHealth(c.sessionId) : null;
+
+      return {
+        sessionId: c.sessionId,
+        customName: c.customName || c.summary?.slice(0, 50) || '',
+        projectName: c.projectName,
+        accountId: c.accountId,
+        isSubSession: !!c.isSubSession,
+        processAlive,
+        attentionState: c.attentionState,
+        attentionReason: c.attentionReason,
+        diagnosis: diagnosis ? {
+          needsRecovery: diagnosis.needsRecovery,
+          reason: diagnosis.reason,
+          details: diagnosis.details,
+          lastRole: diagnosis.lastRole,
+        } : null,
+        status: processAlive ? 'running' : (diagnosis?.needsRecovery ? 'needs_recovery' : 'stopped'),
+      };
+    });
+
+    const needsRecovery = results.filter(r => r.status === 'needs_recovery');
+    const running = results.filter(r => r.status === 'running');
+    const stopped = results.filter(r => r.status === 'stopped');
+
+    res.json({
+      total: results.length,
+      running: running.length,
+      needsRecovery: needsRecovery.length,
+      stopped: stopped.length,
+      sessions: results,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 6b-sub. Sub-sessions list — compact overview for SubSessionPanel
+router.get('/sub-sessions', async (req, res) => {
+  try {
+    const filterWorkDir = req.query.workDir as string | undefined;
+    // Get all conversations from cache
+    const now = Date.now();
+    let data = _convCache.data;
+    if (!data) {
+      data = await fetchConvList();
+      _convCache = { data, timestamp: now, refreshing: false };
+    }
+
+    const subSessions = convMeta.getAllSubSessions();
+    const states = getSessionStates();
+    const results: any[] = [];
+
+    for (const conv of (data.conversations || [])) {
+      if (!subSessions[conv.sessionId]) continue;
+      if (conv.manualFinished) continue;
+
+      // Filter by workDir if specified (match parent's workDir or sub-session's own)
+      if (filterWorkDir) {
+        const convPath = conv.projectPath || '';
+        const parentSid = convMeta.getParentSessionId(conv.sessionId);
+        const parentWorkDir = parentSid ? convMeta.getWorkDir(parentSid) : '';
+        if (!convPath.includes(filterWorkDir) && !parentWorkDir?.includes(filterWorkDir)) continue;
+      }
+
+      // Get attention state
+      let attentionState = 'idle';
+      let attentionReason = '';
+      for (const [_key, state] of Object.entries(states)) {
+        if (state.sessionId === conv.sessionId) {
+          attentionState = state.state;
+          attentionReason = state.reason || '';
+        }
+      }
+
+      // Get last assistant snippet
+      let lastSnippet = '';
+      try {
+        const found = findJsonlPathAllAccounts(conv.sessionId);
+        if (found) {
+          const lines = readFileSync(found.path, 'utf8').trim().split('\n').filter(Boolean).reverse();
+          for (const line of lines.slice(0, 20)) {
+            try {
+              const obj = JSON.parse(line);
+              if (obj.type === 'assistant' && obj.message?.content) {
+                const parts = Array.isArray(obj.message.content) ? obj.message.content : [];
+                const text = parts.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n').trim();
+                if (text) { lastSnippet = text.slice(0, 200); break; }
+              }
+            } catch { /* skip */ }
+          }
+        }
+      } catch { /* skip */ }
+
+      const parentSessionId = convMeta.getParentSessionId(conv.sessionId);
+      const parentSubject = parentSessionId ? convMeta.getTitle(parentSessionId) : undefined;
+
+      results.push({
+        sessionId: conv.sessionId,
+        subject: conv.subject || convMeta.getTitle(conv.sessionId) || conv.sessionId.slice(0, 8),
+        parentSessionId,
+        parentSubject,
+        accountId: conv.accountId || 'werking',
+        workDir: conv.projectPath || '',
+        attentionState,
+        attentionReason,
+        lastSnippet,
+        updatedAt: conv.updatedAt || conv.ctime,
+      });
+    }
+
+    res.json({ sessions: results, total: results.length });
+  } catch (err) {
+    console.warn('[SubSessions] API error:', (err as Error).message);
+    res.status(500).json({ error: 'Failed to fetch sub-sessions' });
   }
 });
 
