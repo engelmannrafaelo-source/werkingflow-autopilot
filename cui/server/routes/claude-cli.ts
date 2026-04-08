@@ -521,11 +521,59 @@ export async function startConversation(
     _autoContinueCount.delete(resumeSessionId);
   }
 
-  // If we already track this session in-memory, stop it before re-spawning.
-  // We do NOT kill OS-level processes we don't track — they may have background tasks.
+  // If we already track this session in-memory, reuse the existing wrapper.
+  // Only spawn a new one if the tracked process is dead.
   if (resumeSessionId && activeProcesses.has(resumeSessionId)) {
-    console.log(`[ClaudeCLI] Detaching existing tracked process for session ${resumeSessionId.slice(0, 8)} before resume`);
+    const existing = activeProcesses.get(resumeSessionId)!;
+    let isAlive = false;
+    if (existing.mode === 'persistent') {
+      try { process.kill(existing.claudePid, 0); isAlive = true; } catch { /* dead */ }
+    } else {
+      try { process.kill(existing.proc.pid!, 0); isAlive = true; } catch { /* dead */ }
+    }
+    if (isAlive) {
+      // Process is alive — send the prompt via existing FIFO instead of spawning a new wrapper
+      if (prompt) {
+        console.log(`[ClaudeCLI] Reusing live wrapper for session ${resumeSessionId.slice(0, 8)} (sending prompt via FIFO)`);
+        const sent = sendMessage(resumeSessionId, prompt);
+        if (sent) {
+          return { sessionId: resumeSessionId, ok: true };
+        }
+        // FIFO write failed — fall through to re-spawn
+        console.log(`[ClaudeCLI] FIFO write failed for ${resumeSessionId.slice(0, 8)}, will re-spawn`);
+      } else {
+        // No prompt, just resume — wrapper is already alive, nothing to do
+        console.log(`[ClaudeCLI] Session ${resumeSessionId.slice(0, 8)} already has a live wrapper, no action needed`);
+        return { sessionId: resumeSessionId, ok: true };
+      }
+    }
+    // Process is dead — detach and re-spawn below
+    console.log(`[ClaudeCLI] Session ${resumeSessionId.slice(0, 8)}: tracked process dead, will re-spawn`);
     await stopConversation(resumeSessionId);
+  }
+
+  // Check if there's an OS-level wrapper we're not tracking (e.g. after server restart)
+  if (resumeSessionId && !activeProcesses.has(resumeSessionId)) {
+    try {
+      const psOut = execSync(
+        `ps -eo pid,args --no-headers 2>/dev/null | grep "cui-session-wrapper ${resumeSessionId}" | grep -v grep | head -1 || true`,
+        { encoding: 'utf8', timeout: 5000 }
+      ).trim();
+      if (psOut) {
+        // There's a live wrapper we don't track — try to re-attach instead of spawning
+        const pidMatch = psOut.match(/^(\d+)/);
+        if (pidMatch) {
+          const wrapperPid = parseInt(pidMatch[1], 10);
+          console.log(`[ClaudeCLI] Found untracked live wrapper PID ${wrapperPid} for ${resumeSessionId.slice(0, 8)}, re-attaching...`);
+          const reattached = await reattachToWrapper(resumeSessionId, wrapperPid, accountId);
+          if (reattached) {
+            if (prompt) sendMessage(resumeSessionId, prompt);
+            return { sessionId: resumeSessionId, ok: true };
+          }
+          console.log(`[ClaudeCLI] Re-attach failed for ${resumeSessionId.slice(0, 8)}, will spawn new wrapper`);
+        }
+      }
+    } catch { /* ps failed — proceed with new spawn */ }
   }
 
   // Build CLI args
@@ -977,6 +1025,76 @@ async function reconnectExistingSessions(): Promise<void> {
       console.error(`[ClaudeCLI] Failed to reconnect ${sessionId.slice(0, 8)}:`, err instanceof Error ? err.message : err);
       await cleanupSessionFiles(sessionId);
     }
+  }
+}
+
+// --- Re-attach to an existing OS-level wrapper (no new spawn) ---
+
+async function reattachToWrapper(sessionId: string, wrapperPid: number, accountId: string): Promise<boolean> {
+  const stdoutFile = `${FIFO_DIR}/${sessionId}.stdout`;
+  const fifoPath = `${FIFO_DIR}/${sessionId}.fifo`;
+  const pidPath = `${FIFO_DIR}/${sessionId}.pid`;
+
+  try {
+    // Verify wrapper is alive
+    process.kill(wrapperPid, 0);
+
+    // Read Claude PID from PID file
+    let claudePid = wrapperPid;
+    try {
+      const pidContent = await fsp.readFile(pidPath, 'utf8');
+      const lines = pidContent.trim().split('\n');
+      if (lines.length >= 2) claudePid = parseInt(lines[1], 10) || wrapperPid;
+    } catch { /* use wrapperPid */ }
+
+    // Verify Claude is alive
+    try { process.kill(claudePid, 0); } catch {
+      console.log(`[ClaudeCLI] reattach ${sessionId.slice(0, 8)}: Claude PID ${claudePid} dead`);
+      return false;
+    }
+
+    // Verify stdout file exists
+    if (!existsSync(stdoutFile)) {
+      console.log(`[ClaudeCLI] reattach ${sessionId.slice(0, 8)}: stdout file missing`);
+      return false;
+    }
+
+    // Open FIFO
+    let fifoFd: fsp.FileHandle | null = null;
+    try {
+      if (existsSync(fifoPath)) {
+        fifoFd = await fsp.open(fifoPath, 'w');
+      }
+    } catch {
+      console.log(`[ClaudeCLI] reattach ${sessionId.slice(0, 8)}: FIFO open failed`);
+      return false;
+    }
+
+    // Start tail on stdout
+    const tailProc = spawn('tail', ['-f', '-n', '0', stdoutFile], { stdio: ['ignore', 'pipe', 'ignore'] });
+
+    const entry: PersistentProcess = {
+      mode: 'persistent', fifoFd, tailProc, claudePid, wrapperPid, stdoutFile,
+      sessionId, accountId, startedAt: Date.now(), lastStdoutAt: Date.now(), stdoutBuffer: '',
+    };
+    activeProcesses.set(sessionId, entry);
+
+    attachStdoutReader(entry, tailProc, (sid) => {
+      if (sid && sid !== sessionId) {
+        activeProcesses.delete(sessionId);
+        activeProcesses.set(sid, entry);
+      }
+    });
+    tailProc.on('close', () => handlePersistentExit(entry, sessionId));
+
+    const lastState = await detectLastState(stdoutFile);
+    _setSessionState(sessionId, accountId, lastState.state, lastState.reason, sessionId);
+
+    console.log(`[ClaudeCLI] Re-attached to wrapper PID ${wrapperPid} for session ${sessionId.slice(0, 8)} (claude=${claudePid})`);
+    return true;
+  } catch (err) {
+    console.log(`[ClaudeCLI] reattach ${sessionId.slice(0, 8)} failed: ${err instanceof Error ? err.message : err}`);
+    return false;
   }
 }
 

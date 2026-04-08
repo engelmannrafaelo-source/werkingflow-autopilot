@@ -590,6 +590,10 @@ export default function createControlRouter(deps: ControlDeps): Router {
       attentionReason?: string;
       isVisible?: boolean;
       openInWorkspace?: string;
+      /** OS process status: 'alive' (wrapper running), 'dead' (no process), 'tracked' (in activeProcesses) */
+      processStatus?: string;
+      /** Number of OS-level wrapper processes for this session */
+      wrapperCount?: number;
     }
 
     const chats: ActiveChat[] = [];
@@ -639,20 +643,38 @@ export default function createControlRouter(deps: ControlDeps): Router {
 
     // 3. Enrich with attention states + process-alive check
     const states = getSessionStates();
-    // Also check which sessions have a live OS process (wrapper running)
-    let liveWrapperSessions = new Set<string>();
+    const trackedSessions = new Set(getActiveProcesses().map(p => p.sessionId));
+
+    // Count live OS wrappers per session
+    const wrapperCountBySession = new Map<string, number>();
     try {
       const { execSync } = await import('child_process');
-      const psOut = execSync('ps -eo args --no-headers 2>/dev/null | grep cui-session-wrapper | grep -v grep || true', { encoding: 'utf8', timeout: 5000 });
-      for (const line of psOut.split('\n').filter(Boolean)) {
-        // Extract session ID (first UUID-like arg after "cui-session-wrapper")
+      const psOut = execSync('ps ax -o args 2>/dev/null || true', { encoding: 'utf8', timeout: 5000 });
+      for (const line of psOut.split('\n')) {
+        if (!line.includes('cui-session-wrapper') || line.includes('grep')) continue;
         const match = line.match(/cui-session-wrapper\s+([0-9a-f-]{36})/);
-        if (match) liveWrapperSessions.add(match[1]);
+        if (match) {
+          wrapperCountBySession.set(match[1], (wrapperCountBySession.get(match[1]) || 0) + 1);
+        }
       }
-    } catch { /* ps failed — ignore */ }
+    } catch (err) {
+      console.warn('[AllChats] ps wrapper scan failed:', (err as Error).message);
+    }
 
     for (const chat of chats) {
-      // First check in-memory states (tracked sessions)
+      const wrapperCount = wrapperCountBySession.get(chat.sessionId) || 0;
+      chat.wrapperCount = wrapperCount;
+
+      // Determine process status
+      if (trackedSessions.has(chat.sessionId)) {
+        chat.processStatus = 'tracked';
+      } else if (wrapperCount > 0) {
+        chat.processStatus = 'alive';
+      } else {
+        chat.processStatus = 'dead';
+      }
+
+      // Attention state from in-memory tracking
       for (const [_key, state] of Object.entries(states)) {
         if (state.sessionId === chat.sessionId) {
           chat.attentionState = state.state;
@@ -660,7 +682,7 @@ export default function createControlRouter(deps: ControlDeps): Router {
         }
       }
       // If no tracked state but OS process is alive, mark as working
-      if (!chat.attentionState && liveWrapperSessions.has(chat.sessionId)) {
+      if (!chat.attentionState && wrapperCount > 0) {
         chat.attentionState = 'working';
         chat.attentionReason = '';
       }
