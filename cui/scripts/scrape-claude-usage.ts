@@ -344,6 +344,28 @@ async function main() {
   writeFileSync(outputPath, JSON.stringify(results, null, 2), "utf-8");
   console.log(`\nSaved ${results.length}/${toScrape.length} accounts to ${outputPath}`);
 
+  // Persist snapshot to Bridge metrics store (JSONL on Hetzner)
+  try {
+    const bridgeUrl = process.env.AI_BRIDGE_URL || "http://49.12.72.66:8000";
+    const bridgeKey = process.env.AI_BRIDGE_API_KEY || "";
+    const snapshotRes = await fetch(`${bridgeUrl}/v1/metrics/cc-usage-snapshot`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(bridgeKey ? { "Authorization": `Bearer ${bridgeKey}` } : {}),
+      },
+      body: JSON.stringify({ accounts: results }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (snapshotRes.ok) {
+      console.log(`CC usage snapshot persisted to Bridge metrics store`);
+    } else {
+      console.warn(`CC usage snapshot save failed: ${snapshotRes.status}`);
+    }
+  } catch (e: any) {
+    console.warn(`CC usage snapshot save error: ${e.message}`);
+  }
+
   console.log("\n--- USAGE SUMMARY ---");
   for (const r of results) {
     const tag = r.scrapeError ? " [STALE]" : "";

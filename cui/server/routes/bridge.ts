@@ -434,6 +434,52 @@ router.get("/api/bridge/metrics/prompt-performance/timeline", async (req: any, r
 });
 
 
+// Persistent Request Log (all HTTP requests, stored on disk)
+router.get("/api/bridge/metrics/request-log", async (req: any, res: any) => {
+  const hours = req.query.hours || '24';
+  const endpoint = req.query.endpoint || '';
+  const status = req.query.status || '';
+  const limit = req.query.limit || '200';
+  try {
+    let url = `/v1/metrics/request-log?hours=${hours}&limit=${limit}`;
+    if (endpoint) url += `&endpoint=${encodeURIComponent(endpoint)}`;
+    if (status) url += `&status=${encodeURIComponent(status)}`;
+    const data = await bridgeFetch(url);
+    res.json(data);
+  } catch (err: any) {
+    console.warn(`[Bridge] RequestLog: ${err.message}`);
+    res.json({ entries: [], summary: {}, endpoints: {}, _error: err.message });
+  }
+});
+
+// CC-Usage History (account limit snapshots over time)
+router.get("/api/bridge/metrics/cc-usage-history", async (req: any, res: any) => {
+  const hours = req.query.hours || '168';
+  const limit = req.query.limit || '500';
+  try {
+    const data = await bridgeFetch(`/v1/metrics/cc-usage-history?hours=${hours}&limit=${limit}`);
+    res.json(data);
+  } catch (err: any) {
+    console.warn(`[Bridge] CCUsageHistory: ${err.message}`);
+    res.json({ snapshots: [], _error: err.message });
+  }
+});
+
+// CC-Usage Snapshot Save (called after each scrape)
+router.post("/api/bridge/metrics/cc-usage-snapshot", async (req: any, res: any) => {
+  try {
+    const data = await bridgeFetch('/v1/metrics/cc-usage-snapshot', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body),
+    });
+    res.json(data);
+  } catch (err: any) {
+    console.warn(`[Bridge] CCUsageSnapshot save: ${err.message}`);
+    res.json({ status: "error", _error: err.message });
+  }
+});
+
 // ── Generic Bridge Proxy ────────────────────────────────────────────────────
 // Forwards any request from /api/bridge-proxy/* to the Bridge server.
 // This allows the frontend to call Bridge API endpoints through the CUI server
