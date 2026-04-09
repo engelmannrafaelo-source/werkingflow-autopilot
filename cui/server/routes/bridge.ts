@@ -411,8 +411,8 @@ router.get("/api/bridge/metrics/apps", bridgeMetricHandler("Apps", "/v1/metrics/
 
 // Prompt Performance metrics (per app + agent — duration, error rate, tokens)
 router.get("/api/bridge/metrics/prompt-performance", async (req: any, res: any) => {
+  const hours = req.query.hours || '24';
   try {
-    const hours = req.query.hours || '24';
     const data = await bridgeFetch(`/v1/metrics/prompt-performance?hours=${hours}`);
     res.json(data);
   } catch (err: any) {
