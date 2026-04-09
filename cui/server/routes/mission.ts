@@ -33,6 +33,17 @@ const MAX_TITLE_LENGTH = 60;
 const MAX_TAIL_MESSAGES = 500;
 const COMMANDER_CACHE_TTL_MS = 60_000;
 
+// --- Sub-session tracking (module-level so finish endpoint can access) ---
+const _subSessionsAwaitingFinish = new Set<string>();
+
+function cleanupSubSession(sessionId: string) {
+  _subSessionsAwaitingFinish.delete(sessionId);
+  convMeta.setFinished(sessionId, true);
+  convMeta.deleteParentSession(sessionId);
+  claudeCli.stopConversation(sessionId);
+  broadcast({ type: 'control:conversation-finished', sessionId, panelsToClose: [] });
+}
+
 // --- Dependencies (injected via init) ---
 let broadcast: (data: Record<string, unknown>) => void;
 let sessionStates: Map<string, SessionState>;
@@ -130,12 +141,16 @@ export function initMissionRouter(deps: MissionDeps) {
   });
 
   // Sub-session completion handler: when a sub-session reaches done state,
-  // inject its result into the parent session and mark it finished.
+  // inject its result into the parent session. The sub-session is NOT auto-finished —
+  // the parent must explicitly finish it via POST /conversation/:id/finish.
   // Includes retry logic (max 5 attempts, 30s delay) if parent is busy.
   const SUB_INJECT_MAX_RETRIES = 5;
   const SUB_INJECT_RETRY_DELAY_MS = 30_000;
 
   async function injectSubSessionResult(sessionId: string, parentSessionId: string, attempt: number = 1) {
+    // Guard: don't re-inject if already completed
+    if (_subSessionsAwaitingFinish.has(sessionId)) return;
+
     const subjectTitle = convMeta.getTitle(sessionId) || 'Sub-Session';
     console.log(`[SubSession] ${sessionId.slice(0, 8)} → injecting into parent ${parentSessionId.slice(0, 8)} (attempt ${attempt}/${SUB_INJECT_MAX_RETRIES})`);
 
@@ -158,8 +173,9 @@ export function initMissionRouter(deps: MissionDeps) {
       }
 
       if (!subResult) {
-        console.warn(`[SubSession] No result found for sub-session ${sessionId.slice(0, 8)} — giving up`);
-        cleanupSubSession(sessionId);
+        console.warn(`[SubSession] No result found for sub-session ${sessionId.slice(0, 8)} — marking as awaiting finish anyway`);
+        _subSessionsAwaitingFinish.add(sessionId);
+        claudeCli.stopConversation(sessionId);
         return;
       }
 
@@ -167,21 +183,24 @@ export function initMissionRouter(deps: MissionDeps) {
       const parentAccountId = convMeta.getAssignment(parentSessionId) || claudeCli.ACCOUNT_CONFIG[0]?.id || 'werking';
       const parentWorkDir = convMeta.getWorkDir(parentSessionId) || '';
       const parentModel = convMeta.getModel(parentSessionId) || '';
-      const injectMessage = `[Sub-Session Ergebnis: ${subjectTitle}]\n\n${subResult}\n\nPruefe ob alles korrekt ist.`;
+      const injectMessage = `[Sub-Session Ergebnis: ${subjectTitle}]\n\n${subResult}\n\nPruefe ob alles korrekt ist und finishe die Sub-Session wenn erledigt.`;
 
       const result = await claudeCli.startConversation(parentAccountId, injectMessage, parentWorkDir, parentSessionId, parentModel);
       if (result.ok) {
         broadcast({ type: 'conv-subsession-complete', sessionId: parentSessionId, subSessionId: sessionId, result: subResult });
-        console.log(`[SubSession] Result injected into parent ${parentSessionId.slice(0, 8)} successfully`);
-        cleanupSubSession(sessionId);
+        console.log(`[SubSession] Result injected into parent ${parentSessionId.slice(0, 8)} — awaiting explicit finish`);
+        _subSessionsAwaitingFinish.add(sessionId);
+        // Stop CLI process (work is done) but do NOT mark as finished — parent must do that
+        claudeCli.stopConversation(sessionId);
       } else {
         console.warn(`[SubSession] Injection into parent failed: ${result.error}`);
         if (attempt < SUB_INJECT_MAX_RETRIES) {
           console.log(`[SubSession] Retrying in ${SUB_INJECT_RETRY_DELAY_MS / 1000}s...`);
           setTimeout(() => injectSubSessionResult(sessionId, parentSessionId, attempt + 1), SUB_INJECT_RETRY_DELAY_MS);
         } else {
-          console.warn(`[SubSession] All ${SUB_INJECT_MAX_RETRIES} retries exhausted for ${sessionId.slice(0, 8)} → parent ${parentSessionId.slice(0, 8)}. Giving up.`);
-          cleanupSubSession(sessionId);
+          console.warn(`[SubSession] All ${SUB_INJECT_MAX_RETRIES} retries exhausted for ${sessionId.slice(0, 8)} → marking as awaiting finish`);
+          _subSessionsAwaitingFinish.add(sessionId);
+          claudeCli.stopConversation(sessionId);
         }
       }
     } catch (err) {
@@ -190,17 +209,11 @@ export function initMissionRouter(deps: MissionDeps) {
         console.log(`[SubSession] Retrying in ${SUB_INJECT_RETRY_DELAY_MS / 1000}s...`);
         setTimeout(() => injectSubSessionResult(sessionId, parentSessionId, attempt + 1), SUB_INJECT_RETRY_DELAY_MS);
       } else {
-        console.warn(`[SubSession] All ${SUB_INJECT_MAX_RETRIES} retries exhausted for ${sessionId.slice(0, 8)}. Giving up.`);
-        cleanupSubSession(sessionId);
+        console.warn(`[SubSession] All ${SUB_INJECT_MAX_RETRIES} retries exhausted for ${sessionId.slice(0, 8)} — marking as awaiting finish`);
+        _subSessionsAwaitingFinish.add(sessionId);
+        claudeCli.stopConversation(sessionId);
       }
     }
-  }
-
-  function cleanupSubSession(sessionId: string) {
-    convMeta.setFinished(sessionId, true);
-    convMeta.deleteParentSession(sessionId);
-    claudeCli.stopConversation(sessionId);
-    broadcast({ type: 'control:conversation-finished', sessionId, panelsToClose: [] });
   }
 
   onSessionStateChange(async (sessionId, state, reason) => {
@@ -213,6 +226,64 @@ export function initMissionRouter(deps: MissionDeps) {
 
     await injectSubSessionResult(sessionId, parentSessionId);
   });
+
+  // --- Sub-session progress tracker ---
+  // Every 60s, check active sub-sessions and broadcast progress to their parents.
+  // This gives parents continuous visibility into what their sub-sessions are doing.
+  const _subProgressLastSeen = new Map<string, string>(); // sessionId → last known summary hash
+  const SUB_PROGRESS_INTERVAL_MS = 60_000;
+
+  setInterval(() => {
+    // Iterate active CLI processes — only sub-sessions with a parent get progress reports
+    for (const proc of claudeCli.getActiveProcesses()) {
+      const parentSessionId = convMeta.getParentSessionId(proc.sessionId);
+      if (!parentSessionId) continue;
+      if (_subSessionsAwaitingFinish.has(proc.sessionId)) continue;
+
+      // Extract latest assistant message summary from JSONL
+      const found = findJsonlPathAllAccounts(proc.sessionId);
+      if (!found) continue;
+
+      let lastSummary = '';
+      let lastToolInfo = '';
+      try {
+        const lines = readFileSync(found.path, 'utf8').trim().split('\n').filter(Boolean).reverse();
+        for (const line of lines) {
+          try {
+            const obj = JSON.parse(line);
+            if (obj.type === 'assistant' && obj.message?.content) {
+              const parts = Array.isArray(obj.message.content) ? obj.message.content : [];
+              const text = parts.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n').trim();
+              if (text) { lastSummary = text.slice(0, 300); break; }
+              // Check for tool use as progress indicator
+              const toolUse = parts.find((b: any) => b.type === 'tool_use');
+              if (toolUse && !lastToolInfo) { lastToolInfo = `Tool: ${toolUse.name}`; }
+            }
+          } catch { /* skip */ }
+        }
+      } catch { continue; }
+
+      const summary = lastSummary || lastToolInfo || '';
+      if (!summary) continue;
+
+      // Only broadcast if something changed since last check
+      const prevHash = _subProgressLastSeen.get(proc.sessionId);
+      const currentHash = summary.slice(0, 50);
+      if (prevHash === currentHash) continue;
+      _subProgressLastSeen.set(proc.sessionId, currentHash);
+
+      const title = convMeta.getTitle(proc.sessionId) || proc.sessionId.slice(0, 8);
+      const state = getSessionStates()[proc.sessionId];
+      broadcast({
+        type: 'conv-subsession-progress',
+        parentSessionId,
+        subSessionId: proc.sessionId,
+        subSessionTitle: title,
+        subSessionState: state?.state || 'working',
+        summary: summary.slice(0, 200),
+      });
+    }
+  }, SUB_PROGRESS_INTERVAL_MS);
 
   // Rate-limit auto-account-switch: when a session hits rate_limit,
   // automatically switch to the least-loaded account and respawn.
@@ -291,69 +362,69 @@ export function initMissionRouter(deps: MissionDeps) {
     }, RATE_LIMIT_SWITCH_DELAY_MS);
   });
 
-  // Sub-session progress polling: periodically check running sub-sessions
-  // and notify parent sessions with a brief status update.
-  const SUB_PROGRESS_INTERVAL_MS = 60_000;
-  const _subProgressLastCheck = new Map<string, string>(); // sessionId → last snippet hash
+  // Sub-session reminder loop: every 5 minutes, remind parent sessions about
+  // their active sub-sessions. Keeps reminding until parent explicitly finishes them.
+  const SUB_REMINDER_INTERVAL_MS = 5 * 60_000; // 5 minutes
 
   setInterval(() => {
-    // Find all sub-sessions that have a parent and are still running (not finished)
     const states = getSessionStates();
+
+    // Collect all sub-sessions that have a parent and are NOT finished
+    const allSubSessions = new Map<string, string>(); // sessionId → parentSessionId
     for (const [key, sState] of Object.entries(states)) {
       const sessionId = sState.sessionId || key;
       const parentSessionId = convMeta.getParentSessionId(sessionId);
       if (!parentSessionId) continue;
       if (convMeta.isFinished(sessionId)) continue;
+      allSubSessions.set(sessionId, parentSessionId);
+    }
+    // Also check completed sub-sessions awaiting finish (their CLI is stopped, so they won't be in states)
+    for (const sessionId of _subSessionsAwaitingFinish) {
+      if (convMeta.isFinished(sessionId)) { _subSessionsAwaitingFinish.delete(sessionId); continue; }
+      const parentSessionId = convMeta.getParentSessionId(sessionId);
+      if (parentSessionId) allSubSessions.set(sessionId, parentSessionId);
+    }
 
-      // Only notify if sub-session is actively running
-      if (sState.state !== 'working') continue;
+    // Group by parent for batched reminders
+    const byParent = new Map<string, Array<{ sessionId: string; isCompleted: boolean }>>();
+    for (const [sessionId, parentSessionId] of allSubSessions) {
+      if (!byParent.has(parentSessionId)) byParent.set(parentSessionId, []);
+      const isCompleted = _subSessionsAwaitingFinish.has(sessionId);
+      byParent.get(parentSessionId)!.push({ sessionId, isCompleted });
+    }
 
-      // Check if parent is idle (receptive to messages)
+    for (const [parentSessionId, subs] of byParent) {
+      // Only remind if parent is idle (receptive to messages)
       const parentState = states[parentSessionId];
       if (!parentState || parentState.state !== 'idle') continue;
 
       try {
-        const found = findJsonlPathAllAccounts(sessionId);
-        if (!found) continue;
-
-        // Get last assistant text snippet
-        const lines = readFileSync(found.path, 'utf8').trim().split('\n').filter(Boolean).reverse();
-        let snippet = '';
-        for (const line of lines) {
-          try {
-            const obj = JSON.parse(line);
-            if (obj.type === 'assistant' && obj.message?.content) {
-              const parts = Array.isArray(obj.message.content) ? obj.message.content : [];
-              const text = parts.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n').trim();
-              if (text) { snippet = text.slice(0, 200); break; }
-            }
-          } catch { /* skip */ }
+        const lines: string[] = [];
+        for (const { sessionId, isCompleted } of subs) {
+          const title = convMeta.getTitle(sessionId) || sessionId.slice(0, 8);
+          if (isCompleted) {
+            lines.push(`- "${title}" — ist FERTIG. Bitte Ergebnis pruefen und Sub-Session finishen.`);
+          } else {
+            lines.push(`- "${title}" — arbeitet noch.`);
+          }
         }
-        if (!snippet) continue;
 
-        // Skip if snippet hasn't changed since last check
-        const lastSnippet = _subProgressLastCheck.get(sessionId);
-        if (lastSnippet === snippet) continue;
-        _subProgressLastCheck.set(sessionId, snippet);
-
-        const subjectTitle = convMeta.getTitle(sessionId) || 'Sub-Session';
-        const progressMsg = `[Sub-Session Status: ${subjectTitle}]\nArbeitet noch — aktuell bei:\n${snippet}...`;
+        const reminderMsg = `[Sub-Session Reminder]\nDu hast aktive Sub-Sessions:\n${lines.join('\n')}\n\nVergiss nicht, fertige Sub-Sessions zu pruefen und zu finishen.`;
 
         const parentAccountId = convMeta.getAssignment(parentSessionId) || claudeCli.ACCOUNT_CONFIG[0]?.id || 'werking';
         const parentWorkDir = convMeta.getWorkDir(parentSessionId) || '';
         const parentModel = convMeta.getModel(parentSessionId) || '';
 
-        claudeCli.startConversation(parentAccountId, progressMsg, parentWorkDir, parentSessionId, parentModel).then(res => {
+        claudeCli.startConversation(parentAccountId, reminderMsg, parentWorkDir, parentSessionId, parentModel).then(res => {
           if (res.ok) {
-            console.log(`[SubSession] Progress update sent to parent ${parentSessionId.slice(0, 8)} for ${sessionId.slice(0, 8)}`);
+            console.log(`[SubSession] Reminder sent to parent ${parentSessionId.slice(0, 8)} for ${subs.length} sub-session(s)`);
           }
-          // Silent fail on progress — it's optional
         });
       } catch {
-        // Progress polling is best-effort, don't crash
+        // Reminder is best-effort, don't crash
       }
     }
-  }, SUB_PROGRESS_INTERVAL_MS);
+  }, SUB_REMINDER_INTERVAL_MS);
 
   // Warm up conversation cache on startup (async, non-blocking)
   setTimeout(async () => {
@@ -1128,8 +1199,11 @@ router.post('/send', async (req, res) => {
   if (resumeId) {
     const ctx = extractConversationContext(sessionId, 100);
     if (ctx) {
-      resumeMessage = `<session-context>\n${ctx}\n</session-context>\n\n${message}`;
+      resumeMessage = `<session-context>\n[SESSION_ID: ${sessionId}]\n${ctx}\n</session-context>\n\n${message}`;
       console.log(`[Send] Enriched resume message with inline context (${ctx.length} chars)`);
+    } else {
+      // Even without conversation context, inject session ID so the session knows itself
+      resumeMessage = `<session-context>\n[SESSION_ID: ${sessionId}]\n</session-context>\n\n${message}`;
     }
   }
 
@@ -1292,10 +1366,65 @@ router.get('/visibility', (_req, res) => {
   res.json({ panels, visibleSessionIds: [...getVisibleSessionIds()] });
 });
 
+// 5c2. Remove panel from visibility registry (HTTP fallback for when WS is already closed)
+router.post('/panel-removed', (req, res) => {
+  const { panelId, projectId } = req.body || {};
+  if (!panelId || !projectId) { res.status(400).json({ error: 'panelId and projectId required' }); return; }
+  const key = `${projectId}:${panelId}`;
+  if (visibilityRegistry.has(key)) {
+    visibilityRegistry.delete(key);
+    broadcast({ type: 'visibility-update', visibleSessionIds: [...getVisibleSessionIds()] });
+  }
+  res.json({ ok: true });
+});
+
 // 5d. Mark conversation as finished (user override) — also kills the CLI process
+// For sub-sessions: this is the ONLY way to finish them (no auto-finish).
 router.post('/conversation/:sessionId/finish', async (req, res) => {
-  const finished = req.body.finished !== false;
+  const body = req.body || {};
+  const finished = body.finished !== false;
   const sid = req.params.sessionId;
+  const confirm = body.confirm === true;
+
+  // SAFETY GUARD: If session has a live process, require explicit confirm: true
+  // This prevents Claude Code (or any caller) from blindly mass-killing sessions.
+  // Without confirm, the caller gets session details back and must acknowledge the kill.
+  if (finished && !confirm) {
+    const isAlive = claudeCli.isActive(sid);
+    if (isAlive) {
+      // If process is alive but session is idle/done, treat it as finished — no confirm needed.
+      // Claude Code stays idle after every response, so "alive" doesn't mean "working".
+      const stateInfo = getSessionStates()[sid];
+      const state = stateInfo?.state;
+      const reason = stateInfo?.reason;
+      const isDone = (state === 'needs_attention' && reason === 'done') || (state === 'idle' && reason === 'done');
+      if (!isDone) {
+        const title = convMeta.getTitle(sid) || sid.slice(0, 8);
+        const isSubSession = !!convMeta.getParentSessionId(sid);
+        res.status(409).json({
+          ok: false,
+          error: 'SESSION_ALIVE',
+          message: `Session "${title}" hat einen laufenden Prozess. Zum Finishen { "confirm": true } mitsenden.`,
+          sessionId: sid,
+          name: title,
+          isSubSession,
+          hint: 'Jede Session einzeln pruefen bevor sie gefinished wird. Nie blind bulk-finishen.',
+        });
+        return;
+      }
+    }
+  }
+
+  // If this is a sub-session being finished, use cleanupSubSession for proper cleanup
+  const isSubSession = !!convMeta.getParentSessionId(sid);
+  if (finished && isSubSession) {
+    cleanupSubSession(sid);
+    invalidateConvCache();
+    console.log(`[Finish] Sub-session ${sid.slice(0, 8)} explicitly finished by parent`);
+    res.json({ ok: true, sessionId: sid, finished, subSession: true });
+    return;
+  }
+
   convMeta.setFinished(sid, finished);
   invalidateConvCache();
   if (finished) {
@@ -1606,8 +1735,15 @@ router.post('/start', async (req, res) => {
       const bestResp = await fetch(`http://localhost:${process.env.PORT || 4005}/api/claude-code/best-account`, { signal: AbortSignal.timeout(3000) });
       if (bestResp.ok) {
         const bestData = await bestResp.json() as any;
+        const bestAccount = bestData.accounts?.find((a: any) => a.accountId === bestData.bestAccount);
         accountId = bestData.bestAccount || 'werking';
-        console.log(`[Start] Auto-selected account: ${accountId} (weekly: ${bestData.accounts?.find((a: any) => a.accountId === accountId)?.weeklyPercent ?? '?'}%)`);
+        const weeklyPct = bestAccount?.weeklyPercent ?? '?';
+        console.log(`[Start] Auto-selected account: ${accountId} (weekly: ${weeklyPct}%, status: ${bestAccount?.status ?? 'unknown'})`);
+        // Warn if all accounts are critical — session may fail with rate limit
+        const anyAvailable = bestData.accounts?.some((a: any) => a.available);
+        if (!anyAvailable) {
+          console.warn(`[Start] WARNING: All accounts are critical/depleted! Best pick: ${accountId} at ${weeklyPct}%. Session may fail.`);
+        }
       } else {
         accountId = 'werking'; // fallback
       }
@@ -1657,9 +1793,40 @@ router.post('/start', async (req, res) => {
   // Mark as sub-session if subject starts with [Sub]
   if (subject && subject.startsWith('[Sub]')) {
     convMeta.setSubSession(sessionId, true);
+
+    // Auto-detect parent: if parentSessionId not provided, find the idle session
+    // that most likely spawned this sub-session (same account or any idle session)
+    if (!parentSessionId) {
+      const states = getSessionStates();
+      // Look for sessions that were recently working (the spawner just went idle)
+      // Prefer sessions in the same workDir, then any idle session
+      let bestParent: string | null = null;
+      for (const [key, sState] of Object.entries(states)) {
+        const sid = sState.sessionId || key;
+        if (sid === sessionId) continue;
+        if (convMeta.isFinished(sid)) continue;
+        if (convMeta.isSubSession(sid)) continue; // Sub-sessions can't be parents
+        // Idle sessions are the most likely spawners (they just ran a curl command)
+        if (sState.state === 'idle') {
+          const sWorkDir = convMeta.getWorkDir(sid);
+          if (sWorkDir && resolvedWorkDir.includes(sWorkDir.split('/').pop() || '___')) {
+            bestParent = sid; // Same project — high confidence
+            break;
+          }
+          if (!bestParent) bestParent = sid; // Fallback to any idle session
+        }
+      }
+      if (bestParent) {
+        parentSessionId = bestParent;
+        console.log(`[SubSession] Auto-detected parent: ${parentSessionId.slice(0, 8)} for sub ${sessionId.slice(0, 8)}`);
+      }
+    }
+
     if (parentSessionId) {
       convMeta.setParentSession(sessionId, parentSessionId);
-      console.log(`[SubSession] ${sessionId.slice(0, 8)} spawned by parent ${parentSessionId.slice(0, 8)}`);
+      console.log(`[SubSession] ${sessionId.slice(0, 8)} linked to parent ${parentSessionId.slice(0, 8)}`);
+    } else {
+      console.warn(`[SubSession] ${sessionId.slice(0, 8)} has no parent — reminder system won't track it`);
     }
   }
   invalidateConvCache();
