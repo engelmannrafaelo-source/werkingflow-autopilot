@@ -6,6 +6,7 @@ interface ProjectTabsProps {
   projects: Project[];
   activeId: string;
   attention?: Record<string, 'working' | 'needs_attention' | 'idle'>;
+  missingSessions?: number;
   onSelect: (id: string) => void;
   onNew: () => void;
   onEdit: (id: string) => void;
@@ -274,13 +275,13 @@ function SyncthingToggle() {
   );
 }
 
-export default memo(function ProjectTabs({ projects, activeId, attention, onSelect, onNew, onEdit, onDelete, missionActive, onMissionClick, allChatsActive, onAllChatsClick, isMobile }: ProjectTabsProps) {
+export default memo(function ProjectTabs({ projects, activeId, attention, missingSessions = 0, onSelect, onNew, onEdit, onDelete, missionActive, onMissionClick, allChatsActive, onAllChatsClick, isMobile }: ProjectTabsProps) {
   const [syncState, setSyncState] = useState<SyncState>('idle');
   const [syncDetail, setSyncDetail] = useState('');
   const [pendingCount, setPendingCount] = useState(0);
   const [allLive, setAllLive] = useState(false);
   const [panelHealth, setPanelHealth] = useState<{ running: number; total: number; missing: string[] } | null>(null);
-  const { user, authEnabled, logout } = useAuth();
+  const { user, authEnabled, logout, canAccessWorkspace } = useAuth();
 
   // Listen for update-available notifications via WebSocket (forwarded by App.tsx)
   useEffect(() => {
@@ -411,17 +412,19 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
 
   const hasPending = pendingCount > 0 && syncState === 'idle';
 
-  // Sort projects: needs_attention first, then working, then idle, then no status
+  // Filter projects by allowedWorkspaces, then sort: needs_attention first, working, idle, no status
   const sortedProjects = useMemo(() => {
     const scoreFn = (p: Project) => {
       const state = attention?.[p.id];
-      if (state === 'needs_attention') return 0; // highest priority (show first)
+      if (state === 'needs_attention') return 0;
       if (state === 'working') return 1;
       if (state === 'idle') return 2;
-      return 3; // no status
+      return 3;
     };
-    return [...projects].sort((a, b) => scoreFn(a) - scoreFn(b));
-  }, [projects, attention]);
+    return [...projects]
+      .filter(p => canAccessWorkspace(p.id))
+      .sort((a, b) => scoreFn(a) - scoreFn(b));
+  }, [projects, attention, canAccessWorkspace]);
 
   // --- Mobile: compact header with project dropdown ---
   if (isMobile) {
@@ -467,7 +470,7 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
             minHeight: 32,
           }}
         >
-          {projects.map(p => (
+          {projects.filter(p => canAccessWorkspace(p.id)).map(p => (
             <option key={p.id} value={p.id}>{p.name}</option>
           ))}
         </select>
@@ -656,7 +659,7 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
               WebkitAppRegion: 'no-drag',
             } as React.CSSProperties}
           >
-            {attention?.[p.id] && p.id !== activeId && (
+            {attention?.[p.id] && (
               <span style={{
                 width: 7, height: 7, borderRadius: '50%',
                 background: attention[p.id] === 'needs_attention' ? '#ff9e64'
@@ -889,11 +892,13 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
           // Dispatch manual auto-layout trigger to LayoutManager
           window.dispatchEvent(new CustomEvent('cui-auto-layout', { detail: { projectId: activeId } }));
         }}
-        title="Layout automatisch anordnen (löscht Layout-Cache + ordnet Panels neu an)"
+        title={missingSessions > 0
+          ? `Layout anordnen — ${missingSessions} Session${missingSessions > 1 ? 's' : ''} nicht sichtbar`
+          : 'Layout automatisch anordnen (löscht Layout-Cache + ordnet Panels neu an)'}
         style={{
-          background: 'none',
-          border: '1px solid var(--tn-border)',
-          color: 'var(--tn-text-muted)',
+          background: missingSessions > 0 ? 'rgba(224,175,104,0.15)' : 'none',
+          border: `1px solid ${missingSessions > 0 ? '#e0af68' : 'var(--tn-border)'}`,
+          color: missingSessions > 0 ? '#e0af68' : 'var(--tn-text-muted)',
           padding: '2px 6px',
           fontSize: 9,
           fontWeight: 600,
@@ -902,7 +907,7 @@ export default memo(function ProjectTabs({ projects, activeId, attention, onSele
           whiteSpace: 'nowrap',
         } as React.CSSProperties}
       >
-        Layout
+        Layout{missingSessions > 0 ? ` (${missingSessions})` : ''}
       </button>
 
       {/* Spacer */}

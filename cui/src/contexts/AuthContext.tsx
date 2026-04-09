@@ -31,6 +31,8 @@ interface AuthState {
   logout: () => Promise<void>;
   /** Check if user can access a specific panel */
   canAccessPanel: (panelId: string) => boolean;
+  /** Check if user can access a specific workspace */
+  canAccessWorkspace: (workspaceId: string) => boolean;
 }
 
 const AuthContext = createContext<AuthState>({
@@ -40,6 +42,7 @@ const AuthContext = createContext<AuthState>({
   login: async () => ({ ok: false, error: 'Not initialized' }),
   logout: async () => {},
   canAccessPanel: () => true,
+  canAccessWorkspace: () => true,
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -123,8 +126,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return user.allowedPanels.includes(panelId);
   }, [authEnabled, user]);
 
+  const canAccessWorkspace = useCallback((workspaceId: string): boolean => {
+    if (!authEnabled) return true;
+    if (!user) return false;
+    if (user.allowedWorkspaces === '*') return true;
+    return user.allowedWorkspaces.includes(workspaceId);
+  }, [authEnabled, user]);
+
   return (
-    <AuthContext.Provider value={{ authenticated, user, authEnabled, login, logout, canAccessPanel }}>
+    <AuthContext.Provider value={{ authenticated, user, authEnabled, login, logout, canAccessPanel, canAccessWorkspace }}>
       {children}
     </AuthContext.Provider>
   );
