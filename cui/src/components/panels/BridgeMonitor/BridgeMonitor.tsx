@@ -11,6 +11,7 @@ import LogsTab from './tabs/LogsTab';
 import HealthTab from './tabs/HealthTab';
 import RateLimitsTab from './tabs/RateLimitsTab';
 import ActivityFeedTab from './tabs/ActivityFeedTab';
+import PromptPerformanceTab from './tabs/PromptPerformanceTab';
 // Legacy Technical Tabs
 import StatusTab from './tabs/StatusTab';
 import MetrikenTab from './tabs/MetrikenTab';
@@ -40,6 +41,8 @@ export default function BridgeMonitor() {
     { key: 'settings',   label: 'Settings',     component: <ErrorBoundary componentName="SettingsTab"><SettingsTab /></ErrorBoundary> },
     { key: 'logs',       label: 'Logs',         component: <ErrorBoundary componentName="LogsTab"><LogsTab /></ErrorBoundary> },
     { key: 'health',     label: 'Health',       component: <ErrorBoundary componentName="HealthTab"><HealthTab /></ErrorBoundary> },
+    // Prompt Performance (per-agent duration, error rate, tokens)
+    { key: 'prompts',    label: 'Prompts',      component: <ErrorBoundary componentName="PromptPerformanceTab"><PromptPerformanceTab /></ErrorBoundary> },
     // Additional Tabs
     { key: 'limits',     label: 'Limits',       component: <ErrorBoundary componentName="RateLimitsTab"><RateLimitsTab /></ErrorBoundary> },
     { key: 'activity',   label: 'Activity',     component: <ErrorBoundary componentName="ActivityFeedTab"><ActivityFeedTab /></ErrorBoundary> },

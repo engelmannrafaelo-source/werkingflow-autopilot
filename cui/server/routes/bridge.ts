@@ -250,6 +250,64 @@ router.post("/api/claude-code/scrape-now", async (req, res) => {
   });
 });
 
+// GET /api/claude-code/best-account — Returns the least-loaded account for spawning new sessions
+router.get("/api/claude-code/best-account", (_req, res) => {
+  try {
+    let scrapedMap: Record<string, any> = {};
+    try {
+      if (existsSync(SCRAPED_FILE)) {
+        const scraped = JSON.parse(readFileSync(SCRAPED_FILE, "utf-8"));
+        for (const entry of scraped) {
+          const key = entry.account?.toLowerCase().replace(/@.*/, "").replace(/\..+/, "");
+          if (key) scrapedMap[key] = entry;
+        }
+      }
+    } catch { /* scraped data optional */ }
+
+    // Build account list with utilization
+    const ranked = CC_ACCOUNTS.map(acc => {
+      const scraped = scrapedMap[acc.id];
+      const weeklyPercent = scraped?.weeklyAllModels?.percent ?? 0;
+      const sessionPercent = scraped?.currentSession?.percent ?? 0;
+      const extraBalance = scraped?.extraUsage?.balance ? parseFloat(scraped.extraUsage.balance) : Infinity;
+      const extraDepleted = (scraped?.extraUsage?.percent ?? 0) >= 100 && extraBalance <= 0;
+
+      let status: 'safe' | 'warning' | 'critical' = 'safe';
+      if (weeklyPercent >= 80 || extraDepleted) status = 'critical';
+      else if (weeklyPercent >= 50) status = 'warning';
+
+      // Count active sessions per account
+      const activeSessions = ACCOUNT_CONFIG.reduce((count, _) => count, 0); // placeholder — real count from claude-cli
+
+      return {
+        accountId: acc.id,
+        accountName: acc.displayName,
+        weeklyPercent: Math.round(weeklyPercent * 10) / 10,
+        sessionPercent: Math.round(sessionPercent * 10) / 10,
+        status,
+        extraDepleted,
+        available: status !== 'critical',
+      };
+    })
+    .sort((a, b) => {
+      // Sort: available first, then by lowest weekly usage
+      if (a.available !== b.available) return a.available ? -1 : 1;
+      return a.weeklyPercent - b.weeklyPercent;
+    });
+
+    const best = ranked.find(a => a.available) || ranked[0];
+
+    res.json({
+      bestAccount: best.accountId,
+      accounts: ranked,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    console.error("[CC-Usage] Best-account error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ========================================
 // Bridge Monitor API Endpoints
 // ========================================
@@ -350,6 +408,30 @@ router.get("/api/bridge/metrics/persistent", bridgeMetricHandler("Persistent", "
 
 // Per-app metrics breakdown (connected frontend apps)
 router.get("/api/bridge/metrics/apps", bridgeMetricHandler("Apps", "/v1/metrics/apps", { source: "postgresql", apps_period: [], apps_realtime: [] }));
+
+// Prompt Performance metrics (per app + agent — duration, error rate, tokens)
+router.get("/api/bridge/metrics/prompt-performance", async (req: any, res: any) => {
+  try {
+    const hours = req.query.hours || '24';
+    const data = await bridgeFetch(`/v1/metrics/prompt-performance?hours=${hours}`);
+    res.json(data);
+  } catch (err: any) {
+    console.warn(`[Bridge] PromptPerformance: ${err.message}`);
+    res.json({ agents: [], summary: { total_calls: 0, total_agents: 0, total_errors: 0, overall_error_rate: 0 }, period_hours: parseInt(hours) || 24, _error: err.message, _note: 'Bridge endpoint not available' });
+  }
+});
+
+// Prompt Performance timeline (for charts — single agent over time)
+router.get("/api/bridge/metrics/prompt-performance/timeline", async (req: any, res: any) => {
+  try {
+    const { app_id, agent_id, hours = '24', bucket_minutes = '60' } = req.query;
+    const data = await bridgeFetch(`/v1/metrics/prompt-performance/timeline?app_id=${encodeURIComponent(app_id)}&agent_id=${encodeURIComponent(agent_id)}&hours=${hours}&bucket_minutes=${bucket_minutes}`);
+    res.json(data);
+  } catch (err: any) {
+    console.warn(`[Bridge] PromptTimeline: ${err.message}`);
+    res.json({ timeline: [], _error: err.message });
+  }
+});
 
 
 // ── Generic Bridge Proxy ────────────────────────────────────────────────────
