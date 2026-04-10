@@ -137,6 +137,12 @@ import partnerDocsRouter, { initPartnerDocsRouter } from './routes/partner-docs.
 // Partner Messages (admin↔partner inbox with announcements + DMs)
 import partnerMessagesRouter from './routes/partner-messages.js';
 
+// Partner Feedback (structured feedback form for partners)
+import createPartnerFeedbackRouter from './routes/partner-feedback.js';
+
+// Partner Team Status (worklist sections visible to partners)
+import createPartnerTeamStatusRouter from './routes/partner-team-status.js';
+
 // ─── Section 4: Constants ───────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT ?? '4005', 10);
 const PROD = process.env.NODE_ENV === 'production';
@@ -303,6 +309,13 @@ app.use('/api/partner', partnerActivityRouter);                // /api/partner/a
 
 // --- Partner Docs API ---
 app.use('/api/partner', partnerDocsRouter);                    // /api/partner/docs (GET/POST/DELETE)
+app.use(partnerMessagesRouter);                             // /api/partner/messages (GET/POST)
+
+// --- Partner Feedback API ---
+app.use('/api/partner', createPartnerFeedbackRouter());     // /api/partner/feedback (GET/POST/PATCH)
+
+// --- Partner Team Status API ---
+app.use('/api/partner', createPartnerTeamStatusRouter());   // /api/partner/team-status?app=
 
 // --- Document Manager (Phase 3) ---
 app.use('/api/team', documentManager);

@@ -33,6 +33,7 @@ export const ReportBuilder = lazy(() => import('./panels/ReportBuilder/ReportBui
 export const PromptExplorer = lazy(() => import('./panels/PromptExplorer/PromptExplorer'));
 export const BusinessAngelPanel = lazy(() => import('./panels/BusinessAngelPanel'));
 export const SubSessionPanel = lazy(() => import('./panels/SubSessionPanel'));
+export const BusinessDocsPanel = lazy(() => import('./panels/BusinessDocsPanel'));
 export const MyTasksPanel = lazy(() => import('./panels/MyTasksPanel/MyTasksPanel'));
 export const ActivityFeedPanel = lazy(() => import('./panels/ActivityFeedPanel'));
 export const PartnerInboxPanel = lazy(() => import('./panels/PartnerInboxPanel'));
@@ -74,6 +75,7 @@ export const PANEL_NAMES: Record<string, string> = {
   'prompt-explorer': 'Prompt Explorer',
   'business-angel': 'Business Angel',
   'sub-sessions': 'Sub-Sessions',
+  'business-docs': 'Business Docs',
   'my-tasks': 'My Tasks',
   'activity-feed': 'Activity Feed',
   'partner-inbox': 'Partner Inbox',
@@ -142,6 +144,7 @@ export const PANEL_MENU_OPTIONS: PanelMenuGroup[] = [
   {
     category: 'Partner',
     items: [
+      { value: 'business-docs', label: 'Business Docs' },
       { value: 'my-tasks', label: 'My Tasks' },
       { value: 'activity-feed', label: 'Activity Feed' },
       { value: 'partner-inbox', label: 'Partner Inbox' },

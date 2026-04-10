@@ -64,6 +64,7 @@ import {
   ConversationQueuePanel, MaintenancePanel, UserInputAuditPanel,
   ArchitectureExplorer, ReportBuilder, PromptExplorer, BusinessAngelPanel, SubSessionPanel,
   MyTasksPanel, ActivityFeedPanel, PartnerInboxPanel,
+  FeedbackPanel, TeamStatusPanel,
   PANEL_NAMES, PANEL_MENU_OPTIONS,
 } from './panelRegistry';
 // LayoutBuilder ist Desktop-only — bleibt hier
@@ -452,6 +453,10 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         return wrapPanel('Activity Feed', withSuspense(<ActivityFeedPanel />));
       case 'partner-inbox':
         return wrapPanel('Partner Inbox', withSuspense(<PartnerInboxPanel projectId={projectId} />));
+      case 'feedback':
+        return wrapPanel('Feedback', withSuspense(<FeedbackPanel />));
+      case 'team-status':
+        return wrapPanel('Team Status', withSuspense(<TeamStatusPanel />));
       default:
         return wrapPanel(`Unknown:${component}`,
           <div style={{ padding: 20, color: 'var(--tn-text-muted)' }}>
