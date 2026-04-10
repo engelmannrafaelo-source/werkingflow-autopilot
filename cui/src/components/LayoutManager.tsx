@@ -551,7 +551,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
   const saveLayoutRef = useRef(saveLayout);
   saveLayoutRef.current = saveLayout;
 
-  const addTab = useCallback((type: 'cui' | 'cui-lite' | 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'gmail' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'repo-dashboard' | 'watchdog' | 'background-ops' | 'conversation-queue' | 'maintenance' | 'input-audit' | 'qa-dashboard' | 'peer-awareness' | 'infisical-monitor' | 'mission-chat' | 'architecture' | 'report-builder' | 'prompt-explorer' | 'sub-sessions' | 'business-docs', config: Record<string, string>, targetId: string) => {
+  const addTab = useCallback((type: 'cui' | 'cui-lite' | 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'gmail' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'repo-dashboard' | 'watchdog' | 'background-ops' | 'conversation-queue' | 'maintenance' | 'input-audit' | 'qa-dashboard' | 'peer-awareness' | 'infisical-monitor' | 'mission-chat' | 'architecture' | 'report-builder' | 'prompt-explorer' | 'sub-sessions' | 'business-docs' | 'my-tasks' | 'activity-feed' | 'partner-inbox' | 'feedback' | 'team-status', config: Record<string, string>, targetId: string) => {
     const m = modelRef.current;
     if (!m) return;
     // Panel-Namen kommen aus der Registry (SSoT)
@@ -581,9 +581,9 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           const val = e.target.value;
           if (!val) return;
           if (val === 'cui') {
-            addTab('cui', { _userReserved: Date.now() }, node.getId());
+            addTab('cui', { _userReserved: String(Date.now()) }, node.getId());
           } else {
-            addTab(val as 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'gmail' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'repo-dashboard' | 'watchdog' | 'background-ops' | 'conversation-queue' | 'maintenance' | 'input-audit' | 'qa-dashboard' | 'peer-awareness' | 'infisical-monitor' | 'mission-chat' | 'architecture' | 'report-builder' | 'prompt-explorer', {}, node.getId());
+            addTab(val as 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'gmail' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'repo-dashboard' | 'watchdog' | 'background-ops' | 'conversation-queue' | 'maintenance' | 'input-audit' | 'qa-dashboard' | 'peer-awareness' | 'infisical-monitor' | 'mission-chat' | 'architecture' | 'report-builder' | 'prompt-explorer' | 'sub-sessions' | 'business-docs' | 'my-tasks' | 'activity-feed' | 'partner-inbox' | 'feedback' | 'team-status', {}, node.getId());
           }
           e.target.value = '';
         }}
