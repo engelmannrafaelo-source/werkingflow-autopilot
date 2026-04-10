@@ -587,15 +587,21 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         }}
       >
         <option value="">+</option>
-        {PANEL_MENU_OPTIONS.map(({ value, label }) => {
-          const allowed = canAccessPanel(value);
-          return (
-            <option key={value} value={value} disabled={!allowed}
-              style={!allowed ? { color: 'var(--tn-text-muted)', opacity: 0.5 } : undefined}>
-              {allowed ? label : `${label} (nicht verfügbar)`}
-            </option>
-          );
-        })}
+        {PANEL_MENU_OPTIONS.map(({ category, items }) =>
+          items.length === 0 ? null : (
+            <optgroup key={category} label={category}>
+              {items.map(({ value, label }) => {
+                const allowed = canAccessPanel(value);
+                return (
+                  <option key={value} value={value} disabled={!allowed}
+                    style={!allowed ? { color: 'var(--tn-text-muted)', opacity: 0.5 } : undefined}>
+                    {allowed ? label : `${label} (nicht verfügbar)`}
+                  </option>
+                );
+              })}
+            </optgroup>
+          )
+        )}
       </select>
     );
   }, [addTab, canAccessPanel]);

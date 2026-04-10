@@ -71,34 +71,66 @@ export const PANEL_NAMES: Record<string, string> = {
   'sub-sessions': 'Sub-Sessions',
 };
 
-// --- Dropdown-Optionen für den [+] Tab-Picker ---
+// --- Dropdown-Optionen für den [+] Tab-Picker (grouped) ---
 // Reihenfolge = Anzeigereihenfolge im Dropdown.
-export const PANEL_MENU_OPTIONS: { value: string; label: string }[] = [
-  { value: 'cui', label: 'CUI' },
-  { value: 'browser', label: 'Browser' },
-  { value: 'preview', label: 'File Preview' },
-  { value: 'notes', label: 'Notes' },
-  { value: 'images', label: 'Images' },
-  { value: 'mission', label: 'Mission Control' },
-  { value: 'mission-chat', label: 'Mission Chat' },
-  { value: 'office', label: 'Virtual Office' },
-  { value: 'knowledge', label: 'Knowledge' },
-  { value: 'qa-dashboard', label: 'QA Dashboard' },
-  { value: 'admin-wr', label: 'Werking Report Admin' },
-  { value: 'system-health', label: 'System Health' },
-  { value: 'watchdog', label: 'Dev Server Watchdog' },
-  { value: 'linkedin', label: 'LinkedIn Marketing' },
-  { value: 'peer-awareness', label: 'Peer Awareness' },
-  { value: 'background-ops', label: 'Background Ops' },
-  { value: 'conversation-queue', label: 'Conversation Queue' },
-  { value: 'bridge-monitor', label: 'Bridge Monitor' },
-  { value: 'repo-dashboard', label: 'Git & Pipeline Monitor' },
-  { value: 'infisical-monitor', label: 'Infisical Monitor' },
-  { value: 'maintenance', label: 'Maintenance' },
-  { value: 'input-audit', label: 'Input Audit' },
-  { value: 'architecture', label: 'Architecture Explorer' },
-  { value: 'report-builder', label: 'Report Builder' },
-  { value: 'prompt-explorer', label: 'Prompt Explorer' },
-  { value: 'business-angel', label: 'Business Angel' },
-  { value: 'sub-sessions', label: 'Sub-Sessions' },
+export interface PanelMenuOption { value: string; label: string }
+export interface PanelMenuGroup { category: string; items: PanelMenuOption[] }
+
+export const PANEL_MENU_OPTIONS: PanelMenuGroup[] = [
+  {
+    category: 'Workspace',
+    items: [
+      { value: 'cui', label: 'CUI' },
+      { value: 'browser', label: 'Browser' },
+      { value: 'preview', label: 'File Preview' },
+      { value: 'notes', label: 'Notes' },
+      { value: 'images', label: 'Images' },
+    ],
+  },
+  {
+    category: 'Übersicht',
+    items: [
+      { value: 'mission', label: 'Mission Control' },
+      { value: 'mission-chat', label: 'Mission Chat' },
+      { value: 'conversation-queue', label: 'Conversation Queue' },
+      { value: 'sub-sessions', label: 'Sub-Sessions' },
+      { value: 'office', label: 'Virtual Office' },
+    ],
+  },
+  {
+    category: 'Analyse',
+    items: [
+      { value: 'qa-dashboard', label: 'QA Dashboard' },
+      { value: 'architecture', label: 'Architecture Explorer' },
+      { value: 'knowledge', label: 'Knowledge' },
+      { value: 'report-builder', label: 'Report Builder' },
+      { value: 'prompt-explorer', label: 'Prompt Explorer' },
+    ],
+  },
+  {
+    category: 'Monitoring',
+    items: [
+      { value: 'system-health', label: 'System Health' },
+      { value: 'bridge-monitor', label: 'Bridge Monitor' },
+      { value: 'repo-dashboard', label: 'Git & Pipeline Monitor' },
+      { value: 'infisical-monitor', label: 'Infisical Monitor' },
+      { value: 'watchdog', label: 'Dev Server Watchdog' },
+      { value: 'peer-awareness', label: 'Peer Awareness' },
+    ],
+  },
+  {
+    category: 'Admin',
+    items: [
+      { value: 'admin-wr', label: 'Werking Report Admin' },
+      { value: 'business-angel', label: 'Business Angel' },
+      { value: 'background-ops', label: 'Background Ops' },
+      { value: 'maintenance', label: 'Maintenance' },
+      { value: 'input-audit', label: 'Input Audit' },
+      { value: 'linkedin', label: 'LinkedIn Marketing' },
+    ],
+  },
+  {
+    category: 'Partner',
+    items: [],
+  },
 ];
