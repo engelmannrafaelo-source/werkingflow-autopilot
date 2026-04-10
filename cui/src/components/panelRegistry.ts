@@ -34,6 +34,10 @@ export const PromptExplorer = lazy(() => import('./panels/PromptExplorer/PromptE
 export const BusinessAngelPanel = lazy(() => import('./panels/BusinessAngelPanel'));
 export const SubSessionPanel = lazy(() => import('./panels/SubSessionPanel'));
 export const MyTasksPanel = lazy(() => import('./panels/MyTasksPanel/MyTasksPanel'));
+export const ActivityFeedPanel = lazy(() => import('./panels/ActivityFeedPanel'));
+export const PartnerInboxPanel = lazy(() => import('./panels/PartnerInboxPanel'));
+export const FeedbackPanel = lazy(() => import('./panels/FeedbackPanel'));
+export const TeamStatusPanel = lazy(() => import('./panels/TeamStatusPanel'));
 
 // --- Panel ID → Display Name ---
 // Aliases (virtual-office, gmail, knowledge-fullscreen, infrastructure) sind enthalten.
@@ -71,6 +75,10 @@ export const PANEL_NAMES: Record<string, string> = {
   'business-angel': 'Business Angel',
   'sub-sessions': 'Sub-Sessions',
   'my-tasks': 'My Tasks',
+  'activity-feed': 'Activity Feed',
+  'partner-inbox': 'Partner Inbox',
+  feedback: 'Feedback',
+  'team-status': 'Team Status',
 };
 
 // --- Dropdown-Optionen für den [+] Tab-Picker (grouped) ---
@@ -135,6 +143,10 @@ export const PANEL_MENU_OPTIONS: PanelMenuGroup[] = [
     category: 'Partner',
     items: [
       { value: 'my-tasks', label: 'My Tasks' },
+      { value: 'activity-feed', label: 'Activity Feed' },
+      { value: 'partner-inbox', label: 'Partner Inbox' },
+      { value: 'feedback', label: 'Feedback' },
+      { value: 'team-status', label: 'Team Status' },
     ],
   },
 ];
