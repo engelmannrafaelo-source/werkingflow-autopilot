@@ -20,6 +20,7 @@ export interface PanelConfig {
 }
 
 export const ACCOUNTS: Account[] = [
+  { id: 'auto', label: 'Auto (Best)', color: '#22c55e' },
   { id: 'engelmann', label: 'Engelmann', color: '#bb9af7' },
   { id: 'office', label: 'Office', color: '#9ece6a' },
   { id: 'gmail', label: 'Gmail', color: '#7aa2f7' },

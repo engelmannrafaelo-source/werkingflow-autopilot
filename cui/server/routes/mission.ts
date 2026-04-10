@@ -368,21 +368,82 @@ export function initMissionRouter(deps: MissionDeps) {
 
   setInterval(() => {
     const states = getSessionStates();
+    const allSubs = convMeta.getAllSubSessions(); // all sessions marked as sub-session
 
-    // Collect all sub-sessions that have a parent and are NOT finished
-    const allSubSessions = new Map<string, string>(); // sessionId → parentSessionId
-    for (const [key, sState] of Object.entries(states)) {
-      const sessionId = sState.sessionId || key;
-      const parentSessionId = convMeta.getParentSessionId(sessionId);
-      if (!parentSessionId) continue;
+    // Phase 1: Auto-finish zombie sub-sessions (marked as sub but no process, no parent, no title)
+    for (const sessionId of Object.keys(allSubs)) {
       if (convMeta.isFinished(sessionId)) continue;
-      allSubSessions.set(sessionId, parentSessionId);
+      const hasProcess = !!states[sessionId];
+      const hasParent = !!convMeta.getParentSessionId(sessionId);
+      const hasTitle = !!convMeta.getTitle(sessionId);
+      if (!hasProcess && !hasParent && !hasTitle) {
+        console.log(`[SubSession] Auto-finishing zombie sub-session ${sessionId.slice(0, 8)} (no process, no parent, no title)`);
+        convMeta.setFinished(sessionId, true);
+      }
+    }
+
+    // Phase 2: Collect all active sub-sessions that have a parent and are NOT finished
+    const allSubSessions = new Map<string, string>(); // sessionId → parentSessionId
+    for (const sessionId of Object.keys(allSubs)) {
+      if (convMeta.isFinished(sessionId)) continue;
+      const parentSessionId = convMeta.getParentSessionId(sessionId);
+      if (parentSessionId) {
+        allSubSessions.set(sessionId, parentSessionId);
+      }
     }
     // Also check completed sub-sessions awaiting finish (their CLI is stopped, so they won't be in states)
     for (const sessionId of _subSessionsAwaitingFinish) {
       if (convMeta.isFinished(sessionId)) { _subSessionsAwaitingFinish.delete(sessionId); continue; }
       const parentSessionId = convMeta.getParentSessionId(sessionId);
       if (parentSessionId) allSubSessions.set(sessionId, parentSessionId);
+    }
+
+    // Phase 3: Orphan sub-sessions (active, but no parent)
+    const orphansWithProcess: string[] = [];
+    for (const sessionId of Object.keys(allSubs)) {
+      if (convMeta.isFinished(sessionId)) continue;
+      if (allSubSessions.has(sessionId)) continue; // already has parent
+      const hasProcess = !!states[sessionId];
+      if (!hasProcess) {
+        const title = convMeta.getTitle(sessionId) || sessionId.slice(0, 8);
+        console.log(`[SubSession] Auto-finishing orphan sub-session "${title}" (${sessionId.slice(0, 8)}) — no process, no parent`);
+        convMeta.setFinished(sessionId, true);
+      } else {
+        orphansWithProcess.push(sessionId);
+      }
+    }
+
+    // Phase 4: Report orphan sub-sessions with running processes to the Mission Chat
+    // (these are sub-sessions that were spawned before parent-tracking was implemented)
+    if (orphansWithProcess.length > 0) {
+      // Find a Mission Chat session (orchestrator/administration workspace, idle)
+      let missionChat: string | null = null;
+      for (const [key, sState] of Object.entries(states)) {
+        const sid = sState.sessionId || key;
+        if (sState.state !== 'idle') continue;
+        const wdir = convMeta.getWorkDir(sid);
+        if (wdir && (wdir.includes('orchestrator') || wdir.includes('administration') || wdir.includes('diverse'))) {
+          missionChat = sid;
+          break;
+        }
+      }
+
+      if (missionChat) {
+        const lines = orphansWithProcess.map(sid => {
+          const title = convMeta.getTitle(sid) || sid.slice(0, 8);
+          const wdir = convMeta.getWorkDir(sid)?.split('/').pop() || '?';
+          return `- "${title}" (${sid.slice(0, 8)}, workspace: ${wdir}) — laeuft aber hat keinen Parent. Bitte pruefen und ggf. finishen: POST /api/mission/conversation/${sid}/finish {"confirm":true}`;
+        });
+        const orphanMsg = `[Sub-Session Warnung]\n${orphansWithProcess.length} verwaiste Sub-Session(s) ohne Parent:\n${lines.join('\n')}`;
+        const mcAccount = convMeta.getAssignment(missionChat) || claudeCli.ACCOUNT_CONFIG[0]?.id || 'werking';
+        const mcWorkDir = convMeta.getWorkDir(missionChat) || '';
+        const mcModel = convMeta.getModel(missionChat) || '';
+        claudeCli.startConversation(mcAccount, orphanMsg, mcWorkDir, missionChat, mcModel).then(res => {
+          if (res.ok) console.log(`[SubSession] Orphan warning sent to Mission Chat ${missionChat!.slice(0, 8)} for ${orphansWithProcess.length} session(s)`);
+        }).catch(() => {});
+      } else {
+        console.warn(`[SubSession] ${orphansWithProcess.length} orphan sub-session(s) with process but no Mission Chat found to notify`);
+      }
     }
 
     // Group by parent for batched reminders
@@ -814,8 +875,14 @@ async function fetchConvList() {
       (conv as any).toolInfo = stateInfo.toolInfo;
     } else if (conv.status !== 'ongoing' && conv._lastRole === 'assistant') {
       // Auto-recover: last message from assistant + no active process = needs attention
-      (conv as any).attentionState = 'needs_attention';
-      (conv as any).attentionReason = 'waiting';
+      // But only if the session was updated recently (< 5 min) — stale completed sessions
+      // shouldn't pollute workspace badges with permanent orange indicators
+      const updatedMs = conv.updatedAt ? new Date(conv.updatedAt).getTime() : 0;
+      const ageMs = updatedMs > 0 ? (Date.now() - updatedMs) : Infinity;
+      if (ageMs < 5 * 60 * 1000) {
+        (conv as any).attentionState = 'needs_attention';
+        (conv as any).attentionReason = 'waiting';
+      }
     }
   }
 
@@ -1100,11 +1167,33 @@ router.get('/conversation/:accountId/:sessionId', async (req, res) => {
 // 3. Send message to existing conversation (via claude-cli direct spawn)
 router.post('/send', async (req, res) => {
   try {
-  const { accountId, sessionId, message, workDir } = req.body;
+  let { accountId, sessionId, message, workDir } = req.body;
   if (!accountId || !sessionId || !message || (typeof message === 'string' && !message.trim())) {
     res.status(400).json({ error: 'accountId, sessionId, message required' });
     return;
   }
+
+  // Resolve 'auto' → use existing assignment or pick best available account
+  if (accountId === 'auto') {
+    const existing = convMeta.getAssignment(sessionId);
+    if (existing && existing !== 'auto' && claudeCli.getAccountConfig(existing)) {
+      accountId = existing;
+    } else {
+      try {
+        const bestResp = await fetch(`http://localhost:${process.env.PORT || 4005}/api/claude-code/best-account`, { signal: AbortSignal.timeout(3000) });
+        if (bestResp.ok) {
+          const bestData = await bestResp.json() as any;
+          accountId = bestData.bestAccount || 'werking';
+        } else {
+          accountId = 'werking';
+        }
+      } catch {
+        accountId = 'werking';
+      }
+      convMeta.saveAssignment(sessionId, accountId);
+    }
+  }
+
   if (!claudeCli.getAccountConfig(accountId)) {
     res.status(400).json({ error: 'unknown account' }); return;
   }
@@ -1285,10 +1374,26 @@ router.post('/conversation/:accountId/:sessionId/name', async (req, res) => {
 
 // 5b. Assign conversation to account (called when chat is opened in a CUI panel)
 // Atomic account-switch: updates all 4 layers (conv-metadata, layouts, visibility, browser)
-router.post('/conversation/:sessionId/assign', (req, res) => {
-  const { accountId, workDir } = req.body;
+router.post('/conversation/:sessionId/assign', async (req, res) => {
+  let { accountId, workDir } = req.body;
   if (!accountId) { res.status(400).json({ error: 'accountId required' }); return; }
   const sid = req.params.sessionId;
+
+  // Resolve 'auto' → pick best available account (don't persist 'auto' as assignment)
+  if (accountId === 'auto') {
+    try {
+      const bestResp = await fetch(`http://localhost:${process.env.PORT || 4005}/api/claude-code/best-account`, { signal: AbortSignal.timeout(3000) });
+      if (bestResp.ok) {
+        const bestData = await bestResp.json() as any;
+        accountId = bestData.bestAccount || 'werking';
+      } else {
+        accountId = 'werking';
+      }
+    } catch {
+      accountId = 'werking';
+    }
+    console.log(`[Assign] Resolved 'auto' → ${accountId} for session ${sid.slice(0, 8)}`);
+  }
 
   // --- Layer 1: Conversation Metadata ---
   convMeta.saveAssignment(sid, accountId);

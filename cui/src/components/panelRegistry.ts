@@ -32,13 +32,13 @@ export const ArchitectureExplorer = lazy(() => import('./panels/ArchitectureExpl
 export const ReportBuilder = lazy(() => import('./panels/ReportBuilder/ReportBuilder'));
 export const PromptExplorer = lazy(() => import('./panels/PromptExplorer/PromptExplorer'));
 export const BusinessAngelPanel = lazy(() => import('./panels/BusinessAngelPanel'));
+export const SubSessionPanel = lazy(() => import('./panels/SubSessionPanel'));
 
 // --- Panel ID → Display Name ---
 // Aliases (virtual-office, gmail, knowledge-fullscreen, infrastructure) sind enthalten.
 export const PANEL_NAMES: Record<string, string> = {
   cui: 'CUI',
   'cui-lite': 'CUI',
-  chat: 'Native Chat',
   browser: 'Browser',
   preview: 'File Preview',
   notes: 'Notes',
@@ -68,13 +68,13 @@ export const PANEL_NAMES: Record<string, string> = {
   'report-builder': 'Report Builder',
   'prompt-explorer': 'Prompt Explorer',
   'business-angel': 'Business Angel',
+  'sub-sessions': 'Sub-Sessions',
 };
 
 // --- Dropdown-Optionen für den [+] Tab-Picker ---
 // Reihenfolge = Anzeigereihenfolge im Dropdown.
 export const PANEL_MENU_OPTIONS: { value: string; label: string }[] = [
   { value: 'cui', label: 'CUI' },
-  { value: 'chat', label: 'Native Chat' },
   { value: 'browser', label: 'Browser' },
   { value: 'preview', label: 'File Preview' },
   { value: 'notes', label: 'Notes' },
@@ -100,4 +100,5 @@ export const PANEL_MENU_OPTIONS: { value: string; label: string }[] = [
   { value: 'report-builder', label: 'Report Builder' },
   { value: 'prompt-explorer', label: 'Prompt Explorer' },
   { value: 'business-angel', label: 'Business Angel' },
+  { value: 'sub-sessions', label: 'Sub-Sessions' },
 ];

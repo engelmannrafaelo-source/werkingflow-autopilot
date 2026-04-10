@@ -24,6 +24,7 @@ const BUSINESS_DIR = PATHS.businessDir;
 const CONTEXT_YAML = '/root/projekte/local-storage/report-builder/business-angel-context.yaml';
 const BACKUP_DIR   = '/root/projekte/local-storage/report-builder/backups';
 const TEMP_DIR     = '/root/projekte/local-storage/report-builder/temp';
+const SNAPSHOT_DIR = '/root/projekte/local-storage/cui/snapshots';
 
 // Approx tokens per character (rough estimate for German/English mixed text)
 const CHARS_PER_TOKEN = 4;
@@ -395,8 +396,9 @@ router.post('/session/end', (_req, res) => {
   const persisted = readPersistedSession();
   if (persisted && persisted.session_id) {
     SESSION_STORE.delete(persisted.session_id);
+    deleteSnapshot(persisted.session_id);
     archiveSession(persisted);
-    console.log(`[BusinessAngel] Session archived: ${persisted.session_id}`);
+    console.log(`[BusinessAngel] Session archived + snapshot deleted: ${persisted.session_id}`);
   }
   res.json({ ok: true });
 });
@@ -449,11 +451,13 @@ router.post('/session/new', (_req, res) => {
         persisted.title = deriveSessionTitle(persisted.conversation);
       }
       SESSION_STORE.delete(persisted.session_id);
+      deleteSnapshot(persisted.session_id);
       archiveSession(persisted);
       console.log(`[BusinessAngel] Session archived before new: ${persisted.session_id}`);
     } else if (persisted?.session_id) {
       // Empty session — just clear it
       SESSION_STORE.delete(persisted.session_id);
+      deleteSnapshot(persisted.session_id);
     }
 
     // Clear active session file
@@ -528,6 +532,107 @@ router.post('/session/load/:id', (req, res) => {
       files_loaded: found.files_loaded,
     });
   } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Snapshot API ---
+// Immutable file-content snapshot for diff baseline. Created once per session,
+// survives until session.finish(). Diffs are always computed against this snapshot.
+
+interface Snapshot {
+  sessionId: string;
+  createdAt: string;
+  files: Record<string, string>; // path → original content
+}
+
+function snapshotPath(sessionId: string): string {
+  return join(SNAPSHOT_DIR, `${sessionId}.json`);
+}
+
+function readSnapshot(sessionId: string): Snapshot | null {
+  const p = snapshotPath(sessionId);
+  if (!existsSync(p)) return null;
+  try {
+    return JSON.parse(readFileSync(p, 'utf-8')) as Snapshot;
+  } catch {
+    return null;
+  }
+}
+
+function writeSnapshot(snapshot: Snapshot): void {
+  ensureDir(SNAPSHOT_DIR);
+  writeFileSync(snapshotPath(snapshot.sessionId), JSON.stringify(snapshot, null, 2), 'utf-8');
+}
+
+function deleteSnapshot(sessionId: string): void {
+  const p = snapshotPath(sessionId);
+  if (existsSync(p)) {
+    try { writeFileSync(p, '', 'utf-8'); } catch { /* best effort */ }
+  }
+}
+
+// POST /snapshot — create immutable snapshot of file contents
+router.post('/snapshot', (req, res) => {
+  try {
+    const { session_id, files } = req.body as {
+      session_id: string;
+      files: Record<string, string>;
+    };
+
+    if (!session_id) {
+      res.status(400).json({ error: 'session_id required' });
+      return;
+    }
+    if (!files || typeof files !== 'object' || Object.keys(files).length === 0) {
+      res.status(400).json({ error: 'files required (Record<path, content>)' });
+      return;
+    }
+
+    // Immutable: if snapshot already exists for this session, reject
+    const existing = readSnapshot(session_id);
+    if (existing) {
+      res.status(409).json({
+        error: 'Snapshot already exists for this session (immutable until finish)',
+        file_count: Object.keys(existing.files).length,
+        created_at: existing.createdAt,
+      });
+      return;
+    }
+
+    const snapshot: Snapshot = {
+      sessionId: session_id,
+      createdAt: new Date().toISOString(),
+      files,
+    };
+    writeSnapshot(snapshot);
+
+    console.log(`[BusinessAngel] Snapshot created: ${session_id} (${Object.keys(files).length} files)`);
+    res.json({ ok: true, file_count: Object.keys(files).length, created_at: snapshot.createdAt });
+  } catch (err: any) {
+    console.error('[BusinessAngel] /snapshot POST error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /snapshot — read snapshot for a session
+router.get('/snapshot', (req, res) => {
+  try {
+    const session_id = req.query.session_id as string;
+    if (!session_id) {
+      res.status(400).json({ error: 'session_id query param required' });
+      return;
+    }
+
+    const snapshot = readSnapshot(session_id);
+    if (!snapshot) {
+      res.status(404).json({ error: 'No snapshot found for this session' });
+      return;
+    }
+
+    res.json(snapshot);
+  } catch (err: any) {
+    console.error('[BusinessAngel] /snapshot GET error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -648,21 +753,29 @@ REGELN:
 - Verwende AUSSCHLIESSLICH was in den <documents> steht
 - Erfinde keine Zahlen, Konditionen, Personen oder Deals
 - Wenn du etwas nicht weißt: sag es direkt
-- Wenn Rafael sagt "bau die Diffs": schreibe Edit-Befehle für die betroffenen Dateien
-  Format für Änderungen an bestehenden Dateien:
+- Wenn Rafael sagt "bau die Diffs" oder "Generiere Diffs": schreibe strukturierte Diff-Blöcke
+  BEVORZUGTES Format für Änderungen an bestehenden Dateien:
+    <<<DIFF pfad/zur/datei.md
+    old_string: |
+      ...exakter Text aus dem Original-Dokument...
+    new_string: |
+      ...neuer Text...
+    >>>
+  Format für NEUE Dateien:
+    <<<NEW pfad/zur/neuen-datei.md
+    content: |
+      ...vollständiger Inhalt...
+    >>>
+  ALTERNATIVES Format (auch akzeptiert):
     FILE: <relativer Pfad ab business/>
     OLD:
-    <VOLLSTÄNDIGER Abschnitt exakt wie er im Dokument steht — von der ## Überschrift bis zur nächsten ## Überschrift>
+    <Text aus dem Original>
     NEW:
-    <VOLLSTÄNDIGER aktualisierter Abschnitt — gleiche Struktur, nur mit den Änderungen eingearbeitet>
-  Format für NEUE Dateien (noch nicht existierend):
-    FILE: <relativer Pfad ab business/>
-    OLD:
-    NEW:
-    <Vollständiger Inhalt der neuen Datei>
-- KRITISCH für OLD bei Änderungen: Immer den GANZEN Abschnitt kopieren (Überschrift + Inhalt + Leerzeilen), nie nur einzelne Zeilen
-- KRITISCH für NEW: Den gleichen vollständigen Abschnitt mit allen Änderungen — kein Text weglassen
-- Bei neuen Dateien: OLD leer lassen, NEW enthält den kompletten Dateiinhalt
+    <Neuer Text>
+- KRITISCH für old_string/OLD: Beziehe dich IMMER auf den ORIGINAL-Inhalt der Dateien (wie sie zu Beginn der Session geladen wurden), NICHT auf zwischenzeitliche Änderungen
+- KRITISCH: Genug Kontext-Zeilen für eindeutigen Match
+- Mehrere Diff-Blöcke pro Datei sind erlaubt
+- Bei neuen Dateien: <<<NEW verwenden mit vollständigem Inhalt
 - Nur die betroffenen Abschnitte liefern, nicht das gesamte Dokument
 - PFADE: Der <dateibaum> Block enthält die aktuelle Ordnerstruktur. Verwende IMMER existierende Pfade und Namenskonventionen daraus. Für neue Dateien: orientiere dich am Namensschema der Nachbar-Dateien im gleichen Ordner.`;
 
@@ -719,6 +832,31 @@ Dokumente geladen (${filesLoaded} Dateien). Bitte stelle mir deine Fragen.`;
     };
     SESSION_STORE.set(session_id, newSession);
     writePersistedSession(newSession);
+
+    // 6. Create immutable snapshot for diff baseline (only on fresh session, not restore)
+    if (!restore || !readSnapshot(session_id)) {
+      const snapshotFiles: Record<string, string> = {};
+      // Collect all loaded file contents for the snapshot
+      for (const relPath of loadedPaths) {
+        const content = readFileContent(relPath);
+        if (content) snapshotFiles[relPath] = content;
+      }
+      // Also include temp files
+      for (const tf of tempFiles) {
+        snapshotFiles[`temp/${tf.name}`] = tf.content;
+      }
+      if (Object.keys(snapshotFiles).length > 0) {
+        // Delete old snapshot if exists (fresh session)
+        if (!restore) deleteSnapshot(session_id);
+        const snapshot: Snapshot = {
+          sessionId: session_id,
+          createdAt: new Date().toISOString(),
+          files: snapshotFiles,
+        };
+        writeSnapshot(snapshot);
+        console.log(`[BusinessAngel] Snapshot auto-created: ${session_id} (${Object.keys(snapshotFiles).length} files)`);
+      }
+    }
 
     const action = restore && restoredConversation.length > 0 ? 'restored' : 'created';
     console.log(`[BusinessAngel] Session ${action}: ${session_id} (${filesLoaded} files, ~${totalTokens} tokens, ${restoredConversation.length} turns restored)`);

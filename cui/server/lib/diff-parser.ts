@@ -28,6 +28,31 @@ export function parseDiffs(raw: string): ParsedDiff[] {
   // Normalize line endings
   const normalized = raw.replace(/\r\n/g, '\n');
 
+  // ── Format 0: <<<DIFF ... >>> and <<<NEW ... >>> blocks ──────────
+  const diffBlockRe = /<<<DIFF\s+(.+?)\n([\s\S]*?)>>>/g;
+  const newBlockRe  = /<<<NEW\s+(.+?)\n([\s\S]*?)>>>/g;
+  const dedent = (s: string) => s.replace(/^  /gm, '').replace(/\n+$/, '');
+
+  let match: RegExpExecArray | null;
+  while ((match = diffBlockRe.exec(normalized)) !== null) {
+    const file = match[1].trim();
+    const body = match[2];
+    const oldMatch = body.match(/^old_string:\s*\|?\s*\n([\s\S]*?)(?=^new_string:)/m);
+    const newMatch = body.match(/^new_string:\s*\|?\s*\n([\s\S]*?)$/m);
+    if (oldMatch && newMatch) {
+      results.push({ file, old: dedent(oldMatch[1]), newText: dedent(newMatch[1]) });
+    }
+  }
+  while ((match = newBlockRe.exec(normalized)) !== null) {
+    const file = match[1].trim();
+    const body = match[2];
+    const contentMatch = body.match(/^content:\s*\|?\s*\n([\s\S]*?)$/m);
+    if (contentMatch) {
+      results.push({ file, old: '', newText: dedent(contentMatch[1]) });
+    }
+  }
+  if (results.length > 0) return results;
+
   // Split into blocks by --- separator OR by FILE: at start of line
   let blocks: string[] = normalized.split(/\n---+\n/);
 

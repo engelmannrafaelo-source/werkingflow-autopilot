@@ -218,10 +218,37 @@ export default function createLayoutsRouter(deps: LayoutsDeps): Router {
       res.status(400).json({ error: 'invalid projectId' });
       return;
     }
-    writeFileSync(join(LAYOUTS_DIR, `${req.params.projectId}.json`), JSON.stringify(req.body, null, 2));
+
+    const layoutPath = join(LAYOUTS_DIR, `${req.params.projectId}.json`);
+
+    // Read current version from disk
+    let currentV = 0;
+    if (existsSync(layoutPath)) {
+      try {
+        const current = JSON.parse(readFileSync(layoutPath, 'utf8'));
+        currentV = typeof current._v === 'number' ? current._v : 0;
+      } catch { /* ignore — treat as v0 */ }
+    }
+
+    const incomingV: number | undefined = typeof req.body._v === 'number' ? req.body._v : undefined;
+
+    // Conflict: browser has stale version — reject and return current layout
+    if (incomingV !== undefined && incomingV < currentV) {
+      try {
+        const current = JSON.parse(readFileSync(layoutPath, 'utf8'));
+        res.status(409).json({ conflict: true, _v: currentV, layout: current });
+      } catch {
+        res.status(409).json({ conflict: true, _v: currentV });
+      }
+      return;
+    }
+
+    // Accept: bump version and persist
+    const newBody = { ...req.body, _v: currentV + 1 };
+    writeFileSync(layoutPath, JSON.stringify(newBody, null, 2));
     // Auto-apply: broadcast to connected browsers so they update without reload
-    broadcast({ type: 'control:apply-layout', projectId: req.params.projectId, layout: req.body });
-    res.json({ ok: true });
+    broadcast({ type: 'control:apply-layout', projectId: req.params.projectId, layout: newBody });
+    res.json({ ok: true, _v: currentV + 1 });
   });
 
   // Layout template (the "blueprint" from Layout Builder, used for restore)

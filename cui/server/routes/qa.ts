@@ -76,13 +76,15 @@ function getAppStatsFromScenarios(appId: string) {
   const testedScenarios = allTests.filter(t => t.status === 'PASS' || t.status === 'PARTIAL').length;
   const failedScenarios = allTests.filter(t => t.status === 'FAIL' || t.status === 'ERROR').length;
   const bridgeFailureScenarios = allTests.filter(t => t.status === 'BRIDGE_FAILURE').length;
+  const notTestedScenarios = allTests.filter(t => t.status === 'NOT_TESTED').length;
 
   // Scores from all tests that have been scored
   const scores = allTests.map(t => t.score).filter(s => s != null && s > 0) as number[];
   const avgScore = scores.length > 0 ? scores.reduce((s, v) => s + v, 0) / scores.length : 0;
 
-  // Coverage = tested / total scenarios
-  const coveragePercent = totalScenarios > 0 ? (testedScenarios / totalScenarios) * 100 : 0;
+  // Coverage = tested / scorable scenarios (exclude bridge failures and not-tested — they are untestable/blocked)
+  const scorableScenarios = totalScenarios - bridgeFailureScenarios - notTestedScenarios;
+  const coveragePercent = scorableScenarios > 0 ? (testedScenarios / scorableScenarios) * 100 : 0;
 
   // Last tested date
   let lastTested: string | null = null;
@@ -450,6 +452,7 @@ function scanReportsForApp(appId: string): Record<string, ScannedReport> {
         // Parse status
         let status = 'PENDING';
         if (content.includes('✅ PASS')) status = 'PASS';
+        else if (content.includes('⛔ NOT TESTED') || content.includes('NOT_TESTED')) status = 'NOT_TESTED';
         else if (content.includes('❌ FAIL')) status = 'FAIL';
         else if (content.includes('⚠') || content.includes('PARTIAL')) status = 'PARTIAL';
 
@@ -508,7 +511,17 @@ function mergeRegistryIntoReports(appId: string, reports: Record<string, Scanned
   const prefix = appId + '.';
   for (const [scenarioId, entry] of Object.entries(registry.scenarios as Record<string, any>)) {
     if (!scenarioId.startsWith(prefix)) continue;
-    if (reports[scenarioId]) continue; // Markdown report takes priority
+
+    const existing = reports[scenarioId];
+    if (existing) {
+      // Registry takes priority if it has a newer tested_at than the report timestamp.
+      // This handles the case where a report file is stale (e.g. FAIL from 2 weeks ago)
+      // but the registry has a newer result (e.g. BRIDGE_FAILURE from yesterday).
+      const registryDate: string | null = entry.tested_at ?? null;
+      const reportDate: string | null = existing.timestamp ?? null;
+      // Keep existing report unless registry is demonstrably newer
+      if (!registryDate || (reportDate && reportDate >= registryDate)) continue;
+    }
 
     reports[scenarioId] = {
       scenarioId,
@@ -697,7 +710,7 @@ function getPyramidData(appId: string) {
           const score = report?.score ?? null;
           if (status === 'PASS') sPassed++;
           else if (status === 'FAIL' || status === 'ERROR') sFailed++;
-          else if (status === 'PENDING' || status === 'BRIDGE_FAILURE') sPending++;
+          else if (status === 'PENDING' || status === 'BRIDGE_FAILURE' || status === 'NOT_TESTED') sPending++;
           else sFailed++; // PARTIAL without threshold pass = fail
           if (score != null && score > 0) sScores.push(score);
           const summary = getScenarioSummary(s.file, report?.reportPath ?? null);
@@ -723,12 +736,15 @@ function getPyramidData(appId: string) {
         const corePassed = coreTests.filter(t => t.status === 'PASS').length;
         const coreFailed = coreTests.filter(t => t.status === 'FAIL' || t.status === 'ERROR').length;
         const coreBridgeFailure = coreTests.filter(t => t.status === 'BRIDGE_FAILURE').length;
+        const coreNotTested = coreTests.filter(t => t.status === 'NOT_TESTED').length;
         const corePending = coreTests.filter(t => t.status !== 'PASS' && t.status !== 'FAIL' && t.status !== 'ERROR').length;
         const coreScores = coreTests.map(t => t.score).filter(s => s != null && s > 0) as number[];
         const coreAvg = coreScores.length > 0 ? coreScores.reduce((s, v) => s + v, 0) / coreScores.length : 0;
-        const coreStatus = coreFailed > 0 ? 'failed'
-          : corePassed === coreTests.length ? 'passed'
-          : coreTests.every(t => t.status === 'PENDING') ? 'pending'
+        const coreScoredTotal = coreTests.length - coreBridgeFailure - coreNotTested;
+        const coreStatus = (coreBridgeFailure + coreNotTested) === coreTests.length ? 'not_scored'
+          : coreFailed > 0 ? 'failed'
+          : corePassed === coreScoredTotal ? 'passed'
+          : coreTests.every(t => t.status === 'PENDING' || t.status === 'BRIDGE_FAILURE' || t.status === 'NOT_TESTED') ? 'pending'
           : 'partial';
 
         const desc = scannerData?.description ?? meta.description;
@@ -738,7 +754,7 @@ function getPyramidData(appId: string) {
           name: meta.name,
           description: desc,
           totalTests: coreTests.length,
-          passed: corePassed, failed: coreFailed, pending: corePending, bridgeFailure: coreBridgeFailure,
+          passed: corePassed, failed: coreFailed, pending: corePending, bridgeFailure: coreBridgeFailure, notTested: coreNotTested,
           avgScore: coreAvg,
           status: coreStatus,
           tests: coreTests,
@@ -750,13 +766,15 @@ function getPyramidData(appId: string) {
         const llmPassed = llmTests.filter(t => t.status === 'PASS').length;
         const llmFailed = llmTests.filter(t => t.status === 'FAIL' || t.status === 'ERROR').length;
         const llmBridgeFailure = llmTests.filter(t => t.status === 'BRIDGE_FAILURE').length;
+        const llmNotTested = llmTests.filter(t => t.status === 'NOT_TESTED').length;
         const llmPending = llmTests.filter(t => t.status !== 'PASS' && t.status !== 'FAIL' && t.status !== 'ERROR').length;
         const llmScores = llmTests.map(t => t.score).filter(s => s != null && s > 0) as number[];
         const llmAvg = llmScores.length > 0 ? llmScores.reduce((s, v) => s + v, 0) / llmScores.length : 0;
-        const allNotRun = llmTests.every(t => t.status === 'NOT_RUN' || t.status === 'PENDING');
+        const llmScoredTotal = llmTests.length - llmBridgeFailure - llmNotTested;
+        const allNotRun = llmTests.every(t => t.status === 'NOT_RUN' || t.status === 'PENDING' || t.status === 'BRIDGE_FAILURE' || t.status === 'NOT_TESTED');
         const llmStatus = allNotRun ? 'not_run'
           : llmFailed > 0 ? 'failed'
-          : llmPassed === llmTests.length ? 'passed'
+          : llmPassed === llmScoredTotal ? 'passed'
           : 'partial';
 
         layers.push({
@@ -780,7 +798,7 @@ function getPyramidData(appId: string) {
     if (scenarios.length === 0) continue;
 
     const meta = LAYER_META[layerNum];
-    let passed = 0, failed = 0, pending = 0, bridgeFailure = 0;
+    let passed = 0, failed = 0, pending = 0, bridgeFailure = 0, notTested = 0;
     const scores: number[] = [];
 
     const tests = scenarios.map(s => {
@@ -793,6 +811,7 @@ function getPyramidData(appId: string) {
 
       if (status === 'PASS') passed++;
       else if (status === 'FAIL' || status === 'ERROR') failed++;
+      else if (status === 'NOT_TESTED') { notTested++; pending++; }
       else if (status === 'BRIDGE_FAILURE') { bridgeFailure++; pending++; }
       else if (status === 'PENDING') pending++;
       else failed++; // PARTIAL without threshold pass = fail
@@ -804,10 +823,12 @@ function getPyramidData(appId: string) {
     });
 
     const avgScore = scores.length > 0 ? scores.reduce((s, v) => s + v, 0) / scores.length : 0;
+    const scoredTotal = tests.length - bridgeFailure - notTested; // exclude unscored from pass/fail logic
     const layerStatus = tests.length === 0 ? 'empty'
-      : pending === tests.length ? 'pending'
+      : (bridgeFailure + notTested) === tests.length ? 'not_scored'
+      : (pending - bridgeFailure - notTested) === scoredTotal ? 'pending'
       : failed > 0 ? 'failed'
-      : passed === tests.length ? 'passed'
+      : passed === scoredTotal ? 'passed'
       : 'partial';
 
     layers.push({
@@ -815,7 +836,7 @@ function getPyramidData(appId: string) {
       name: meta.name,
       description: meta.description,
       totalTests: tests.length,
-      passed, failed, pending, bridgeFailure,
+      passed, failed, pending, bridgeFailure, notTested,
       avgScore,
       status: layerStatus,
       tests,
@@ -827,7 +848,7 @@ function getPyramidData(appId: string) {
   const ungrouped = flatScenarios.filter(s => !layeredIds.has(s.id));
 
   if (ungrouped.length > 0) {
-    let passed = 0, failed = 0, pending = 0, bridgeFailure = 0;
+    let passed = 0, failed = 0, pending = 0, bridgeFailure = 0, notTested = 0;
     const scores: number[] = [];
     const tests = ungrouped.map(s => {
       const report = scannedReports[s.id];
@@ -835,6 +856,7 @@ function getPyramidData(appId: string) {
       const score = report?.score ?? null;
       if (status === 'PASS') passed++;
       else if (status === 'FAIL' || status === 'ERROR') failed++;
+      else if (status === 'NOT_TESTED') { notTested++; pending++; }
       else if (status === 'BRIDGE_FAILURE') { bridgeFailure++; pending++; }
       else if (status === 'PENDING') pending++;
       else failed++;
@@ -843,15 +865,20 @@ function getPyramidData(appId: string) {
       return { id: s.id, status, score, lastRun: report?.timestamp ?? null, reportPath: report?.reportPath ?? null, ...summary };
     });
     const avgScore = scores.length > 0 ? scores.reduce((s, v) => s + v, 0) / scores.length : 0;
+    const scoredTotal = tests.length - bridgeFailure - notTested;
 
     layers.push({
       id: -1,
       name: 'Scenarios',
       description: 'Flat scenarios (not yet layered)',
       totalTests: tests.length,
-      passed, failed, pending, bridgeFailure,
+      passed, failed, pending, bridgeFailure, notTested,
       avgScore,
-      status: failed > 0 ? 'failed' : pending === tests.length ? 'pending' : passed === tests.length ? 'passed' : 'partial',
+      status: (bridgeFailure + notTested) === tests.length ? 'not_scored'
+        : failed > 0 ? 'failed'
+        : (pending - bridgeFailure - notTested) === scoredTotal ? 'pending'
+        : passed === scoredTotal ? 'passed'
+        : 'partial',
       tests,
     });
   }
@@ -1153,6 +1180,8 @@ router.get('/api/qa/app/:appId', async (req, res) => {
     );
 
     const testedCount = scenarios.filter(s => s.status === 'PASS' || s.status === 'PARTIAL').length;
+    const bridgeFailureCount = scenarios.filter(s => s.status === 'BRIDGE_FAILURE').length;
+    const notTestedCount = scenarios.filter(s => s.status === 'NOT_TESTED').length;
     const scores = scenarios.map(s => s.score).filter(s => s != null && s > 0) as number[];
 
     res.json({
@@ -1161,6 +1190,8 @@ router.get('/api/qa/app/:appId', async (req, res) => {
       statistics: {
         totalScenarios: scenarios.length,
         testedCount,
+        bridgeFailures: bridgeFailureCount,
+        notTested: notTestedCount,
         avgScore: scores.length > 0 ? scores.reduce((s, v) => s + v, 0) / scores.length : 0,
         untestedScenarios: scenarios.filter(s => s.status === 'PENDING').map(s => s.id),
       },
@@ -1170,6 +1201,7 @@ router.get('/api/qa/app/:appId', async (req, res) => {
         passed: l.passed,
         total: l.totalTests,
         avgScore: l.avgScore,
+        bridgeFailures: (l as any).bridgeFailure ?? 0,
       })),
       timestamp: new Date().toISOString(),
     });

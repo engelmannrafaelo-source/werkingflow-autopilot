@@ -701,6 +701,18 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     }
   }, [sessionId, selectedId, panelId, projectId]);
 
+  // --- Notify server when tab becomes hidden (clear visibility immediately) ---
+  useEffect(() => {
+    if (!isTabVisible) {
+      // Tab hidden — tell server to remove this panel from visibility registry
+      fetch(`/api/mission/panel-removed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ panelId, projectId }),
+      }).catch(() => {}); // best-effort
+    }
+  }, [isTabVisible, panelId, projectId]);
+
   // --- WS for realtime attention events (auto-reconnect) ---
   useEffect(() => {
     if (!isTabVisible) return;
@@ -928,8 +940,24 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     };
 
     connect();
+
+    // Listen for SessionStore reconnection — immediately reconnect this panel's WS
+    const onServerReconnected = () => {
+      if (disposed) return;
+      console.log('[CuiLite WS] Server reconnected via SessionStore, immediate reconnect');
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      backoff = 1000;
+      circuitOpenRef.current = false;
+      pollFailCountRef.current = 0;
+      const existing = panelWsRef.current;
+      if (existing) { existing.onclose = null; existing.close(); panelWsRef.current = null; }
+      connect();
+    };
+    window.addEventListener('cui-reconnected', onServerReconnected);
+
     return () => {
       disposed = true;
+      window.removeEventListener('cui-reconnected', onServerReconnected);
       // CRITICAL: close the WebSocket to prevent connection leak
       const ws = panelWsRef.current;
       if (ws) { ws.onclose = null; ws.close(); }
@@ -1311,7 +1339,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       const resp = await fetch('/api/mission/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accountId: selectedId, message, workDir, subject, model }),
+        body: JSON.stringify({ accountId: 'auto', message, workDir, subject, model }),
         signal: AbortSignal.timeout(65000),
       });
       if (!resp.ok) {
@@ -1378,12 +1406,30 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   const handleFinish = useCallback(async () => {
     if (!sessionId) return;
     try {
-      await fetch(`/api/mission/conversation/${sessionId}/finish`, {
+      const resp = await fetch(`/api/mission/conversation/${sessionId}/finish`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ finished: true }),
         signal: AbortSignal.timeout(20000),
       });
+      if (resp.status === 409) {
+        // Session still has a live process — confirm and retry with force
+        const data = await resp.json().catch(() => ({ message: 'Session laeuft noch.' }));
+        if (confirm(`${data.message}\n\nTrotzdem finishen?`)) {
+          const r2 = await fetch(`/api/mission/conversation/${sessionId}/finish`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ finished: true, confirm: true }),
+            signal: AbortSignal.timeout(20000),
+          });
+          if (!r2.ok) { console.warn('[CuiLite] Finish confirm failed:', r2.status); return; }
+        } else {
+          return; // User cancelled — don't call onFinish
+        }
+      } else if (!resp.ok) {
+        console.warn('[CuiLite] Finish failed:', resp.status);
+        return;
+      }
       // Server broadcasts control:conversation-finished -> LayoutManager deleteTab
       // onFinish as immediate local fallback
       onFinish?.(sessionId);

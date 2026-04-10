@@ -98,6 +98,7 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.cjs'),
+      backgroundThrottling: false,
       additionalArguments: ['--cui-mode=' + (isDevMode ? 'dev' : isLocalMode ? 'local' : isPartnerMode ? 'partner' : 'remote')],
     },
   });
@@ -124,12 +125,43 @@ function createWindow() {
   }
   mainWindow.loadURL(targetURL);
 
+  // Retry with exponential backoff on load failures
+  let retryCount = 0;
   mainWindow.webContents.on('did-fail-load', (_event, code, desc) => {
-    console.error(`Failed to load: ${code} ${desc}`);
-    // Retry after 2s if server isn't reachable yet
-    if (code === -102 || code === -6) {
-      setTimeout(() => mainWindow.loadURL(targetURL), 2000);
+    console.error(`[Electron] Failed to load: ${code} ${desc}`);
+    retryCount++;
+    const delay = Math.min(2000 * Math.pow(2, retryCount - 1), 30000);
+    console.log(`[Electron] Retrying in ${delay}ms (attempt ${retryCount})...`);
+    setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.loadURL(targetURL);
+    }, delay);
+  });
+  mainWindow.webContents.on('did-finish-load', () => { retryCount = 0; });
+
+  // Crash recovery: auto-reload when renderer process dies
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error('[Electron] Renderer process gone:', details.reason);
+    if (details.reason !== 'clean-exit') {
+      setTimeout(() => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.loadURL(targetURL);
+      }, 3000);
     }
+  });
+
+  // Unresponsive recovery: reload after 8s of unresponsiveness
+  let unresponsiveTimer = null;
+  mainWindow.on('unresponsive', () => {
+    console.warn('[Electron] Window unresponsive');
+    unresponsiveTimer = setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        console.log('[Electron] Force reloading unresponsive window');
+        mainWindow.webContents.reload();
+      }
+    }, 8000);
+  });
+  mainWindow.on('responsive', () => {
+    if (unresponsiveTimer) { clearTimeout(unresponsiveTimer); unresponsiveTimer = null; }
+    console.log('[Electron] Window responsive again');
   });
 }
 

@@ -12,12 +12,6 @@ const PANEL_OPTIONS = [
   { value: 'cui:local', label: 'CUI: Local' },
   { value: 'cui:gemini', label: 'CUI: Gemini' },
   { value: 'cui:werking', label: 'CUI: Werking' },
-  { value: 'chat:engelmann', label: 'Chat: Engelmann 🖼️' },
-  { value: 'chat:office', label: 'Chat: Office 🖼️' },
-  { value: 'chat:gmail', label: 'Chat: Gmail 🖼️' },
-  { value: 'chat:local', label: 'Chat: Local 🖼️' },
-  { value: 'chat:gemini', label: 'Chat: Gemini 🖼️' },
-  { value: 'chat:werking', label: 'Chat: Werking 🖼️' },
   { value: 'images', label: 'Images' },
   { value: 'browser', label: 'Browser' },
   { value: 'preview', label: 'File Preview' },
@@ -99,10 +93,6 @@ function panelFromValue(value: string, workDir: string): PanelConfig {
   if (value.startsWith('cui:')) {
     const accountId = value.split(':')[1];
     return { component: 'cui', name: ACCOUNT_LABELS[accountId] || accountId, config: { accountId } };
-  }
-  if (value.startsWith('chat:')) {
-    const accountId = value.split(':')[1];
-    return { component: 'chat', name: `Chat: ${ACCOUNT_LABELS[accountId] || accountId}`, config: { accountId } };
   }
   switch (value) {
     case 'images':   return { component: 'images', name: 'Images', config: {} };
@@ -316,12 +306,11 @@ interface LayoutBuilderProps {
 export default function LayoutBuilder({ workDir, onApply, onClose }: LayoutBuilderProps) {
   const { canAccessPanel } = useAuth();
 
-  // Filter panel options based on user's allowed panels
+  // All panels visible; non-allowed ones are disabled (greyed out)
   const filteredPanelOptions = useMemo(() =>
-    PANEL_OPTIONS.filter(opt => {
-      // Panel value format: 'component' or 'component:account'
+    PANEL_OPTIONS.map(opt => {
       const component = opt.value.split(':')[0];
-      return canAccessPanel(component);
+      return { ...opt, allowed: canAccessPanel(component) };
     }),
   [canAccessPanel]);
 
@@ -473,12 +462,16 @@ export default function LayoutBuilder({ workDir, onApply, onClose }: LayoutBuild
                 >
                   <optgroup label="CUI">
                     {filteredPanelOptions.filter(o => o.value.startsWith('cui:')).map(o => (
-                      <option key={o.value} value={o.value}>{o.label}</option>
+                      <option key={o.value} value={o.value} disabled={!o.allowed}>
+                        {o.allowed ? o.label : `${o.label} (nicht verfügbar)`}
+                      </option>
                     ))}
                   </optgroup>
                   <optgroup label="Tools">
                     {filteredPanelOptions.filter(o => !o.value.startsWith('cui:')).map(o => (
-                      <option key={o.value} value={o.value}>{o.label}</option>
+                      <option key={o.value} value={o.value} disabled={!o.allowed}>
+                        {o.allowed ? o.label : `${o.label} (nicht verfügbar)`}
+                      </option>
                     ))}
                   </optgroup>
                 </select>

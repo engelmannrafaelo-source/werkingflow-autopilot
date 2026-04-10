@@ -80,13 +80,16 @@ export function getVisibleSessionIds(): Set<string> {
   return ids;
 }
 
-// Cleanup stale entries every 60s (panels closed, browser refreshed)
+// Cleanup stale entries every 30s (panels closed, browser refreshed)
+// 90s timeout: panels send heartbeat via WS every ~30s, so 90s catches disconnected panels quickly
 _intervals.push(setInterval(() => {
-  const cutoff = Date.now() - 5 * 60 * 1000;
+  const cutoff = Date.now() - 90 * 1000;
+  let changed = false;
   for (const [key, entry] of visibilityRegistry) {
-    if (entry.updatedAt < cutoff) visibilityRegistry.delete(key);
+    if (entry.updatedAt < cutoff) { visibilityRegistry.delete(key); changed = true; }
   }
-}, 60000));
+  if (changed) broadcast({ type: 'visibility-update', visibleSessionIds: [...getVisibleSessionIds()] });
+}, 30000));
 
 // --- Per-Session Attention State Tracker ---
 // Types imported from shared/types.ts — re-exported for backward compatibility.

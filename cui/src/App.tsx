@@ -242,6 +242,7 @@ function AppContent() {
   const [showMission, setShowMission] = useState(false);
   const [showAllChats, setShowAllChats] = useState(false);
   const [pendingActivation, setPendingActivation] = useState<Array<{ projectId: string; conversations: Array<{ sessionId: string; accountId: string }> }> | null>(null);
+  const [missingSessions, setMissingSessions] = useState<Record<string, number>>({}); // projectId → count of unmounted sessions
 
   // Auto-reload when bundle changes (detects Syncthing-triggered rebuilds)
   const currentBundleRef = useRef(
@@ -401,7 +402,7 @@ function AppContent() {
   // Split into two effects:
   // 1. Conversation fetching (every 5s, depends only on projects)
   // 2. Attention computation (reacts to sessionStatesTick from WS events)
-  const convCacheRef = useRef<Array<{ sessionId: string; projectName: string; status: string; updatedAt: string; attentionState?: string; attentionReason?: string; isSubSession?: boolean }>>([]);
+  const convCacheRef = useRef<Array<{ sessionId: string; projectName: string; status: string; updatedAt: string; attentionState?: string; attentionReason?: string; isSubSession?: boolean; processAlive?: boolean }>>([]);
   const convTickRef = useRef(0);
   const [convTick, setConvTick] = useState(0);
 
@@ -421,6 +422,7 @@ function AppContent() {
             attentionState: c.attentionState,
             attentionReason: c.attentionReason,
             isSubSession: c.isSubSession || false,
+            processAlive: c.processAlive || false,
           }));
           convTickRef.current++;
           setConvTick(convTickRef.current);
@@ -455,9 +457,9 @@ function AppContent() {
       const reason = ss?.reason || conv.attentionReason;
 
       // Stale detection: if "working" but no WS update in 90s, treat as needs_attention
-      // Use ss.since (WS-based, updated on every event) instead of conv.updatedAt (API-based, rarely updated)
+      // UNLESS the process is still alive (it may just be running a long tool)
       let isStale = false;
-      if (rawState === 'working') {
+      if (rawState === 'working' && !conv.processAlive) {
         const lastUpdate = ss?.since || (conv.updatedAt ? new Date(conv.updatedAt).getTime() : 0);
         if (lastUpdate > 0) {
           isStale = (now - lastUpdate) > 90_000;
@@ -470,8 +472,11 @@ function AppContent() {
       } else if (rawState === 'needs_attention' || isStale) {
         effectiveState = 'needs_attention';
       } else if (rawState === 'idle' && reason === 'done') {
-        // Session finished and is waiting for user input → needs attention
+        // Session done → needs attention (user should review)
         effectiveState = 'needs_attention';
+      } else if (conv.processAlive && rawState !== 'needs_attention') {
+        // Process is alive → treat as working even if temporarily idle between tool calls
+        effectiveState = 'working';
       } else {
         effectiveState = 'idle';
       }
@@ -495,6 +500,13 @@ function AppContent() {
       return changed ? result : prev;
     });
   }, [projects, sessionStatesTick, convTick]); // sessionStatesTick triggers on every WS event
+
+  const handleMissingSessions = useCallback((projectId: string, count: number) => {
+    setMissingSessions(prev => {
+      if (prev[projectId] === count) return prev;
+      return { ...prev, [projectId]: count };
+    });
+  }, []);
 
   const handleActivationProcessed = useCallback((processedProjectId?: string) => {
     if (!processedProjectId) {
@@ -681,6 +693,7 @@ function AppContent() {
         projects={projects}
         activeId={activeId}
         attention={projectAttention}
+        missingSessions={missingSessions[activeId] || 0}
         onSelect={(id) => { setShowMission(false); setShowAllChats(false);handleSelect(id); }}
         onNew={handleNew}
         onEdit={handleEdit}
@@ -743,6 +756,7 @@ function AppContent() {
                 pendingActivation={pendingActivation}
                 isActive={p.id === activeId}
                 onActivationProcessed={handleActivationProcessed}
+                onMissingSessions={(count) => handleMissingSessions(p.id, count)}
               />
             )}
           </div>

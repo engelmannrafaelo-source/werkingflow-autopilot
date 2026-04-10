@@ -48,7 +48,6 @@ function patchLayoutRedraw(layoutRef: any) {
 }
 // --- Critical-path panels (lightweight, needed immediately) ---
 import CuiLitePanel from './panels/CuiLitePanel';
-import NativeChat from './panels/NativeChat';
 import ImageDrop from './panels/ImageDrop';
 import BrowserPanel from './panels/BrowserPanel';
 import FilePreview from './panels/FilePreview';
@@ -63,7 +62,7 @@ import {
   LinkedInPanel, BridgeMonitor, InfisicalMonitor, QADashboard, RepoDashboard,
   SystemHealth, WatchdogPanel, PeerAwarenessPanel, BackgroundOpsPanel,
   ConversationQueuePanel, MaintenancePanel, UserInputAuditPanel,
-  ArchitectureExplorer, ReportBuilder, PromptExplorer, BusinessAngelPanel,
+  ArchitectureExplorer, ReportBuilder, PromptExplorer, BusinessAngelPanel, SubSessionPanel,
   PANEL_NAMES, PANEL_MENU_OPTIONS,
 } from './panelRegistry';
 // LayoutBuilder ist Desktop-only — bleibt hier
@@ -183,9 +182,10 @@ interface LayoutManagerProps {
   pendingActivation?: ActivationPlan[] | null;
   onActivationProcessed?: (projectId?: string) => void;
   isActive?: boolean;
+  onMissingSessions?: (count: number) => void;
 }
 
-export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAttentionChange, onCuiStateReset, pendingActivation, onActivationProcessed, isActive }: LayoutManagerProps) {
+export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAttentionChange, onCuiStateReset, pendingActivation, onActivationProcessed, isActive, onMissingSessions }: LayoutManagerProps) {
   const { canAccessPanel } = useAuth();
 
   // Stale-while-revalidate: use cached layout instantly, refresh in background
@@ -219,9 +219,18 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
   onCuiStateResetRef.current = onCuiStateReset;
   const isActiveRef = useRef(isActive);
   isActiveRef.current = isActive;
+  const onMissingSessionsRef = useRef(onMissingSessions);
+  onMissingSessionsRef.current = onMissingSessions;
   const modelRef = useRef<Model | null>(null);
   modelRef.current = model;
   const modelInitialized = model !== null;  // stable boolean: changes only once (null->Model)
+
+  // Version tracking for optimistic concurrency: prevents stale browser from overwriting
+  // a newer server layout (set via API). Server increments _v on every write.
+  const currentLayoutVersionRef = useRef<number>(0);
+  // Suppress the next handleModelChange call after an external layout is applied
+  // (WebSocket control:apply-layout or 409 recovery) to avoid echoing back to server.
+  const suppressNextSaveRef = useRef<boolean>(false);
 
   // Background refresh: fetch fresh layout from server (stale-while-revalidate)
   // Model is already loaded from localStorage cache in useState initializer above
@@ -230,6 +239,19 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     const cacheKey = `cui-layout-${projectId}`;
     const tplCacheKey = `cui-template-${projectId}`;
     const hadCachedModel = model !== null;
+
+    // Initialize version from localStorage cache so we don't send a stale _v=0
+    if (hadCachedModel) {
+      try {
+        const cached = localStorage.getItem(cacheKey);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (typeof parsed._v === 'number') {
+            currentLayoutVersionRef.current = parsed._v;
+          }
+        }
+      } catch { /* ignore */ }
+    }
 
     // Load template cache if available
     try {
@@ -258,8 +280,16 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       if (layoutJson) {
         // Cache for next load
         try { localStorage.setItem(cacheKey, JSON.stringify(layoutJson)); } catch (e) { console.warn('[LayoutManager] Failed to cache layout:', e); }
-        // Only update model if we didn't have a cache (avoid destroying existing Layout tree)
-        if (!hadCachedModel) {
+        const serverV = typeof layoutJson._v === 'number' ? layoutJson._v : -1;
+        if (serverV > currentLayoutVersionRef.current) {
+          // Server has a newer version (e.g. set via API) — apply it and suppress echo
+          currentLayoutVersionRef.current = serverV;
+          suppressNextSaveRef.current = true;
+          if (saveTimer.current) clearTimeout(saveTimer.current);
+          try { setModel(Model.fromJson(layoutJson)); } catch (e) { console.warn('[LayoutManager] Failed to parse server layout JSON:', e); }
+        } else if (!hadCachedModel) {
+          // No local cache at all — apply whatever the server has
+          if (serverV >= 0) currentLayoutVersionRef.current = serverV;
           try { setModel(Model.fromJson(layoutJson)); } catch (e) { console.warn('[LayoutManager] Failed to parse server layout JSON:', e); }
         }
         return;
@@ -340,18 +370,6 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
               try { m.doAction(Actions.deleteTab(nodeId)); saveLayoutRef.current(m); } catch (e) { console.warn('[LM] Finish deleteTab:', e); }
             }
           }} />);
-      case 'chat': {
-        const accountId = config.accountId || 'engelmann';
-        const PROXY_PORTS: Record<string, number> = {
-          rafael: 5001,
-          engelmann: 5002,
-          office: 5003,
-          local: 5004,
-          gemini: 5005,
-          werking: 5006
-        };
-        return wrapPanel('NativeChat', <NativeChat accountId={accountId} proxyPort={PROXY_PORTS[accountId] || 5001} />);
-      }
       case 'images':
         return wrapPanel('ImageDrop', <ImageDrop />);
       case 'browser':
@@ -425,6 +443,8 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         return wrapPanel('Business Angel', withSuspense(<BusinessAngelPanel />));
       case 'prompt-explorer':
         return wrapPanel('PromptExplorer', withSuspense(<PromptExplorer />));
+      case 'sub-sessions':
+        return wrapPanel('Sub-Sessions', withSuspense(<SubSessionPanel workDir={workDir} isVisible={node.isVisible()} />));
       default:
         return wrapPanel(`Unknown:${component}`,
           <div style={{ padding: 20, color: 'var(--tn-text-muted)' }}>
@@ -436,21 +456,43 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
 
   const saveLayout = useCallback((m: Model) => {
     const json = m.toJson();
+    const payload = { ...json, _v: currentLayoutVersionRef.current };
     // Cache locally for instant load on next visit
-    try { localStorage.setItem(`cui-layout-${projectId}`, JSON.stringify(json)); } catch (e) { console.warn('[LayoutManager] Failed to cache layout locally:', e); }
+    try { localStorage.setItem(`cui-layout-${projectId}`, JSON.stringify(payload)); } catch (e) { console.warn('[LayoutManager] Failed to cache layout locally:', e); }
     if ((window as any).__cuiServerAlive === false) return;
     try {
       fetch(`${API}/layouts/${projectId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(json),
+        body: JSON.stringify(payload),
         signal: AbortSignal.timeout(15000),
+      }).then(async (res) => {
+        if (res.ok) {
+          const data = await res.json().catch(() => ({}));
+          if (typeof data._v === 'number') currentLayoutVersionRef.current = data._v;
+        } else if (res.status === 409) {
+          // Server has newer version — apply it, suppress echo
+          const data = await res.json().catch(() => ({}));
+          if (data.layout) {
+            currentLayoutVersionRef.current = typeof data._v === 'number' ? data._v : currentLayoutVersionRef.current;
+            suppressNextSaveRef.current = true;
+            if (saveTimer.current) clearTimeout(saveTimer.current);
+            try {
+              setModel(Model.fromJson(data.layout));
+              localStorage.setItem(`cui-layout-${projectId}`, JSON.stringify(data.layout));
+            } catch (e) { console.warn('[LayoutManager] Failed to apply conflict layout:', e); }
+          }
+        }
       }).catch((err) => { console.warn('[LayoutManager] saveLayout fetch failed:', err); });
     } catch (err) { console.warn('[LayoutManager] saveLayout error:', err); }
   }, [projectId]);
 
   const handleModelChange = useCallback(
     (m: Model) => {
+      if (suppressNextSaveRef.current) {
+        suppressNextSaveRef.current = false;
+        return;
+      }
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => saveLayout(m), 1500);
     },
@@ -495,7 +537,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
   const saveLayoutRef = useRef(saveLayout);
   saveLayoutRef.current = saveLayout;
 
-  const addTab = useCallback((type: 'cui' | 'cui-lite' | 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'gmail' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'repo-dashboard' | 'watchdog' | 'background-ops' | 'conversation-queue' | 'maintenance' | 'input-audit' | 'qa-dashboard' | 'peer-awareness' | 'infisical-monitor' | 'mission-chat' | 'architecture' | 'report-builder' | 'prompt-explorer', config: Record<string, string>, targetId: string) => {
+  const addTab = useCallback((type: 'cui' | 'cui-lite' | 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'gmail' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'repo-dashboard' | 'watchdog' | 'background-ops' | 'conversation-queue' | 'maintenance' | 'input-audit' | 'qa-dashboard' | 'peer-awareness' | 'infisical-monitor' | 'mission-chat' | 'architecture' | 'report-builder' | 'prompt-explorer' | 'sub-sessions', config: Record<string, string>, targetId: string) => {
     const m = modelRef.current;
     if (!m) return;
     // Panel-Namen kommen aus der Registry (SSoT)
@@ -545,12 +587,18 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         }}
       >
         <option value="">+</option>
-        {PANEL_MENU_OPTIONS.map(({ value, label }) => (
-          <option key={value} value={value}>{label}</option>
-        ))}
+        {PANEL_MENU_OPTIONS.map(({ value, label }) => {
+          const allowed = canAccessPanel(value);
+          return (
+            <option key={value} value={value} disabled={!allowed}
+              style={!allowed ? { color: 'var(--tn-text-muted)', opacity: 0.5 } : undefined}>
+              {allowed ? label : `${label} (nicht verfügbar)`}
+            </option>
+          );
+        })}
       </select>
     );
-  }, [addTab]);
+  }, [addTab, canAccessPanel]);
 
   // When cuiStates changes, update tab header dots via DOM (no React re-render needed).
   // Direct DOM manipulation avoids triggering flexlayout's expensive render/layout cycle.
@@ -716,14 +764,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         reportPanels();
         // Re-sync conversations on reconnect
         setTimeout(() => syncNowRef.current?.(), 1500);
-        // Auto-layout: split stacked CUI panels — only when this workspace is currently active
-        if (isActiveRef.current) {
-          fetch(`/api/control/auto-layout`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ projectId }),
-          }).catch(() => { /* non-critical */ });
-        }
+        // Auto-layout disabled on reconnect — only triggered manually via Layout button
       };
       ws.onclose = () => {
         if (controlWsRef.current === ws) controlWsRef.current = null;
@@ -788,12 +829,19 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         // Server-pushed layout update: apply without reload (triggered by POST /api/layouts/:projectId)
         if (msg.type === 'control:apply-layout' && msg.projectId === projectId && msg.layout) {
           try {
-            const layoutData = msg.layout.layout || msg.layout;
-            const newModel = Model.fromJson(layoutData);
-            setModel(newModel);
-            try { localStorage.setItem(`cui-layout-${projectId}`, JSON.stringify(msg.layout)); } catch (e) { /* ignore */ }
-            console.log(`[LayoutManager] Applied server layout for ${projectId}`);
-            setTimeout(reportPanels, 200);
+            const serverV = typeof msg.layout._v === 'number' ? msg.layout._v : -1;
+            // Only apply if server version is newer (or unversioned) — prevents processing our own echo
+            if (serverV > currentLayoutVersionRef.current || serverV === -1) {
+              if (serverV >= 0) currentLayoutVersionRef.current = serverV;
+              const layoutData = msg.layout.layout || msg.layout;
+              suppressNextSaveRef.current = true;
+              if (saveTimer.current) clearTimeout(saveTimer.current);
+              const newModel = Model.fromJson(layoutData);
+              setModel(newModel);
+              try { localStorage.setItem(`cui-layout-${projectId}`, JSON.stringify(msg.layout)); } catch (e) { /* ignore */ }
+              console.log(`[LayoutManager] Applied server layout v${serverV} for ${projectId}`);
+              setTimeout(reportPanels, 200);
+            }
           } catch (err) { console.warn('[LayoutManager] apply-layout failed:', err); }
         }
         if (msg.type === 'control:select-tab' && m && msg.target) {
@@ -1042,8 +1090,22 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     };
 
     connect();
+
+    // Listen for SessionStore reconnection — immediately reconnect control WS
+    const onServerReconnected = () => {
+      if (disposed) return;
+      console.log('[LayoutManager WS] Server reconnected via SessionStore, immediate reconnect');
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      backoff = 1000;
+      const existing = controlWsRef.current;
+      if (existing) { existing.onclose = null; existing.close(); controlWsRef.current = null; }
+      connect();
+    };
+    window.addEventListener('cui-reconnected', onServerReconnected);
+
     return () => {
       disposed = true;
+      window.removeEventListener('cui-reconnected', onServerReconnected);
       if (reconnectTimer) clearTimeout(reconnectTimer);
       const ws = controlWsRef.current;
       controlWsRef.current = null;
@@ -1216,26 +1278,32 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         const activeSessionIds = new Set(active.map((c: any) => c.sessionId));
 
         // Cleanup: remove tabs whose session is no longer active (finished or too old)
-        const allSessionIds = new Set(conversations.map((c: any) => c.sessionId));
+        // ONLY when user explicitly clicked Layout button (prevents sessions from disappearing)
         let removed = 0;
-        for (const [sid, nodeId] of mountedSessions) {
-          // Keep if session is in active list
-          if (activeSessionIds.has(sid)) continue;
-          // Keep panels reserved for new session creation (placeholder route)
-          if (sid === '_starting') continue;
-          // Remove stale tab
-          try {
-            m.doAction(Actions.deleteTab(nodeId));
-            removed++;
-          } catch (err) { console.warn('[LM] cleanup deleteTab failed:', err); }
-        }
-        if (removed > 0) {
-          saveLayoutRef.current(m);
-          console.log(`[LM] Cleanup: removed ${removed} stale tabs`);
+        if ((window as any).__cuiAutoLayoutActive) {
+          for (const [sid, nodeId] of mountedSessions) {
+            // Keep if session is in active list
+            if (activeSessionIds.has(sid)) continue;
+            // Keep panels reserved for new session creation (placeholder route)
+            if (sid === '_starting') continue;
+            // Remove stale tab
+            try {
+              m.doAction(Actions.deleteTab(nodeId));
+              removed++;
+            } catch (err) { console.warn('[LM] cleanup deleteTab failed:', err); }
+          }
+          if (removed > 0) {
+            saveLayoutRef.current(m);
+            console.log(`[LM] Cleanup: removed ${removed} stale tabs`);
+          }
         }
 
         // Find missing conversations (not yet mounted in any panel)
         const missing = active.filter((c: any) => !mountedSessions.has(c.sessionId));
+
+        // Report missing sessions count to parent (for Layout button indicator)
+        onMissingSessionsRef.current?.(missing.length);
+
         if (missing.length === 0 && removed === 0) return;
         if (missing.length === 0) return;
 
@@ -1333,6 +1401,44 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           saveLayoutRef.current(m);
           console.log(`[LM] Auto-sync: mounted ${mounted} conversations`);
         }
+
+        // Auto-add SubSessionPanel when Layout button clicked and sub-sessions exist
+        if ((window as any).__cuiAutoLayoutActive) {
+          try {
+            const subRes = await fetch('/api/mission/sub-sessions', { signal: AbortSignal.timeout(5000) });
+            if (subRes.ok) {
+              const subData = await subRes.json();
+              const activeSubs = (subData.sessions || []).filter((s: any) =>
+                s.attentionState === 'working' || s.attentionState === 'needs_attention'
+              );
+              if (activeSubs.length > 0) {
+                // Check if a sub-sessions panel already exists
+                let hasSubPanel = false;
+                m.visitNodes((node) => {
+                  if (node.getType() === 'tab') {
+                    const tab = node as TabNode;
+                    if (tab.getComponent?.() === 'sub-sessions') hasSubPanel = true;
+                  }
+                });
+                if (!hasSubPanel) {
+                  // Find a tabset to dock the sub-sessions panel into
+                  let targetTabsetId = '';
+                  m.visitNodes((node) => {
+                    if (!targetTabsetId && node.getType() === 'tabset') targetTabsetId = node.getId();
+                  });
+                  if (targetTabsetId) {
+                    m.doAction(Actions.addNode(
+                      { type: 'tab', name: 'Sub-Sessions', component: 'sub-sessions', config: {} },
+                      targetTabsetId, DockLocation.BOTTOM, -1
+                    ));
+                    saveLayoutRef.current(m);
+                    console.log(`[LM] Auto-added Sub-Sessions panel (${activeSubs.length} active sub-sessions)`);
+                  }
+                }
+              }
+            }
+          } catch (err) { console.warn('[LM] sub-session panel check failed:', err); }
+        }
       } catch (err) { console.warn('[LM] auto-sync error:', err); }
     };
 
@@ -1370,6 +1476,15 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
   // Trigger immediate sync + notify server when this project tab becomes active
   useEffect(() => {
     if (isActive) {
+      // Force FlexLayout to recalculate dimensions after display:none → display:flex transition
+      // Without this, FlexLayout may render with stale 0x0 dimensions from when the tab was hidden
+      const redrawTimer = setTimeout(() => {
+        const internal = (layoutRef.current as any)?.selfRef?.current;
+        if (internal?.redrawInternal) {
+          internal.redrawInternal('project-switch');
+        }
+      }, 50); // 50ms: enough for CSS display:flex to take effect, before user sees black screen
+
       // Notify server of active project (sets activeProjectId for auto-layout)
       fetch(`/api/control/project/switch`, {
         method: 'POST',
@@ -1394,8 +1509,9 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       // Small delay to let CSS display:flex take effect before syncing conversations
       if (syncNowRef.current) {
         const t = setTimeout(() => syncNowRef.current?.(), 300);
-        return () => clearTimeout(t);
+        return () => { clearTimeout(t); clearTimeout(redrawTimer); };
       }
+      return () => clearTimeout(redrawTimer);
     }
   }, [isActive, projectId]);
 

@@ -595,7 +595,7 @@ function NewConversationDialog({ projects, onStart, onClose }: {
   onStart: (accountId: string, workDir: string, subject: string, message: string, model: string) => void;
   onClose: () => void;
 }) {
-  const [accountId, setAccountId] = useState('engelmann');
+  const [accountId, setAccountId] = useState('auto');
   const [projectId, setProjectId] = useState(projects[0]?.id || '');
   const [model, setModel] = useState<'sonnet' | 'opus'>('opus');
   const [subject, setSubject] = useState('');
@@ -1005,10 +1005,24 @@ export default function MissionControl({ projectId }: MissionControlProps) {
 
   const handleFinish = useCallback((conv: Conversation) => {
     if ((window as any).__cuiServerAlive === false) { console.warn('[MissionControl] handleFinish skipped: server not alive'); return; }
+    const displayName = conv.customName || conv.summary?.slice(0, 40) || conv.sessionId.slice(0, 8);
+    // First try without confirm — server rejects with 409 if session process is still alive
     fetch(`${API}/mission/conversation/${conv.sessionId}/finish`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ finished: true }),
       signal: AbortSignal.timeout(15000),
-    }).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); setTimeout(fetchConversations, 500); })
+    }).then(async r => {
+      if (r.status === 409) {
+        const data = await r.json();
+        if (confirm(`"${displayName}" laeuft noch!\n\n${data.message}\n\nTrotzdem finishen?`)) {
+          return fetch(`${API}/mission/conversation/${conv.sessionId}/finish`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ finished: true, confirm: true }),
+            signal: AbortSignal.timeout(15000),
+          }).then(r2 => { if (!r2.ok) throw new Error(`HTTP ${r2.status}`); });
+        }
+        return;
+      }
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    }).then(() => { setTimeout(fetchConversations, 500); })
       .catch((err) => { console.warn('[MissionControl] handleFinish failed:', err); });
   }, [fetchConversations]);
 
@@ -1043,16 +1057,25 @@ export default function MissionControl({ projectId }: MissionControlProps) {
     const targets = displayedConvs.filter(c => checkedConvs.has(convKey(c)));
     if (targets.length === 0) return;
     setBulkStatus(`Markiere ${targets.length} als fertig...`);
+    let finished = 0;
+    let blocked = 0;
+    const blockedNames: string[] = [];
     Promise.all(targets.map(c =>
       fetch(`${API}/mission/conversation/${c.sessionId}/finish`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ finished: true }),
         signal: AbortSignal.timeout(15000),
-      }).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); })
-        .catch((err) => { console.warn('[MissionControl] handleBulkFinish single failed:', err); })
+      }).then(async r => {
+        if (r.status === 409) { blocked++; blockedNames.push(c.customName || c.sessionId.slice(0, 8)); return; }
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        finished++;
+      }).catch((err) => { console.warn('[MissionControl] handleBulkFinish single failed:', err); })
     )).then(() => {
-      setBulkStatus(`${targets.length} fertig`);
+      const msg = blocked > 0
+        ? `${finished} fertig, ${blocked} uebersprungen (laufen noch: ${blockedNames.join(', ')})`
+        : `${finished} fertig`;
+      setBulkStatus(msg);
       setCheckedConvs(new Set());
-      setTimeout(() => { setBulkStatus(null); fetchConversations(); }, 2000);
+      setTimeout(() => { setBulkStatus(null); fetchConversations(); }, blocked > 0 ? 5000 : 2000);
     });
   }, [displayedConvs, checkedConvs, fetchConversations]);
 

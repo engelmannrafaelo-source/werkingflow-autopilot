@@ -126,7 +126,7 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
         if (!disposed) {
           if (backoff <= 1000) console.log('[SessionStore] WS disconnected, reconnecting...');
           reconnectTimer = setTimeout(() => {
-            backoff = Math.min(backoff * 2, 30000);
+            backoff = Math.min(backoff * 2, 10000);
             connect();
           }, backoff);
         }

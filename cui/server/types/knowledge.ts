@@ -45,7 +45,7 @@ export interface PersonaAssignment {
 export interface DocumentKnowledge {
   // File metadata
   path: string;                   // Relative: "shared/VISION.md"
-  absolute_path: string;          // Full: "/root/projekte/werkingflow/business/shared/VISION.md"
+  absolute_path: string;          // Full: "/root/projekte/werkingflow-business/shared/VISION.md"
   filename: string;               // "VISION.md"
   category: DocumentCategory;
   size_bytes: number;
