@@ -63,6 +63,7 @@ import {
   SystemHealth, WatchdogPanel, PeerAwarenessPanel, BackgroundOpsPanel,
   ConversationQueuePanel, MaintenancePanel, UserInputAuditPanel,
   ArchitectureExplorer, ReportBuilder, PromptExplorer, BusinessAngelPanel, SubSessionPanel,
+  MyTasksPanel,
   PANEL_NAMES, PANEL_MENU_OPTIONS,
 } from './panelRegistry';
 // LayoutBuilder ist Desktop-only — bleibt hier
@@ -445,6 +446,8 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         return wrapPanel('PromptExplorer', withSuspense(<PromptExplorer />));
       case 'sub-sessions':
         return wrapPanel('Sub-Sessions', withSuspense(<SubSessionPanel workDir={workDir} isVisible={node.isVisible()} />));
+      case 'my-tasks':
+        return wrapPanel('MyTasks', withSuspense(<MyTasksPanel />));
       default:
         return wrapPanel(`Unknown:${component}`,
           <div style={{ padding: 20, color: 'var(--tn-text-muted)' }}>

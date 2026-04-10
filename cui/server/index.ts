@@ -125,6 +125,9 @@ import { createBackgroundOpsRouter } from './routes/background-ops.js';
 // Prompt Explorer (live pipeline & prompt scanner)
 import { createPromptExplorerRouter } from './routes/prompt-explorer.js';
 
+// Partner Tasks (task assignment and status tracking for partners)
+import partnerTasksRouter, { initPartnerTasksRouter } from './routes/partner-tasks.js';
+
 
 // ─── Section 4: Constants ───────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT ?? '4005', 10);
@@ -191,6 +194,7 @@ initMissionRouter({
 initTemplatesRouter(DATA_DIR);
 initAuditRouter(DATA_DIR);
 initReportBuilder(DATA_DIR);
+initPartnerTasksRouter(DATA_DIR);
 
 const filesRouter = createFilesRouter({ DATA_DIR, ACTIVE_DIR, PORT });
 const layoutsRouter = createLayoutsRouter({ LAYOUTS_DIR, PROJECTS_DIR, NOTES_DIR, UPLOADS_DIR, DATA_DIR });
@@ -281,6 +285,9 @@ app.use('/api/business-angel', businessAngelRouter); // /api/business-angel/cont
 
 // --- Prompt Explorer API ---
 app.use('/api/prompt-explorer', createPromptExplorerRouter()); // /api/prompt-explorer/pipelines, /scan, /prompt
+
+// --- Partner Tasks API ---
+app.use('/api/partner', partnerTasksRouter);                   // /api/partner/tasks (GET/POST/PATCH/DELETE)
 
 // --- Document Manager (Phase 3) ---
 app.use('/api/team', documentManager);

@@ -33,6 +33,7 @@ export const ReportBuilder = lazy(() => import('./panels/ReportBuilder/ReportBui
 export const PromptExplorer = lazy(() => import('./panels/PromptExplorer/PromptExplorer'));
 export const BusinessAngelPanel = lazy(() => import('./panels/BusinessAngelPanel'));
 export const SubSessionPanel = lazy(() => import('./panels/SubSessionPanel'));
+export const MyTasksPanel = lazy(() => import('./panels/MyTasksPanel/MyTasksPanel'));
 
 // --- Panel ID → Display Name ---
 // Aliases (virtual-office, gmail, knowledge-fullscreen, infrastructure) sind enthalten.
@@ -69,6 +70,7 @@ export const PANEL_NAMES: Record<string, string> = {
   'prompt-explorer': 'Prompt Explorer',
   'business-angel': 'Business Angel',
   'sub-sessions': 'Sub-Sessions',
+  'my-tasks': 'My Tasks',
 };
 
 // --- Dropdown-Optionen für den [+] Tab-Picker (grouped) ---
@@ -131,6 +133,8 @@ export const PANEL_MENU_OPTIONS: PanelMenuGroup[] = [
   },
   {
     category: 'Partner',
-    items: [],
+    items: [
+      { value: 'my-tasks', label: 'My Tasks' },
+    ],
   },
 ];
