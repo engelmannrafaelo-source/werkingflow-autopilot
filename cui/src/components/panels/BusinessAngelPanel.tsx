@@ -1467,7 +1467,7 @@ Wichtig:
 
                   // ── Collapse unchanged regions, keep only hunks with CONTEXT_LINES context ──
                   const CONTEXT_LINES = 4;
-                  type DiffHunk = { leftLines: LineEntry[]; rightLines: LineEntry[]; type: 'hunk' | 'separator'; hiddenCount?: number };
+                  type DiffHunk = { leftLines: LineEntry[]; rightLines: LineEntry[]; type: 'hunk' | 'separator'; hiddenCount?: number; position?: 'start' | 'end' | 'mid' };
                   const diffHunks: DiffHunk[] = [];
 
                   // Find all changed line indices
@@ -1501,14 +1501,14 @@ Wichtig:
                     }
                     ranges.push({ start: rangeStart, end: rangeEnd });
 
-                    // Build hunks with separators
+                    // Build hunks with separators (track position: start/mid/end)
                     let lastEnd = -1;
                     for (const range of ranges) {
                       if (lastEnd >= 0 && range.start > lastEnd + 1) {
                         const hidden = range.start - lastEnd - 1;
-                        diffHunks.push({ leftLines: [], rightLines: [], type: 'separator', hiddenCount: hidden });
+                        diffHunks.push({ leftLines: [], rightLines: [], type: 'separator', hiddenCount: hidden, position: 'mid' });
                       } else if (lastEnd < 0 && range.start > 0) {
-                        diffHunks.push({ leftLines: [], rightLines: [], type: 'separator', hiddenCount: range.start });
+                        diffHunks.push({ leftLines: [], rightLines: [], type: 'separator', hiddenCount: range.start, position: 'start' });
                       }
                       diffHunks.push({
                         leftLines: allLeftLines.slice(range.start, range.end + 1),
@@ -1518,7 +1518,7 @@ Wichtig:
                       lastEnd = range.end;
                     }
                     if (lastEnd < allLeftLines.length - 1) {
-                      diffHunks.push({ leftLines: [], rightLines: [], type: 'separator', hiddenCount: allLeftLines.length - 1 - lastEnd });
+                      diffHunks.push({ leftLines: [], rightLines: [], type: 'separator', hiddenCount: allLeftLines.length - 1 - lastEnd, position: 'end' });
                     }
                   }
 
@@ -1719,8 +1719,19 @@ Wichtig:
                           {/* Hunks with separators */}
                           {diffHunks.map((hunk, hi) => hunk.type === 'separator' ? (
                             <div key={`sep-${hi}`} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
-                              <div style={{ ...separatorStyle, borderRight: '1px solid rgba(255,255,255,0.07)' }}>··· {hunk.hiddenCount} Zeilen ···</div>
-                              <div style={separatorStyle}>··· {hunk.hiddenCount} Zeilen ···</div>
+                              {(() => {
+                                const label = hunk.position === 'start'
+                                  ? `▼ Dateianfang ··· ${hunk.hiddenCount} Zeilen ···`
+                                  : hunk.position === 'end'
+                                  ? `··· ${hunk.hiddenCount} Zeilen ··· Dateiende ▲`
+                                  : `··· ${hunk.hiddenCount} Zeilen ···`;
+                                return (
+                                  <>
+                                    <div style={{ ...separatorStyle, borderRight: '1px solid rgba(255,255,255,0.07)' }}>{label}</div>
+                                    <div style={separatorStyle}>{label}</div>
+                                  </>
+                                );
+                              })()}
                             </div>
                           ) : (
                             <div key={`hunk-${hi}`} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
