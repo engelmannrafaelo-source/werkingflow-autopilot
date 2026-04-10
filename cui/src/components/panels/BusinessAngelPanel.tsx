@@ -93,6 +93,54 @@ function tokenColor(n: number): string {
 function parseDiffsClient(text: string): Array<{ file: string; old: string; newText: string; rawHunk?: string }> {
   const results: Array<{ file: string; old: string; newText: string; rawHunk?: string }> = [];
 
+  // ── Format 0: <<<DIFF ... >>> and <<<NEW ... >>> blocks ──────────
+  // This is the preferred snapshot-based diff format.
+  const diffBlockRe = /<<<DIFF\s+(.+?)\n([\s\S]*?)>>>/g;
+  const newBlockRe  = /<<<NEW\s+(.+?)\n([\s\S]*?)>>>/g;
+
+  let match: RegExpExecArray | null;
+
+  // Parse <<<DIFF blocks
+  while ((match = diffBlockRe.exec(text)) !== null) {
+    const filePath = match[1].trim();
+    const body = match[2];
+
+    // Extract old_string and new_string from YAML-like body
+    const oldMatch = body.match(/^old_string:\s*\|?\s*\n([\s\S]*?)(?=^new_string:)/m);
+    const newMatch = body.match(/^new_string:\s*\|?\s*\n([\s\S]*?)$/m);
+
+    if (oldMatch && newMatch) {
+      // Remove leading 2-space indent from YAML block scalar
+      const dedent = (s: string) => s.replace(/^  /gm, '').replace(/\n+$/, '');
+      results.push({
+        file: filePath,
+        old: dedent(oldMatch[1]),
+        newText: dedent(newMatch[1]),
+        rawHunk: match[0],
+      });
+    }
+  }
+
+  // Parse <<<NEW blocks
+  while ((match = newBlockRe.exec(text)) !== null) {
+    const filePath = match[1].trim();
+    const body = match[2];
+
+    const contentMatch = body.match(/^content:\s*\|?\s*\n([\s\S]*?)$/m);
+    if (contentMatch) {
+      const dedent = (s: string) => s.replace(/^  /gm, '').replace(/\n+$/, '');
+      results.push({
+        file: filePath,
+        old: '',
+        newText: dedent(contentMatch[1]),
+        rawHunk: match[0],
+      });
+    }
+  }
+
+  // If we found <<<DIFF/<<<NEW blocks, return them (preferred format)
+  if (results.length > 0) return results;
+
   // ── Format 1: git unified diff ────────────────────────────────────
   // Split on file headers (--- a/path or --- /dev/null)
   const fileBlocks = text.split(/(?=^--- )/m).filter(s => s.trimStart().startsWith('---'));
@@ -458,20 +506,42 @@ export default function BusinessAngelPanel() {
 
   // View mode + diff editing
   const [activeView, setActiveView] = useState<'chat' | 'diffs'>('chat');
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editBuffer, setEditBuffer] = useState('');
+  // Per-file edit toggle
+  const [fileEditMode, setFileEditMode] = useState<Record<string, boolean>>({});
 
   // File content cache for full-file diff view
   const [fileContents, setFileContents] = useState<Record<string, string>>({});
   const fetchFileContent = useCallback(async (filePath: string) => {
-    if (fileContents[filePath] !== undefined) return;
+    // Re-fetch if empty string (may be stale from previous bug)
+    if (fileContents[filePath] !== undefined && fileContents[filePath] !== '') return;
     try {
       const r = await fetch(`/api/business-angel/file-preview?path=${encodeURIComponent(filePath)}`);
       if (!r.ok) return;
       const data = await r.json();
-      setFileContents(prev => ({ ...prev, [filePath]: data.content ?? '' }));
+      setFileContents(prev => ({ ...prev, [filePath]: data.preview ?? data.content ?? '' }));
     } catch { /* ignore */ }
   }, [fileContents]);
+
+  // Snapshot cache — immutable baseline for diff comparison
+  const [snapshotFiles, setSnapshotFiles] = useState<Record<string, string>>({});
+  const [snapshotLoaded, setSnapshotLoaded] = useState(false);
+
+  const fetchSnapshot = useCallback(async (sessionId: string) => {
+    try {
+      const r = await fetch(`/api/business-angel/snapshot?session_id=${encodeURIComponent(sessionId)}`);
+      if (!r.ok) {
+        console.warn('[BusinessAngel] No snapshot found');
+        setSnapshotLoaded(true);
+        return;
+      }
+      const data = await r.json();
+      setSnapshotFiles(data.files ?? {});
+      setSnapshotLoaded(true);
+      console.log(`[BusinessAngel] Snapshot loaded: ${Object.keys(data.files ?? {}).length} files`);
+    } catch {
+      setSnapshotLoaded(true);
+    }
+  }, []);
 
   // --- Load data ---
 
@@ -562,6 +632,8 @@ export default function BusinessAngelPanel() {
       setSession(data as LoadResult);
       setContextCollapsed(true);
       setActiveSessionInfo(null);
+      // Load snapshot for diff baseline
+      fetchSnapshot(data.session_id);
       const excluded: string[] = data.excluded ?? [];
       const excludedNote = excluded.length > 0
         ? `\n\n⚠️ Nicht geladen (Budget): ${excluded.map((f: string) => f.split('/').pop()).join(', ')}`
@@ -608,6 +680,8 @@ export default function BusinessAngelPanel() {
     setSession(null);
     setChatMessages([]);
     setActiveSessionInfo(null);
+    setSnapshotFiles({});
+    setSnapshotLoaded(false);
   };
 
   // --- Session Management ---
@@ -682,13 +756,71 @@ export default function BusinessAngelPanel() {
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
       setChatMessages(prev => [...prev, { role: 'assistant', content: data.response }]);
-      if (/^FILE:/m.test(data.response) || /^--- /m.test(data.response)) {
+      if (/^FILE:/m.test(data.response) || /^--- /m.test(data.response) || /<<<DIFF\s/m.test(data.response) || /<<<NEW\s/m.test(data.response)) {
         injectDiffs(data.response);
         setTimeout(() => diffRef.current?.scrollIntoView({ behavior: 'smooth' }), 300);
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       // Session expired (server restart) — clear session so user can reload
+      if (msg.includes('Session not found') || msg.includes('404')) {
+        setSession(null);
+        setChatMessages([]);
+        setChatError('Session abgelaufen (Server-Neustart). Bitte Session neu laden.');
+      } else {
+        setChatError(msg);
+      }
+    } finally {
+      setChatSending(false);
+    }
+  };
+
+  // --- Generate Diffs (standard prompt injection) ---
+
+  const GENERATE_DIFFS_PROMPT = `Generiere für jede Datei die du ändern willst einen strukturierten Diff-Block.
+Beziehe dich dabei IMMER auf den ORIGINAL-Inhalt der Dateien (wie sie zu Beginn der Session geladen wurden), NICHT auf zwischenzeitliche Änderungen.
+
+Format für Änderungen:
+<<<DIFF pfad/zur/datei.md
+old_string: |
+  ...exakter Text aus dem Original...
+new_string: |
+  ...neuer Text...
+>>>
+
+Format für neue Dateien:
+<<<NEW pfad/zur/neuen-datei.md
+content: |
+  ...vollständiger Inhalt...
+>>>
+
+Wichtig:
+- old_string muss EXAKT im Original-Dokument vorkommen (nicht in einer bereits geänderten Version)
+- Genug Kontext-Zeilen für eindeutigen Match
+- Mehrere Diff-Blöcke pro Datei sind erlaubt`;
+
+  const generateDiffs = async () => {
+    if (!session || chatSending) return;
+    setChatSending(true);
+    setChatError('');
+    setChatMessages(prev => [...prev, { role: 'user', content: '📝 Generiere Diffs' }]);
+    try {
+      const resp = await fetch('/api/business-angel/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: session.session_id, message: GENERATE_DIFFS_PROMPT }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+      setChatMessages(prev => [...prev, { role: 'assistant', content: data.response }]);
+      // Auto-detect and inject diffs from response
+      const parsed = parseDiffsClient(data.response);
+      if (parsed.length > 0) {
+        injectDiffs(data.response);
+        setTimeout(() => diffRef.current?.scrollIntoView({ behavior: 'smooth' }), 300);
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
       if (msg.includes('Session not found') || msg.includes('404')) {
         setSession(null);
         setChatMessages([]);
@@ -722,7 +854,6 @@ export default function BusinessAngelPanel() {
     setDiffCards(prev => prev.map(c => c.id === id ? { ...c, newText: text } : c));
 
   const startEdit = (card: DiffCard) => { setEditingId(card.id); setEditBuffer(card.newText); };
-  const saveEdit  = (id: string)    => { updateNewText(id, editBuffer); setEditingId(null); setEditBuffer(''); };
   const cancelEdit = ()             => { setEditingId(null); setEditBuffer(''); };
 
   const parsePasted = () => {
@@ -912,6 +1043,22 @@ export default function BusinessAngelPanel() {
             {formatTokens(totalTokens)} tokens
           </span>
           <button style={{ ...S.btn, ...S.btnGhost, padding: '3px 7px', fontSize: '11px' }} onClick={() => { fetchContext(); fetchFileTree(); }}>↻</button>
+          {session && (
+            <button
+              style={{
+                ...S.btn,
+                padding: '3px 10px', fontSize: '14px', borderRadius: '6px',
+                background: 'var(--tn-green, #9ece6a)',
+                color: '#1a1b26',
+                border: 'none',
+                fontWeight: 700,
+                marginLeft: '4px',
+              }}
+              onClick={newSession}
+              title="Neue Session starten"
+              disabled={starting}
+            >＋</button>
+          )}
         </div>
       </div>
 
@@ -1248,154 +1395,349 @@ export default function BusinessAngelPanel() {
 
               {diffCards.length === 0 ? (
                 <div style={{ padding: '48px 0', textAlign: 'center' as const, color: 'var(--tn-text-muted)', fontSize: '13px' }}>
-                  Keine Diffs — im Chat «bau die Diffs» sagen
+                  Keine Diffs — im Chat den [Diffs] Button klicken oder «bau die Diffs» sagen
                 </div>
-              ) : diffCards.map((card, idx) => {
-                // Trigger file fetch for full-file diff view
-                if (fileContents[card.file] === undefined && card.old.trim()) fetchFileContent(card.file);
-                const isEditing = editingId === card.id;
-                const isDone = card.status === 'applied' || card.status === 'skipped';
-                const borderColor = card.status === 'ok' ? 'rgba(158,206,106,0.35)'
-                  : card.status === 'error' ? 'rgba(247,118,142,0.35)'
-                  : card.status === 'applied' ? 'rgba(122,162,247,0.25)'
-                  : 'rgba(255,255,255,0.08)';
-                return (
-                  <div key={card.id} style={{
-                    marginTop: idx === 0 ? '12px' : '20px',
-                    border: `1px solid ${borderColor}`,
-                    borderRadius: '8px', overflow: 'hidden',
-                    opacity: isDone ? 0.45 : 1,
-                    transition: 'opacity 0.2s',
-                  }}>
-                    {/* ── Card header ── */}
-                    <div style={{
-                      display: 'flex', alignItems: 'center', gap: '8px',
-                      padding: '7px 12px',
-                      background: 'rgba(255,255,255,0.04)',
-                      borderBottom: `1px solid ${borderColor}`,
-                    }}>
-                      <span style={{
-                        fontFamily: 'monospace', fontSize: '11px', flex: 1,
-                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
-                        color: 'var(--tn-blue,#7aa2f7)',
-                      }} title={card.file}>{card.file}</span>
+              ) : (() => {
+                // ── Group diff cards by file for full-file preview ──
+                const fileGroups = new Map<string, DiffCard[]>();
+                diffCards.forEach(card => {
+                  const group = fileGroups.get(card.file) || [];
+                  group.push(card);
+                  fileGroups.set(card.file, group);
+                });
 
-                      {card.status === 'error' && card.reason && (
-                        <span style={{ fontSize: '10px', color: 'var(--tn-red,#f7768e)', flexShrink: 0 }} title={card.reason}>⚠ {card.reason.slice(0, 40)}</span>
-                      )}
+                // Trigger file content fetch for all files that need it
+                fileGroups.forEach((_, file) => {
+                  if (fileContents[file] === undefined) fetchFileContent(file);
+                });
 
-                      <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0 }}>
-                        {/* Accept / status toggle */}
-                        <button
-                          title={card.status === 'ok' ? 'Akzeptiert — klicken zum Anwenden' : card.status === 'applied' ? 'Angewendet' : 'Akzeptieren'}
-                          style={{
-                            ...S.btn,
-                            padding: '3px 12px', fontSize: '12px', borderRadius: '6px',
-                            background: card.status === 'ok' ? 'rgba(158,206,106,0.2)' : card.status === 'applied' ? 'rgba(122,162,247,0.2)' : 'rgba(255,255,255,0.06)',
-                            color: card.status === 'ok' ? 'var(--tn-green,#9ece6a)' : card.status === 'applied' ? 'var(--tn-blue,#7aa2f7)' : 'var(--tn-text-muted)',
-                            border: `1px solid ${card.status === 'ok' ? 'rgba(158,206,106,0.4)' : card.status === 'applied' ? 'rgba(122,162,247,0.3)' : 'rgba(255,255,255,0.12)'}`,
-                          }}
-                          onClick={() => card.status === 'ok' ? applyOne(card.id) : card.status === 'unchecked' || card.status === 'error' ? validateAll() : undefined}
-                        >
-                          {card.status === 'applied' ? '✓ Applied' : card.status === 'ok' ? '✓ Apply' : card.status === 'error' ? '✗ Fehler' : card.status === 'skipped' ? '— Skip' : '⬜ Prüfen'}
-                        </button>
-                        {!isDone && (
-                          <button style={{ ...S.btn, ...S.btnGhost, padding: '3px 7px', fontSize: '11px', opacity: 0.6 }}
-                            title="Überspringen" onClick={() => skipDiff(card.id)}>—</button>
-                        )}
-                        <button style={{ ...S.btn, ...S.btnGhost, padding: '3px 7px', fontSize: '11px', color: 'rgba(247,118,142,0.6)' }}
-                          title="Entfernen" onClick={() => removeDiff(card.id)}>✕</button>
-                      </div>
-                    </div>
+                let groupIdx = 0;
+                return Array.from(fileGroups.entries()).map(([file, fileCards]) => {
+                  const currentGroupIdx = groupIdx++;
+                  const snapshotContent = snapshotFiles[file];
+                  const rawFileContent = fileContents[file];
+                  const fullFile = snapshotContent ?? (rawFileContent && rawFileContent.length > 0 ? rawFileContent : undefined);
+                  // A file is truly new only if it was created via <<<NEW>>> AND has no snapshot/existing content
+                  const isNewFile = !fullFile && fileCards.every(c => !c.old.trim() && c.rawHunk?.startsWith('<<<NEW'));
+                  const allDone = fileCards.every(c => c.status === 'applied' || c.status === 'skipped');
+                  // Still loading if no content and not a new file — fetch is in progress
+                  const isLoadingContent = !fullFile && !isNewFile;
 
-                    {/* ── Full-file side-by-side diff — complete text, scrollable ── */}
-                    {(() => {
-                      const isNew = !card.old.trim();
-                      const fullFile = fileContents[card.file];
-
-                      // Build left/right full-file content
-                      const normalize = (s: string) => s.replace(/\r\n/g, '\n').split('\n').map(l => l.trimEnd()).join('\n');
-                      const leftFull = isNew ? '' : (fullFile ?? card.old);
-                      const rightFull = isNew ? card.newText : (() => {
-                        if (!fullFile) return card.newText;
-                        const n = normalize(fullFile);
-                        const nOld = normalize(card.old);
-                        const nNew = normalize(card.newText);
-                        return n.includes(nOld) ? n.replace(nOld, nNew) : card.newText;
+                  // Build the full "after" content by applying all hunks to the baseline
+                  const normalize = (s: string) => s.replace(/\r\n/g, '\n').split('\n').map(l => l.trimEnd()).join('\n');
+                  const leftFull = isNewFile ? '' : (fullFile ?? '');
+                  const rightFull = isNewFile
+                    ? fileCards.map(c => c.newText).join('\n')
+                    : (() => {
+                        if (!fullFile) {
+                          // No baseline available yet — show combined new text
+                          return fileCards.map(c => c.newText).join('\n');
+                        }
+                        let result = normalize(fullFile);
+                        for (const card of fileCards) {
+                          if (card.old.trim()) {
+                            const nOld = normalize(card.old);
+                            const nNew = normalize(card.newText);
+                            if (result.includes(nOld)) {
+                              result = result.replace(nOld, nNew);
+                            }
+                          } else {
+                            // Insert-only hunk (empty old_string) — append content
+                            result = result + (result.endsWith('\n') ? '' : '\n') + normalize(card.newText);
+                          }
+                        }
+                        return result;
                       })();
 
-                      // Compute line-level diff
-                      type LineEntry = { text: string; type: 'removed'|'added'|'unchanged' };
-                      const leftLines: LineEntry[] = [];
-                      const rightLines: LineEntry[] = [];
-                      const chunks = diffLines(leftFull, rightFull);
-                      for (const chunk of chunks) {
-                        const lines = chunk.value.replace(/\n$/, '').split('\n');
-                        if (chunk.removed) {
-                          lines.forEach(l => { leftLines.push({ text: l, type: 'removed' }); rightLines.push({ text: '\u00a0', type: 'unchanged' }); });
-                        } else if (chunk.added) {
-                          lines.forEach(l => { leftLines.push({ text: '\u00a0', type: 'unchanged' }); rightLines.push({ text: l, type: 'added' }); });
-                        } else {
-                          lines.forEach(l => { leftLines.push({ text: l, type: 'unchanged' }); rightLines.push({ text: l, type: 'unchanged' }); });
-                        }
+                  // Compute line-level diff
+                  type LineEntry = { text: string; type: 'removed'|'added'|'unchanged' };
+                  const allLeftLines: LineEntry[] = [];
+                  const allRightLines: LineEntry[] = [];
+                  const chunks = diffLines(leftFull, rightFull);
+                  for (const chunk of chunks) {
+                    const lines = chunk.value.replace(/\n$/, '').split('\n');
+                    if (chunk.removed) {
+                      lines.forEach(l => { allLeftLines.push({ text: l, type: 'removed' }); allRightLines.push({ text: '\u00a0', type: 'unchanged' }); });
+                    } else if (chunk.added) {
+                      lines.forEach(l => { allLeftLines.push({ text: '\u00a0', type: 'unchanged' }); allRightLines.push({ text: l, type: 'added' }); });
+                    } else {
+                      lines.forEach(l => { allLeftLines.push({ text: l, type: 'unchanged' }); allRightLines.push({ text: l, type: 'unchanged' }); });
+                    }
+                  }
+
+                  // ── Collapse unchanged regions, keep only hunks with CONTEXT_LINES context ──
+                  const CONTEXT_LINES = 4;
+                  type DiffHunk = { leftLines: LineEntry[]; rightLines: LineEntry[]; type: 'hunk' | 'separator'; hiddenCount?: number };
+                  const diffHunks: DiffHunk[] = [];
+
+                  // Find all changed line indices
+                  const changedIndices: number[] = [];
+                  for (let i = 0; i < allLeftLines.length; i++) {
+                    if (allLeftLines[i].type !== 'unchanged' || allRightLines[i].type !== 'unchanged') {
+                      changedIndices.push(i);
+                    }
+                  }
+
+                  if (changedIndices.length === 0) {
+                    // No changes — show nothing
+                  } else {
+                    // Group changed lines into ranges with context
+                    type Range = { start: number; end: number };
+                    const ranges: Range[] = [];
+                    let rangeStart = Math.max(0, changedIndices[0] - CONTEXT_LINES);
+                    let rangeEnd = Math.min(allLeftLines.length - 1, changedIndices[0] + CONTEXT_LINES);
+                    for (let ci = 1; ci < changedIndices.length; ci++) {
+                      const idx = changedIndices[ci];
+                      const newStart = Math.max(0, idx - CONTEXT_LINES);
+                      const newEnd = Math.min(allLeftLines.length - 1, idx + CONTEXT_LINES);
+                      if (newStart <= rangeEnd + 1) {
+                        // Merge overlapping/adjacent ranges
+                        rangeEnd = newEnd;
+                      } else {
+                        ranges.push({ start: rangeStart, end: rangeEnd });
+                        rangeStart = newStart;
+                        rangeEnd = newEnd;
                       }
+                    }
+                    ranges.push({ start: rangeStart, end: rangeEnd });
 
-                      const lineStyle = (type: LineEntry['type']): React.CSSProperties => ({
-                        fontFamily: 'monospace', fontSize: '11px', lineHeight: 1.55,
-                        whiteSpace: 'pre-wrap' as const, wordBreak: 'break-word' as const,
-                        padding: '0 8px',
-                        background: type === 'removed' ? 'rgba(247,118,142,0.18)'
-                          : type === 'added' ? 'rgba(158,206,106,0.18)' : 'transparent',
-                        color: type === 'removed' ? 'rgba(247,118,142,0.9)'
-                          : type === 'added' ? 'rgba(158,206,106,0.9)' : 'var(--tn-text-muted)',
+                    // Build hunks with separators
+                    let lastEnd = -1;
+                    for (const range of ranges) {
+                      if (lastEnd >= 0 && range.start > lastEnd + 1) {
+                        const hidden = range.start - lastEnd - 1;
+                        diffHunks.push({ leftLines: [], rightLines: [], type: 'separator', hiddenCount: hidden });
+                      } else if (lastEnd < 0 && range.start > 0) {
+                        diffHunks.push({ leftLines: [], rightLines: [], type: 'separator', hiddenCount: range.start });
+                      }
+                      diffHunks.push({
+                        leftLines: allLeftLines.slice(range.start, range.end + 1),
+                        rightLines: allRightLines.slice(range.start, range.end + 1),
+                        type: 'hunk',
                       });
-                      const colHdr = (label: string, clr: string, extra?: React.ReactNode) => (
-                        <div style={{ padding: '3px 8px', fontSize: '9px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' as const, color: clr, borderBottom: `1px solid ${clr}22`, display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0, position: 'sticky' as const, top: 0, zIndex: 1, background: 'var(--tn-bg,#1a1b26)' }}>
-                          {label}{extra}
-                        </div>
-                      );
+                      lastEnd = range.end;
+                    }
+                    if (lastEnd < allLeftLines.length - 1) {
+                      diffHunks.push({ leftLines: [], rightLines: [], type: 'separator', hiddenCount: allLeftLines.length - 1 - lastEnd });
+                    }
+                  }
 
-                      const renderAllLines = (lines: LineEntry[]) => {
-                        if (!lines.length) return <div key="empty" style={{ padding: '8px', fontSize: '11px', color: 'rgba(255,255,255,0.2)', fontFamily: 'monospace' }}>Lade…</div>;
-                        return lines.map((l, i) => {
-                          const prefix = l.type === 'removed' ? '− ' : l.type === 'added' ? '+ ' : '\u00a0\u00a0';
-                          return <div key={i} style={lineStyle(l.type)}>{prefix}{l.text}</div>;
-                        });
-                      };
+                  const colHdr = (label: string, clr: string) => (
+                    <div style={{ padding: '3px 8px', fontSize: '9px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' as const, color: clr, borderBottom: `1px solid ${clr}22`, display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0, position: 'sticky' as const, top: 0, zIndex: 1, background: 'var(--tn-bg,#1a1b26)' }}>
+                      {label}
+                    </div>
+                  );
+                  const separatorStyle: React.CSSProperties = {
+                    padding: '2px 8px', fontSize: '10px', color: 'rgba(255,255,255,0.25)',
+                    fontFamily: 'monospace', background: 'rgba(255,255,255,0.02)',
+                    borderTop: '1px solid rgba(255,255,255,0.06)',
+                    borderBottom: '1px solid rgba(255,255,255,0.06)',
+                    textAlign: 'center' as const,
+                  };
 
+                  // Group consecutive lines by type, render each group as markdown
+                  const renderHunkLines = (lines: LineEntry[]) => {
+                    if (!lines.length) return null;
+                    // Build groups of consecutive same-type lines
+                    type LineGroup = { type: LineEntry['type']; lines: string[] };
+                    const groups: LineGroup[] = [];
+                    for (const l of lines) {
+                      const last = groups[groups.length - 1];
+                      if (last && last.type === l.type) {
+                        last.lines.push(l.text);
+                      } else {
+                        groups.push({ type: l.type, lines: [l.text] });
+                      }
+                    }
+                    return groups.map((g, gi) => {
+                      const bgColor = g.type === 'removed' ? 'rgba(247,118,142,0.12)'
+                        : g.type === 'added' ? 'rgba(158,206,106,0.12)' : 'transparent';
+                      const borderLeft = g.type === 'removed' ? '3px solid rgba(247,118,142,0.5)'
+                        : g.type === 'added' ? '3px solid rgba(158,206,106,0.5)' : '3px solid transparent';
+                      // Filter out placeholder lines (nbsp spacers from diff alignment)
+                      const text = g.lines.filter(l => l.trim() !== '\u00a0' && l !== '\u00a0').join('\n');
+                      if (!text.trim()) {
+                        // Empty placeholder block — render minimal spacer to keep alignment
+                        return <div key={gi} style={{ minHeight: `${g.lines.length * 1.55}em` }} />;
+                      }
                       return (
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', minHeight: '60px', maxHeight: '70vh' }}>
-                          {/* LEFT — full old text, scrollable */}
-                          <div style={{ borderRight: '1px solid rgba(255,255,255,0.07)', background: 'rgba(247,118,142,0.02)', overflowY: 'auto' as const, maxHeight: '70vh', display: 'flex', flexDirection: 'column' as const }}>
-                            {colHdr('Vorher', 'rgba(247,118,142,0.55)')}
-                            {isNew
-                              ? <div style={{ padding: '8px', fontSize: '11px', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic', fontFamily: 'monospace' }}>— neue Datei —</div>
-                              : <div style={{ padding: '4px 0' }}>{renderAllLines(leftLines)}</div>
-                            }
-                          </div>
-                          {/* RIGHT — full new text, scrollable, editable */}
-                          <div style={{ background: 'rgba(158,206,106,0.02)', display: 'flex', flexDirection: 'column' as const, overflowY: 'auto' as const, maxHeight: '70vh' }}>
-                            {colHdr('Nachher', 'rgba(158,206,106,0.55)',
-                              !isDone && <button style={{ marginLeft: 'auto', fontSize: '9px', opacity: 0.45, background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', padding: '0 2px' }} onClick={() => setEditingId(editingId === card.id ? null : card.id)} title="Bearbeiten">✎</button>
-                            )}
-                            {editingId === card.id ? (
-                              <textarea autoFocus value={card.newText} onChange={e => updateNewText(card.id, e.target.value)} onBlur={() => setEditingId(null)}
-                                style={{ flex: 1, display: 'block', width: '100%', minHeight: '300px', resize: 'vertical' as const, background: 'transparent', border: 'none', outline: 'none', color: '#c0caf5', fontFamily: 'monospace', fontSize: '11px', lineHeight: 1.55, padding: '4px 8px', boxSizing: 'border-box' as const }} />
-                            ) : (
-                              <div style={{ padding: '4px 0', cursor: isDone ? 'default' : 'text' }} onClick={() => !isDone && setEditingId(card.id)}>
-                                {isNew
-                                  ? card.newText.replace(/\n$/, '').split('\n').map((l, i) => <div key={i} style={lineStyle('added')}>+ {l || '\u00a0'}</div>)
-                                  : renderAllLines(rightLines)
-                                }
-                              </div>
-                            )}
-                          </div>
+                        <div key={gi} style={{
+                          background: bgColor, borderLeft, padding: '4px 12px',
+                          fontSize: '12px', lineHeight: 1.6, marginBottom: '2px',
+                        }}>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{text}</ReactMarkdown>
                         </div>
                       );
-                    })()}
-                  </div>
-                );
-              })}
+                    });
+                  };
+
+                  return (
+                    <div key={file} style={{
+                      marginTop: currentGroupIdx === 0 ? '12px' : '20px',
+                      border: `1px solid rgba(255,255,255,0.08)`,
+                      borderRadius: '8px', overflow: 'hidden',
+                      opacity: allDone ? 0.45 : 1,
+                      transition: 'opacity 0.2s',
+                    }}>
+                      {/* ── Single file header with aggregated controls ── */}
+                      {(() => {
+                        const appliedCount = fileCards.filter(c => c.status === 'applied').length;
+                        const okCount = fileCards.filter(c => c.status === 'ok').length;
+                        const errorCount = fileCards.filter(c => c.status === 'error').length;
+                        const pendingCount = fileCards.filter(c => c.status === 'unchecked').length;
+                        const headerBorderColor = errorCount > 0 ? 'rgba(247,118,142,0.35)'
+                          : okCount > 0 ? 'rgba(158,206,106,0.35)'
+                          : allDone ? 'rgba(122,162,247,0.25)'
+                          : 'rgba(255,255,255,0.08)';
+                        return (
+                          <div style={{
+                            display: 'flex', alignItems: 'center', gap: '8px',
+                            padding: '7px 12px',
+                            background: 'rgba(255,255,255,0.04)',
+                            borderBottom: `1px solid ${headerBorderColor}`,
+                          }}>
+                            <span style={{
+                              fontFamily: 'monospace', fontSize: '11px', flex: 1,
+                              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
+                              color: 'var(--tn-blue,#7aa2f7)',
+                            }} title={file}>
+                              {file}
+                              {fileCards.length > 1 && (
+                                <span style={{ color: 'var(--tn-text-muted)', fontSize: '10px', marginLeft: '6px' }}>
+                                  ({fileCards.length} Änderungen)
+                                </span>
+                              )}
+                            </span>
+
+                            {errorCount > 0 && (
+                              <span style={{ fontSize: '10px', color: 'var(--tn-red,#f7768e)', flexShrink: 0 }}>
+                                ⚠ {errorCount} Fehler
+                              </span>
+                            )}
+                            {appliedCount > 0 && appliedCount < fileCards.length && (
+                              <span style={{ fontSize: '10px', color: 'var(--tn-blue,#7aa2f7)', flexShrink: 0 }}>
+                                {appliedCount}/{fileCards.length} applied
+                              </span>
+                            )}
+
+                            <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0 }}>
+                              {/* Validate / Apply all hunks for this file */}
+                              <button
+                                title={allDone ? 'Alle angewendet' : okCount > 0 ? 'Alle akzeptierten anwenden' : 'Alle prüfen'}
+                                style={{
+                                  ...S.btn,
+                                  padding: '3px 12px', fontSize: '12px', borderRadius: '6px',
+                                  background: allDone ? 'rgba(122,162,247,0.2)' : okCount > 0 ? 'rgba(158,206,106,0.2)' : 'rgba(255,255,255,0.06)',
+                                  color: allDone ? 'var(--tn-blue,#7aa2f7)' : okCount > 0 ? 'var(--tn-green,#9ece6a)' : 'var(--tn-text-muted)',
+                                  border: `1px solid ${allDone ? 'rgba(122,162,247,0.3)' : okCount > 0 ? 'rgba(158,206,106,0.4)' : 'rgba(255,255,255,0.12)'}`,
+                                }}
+                                onClick={() => {
+                                  if (okCount > 0) {
+                                    // Apply all OK hunks for this file
+                                    fileCards.filter(c => c.status === 'ok').forEach(c => applyOne(c.id));
+                                  } else if (pendingCount > 0 || errorCount > 0) {
+                                    validateAll();
+                                  }
+                                }}
+                              >
+                                {allDone ? '✓ Applied' : okCount > 0 ? `✓ Apply${fileCards.length > 1 ? ` (${okCount})` : ''}` : pendingCount > 0 ? '⬜ Prüfen' : '✗ Fehler'}
+                              </button>
+                              {!allDone && (
+                                <button style={{ ...S.btn, ...S.btnGhost, padding: '3px 7px', fontSize: '11px', opacity: 0.6 }}
+                                  title="Alle überspringen" onClick={() => fileCards.forEach(c => { if (c.status !== 'applied' && c.status !== 'skipped') skipDiff(c.id); })}>—</button>
+                              )}
+                              <button style={{ ...S.btn, ...S.btnGhost, padding: '3px 7px', fontSize: '11px', color: 'rgba(247,118,142,0.6)' }}
+                                title="Alle entfernen" onClick={() => fileCards.forEach(c => removeDiff(c.id))}>✕</button>
+                              {!allDone && (
+                                <button style={{ marginLeft: '2px', fontSize: '9px', opacity: 0.45, background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', padding: '0 2px' }}
+                                  onClick={() => setFileEditMode(p => ({ ...p, [file]: !p[file] }))}
+                                  title="Bearbeiten">✎</button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                      {/* ── Error details for failed hunks ── */}
+                      {fileCards.some(c => c.status === 'error') && (
+                        <div style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                          {fileCards.map((card, hunkIdx) => card.status === 'error' && card.reason && (
+                            <div key={card.id} style={{ padding: '4px 12px', fontSize: '10px', color: 'var(--tn-red,#f7768e)' }}>
+                              Hunk {hunkIdx + 1}: ⚠ {card.reason}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* ── Collapsed side-by-side diff: synced hunks with context + edit toggle ── */}
+                      {isLoadingContent ? (
+                        <div style={{ padding: '16px', fontSize: '11px', color: 'rgba(255,255,255,0.3)', fontFamily: 'monospace', textAlign: 'center' as const }}>
+                          Lade Dateiinhalt…
+                        </div>
+                      ) : fileEditMode[file] ? (
+                        /* Edit mode: left = diff, right = textarea */
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', maxHeight: '50vh' }}>
+                          <div style={{ borderRight: '1px solid rgba(255,255,255,0.07)', overflowY: 'auto' as const, maxHeight: '50vh', display: 'flex', flexDirection: 'column' as const }}>
+                            {colHdr(snapshotContent ? 'Vorher (Snapshot)' : 'Vorher', 'rgba(247,118,142,0.55)')}
+                            <div style={{ padding: '8px 10px', fontSize: '12px', lineHeight: 1.6 }}>
+                              <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{leftFull}</ReactMarkdown>
+                            </div>
+                          </div>
+                          <div style={{ overflowY: 'auto' as const, maxHeight: '50vh', display: 'flex', flexDirection: 'column' as const }}>
+                            {colHdr('Nachher (bearbeitbar)', 'rgba(158,206,106,0.55)')}
+                            <div style={{ padding: '4px', flex: 1 }}>
+                              <textarea
+                                value={rightFull}
+                                onChange={e => { if (fileCards.length === 1) updateNewText(fileCards[0].id, e.target.value); }}
+                                style={{
+                                  display: 'block', width: '100%', minHeight: '200px', resize: 'vertical' as const,
+                                  background: 'transparent', border: '1px solid rgba(255,255,255,0.1)',
+                                  borderRadius: '4px', outline: 'none', color: '#c0caf5',
+                                  fontFamily: 'monospace', fontSize: '11px', lineHeight: 1.55,
+                                  padding: '8px', boxSizing: 'border-box' as const,
+                                }}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ) : diffHunks.length === 0 ? (
+                        <div style={{ padding: '6px 8px' }}>
+                          {rightFull.split('\n').slice(0, 3).map((l, i) => (
+                            <div key={i} style={{ fontFamily: 'monospace', fontSize: '11px', lineHeight: 1.55, padding: '0 8px', color: 'var(--tn-text-muted)', opacity: 0.5 }}>{l || '\u00a0'}</div>
+                          ))}
+                          <div style={{ ...separatorStyle, marginTop: '2px' }}>Keine Unterschiede</div>
+                        </div>
+                      ) : (
+                        /* Synced collapsed diff view */
+                        <div style={{ maxHeight: '50vh', overflowY: 'auto' as const }}>
+                          {/* Column headers */}
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', position: 'sticky' as const, top: 0, zIndex: 2 }}>
+                            <div style={{ borderRight: '1px solid rgba(255,255,255,0.07)' }}>
+                              {colHdr(snapshotContent ? 'Vorher (Snapshot)' : 'Vorher', 'rgba(247,118,142,0.55)')}
+                            </div>
+                            {colHdr('Nachher', 'rgba(158,206,106,0.55)')}
+                          </div>
+                          {/* Hunks with separators */}
+                          {diffHunks.map((hunk, hi) => hunk.type === 'separator' ? (
+                            <div key={`sep-${hi}`} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
+                              <div style={{ ...separatorStyle, borderRight: '1px solid rgba(255,255,255,0.07)' }}>··· {hunk.hiddenCount} Zeilen ···</div>
+                              <div style={separatorStyle}>··· {hunk.hiddenCount} Zeilen ···</div>
+                            </div>
+                          ) : (
+                            <div key={`hunk-${hi}`} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
+                              <div style={{ borderRight: '1px solid rgba(255,255,255,0.07)', background: 'rgba(247,118,142,0.02)', padding: '6px 4px' }}>
+                                {renderHunkLines(hunk.leftLines)}
+                              </div>
+                              <div style={{ background: 'rgba(158,206,106,0.02)', padding: '6px 4px' }}>
+                                {renderHunkLines(hunk.rightLines)}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                });
+              })()}
 
               {/* Diffs manuell einfügen */}
               <div style={{ marginTop: '24px', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '12px' }}>
@@ -1468,6 +1810,17 @@ export default function BusinessAngelPanel() {
                 onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
                 disabled={chatSending}
               />
+              <button
+                style={{
+                  ...S.btn,
+                  background: 'var(--tn-cyan, #7dcfff)', color: '#1a1b26',
+                  padding: '6px 10px', fontSize: '11px', fontWeight: 700,
+                  opacity: chatSending ? 0.5 : 1,
+                }}
+                onClick={generateDiffs}
+                disabled={chatSending}
+                title="Standard-Prompt injizieren: Generiere strukturierte Diffs basierend auf dem Snapshot"
+              >Diffs</button>
               <button
                 style={{ ...S.btn, ...S.btnPrimary, opacity: chatSending || !chatInput.trim() ? 0.6 : 1 }}
                 onClick={sendMessage} disabled={chatSending || !chatInput.trim()}
