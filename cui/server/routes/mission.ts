@@ -1895,23 +1895,25 @@ router.post('/start', async (req, res) => {
   convMeta.saveWorkDir(sessionId, resolvedWorkDir);
   convMeta.saveModel(sessionId, resolvedModel);
   convMeta.setLastPrompt(sessionId);
-  // Mark as sub-session if subject starts with [Sub]
-  if (subject && subject.startsWith('[Sub]')) {
+  // Mark as sub-session if parentSessionId is explicitly provided OR subject starts with [Sub]
+  const hasExplicitParent = typeof parentSessionId === 'string' && parentSessionId.trim().length > 0;
+  const isSubSession = hasExplicitParent || (subject && subject.startsWith('[Sub]'));
+  if (isSubSession) {
     convMeta.setSubSession(sessionId, true);
 
-    // Auto-detect parent: if parentSessionId not provided, find the idle session
-    // that most likely spawned this sub-session (same account or any idle session)
-    if (!parentSessionId) {
+    if (hasExplicitParent) {
+      // Explicit parent — link directly, skip auto-detect
+      convMeta.setParentSession(sessionId, parentSessionId);
+      console.log(`[SubSession] ${sessionId.slice(0, 8)} explicitly linked to parent ${parentSessionId.slice(0, 8)}`);
+    } else if (!parentSessionId) {
+      // Auto-detect parent: find the idle session that most likely spawned this sub-session
       const states = getSessionStates();
-      // Look for sessions that were recently working (the spawner just went idle)
-      // Prefer sessions in the same workDir, then any idle session
       let bestParent: string | null = null;
       for (const [key, sState] of Object.entries(states)) {
         const sid = sState.sessionId || key;
         if (sid === sessionId) continue;
         if (convMeta.isFinished(sid)) continue;
         if (convMeta.isSubSession(sid)) continue; // Sub-sessions can't be parents
-        // Idle sessions are the most likely spawners (they just ran a curl command)
         if (sState.state === 'idle') {
           const sWorkDir = convMeta.getWorkDir(sid);
           if (sWorkDir && resolvedWorkDir.includes(sWorkDir.split('/').pop() || '___')) {
@@ -1925,13 +1927,13 @@ router.post('/start', async (req, res) => {
         parentSessionId = bestParent;
         console.log(`[SubSession] Auto-detected parent: ${parentSessionId.slice(0, 8)} for sub ${sessionId.slice(0, 8)}`);
       }
-    }
 
-    if (parentSessionId) {
-      convMeta.setParentSession(sessionId, parentSessionId);
-      console.log(`[SubSession] ${sessionId.slice(0, 8)} linked to parent ${parentSessionId.slice(0, 8)}`);
-    } else {
-      console.warn(`[SubSession] ${sessionId.slice(0, 8)} has no parent — reminder system won't track it`);
+      if (parentSessionId) {
+        convMeta.setParentSession(sessionId, parentSessionId);
+        console.log(`[SubSession] ${sessionId.slice(0, 8)} linked to parent ${parentSessionId.slice(0, 8)}`);
+      } else {
+        console.warn(`[SubSession] ${sessionId.slice(0, 8)} has no parent — reminder system won't track it`);
+      }
     }
   }
   invalidateConvCache();
