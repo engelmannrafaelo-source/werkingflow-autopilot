@@ -8,6 +8,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from 'recharts';
+import { formatNumber } from '../shared';
 
 // Bridge /metrics/usage response format
 interface UsageData {

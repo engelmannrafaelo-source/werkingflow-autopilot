@@ -853,8 +853,7 @@ Wichtig:
   const updateNewText = (id: string, text: string) =>
     setDiffCards(prev => prev.map(c => c.id === id ? { ...c, newText: text } : c));
 
-  const startEdit = (card: DiffCard) => { setEditingId(card.id); setEditBuffer(card.newText); };
-  const cancelEdit = ()             => { setEditingId(null); setEditBuffer(''); };
+  // startEdit/cancelEdit removed — were using undefined state (setEditingId/setEditBuffer)
 
   const parsePasted = () => {
     if (!rawPasteText.trim()) return;
