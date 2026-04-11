@@ -182,7 +182,7 @@ export default function UsageAnalyticsTab() {
                         border: '1px solid var(--tn-border)',
                         fontSize: 10,
                       }}
-                      formatter={(value: number) => [formatNumber(value), 'Requests']}
+                      formatter={(value) => [formatNumber(value as number), 'Requests']}
                     />
                     <Bar dataKey="requests" radius={[4, 4, 0, 0]}>
                       {data.endpoints.map((_, index) => (

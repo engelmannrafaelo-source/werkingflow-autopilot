@@ -83,7 +83,7 @@ function applyPortStatusToNode(nodeEl: SVGElement, portStatus: Record<string, Po
   }
 
   // Add a small status dot in top-right corner
-  const bbox = nodeEl.getBBox?.();
+  const bbox = (nodeEl as SVGGraphicsElement).getBBox?.();
   if (bbox) {
     const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
     dot.setAttribute('cx', String(bbox.x + bbox.width - 4));

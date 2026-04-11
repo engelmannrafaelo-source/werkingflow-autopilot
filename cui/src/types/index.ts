@@ -8,7 +8,7 @@ export interface Project {
   id: string;
   name: string;
   workDir: string;
-  location: 'remote' | 'local';
+  location?: 'remote' | 'local';
   lastOpened: string;
 }
 

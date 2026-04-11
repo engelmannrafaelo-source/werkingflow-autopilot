@@ -472,7 +472,7 @@ export default function VirtualOffice({ projectId, workDir }: VirtualOfficeProps
                     mbti: '',
                     worklistPath: '',
                     lastUpdated: agents.find(a => a.persona_id === selectedAgent)?.last_run || ''
-                  } : null}
+                  } as any : null}
                 />
                 {selectedAgent && (
                   <PersonaDocumentList

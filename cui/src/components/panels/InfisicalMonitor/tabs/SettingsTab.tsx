@@ -1,5 +1,13 @@
 import type { ServerInfo } from '../InfisicalMonitor';
 
+interface SettingsItem {
+  label: string;
+  value: string;
+  mono?: boolean;
+  link?: boolean;
+  status?: boolean;
+}
+
 interface Props {
   serverInfo: ServerInfo | null;
 }
@@ -18,7 +26,7 @@ export default function SettingsTab({ serverInfo }: Props) {
     );
   }
 
-  const sections = [
+  const sections: Array<{ title: string; items: SettingsItem[] }> = [
     {
       title: 'Server Configuration',
       items: [

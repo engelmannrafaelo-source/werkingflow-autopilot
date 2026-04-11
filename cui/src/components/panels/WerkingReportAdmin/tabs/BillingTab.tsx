@@ -1117,7 +1117,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                           return {
                             bg: 'rgba(115,203,255,0.2)',
                             color: 'var(--tn-blue)',
-                            label: event.type.toUpperCase(),
+                            label: (event.type as string).toUpperCase(),
                           };
                       }
                     };

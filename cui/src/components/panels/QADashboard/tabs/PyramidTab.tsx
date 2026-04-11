@@ -94,6 +94,68 @@ const scoreColor = (score: number | null) => {
   return 'var(--tn-red)';
 };
 
+/** Compute days since a date string (YYYY-MM-DD or ISO). Returns null if no date. */
+const daysAgo = (dateStr: string | null | undefined): number | null => {
+  if (!dateStr) return null;
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return null;
+  return Math.floor((Date.now() - d.getTime()) / 86400000);
+};
+
+/** Human-readable relative age */
+const formatAge = (days: number | null): string => {
+  if (days == null) return 'never';
+  if (days === 0) return 'today';
+  if (days === 1) return '1d ago';
+  if (days < 7) return `${days}d ago`;
+  if (days < 30) return `${Math.floor(days / 7)}w ago`;
+  return `${Math.floor(days / 30)}mo ago`;
+};
+
+/** Bar opacity based on test age: fresh=1.0, fading with age */
+const ageOpacity = (dateStr: string | null | undefined): number => {
+  const days = daysAgo(dateStr);
+  if (days == null) return 0.25; // never run → very faded
+  if (days <= 1) return 1.0;
+  if (days <= 3) return 0.85;
+  if (days <= 7) return 0.65;
+  if (days <= 14) return 0.45;
+  return 0.3; // > 2 weeks
+};
+
+/** Color tint for age: green=fresh, orange=aging, red=old */
+const ageColor = (dateStr: string | null | undefined): string => {
+  const days = daysAgo(dateStr);
+  if (days == null) return 'var(--tn-text-muted)';
+  if (days <= 1) return 'var(--tn-green)';
+  if (days <= 3) return 'var(--tn-text-muted)';
+  if (days <= 7) return '#ffaa00';
+  return 'var(--tn-red)';
+};
+
+/** Color tint for age from days number directly */
+const ageColorFromDays = (days: number | null): string => {
+  if (days == null) return 'var(--tn-text-muted)';
+  if (days <= 1) return 'var(--tn-green)';
+  if (days <= 3) return 'var(--tn-text-muted)';
+  if (days <= 7) return '#ffaa00';
+  return 'var(--tn-red)';
+};
+
+/** Compute oldest and newest lastRun for a layer's tests */
+const layerAgeStats = (tests: PyramidTest[]): { oldest: number | null; newest: number | null; neverRun: number } => {
+  let oldest: number | null = null;
+  let newest: number | null = null;
+  let neverRun = 0;
+  for (const t of tests) {
+    const d = daysAgo(t.lastRun);
+    if (d == null) { neverRun++; continue; }
+    if (oldest == null || d > oldest) oldest = d;
+    if (newest == null || d < newest) newest = d;
+  }
+  return { oldest, newest, neverRun };
+};
+
 // layerCoverage removed — coverage is app-wide and shown in the KPI header only
 
 // Slide-in sidebar for test detail — split view: Review (top) + Scenario JSON (bottom)
@@ -837,6 +899,7 @@ export default function PyramidTab() {
                   // Staleness info for this layer
                   const layerStaleCount = staleness?.summary?.stale_by_layer?.[layer.id] ?? 0;
                   const isLayerRetesting = retesting === `layer-${layer.id}`;
+                  const ageStats = layerAgeStats(layer.tests);
 
                   return (
                     <div key={layer.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
@@ -921,6 +984,19 @@ export default function PyramidTab() {
                                   {layerStaleCount} STALE
                                 </span>
                               )}
+                              {/* Age badge: oldest test age */}
+                              {layer.tests.length > 0 && (
+                                <span
+                                  title={`Oldest: ${formatAge(ageStats.oldest)}${ageStats.newest != null && ageStats.newest !== ageStats.oldest ? ` · Newest: ${formatAge(ageStats.newest)}` : ''}${ageStats.neverRun > 0 ? ` · ${ageStats.neverRun} never run` : ''}`}
+                                  style={{
+                                    fontSize: 8, fontWeight: 600, padding: '2px 6px', borderRadius: 3,
+                                    background: `${ageColorFromDays(ageStats.oldest)}18`,
+                                    color: ageColorFromDays(ageStats.oldest),
+                                  }}
+                                >
+                                  {ageStats.oldest != null ? `oldest: ${formatAge(ageStats.oldest)}` : `${ageStats.neverRun} untested`}
+                                </span>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -941,17 +1017,19 @@ export default function PyramidTab() {
                                 const h = s > 0 ? Math.max((s / 10) * 100, 10) : 5;
                                 const bg = s > 0 ? scoreColor(s) : 'rgba(255,255,255,0.08)';
                                 const isSelected = sidebarTest?.id === t.id;
+                                const barAge = ageOpacity(t.lastRun);
+                                const ageDays = daysAgo(t.lastRun);
                                 return (
                                   <div
                                     key={t.id}
-                                    title={`${t.id}${s > 0 ? ': ' + s.toFixed(1) : ''} — click for details`}
+                                    title={`${t.id}${s > 0 ? ': ' + s.toFixed(1) : ''} · ${formatAge(ageDays)} — click for details`}
                                     onClick={(e) => { e.stopPropagation(); setSidebarTest(prev => prev?.id === t.id ? null : t); }}
                                     style={{
                                       flex: 1, maxWidth: 24, minWidth: 3,
                                       height: `${h}%`, background: bg, borderRadius: 2,
                                       transition: 'height 0.3s, opacity 0.15s',
                                       cursor: 'pointer',
-                                      opacity: isSelected ? 1 : 0.8,
+                                      opacity: isSelected ? 1 : barAge,
                                       outline: isSelected ? `2px solid ${bg}` : 'none',
                                       outlineOffset: 1,
                                     }}

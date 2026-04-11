@@ -43,7 +43,7 @@ export async function bridgeJson<T = any>(path: string, opts?: RequestInit & { t
 
 // ─── Reusable UI Components ─────────────────────────────────────────
 
-export function StatusBadge({ status }: { status: 'active' | 'paused' | 'dead' | 'ok' | 'error' | 'unknown' | 'limited' | 'running' | 'completed' | 'failed' | 'cancelled' }) {
+export function StatusBadge({ status, label: customLabel }: { status: 'active' | 'paused' | 'dead' | 'ok' | 'error' | 'unknown' | 'limited' | 'running' | 'completed' | 'failed' | 'cancelled' | 'warn'; label?: string }) {
   const map: Record<string, { bg: string; color: string; label: string }> = {
     active:    { bg: 'rgba(158,206,106,0.2)', color: 'var(--tn-green)',       label: 'AKTIV' },
     ok:        { bg: 'rgba(158,206,106,0.2)', color: 'var(--tn-green)',       label: 'OK' },
@@ -55,6 +55,7 @@ export function StatusBadge({ status }: { status: 'active' | 'paused' | 'dead' |
     error:     { bg: 'rgba(247,118,142,0.2)', color: 'var(--tn-red)',         label: 'FEHLER' },
     failed:    { bg: 'rgba(247,118,142,0.2)', color: 'var(--tn-red)',         label: 'FEHLGESCHLAGEN' },
     cancelled: { bg: 'rgba(100,100,100,0.2)', color: 'var(--tn-text-muted)',  label: 'ABGEBROCHEN' },
+    warn:      { bg: 'rgba(224,175,104,0.2)', color: 'var(--tn-orange)',      label: 'WARNUNG' },
     unknown:   { bg: 'rgba(100,100,100,0.2)', color: 'var(--tn-text-muted)',  label: 'UNBEKANNT' },
   };
   const s = map[status] ?? map.unknown;
@@ -64,7 +65,7 @@ export function StatusBadge({ status }: { status: 'active' | 'paused' | 'dead' |
       fontSize: 9, fontWeight: 700, letterSpacing: '0.05em',
       background: s.bg, color: s.color,
     }}>
-      {s.label}
+      {customLabel ?? s.label}
     </span>
   );
 }
@@ -155,9 +156,9 @@ export function ActionButton({ label, loading, onClick, color }: { label: string
   );
 }
 
-export function Toolbar({ lastRefresh, loading, onRefresh, autoRefresh }: {
+export function Toolbar({ lastRefresh, loading = false, onRefresh, autoRefresh }: {
   lastRefresh: Date | null;
-  loading: boolean;
+  loading?: boolean;
   onRefresh: () => void;
   autoRefresh?: number;
 }) {
@@ -186,15 +187,16 @@ export function Toolbar({ lastRefresh, loading, onRefresh, autoRefresh }: {
   );
 }
 
-export function ErrorBanner({ message }: { message: string }) {
+export function ErrorBanner({ message, onRetry }: { message: string; onRetry?: () => void }) {
   return (
-    <div style={{ padding: '6px 10px', fontSize: 11, color: 'var(--tn-red)', background: 'rgba(247,118,142,0.1)', borderRadius: 4, marginBottom: 12 }}>
-      {message}
+    <div style={{ padding: '6px 10px', fontSize: 11, color: 'var(--tn-red)', background: 'rgba(247,118,142,0.1)', borderRadius: 4, marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <span>{message}</span>
+      {onRetry && <button onClick={onRetry} style={{ fontSize: 10, padding: '2px 8px', cursor: 'pointer', background: 'rgba(247,118,142,0.2)', border: '1px solid var(--tn-red)', borderRadius: 3, color: 'var(--tn-red)' }}>Retry</button>}
     </div>
   );
 }
 
-export function LoadingSpinner({ text }: { text: string }) {
+export function LoadingSpinner({ text = 'Laden...' }: { text?: string }) {
   return (
     <div style={{ padding: 30, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 12 }}>
       {text}

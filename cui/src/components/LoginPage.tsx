@@ -45,6 +45,9 @@ export default function LoginPage() {
           boxShadow: '0 20px 60px rgba(0,0,0,0.4)',
         }}
       >
+        <div style={{ textAlign: 'center', marginBottom: 12 }}>
+          <img src="/werking-logo.png" alt="WerkING" style={{ width: 56, height: 56, borderRadius: 12 }} />
+        </div>
         <h1 style={{
           fontSize: 20,
           fontWeight: 700,
@@ -52,7 +55,7 @@ export default function LoginPage() {
           marginBottom: 8,
           textAlign: 'center',
         }}>
-          CUI Workspace
+          WerkING Lab
         </h1>
         <p style={{
           fontSize: 12,
@@ -60,7 +63,7 @@ export default function LoginPage() {
           marginBottom: 24,
           textAlign: 'center',
         }}>
-          Sign in to continue
+          Partner Workspace
         </p>
 
         {error && (

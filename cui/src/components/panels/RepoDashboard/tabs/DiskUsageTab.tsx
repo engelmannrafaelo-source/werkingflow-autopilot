@@ -249,7 +249,7 @@ export default function DiskUsageTab() {
             <ResponsiveContainer width="100%" height="100%">
               <Treemap
                 data-ai-id="disk-usage-treemap"
-                data={treemapData}
+                data={treemapData as any}
                 dataKey="size"
                 stroke="var(--tn-border)"
                 content={<CustomTreemapContent />}

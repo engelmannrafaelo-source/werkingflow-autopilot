@@ -209,7 +209,7 @@ export default function CostAnalyticsTab() {
                         border: '1px solid var(--tn-border)',
                         fontSize: 10,
                       }}
-                      formatter={(value: number) => [`$${value.toFixed(4)}`, 'Cost']}
+                      formatter={(value) => [`$${(value as number).toFixed(4)}`, 'Cost']}
                     />
                     <Bar dataKey="cost" radius={[4, 4, 0, 0]}>
                       {getChartData().map((entry, index) => (

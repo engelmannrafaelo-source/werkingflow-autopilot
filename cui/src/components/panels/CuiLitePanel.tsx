@@ -37,10 +37,12 @@ interface CuiLitePanelProps {
   panelId?: string;
   isTabVisible?: boolean;
   onRouteChange?: (route: string) => void;
+  initialRoute?: string;
   initialSessionId?: string;
   onLoadFailed?: (sessionId: string) => void;
   onFinish?: (sessionId: string) => void;
   onStateChange?: (state: 'idle' | 'working' | 'needs_attention') => void;
+  compactInputBar?: boolean;
 }
 
 // --- Markdown Components (Tokyo Night) ---

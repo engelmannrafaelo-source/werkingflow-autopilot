@@ -303,7 +303,7 @@ export default function PromptPerformanceTab() {
               <YAxis tick={{ fontSize: 9, fill: 'var(--tn-text-muted)' }} width={35} unit="s" />
               <Tooltip
                 contentStyle={{ background: 'var(--tn-bg-dark)', border: '1px solid var(--tn-border)', fontSize: 10 }}
-                formatter={(value: number, name: string) => [`${value}s`, name === 'avg' ? 'Avg' : 'P95']}
+                formatter={(value, name) => [`${value}s`, name === 'avg' ? 'Avg' : 'P95']}
               />
               <Bar dataKey="avg" radius={[3, 3, 0, 0]} name="avg">
                 {chartData.map((entry, i) => (
@@ -494,7 +494,7 @@ export default function PromptPerformanceTab() {
                             <YAxis tick={{ fontSize: 8, fill: 'var(--tn-text-muted)' }} width={30} unit="s" />
                             <Tooltip
                               contentStyle={{ background: 'var(--tn-bg-dark)', border: '1px solid var(--tn-border)', fontSize: 10 }}
-                              formatter={(value: number, name: string) => [`${value}s`, name === 'avg' ? 'Avg' : 'Max']}
+                              formatter={(value, name) => [`${value}s`, name === 'avg' ? 'Avg' : 'Max']}
                             />
                             <Line type="monotone" dataKey="avg" stroke="var(--tn-blue)" strokeWidth={2} dot={false} />
                             <Line type="monotone" dataKey="max" stroke="var(--tn-orange)" strokeWidth={1} dot={false} opacity={0.5} />

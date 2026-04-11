@@ -18,7 +18,7 @@ export default function OverviewTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const retryTimer = useRef<ReturnType<typeof setTimeout>>();
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const fetchData = useCallback(async () => {
     if ((window as any).__cuiServerAlive === false) return;

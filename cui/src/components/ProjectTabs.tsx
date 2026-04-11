@@ -441,7 +441,8 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
           flexShrink: 0,
         }}
       >
-        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--tn-blue)' }}>CUI</span>
+        <img src="/werking-logo.png" alt="W" style={{ width: 22, height: 22, borderRadius: 4, marginRight: 4 }} />
+        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--tn-blue)' }}>WerkING Lab</span>
         <span
           style={{
             fontSize: 8,
@@ -520,6 +521,7 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
         flexWrap: 'wrap',
       } as React.CSSProperties}
     >
+      <img src="/werking-logo.png" alt="W" style={{ width: 20, height: 20, borderRadius: 4, marginRight: 4 }} />
       <span
         style={{
           fontSize: 13,
@@ -529,7 +531,7 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
           whiteSpace: 'nowrap',
         }}
       >
-        CUI
+        WerkING Lab
       </span>
       <span
         title={CUI_MODE === 'local'
