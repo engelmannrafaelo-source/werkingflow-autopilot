@@ -514,13 +514,18 @@ function mergeRegistryIntoReports(appId: string, reports: Record<string, Scanned
 
     const existing = reports[scenarioId];
     if (existing) {
-      // Registry takes priority if it has a newer tested_at than the report timestamp.
-      // This handles the case where a report file is stale (e.g. FAIL from 2 weeks ago)
-      // but the registry has a newer result (e.g. BRIDGE_FAILURE from yesterday).
+      // Registry takes priority when its date is >= the report's date.
+      // The registry is updated as the final step of a test run, so it is the
+      // authoritative source. Report files use full ISO timestamps like
+      // "2026-04-11T19:14:48" which are lexicographically > the registry's
+      // date-only "2026-04-11", causing same-day report files to incorrectly
+      // win over a newer registry result. Normalize both to YYYY-MM-DD before
+      // comparing so the registry wins on same-day conflicts.
       const registryDate: string | null = entry.tested_at ?? null;
       const reportDate: string | null = existing.timestamp ?? null;
-      // Keep existing report unless registry is demonstrably newer
-      if (!registryDate || (reportDate && reportDate >= registryDate)) continue;
+      const reportDateOnly = reportDate ? reportDate.substring(0, 10) : null;
+      // Keep existing report only if it is strictly newer (day-level) than registry
+      if (!registryDate || (reportDateOnly && reportDateOnly > registryDate)) continue;
     }
 
     reports[scenarioId] = {
