@@ -197,10 +197,19 @@ export function initMissionRouter(deps: MissionDeps) {
       const result = await claudeCli.startConversation(parentAccountId, injectMessage, parentWorkDir, parentSessionId, parentModel);
       if (result.ok) {
         broadcast({ type: 'conv-subsession-complete', sessionId: parentSessionId, subSessionId: sessionId, result: subResult });
-        console.log(`[SubSession] Result injected into parent ${parentSessionId.slice(0, 8)} — awaiting explicit finish`);
-        _subSessionsAwaitingFinish.add(sessionId);
-        // Stop CLI process (work is done) but do NOT mark as finished — parent must do that
+        console.log(`[SubSession] Result injected into parent ${parentSessionId.slice(0, 8)} — auto-finishing in 3min`);
         claudeCli.stopConversation(sessionId);
+        // Auto-finish after 3 minutes — parent has the result, sub-session no longer needed.
+        // Parent can still call finish immediately; this is a safety net.
+        setTimeout(() => {
+          if (!convMeta.isFinished(sessionId)) {
+            console.log(`[SubSession] Auto-finishing ${sessionId.slice(0, 8)} after 3min timeout`);
+            convMeta.setFinished(sessionId, true);
+            broadcast({ type: 'control:conversation-finished', sessionId, panelsToClose: [] });
+          }
+          _subSessionsAwaitingFinish.delete(sessionId);
+        }, 3 * 60_000);
+        _subSessionsAwaitingFinish.add(sessionId);
       } else {
         console.warn(`[SubSession] Injection into parent failed: ${result.error}`);
         if (attempt < SUB_INJECT_MAX_RETRIES) {
@@ -498,6 +507,42 @@ export function initMissionRouter(deps: MissionDeps) {
       }
     }
   }, SUB_REMINDER_INTERVAL_MS);
+
+  // Auto-finish idle/done sessions that have been stuck for too long.
+  // These are sessions (sub or regular) that finished their work but were never explicitly closed.
+  // Persistent workspaces (mission-chat, diverse, team, etc.) are excluded — those stay open.
+  const IDLE_DONE_AUTO_FINISH_MS = 10 * 60_000; // 10 minutes
+  const PERSISTENT_WORKDIRS = ['mission-chat', 'diverse', 'team', 'administration', 'general', 'privat'];
+  const _idleDoneSince = new Map<string, number>(); // sessionId → timestamp when first seen idle/done
+  setInterval(() => {
+    const states = getSessionStates();
+    const now = Date.now();
+    for (const [key, sState] of Object.entries(states)) {
+      const sid = sState.sessionId || key;
+      if (convMeta.isFinished(sid)) { _idleDoneSince.delete(sid); continue; }
+      const isDone = (sState.state === 'needs_attention' || sState.state === 'idle') && sState.reason === 'done';
+      if (!isDone) { _idleDoneSince.delete(sid); continue; }
+
+      // Skip persistent workspaces
+      const wdir = convMeta.getWorkDir(sid) || '';
+      if (PERSISTENT_WORKDIRS.some(p => wdir.includes(p))) { _idleDoneSince.delete(sid); continue; }
+
+      if (!_idleDoneSince.has(sid)) {
+        _idleDoneSince.set(sid, now);
+        continue;
+      }
+
+      const idleFor = now - _idleDoneSince.get(sid)!;
+      if (idleFor >= IDLE_DONE_AUTO_FINISH_MS) {
+        const title = convMeta.getTitle(sid) || sid.slice(0, 8);
+        console.log(`[AutoFinish] Session "${title}" (${sid.slice(0, 8)}) idle/done for ${Math.round(idleFor/60000)}min — auto-finishing`);
+        convMeta.setFinished(sid, true);
+        claudeCli.stopConversation(sid);
+        broadcast({ type: 'control:conversation-finished', sessionId: sid, panelsToClose: [] });
+        _idleDoneSince.delete(sid);
+      }
+    }
+  }, 60_000); // Check every minute
 
   // Warm up conversation cache on startup (async, non-blocking)
   setTimeout(async () => {
@@ -1956,9 +2001,10 @@ router.post('/start', async (req, res) => {
   const startUserId = (req as any).user?.sub || (req as any).user?.id;
   if (startUserId) convMeta.saveUser(sessionId, startUserId);
   convMeta.setLastPrompt(sessionId);
-  // Mark as sub-session if parentSessionId is explicitly provided OR subject starts with [Sub]
+  // Mark as sub-session if parentSessionId is explicitly provided OR subject starts with known sub-session prefixes
+  const SUB_PREFIXES = ['[Sub]', '[Arch-Fix]', '[Arch-App]', '[Fix]', '[Analysis]'];
   const hasExplicitParent = typeof parentSessionId === 'string' && parentSessionId.trim().length > 0;
-  const isSubSession = hasExplicitParent || (subject && subject.startsWith('[Sub]'));
+  const isSubSession = hasExplicitParent || (subject && SUB_PREFIXES.some(p => subject.startsWith(p)));
   if (isSubSession) {
     convMeta.setSubSession(sessionId, true);
 
