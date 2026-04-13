@@ -7,6 +7,8 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { validateApiResponse } from '../../../lib/validateApiResponse';
+import FlowDiagramView from './FlowDiagramView';
 import './PromptExplorer.css';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -45,12 +47,13 @@ interface PromptCallSite {
 
 interface PromptFile {
   path: string;
-  relativePath: string;
-  functions: PromptFunction[];
-  constants: PromptConstant[];
-  content: string;
-  lastModified: string;
-  callSites: PromptCallSite[];
+  name: string;
+  relativePath?: string;
+  functions?: PromptFunction[];
+  constants?: PromptConstant[];
+  content?: string;
+  lastModified?: string;
+  callSites?: PromptCallSite[];
 }
 
 interface PromptCallInOrder {
@@ -100,22 +103,22 @@ interface PipelineScanResult {
   id: string;
   name: string;
   basePath: string;
-  type: 'phase-step' | 'flat-stage';
-  phases: PhaseInfo[];
-  entryInputs: string[];
-  finalOutputs: string[];
-  crossPhaseFlow: CrossPhaseFlow[];
-  validationIssues: ValidationIssue[];
-  scannedAt: string;
+  type?: 'phase-step' | 'flat-stage';
+  phases?: PhaseInfo[];
+  entryInputs?: string[];
+  finalOutputs?: string[];
+  crossPhaseFlow?: CrossPhaseFlow[];
+  validationIssues?: ValidationIssue[];
+  scannedAt?: string;
 }
 
 interface PipelineSummary {
   id: string;
   name: string;
-  phaseCount: number;
-  totalPromptFiles: number;
-  issueCount: number;
-  hasErrors: boolean;
+  phaseCount?: number;
+  totalPromptFiles?: number;
+  issueCount?: number;
+  hasErrors?: boolean;
 }
 
 // ─── Main Component ──────────────────────────────────────────────────────────
@@ -123,6 +126,7 @@ interface PipelineSummary {
 export default function PromptExplorer() {
   const [pipelines, setPipelines] = useState<PipelineSummary[]>([]);
   const [activePipeline, setActivePipeline] = useState<PipelineScanResult | null>(null);
+  const [viewMode, setViewMode] = useState<'list' | 'flow'>('flow');
   const [expandedPhase, setExpandedPhase] = useState<string | null>(null);
   const [selectedPromptFile, setSelectedPromptFile] = useState<PromptFile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -130,8 +134,14 @@ export default function PromptExplorer() {
 
   useEffect(() => {
     fetch('/api/prompt-explorer/pipelines')
-      .then(r => r.json())
-      .then(data => { setPipelines(data.pipelines || []); setLoading(false); })
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(raw => {
+        const data = validateApiResponse<{ pipelines: PipelineSummary[] }>(raw, '/api/prompt-explorer/pipelines', {
+          pipelines: 'array',
+        });
+        setPipelines(data.pipelines);
+        setLoading(false);
+      })
       .catch(err => { setError(`Failed to load: ${err.message}`); setLoading(false); });
   }, []);
 
@@ -140,8 +150,16 @@ export default function PromptExplorer() {
     setExpandedPhase(null);
     setSelectedPromptFile(null);
     fetch(`/api/prompt-explorer/scan/${id}`)
-      .then(r => r.json())
-      .then((data: PipelineScanResult) => { setActivePipeline(data); setLoading(false); })
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(raw => {
+        const data = validateApiResponse<PipelineScanResult>(raw, `/api/prompt-explorer/scan/${id}`, {
+          id: 'string',
+          name: 'string',
+          basePath: 'string',
+        });
+        setActivePipeline(data);
+        setLoading(false);
+      })
       .catch(err => { setError(`Failed to scan: ${err.message}`); setLoading(false); });
   }, []);
 
@@ -164,8 +182,8 @@ export default function PromptExplorer() {
                 <span className={`pe-dot ${p.hasErrors ? 'error' : 'ok'}`} />
                 <span className="pe-card-name">{p.name}</span>
                 <span className="pe-card-stats">
-                  {p.phaseCount} phases &middot; {p.totalPromptFiles} prompts
-                  {p.issueCount > 0 && <span className="pe-badge">{p.issueCount}</span>}
+                  {p.phaseCount ?? 0} phases &middot; {p.totalPromptFiles ?? 0} prompts
+                  {(p.issueCount ?? 0) > 0 && <span className="pe-badge">{p.issueCount ?? 0}</span>}
                 </span>
               </button>
             ))}
@@ -191,16 +209,36 @@ export default function PromptExplorer() {
         <div className="pe-title-bar">
           <button className="pe-back" onClick={() => setActivePipeline(null)}>&larr;</button>
           <span className="pe-breadcrumb">{activePipeline.name}</span>
-          <span className="pe-scanned">{new Date(activePipeline.scannedAt).toLocaleTimeString()}</span>
+          <div className="pe-view-toggle">
+            <button
+              className={`pe-view-btn ${viewMode === 'flow' ? 'active' : ''}`}
+              onClick={() => setViewMode('flow')}
+              title="Flow Diagram"
+            >Flow</button>
+            <button
+              className={`pe-view-btn ${viewMode === 'list' ? 'active' : ''}`}
+              onClick={() => setViewMode('list')}
+              title="List View"
+            >List</button>
+          </div>
+          <span className="pe-scanned">{activePipeline.scannedAt ? new Date(activePipeline.scannedAt).toLocaleTimeString() : ''}</span>
         </div>
         <div className="pe-flow-list">
-          <FlowNavigation
-            pipeline={activePipeline}
-            expandedPhase={expandedPhase}
-            selectedPromptFile={selectedPromptFile}
-            onTogglePhase={togglePhase}
-            onSelectPrompt={selectPrompt}
-          />
+          {viewMode === 'flow' ? (
+            <FlowDiagramView
+              pipeline={activePipeline}
+              selectedPromptFile={selectedPromptFile}
+              onSelectPrompt={selectPrompt}
+            />
+          ) : (
+            <FlowNavigation
+              pipeline={activePipeline}
+              expandedPhase={expandedPhase}
+              selectedPromptFile={selectedPromptFile}
+              onTogglePhase={togglePhase}
+              onSelectPrompt={selectPrompt}
+            />
+          )}
         </div>
       </div>
 
@@ -228,7 +266,10 @@ function FlowNavigation({ pipeline, expandedPhase, selectedPromptFile, onToggleP
   onTogglePhase: (id: string) => void;
   onSelectPrompt: (pf: PromptFile) => void;
 }) {
-  const { phases, entryInputs, finalOutputs, crossPhaseFlow } = pipeline;
+  const phases = pipeline.phases ?? [];
+  const entryInputs = pipeline.entryInputs ?? [];
+  const finalOutputs = pipeline.finalOutputs ?? [];
+  const crossPhaseFlow = pipeline.crossPhaseFlow ?? [];
 
   // Compute per-phase input/output counts from crossPhaseFlow
   const phaseInputCount = new Map<string, number>();
@@ -236,7 +277,7 @@ function FlowNavigation({ pipeline, expandedPhase, selectedPromptFile, onToggleP
   for (const flow of crossPhaseFlow) {
     const fromPhase = flow.from.split('/')[0];
     phaseOutputCount.set(fromPhase, (phaseOutputCount.get(fromPhase) || 0) + 1);
-    for (const target of flow.to) {
+    for (const target of (flow.to ?? [])) {
       phaseInputCount.set(target, (phaseInputCount.get(target) || 0) + 1);
     }
   }
@@ -262,7 +303,7 @@ function FlowNavigation({ pipeline, expandedPhase, selectedPromptFile, onToggleP
       {/* Phase nodes */}
       {phases.map((phase, idx) => {
         const isExpanded = expandedPhase === phase.id;
-        const promptCount = phase.steps.reduce((n, s) => n + s.promptFiles.length, 0);
+        const promptCount = (phase.steps ?? []).reduce((n, s) => n + (s.promptFiles?.length ?? 0), 0);
         const inCount = phaseInputCount.get(phase.id) || 0;
         const outCount = phaseOutputCount.get(phase.id) || 0;
         const isCentralPrompts = phase.id === 'central_prompts';
@@ -276,7 +317,7 @@ function FlowNavigation({ pipeline, expandedPhase, selectedPromptFile, onToggleP
             >
               <div className="pe-fl-phase-main">
                 <span className="pe-fl-phase-badge">
-                  {isCentralPrompts ? 'LIB' : pipeline.type === 'flat-stage' ? phase.id.toUpperCase() : `P${phase.number}`}
+                  {isCentralPrompts ? 'LIB' : pipeline.type === 'flat-stage' ? (phase.id ?? '').toUpperCase() : `P${phase.number ?? 0}`}
                 </span>
                 <div className="pe-fl-phase-info">
                   <span className="pe-fl-phase-name">
@@ -285,7 +326,7 @@ function FlowNavigation({ pipeline, expandedPhase, selectedPromptFile, onToggleP
                   <span className="pe-fl-phase-meta">
                     {isCentralPrompts
                       ? 'Wiederverwendbare Prompts die von mehreren Stages importiert werden'
-                      : `${phase.steps.length} step${phase.steps.length !== 1 ? 's' : ''} \u00b7 ${promptCount} prompt${promptCount !== 1 ? 's' : ''}`
+                      : `${(phase.steps ?? []).length} step${(phase.steps ?? []).length !== 1 ? 's' : ''} \u00b7 ${promptCount} prompt${promptCount !== 1 ? 's' : ''}`
                     }
                     {inCount > 0 && ` \u00b7 ${inCount} in`}
                     {outCount > 0 && ` \u00b7 ${outCount} out`}
@@ -301,18 +342,18 @@ function FlowNavigation({ pipeline, expandedPhase, selectedPromptFile, onToggleP
             {/* Expanded: Execution Flow or File List */}
             {isExpanded && (
               <div className="pe-fl-phase-content">
-                {phase.steps.map((step, stepIdx) => {
-                  const hasExecOrder = (step.executionOrder || []).length > 0;
+                {(phase.steps ?? []).map((step, stepIdx) => {
+                  const hasExecOrder = (step.executionOrder ?? []).length > 0;
 
                   return (
                     <div key={step.id} className="pe-fl-step-group">
                       {/* Step header (only if multiple steps) */}
-                      {phase.steps.length > 1 && (
+                      {(phase.steps ?? []).length > 1 && (
                         <div className="pe-fl-step-header">
                           <span className="pe-fl-step-num">{stepIdx + 1}</span>
                           <span className="pe-fl-step-name">{humanize(step.name)}</span>
                           {hasExecOrder && (
-                            <span className="pe-fl-step-calls">{step.executionOrder.length} calls</span>
+                            <span className="pe-fl-step-calls">{(step.executionOrder ?? []).length} calls</span>
                           )}
                         </div>
                       )}
@@ -320,13 +361,13 @@ function FlowNavigation({ pipeline, expandedPhase, selectedPromptFile, onToggleP
                       {/* ─── Execution Order View (when call-site data exists) ─── */}
                       {hasExecOrder ? (
                         <div className="pe-fl-exec-flow">
-                          {step.executionOrder.map((call, ci) => {
+                          {(step.executionOrder ?? []).map((call, ci) => {
                             // Find the prompt file for click-to-detail
-                            const matchingPf = step.promptFiles.find(pf =>
-                              pf.relativePath === call.promptFile
-                              || pf.relativePath.endsWith(call.promptFile)
+                            const matchingPf = (step.promptFiles ?? []).find(pf =>
+                              (pf.relativePath ?? '') === call.promptFile
+                              || (pf.relativePath ?? '').endsWith(call.promptFile)
                             );
-                            const isSelected = matchingPf && selectedPromptFile?.path === matchingPf.path;
+                            const isSelected = matchingPf && selectedPromptFile?.path === matchingPf?.path;
 
                             return (
                               <div key={`${call.name}-${call.callerLine}`}>
@@ -349,7 +390,7 @@ function FlowNavigation({ pipeline, expandedPhase, selectedPromptFile, onToggleP
                                   </div>
                                 </div>
                                 {/* Arrow between calls */}
-                                {ci < step.executionOrder.length - 1 && (
+                                {ci < (step.executionOrder ?? []).length - 1 && (
                                   <div className="pe-fl-exec-arrow">&#x2193;</div>
                                 )}
                               </div>
@@ -359,12 +400,12 @@ function FlowNavigation({ pipeline, expandedPhase, selectedPromptFile, onToggleP
                       ) : (
                         /* ─── Fallback: File List (for library/no-call-site phases) ─── */
                         <>
-                          {step.promptFiles.map(pf => {
+                          {(step.promptFiles ?? []).map(pf => {
                             const isSelected = selectedPromptFile?.path === pf.path;
-                            const fnNames = pf.functions.filter(fn => fn.promptBody).map(fn => fn.name);
-                            const constNames = (pf.constants || []).map(c => c.name);
+                            const fnNames = (pf.functions ?? []).filter(fn => fn.promptBody).map(fn => fn.name);
+                            const constNames = (pf.constants ?? []).map(c => c.name);
                             const allNames = [...constNames, ...fnNames];
-                            const csCount = pf.callSites?.length || 0;
+                            const csCount = pf.callSites?.length ?? 0;
 
                             return (
                               <div
@@ -374,7 +415,7 @@ function FlowNavigation({ pipeline, expandedPhase, selectedPromptFile, onToggleP
                               >
                                 <span className="pe-fl-prompt-icon">P</span>
                                 <div className="pe-fl-prompt-info">
-                                  <span className="pe-fl-prompt-name">{shortFilename(pf.relativePath)}</span>
+                                  <span className="pe-fl-prompt-name">{shortFilename(pf.relativePath ?? '')}</span>
                                   {allNames.length > 0 && (
                                     <span className="pe-fl-prompt-fns">{allNames.slice(0, 3).join(', ')}{allNames.length > 3 ? ` +${allNames.length - 3}` : ''}</span>
                                   )}
@@ -396,7 +437,7 @@ function FlowNavigation({ pipeline, expandedPhase, selectedPromptFile, onToggleP
                       )}
 
                       {/* Step separator arrow (between steps, not after last) */}
-                      {phase.steps.length > 1 && stepIdx < phase.steps.length - 1 && (
+                      {(phase.steps ?? []).length > 1 && stepIdx < (phase.steps ?? []).length - 1 && (
                         <div className="pe-fl-step-arrow">&#x25BE;</div>
                       )}
                     </div>
@@ -435,16 +476,16 @@ function FlowNavigation({ pipeline, expandedPhase, selectedPromptFile, onToggleP
 function PromptDetailPanel({ file, pipeline }: { file: PromptFile; pipeline: PipelineScanResult }) {
   const [showRaw, setShowRaw] = useState(false);
   const [expandedFns, setExpandedFns] = useState<Set<string>>(() =>
-    new Set(file.functions.filter(fn => fn.promptBody).map(fn => fn.name))
+    new Set((file.functions ?? []).filter(fn => fn.promptBody).map(fn => fn.name))
   );
   const [expandedConsts, setExpandedConsts] = useState<Set<string>>(() =>
-    new Set((file.constants || []).map(c => c.name))
+    new Set((file.constants ?? []).map(c => c.name))
   );
 
   // Reset expanded state when file changes
   useEffect(() => {
-    setExpandedFns(new Set(file.functions.filter(fn => fn.promptBody).map(fn => fn.name)));
-    setExpandedConsts(new Set((file.constants || []).map(c => c.name)));
+    setExpandedFns(new Set((file.functions ?? []).filter(fn => fn.promptBody).map(fn => fn.name)));
+    setExpandedConsts(new Set((file.constants ?? []).map(c => c.name)));
     setShowRaw(false);
   }, [file.path]);
 
@@ -464,14 +505,14 @@ function PromptDetailPanel({ file, pipeline }: { file: PromptFile; pipeline: Pip
     });
   };
 
-  const hasPromptContent = file.functions.some(fn => fn.promptBody) || (file.constants?.length > 0);
-  const callSites = file.callSites || [];
+  const hasPromptContent = (file.functions ?? []).some(fn => fn.promptBody) || ((file.constants?.length ?? 0) > 0);
+  const callSites = file.callSites ?? [];
 
   // Find which phase this file belongs to (for context)
   let parentPhase: PhaseInfo | null = null;
-  for (const phase of pipeline.phases) {
-    for (const step of phase.steps) {
-      if (step.promptFiles.some(pf => pf.path === file.path)) {
+  for (const phase of (pipeline.phases ?? [])) {
+    for (const step of (phase.steps ?? [])) {
+      if ((step.promptFiles ?? []).some(pf => pf.path === file.path)) {
         parentPhase = phase;
         break;
       }
@@ -481,7 +522,7 @@ function PromptDetailPanel({ file, pipeline }: { file: PromptFile; pipeline: Pip
 
   // Compute incoming files for this phase
   const incoming = parentPhase
-    ? pipeline.crossPhaseFlow.filter(f => f.to.includes(parentPhase!.id))
+    ? (pipeline.crossPhaseFlow ?? []).filter(f => (f.to ?? []).includes(parentPhase!.id ?? ''))
     : [];
 
   return (
@@ -494,10 +535,10 @@ function PromptDetailPanel({ file, pipeline }: { file: PromptFile; pipeline: Pip
               {parentPhase.label || humanize(parentPhase.name)}
             </span>
           )}
-          <span className="pe-detail-filename">{shortFilename(file.relativePath)}</span>
+          <span className="pe-detail-filename">{shortFilename(file.relativePath ?? '')}</span>
         </div>
         <div className="pe-detail-meta">
-          <span className="pe-detail-path">{file.relativePath}</span>
+          <span className="pe-detail-path">{file.relativePath ?? ''}</span>
           <button className="pe-pv-toggle" onClick={() => setShowRaw(!showRaw)}>
             {showRaw ? 'Prompts' : 'Raw Code'}
           </button>
@@ -579,13 +620,13 @@ function PromptDetailPanel({ file, pipeline }: { file: PromptFile; pipeline: Pip
 
         {/* ─── Prompt Content ──────────────────────────────────────────── */}
         {showRaw ? (
-          <pre className="pe-code">{file.content}</pre>
+          <pre className="pe-code">{file.content ?? ''}</pre>
         ) : !hasPromptContent ? (
-          <pre className="pe-code">{file.content}</pre>
+          <pre className="pe-code">{file.content ?? ''}</pre>
         ) : (
           <div className="pe-fn-list">
             {/* Module-level prompt constants */}
-            {(file.constants || []).map(c => (
+            {(file.constants ?? []).map(c => (
               <div key={c.name} className="pe-prompt-block">
                 <div className="pe-prompt-header" onClick={() => toggleConst(c.name)}>
                   <span className="pe-prompt-expand">{expandedConsts.has(c.name) ? '\u25BC' : '\u25B6'}</span>
@@ -601,7 +642,7 @@ function PromptDetailPanel({ file, pipeline }: { file: PromptFile; pipeline: Pip
             ))}
 
             {/* Functions with prompt bodies */}
-            {file.functions.map(fn => {
+            {(file.functions ?? []).map(fn => {
               const fnCallSites = callSites.filter(cs => cs.functionName === fn.name);
               return (
                 <div key={fn.name} className="pe-prompt-block">
