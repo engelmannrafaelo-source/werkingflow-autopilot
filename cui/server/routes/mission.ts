@@ -7,6 +7,7 @@ import { promisify } from 'util';
 
 import { PATHS, BRIDGE_URL } from '../config/paths.js';
 import { bridgeChat } from '../lib/bridge-fetch.js';
+import { isAuthEnabled } from '../auth/users.js';
 import type { AttentionReason, ConvAttentionState, SessionState, PanelVisibility } from './shared/types.js';
 import { logUserInput as sharedLogUserInput, atomicWriteFileSync } from './shared/utils.js';
 import { findJsonlPath, findJsonlPathAllAccounts, ensureJsonlForAccount, readJsonlMetadata, clearMetaCache, readConversationMessages, getOriginalCwd, extractConversationContext, unstickConversation, deepRepairJsonl, compactJsonlForResume, diagnoseSessionHealth } from './shared/jsonl.js';
@@ -41,7 +42,14 @@ function cleanupSubSession(sessionId: string) {
   convMeta.setFinished(sessionId, true);
   convMeta.deleteParentSession(sessionId);
   claudeCli.stopConversation(sessionId);
-  broadcast({ type: 'control:conversation-finished', sessionId, panelsToClose: [] });
+  // Build panelsToClose from visibilityRegistry (same as normal finish)
+  const panelsToClose: Array<{ panelId: string; projectId: string }> = [];
+  for (const entry of visibilityRegistry.values()) {
+    if (entry.sessionId === sessionId) {
+      panelsToClose.push({ panelId: entry.panelId, projectId: entry.projectId });
+    }
+  }
+  broadcast({ type: 'control:conversation-finished', sessionId, panelsToClose });
 }
 
 // --- Dependencies (injected via init) ---
@@ -183,7 +191,8 @@ export function initMissionRouter(deps: MissionDeps) {
       const parentAccountId = convMeta.getAssignment(parentSessionId) || claudeCli.ACCOUNT_CONFIG[0]?.id || 'werking';
       const parentWorkDir = convMeta.getWorkDir(parentSessionId) || '';
       const parentModel = convMeta.getModel(parentSessionId) || '';
-      const injectMessage = `[Sub-Session Ergebnis: ${subjectTitle}]\n\n${subResult}\n\nPruefe ob alles korrekt ist und finishe die Sub-Session wenn erledigt.`;
+      const finishCmd = `curl -s -X POST http://localhost:4005/api/mission/conversation/${sessionId}/finish -H 'Content-Type: application/json' -d '{"finished":true}'`;
+      const injectMessage = `[Sub-Session Ergebnis: ${subjectTitle}]\n\n${subResult}\n\nPruefe ob alles korrekt ist. Wenn erledigt, finishe die Sub-Session mit:\n${finishCmd}`;
 
       const result = await claudeCli.startConversation(parentAccountId, injectMessage, parentWorkDir, parentSessionId, parentModel);
       if (result.ok) {
@@ -461,16 +470,19 @@ export function initMissionRouter(deps: MissionDeps) {
 
       try {
         const lines: string[] = [];
+        const finishCmds: string[] = [];
         for (const { sessionId, isCompleted } of subs) {
           const title = convMeta.getTitle(sessionId) || sessionId.slice(0, 8);
           if (isCompleted) {
-            lines.push(`- "${title}" — ist FERTIG. Bitte Ergebnis pruefen und Sub-Session finishen.`);
+            lines.push(`- "${title}" — ist FERTIG. Bitte Ergebnis pruefen und finishen.`);
+            finishCmds.push(`curl -s -X POST http://localhost:4005/api/mission/conversation/${sessionId}/finish -H 'Content-Type: application/json' -d '{"finished":true}'`);
           } else {
             lines.push(`- "${title}" — arbeitet noch.`);
           }
         }
 
-        const reminderMsg = `[Sub-Session Reminder]\nDu hast aktive Sub-Sessions:\n${lines.join('\n')}\n\nVergiss nicht, fertige Sub-Sessions zu pruefen und zu finishen.`;
+        const finishBlock = finishCmds.length > 0 ? `\n\nZum Finishen:\n${finishCmds.join('\n')}` : '';
+        const reminderMsg = `[Sub-Session Reminder]\nDu hast aktive Sub-Sessions:\n${lines.join('\n')}${finishBlock}`;
 
         const parentAccountId = convMeta.getAssignment(parentSessionId) || claudeCli.ACCOUNT_CONFIG[0]?.id || 'werking';
         const parentWorkDir = convMeta.getWorkDir(parentSessionId) || '';
@@ -962,7 +974,24 @@ router.get('/conversations', async (req, res) => {
     }
   }
 
-  // Apply project filter AFTER cache
+  // Partner isolation: non-admin users only see their own conversations
+  const convUserRole = (req as any).user?.role;
+  const convUserId = (req as any).user?.sub || (req as any).user?.id;
+  const convIsAdmin = convUserRole === 'admin';
+  if (!convIsAdmin && convUserId && data) {
+    const allUsers = convMeta.getAllUsers();
+    data = {
+      ...data,
+      conversations: data.conversations.filter((c: any) => {
+        const sessionOwner = allUsers[c.sessionId];
+        // Show conversations owned by this user, or unowned (legacy/admin sessions are hidden)
+        return sessionOwner === convUserId;
+      }),
+    };
+    data.total = data.conversations.length;
+  }
+
+  // Apply project filter AFTER cache and user isolation
   if (filterProject && data) {
     const isSubSessionsWorkspace = filterProject.includes('sub-sessions');
     const filtered = { ...data, conversations: data.conversations.filter((c: any) => {
@@ -1280,7 +1309,13 @@ router.post('/send', async (req, res) => {
   }
 
   // Read stored model for this session (for resume)
-  const storedModel = convMeta.getModel(sessionId) || 'opus';
+  // Partners (non-admin) are restricted to sonnet — dev-server (no auth) = admin
+  const resumeUserRole = (req as any).user?.role;
+  const resumeIsAdmin = !isAuthEnabled() || resumeUserRole === 'admin';
+  const resumeDefault = resumeIsAdmin ? 'opus' : 'sonnet';
+  let storedModel = convMeta.getModel(sessionId) || resumeDefault;
+  // Enforce model restriction: partners cannot resume with opus
+  if (!resumeIsAdmin && storedModel === 'opus') storedModel = 'sonnet';
 
   // Enrich message with session context on resume (prevents context amnesia)
   // Inlines full user messages + truncated assistant text — no tool calls
@@ -1338,6 +1373,9 @@ router.post('/send', async (req, res) => {
   setSessionState(finalSessionId, accountId, 'working', undefined, finalSessionId); // Clear idle/done → working
   convMeta.saveWorkDir(finalSessionId, resolvedWorkDir);
   convMeta.setLastPrompt(finalSessionId);
+  // Ensure userId is set for partner isolation (covers resumed sessions)
+  const sendUserId = (req as any).user?.sub || (req as any).user?.id;
+  if (sendUserId && !convMeta.getUser(finalSessionId)) convMeta.saveUser(finalSessionId, sendUserId);
   convMeta.setFinished(finalSessionId, false); // Auto-unfinish when message sent
   invalidateConvCache();
 
@@ -1638,11 +1676,15 @@ router.post('/model/:sessionId', async (req, res) => {
     const { sessionId } = req.params;
     const { model } = req.body;
     const VALID_MODELS = ['opus', 'sonnet', 'haiku'];
-    if (!model || !VALID_MODELS.includes(model)) {
-      res.status(400).json({ error: `Invalid model. Valid: ${VALID_MODELS.join(', ')}` });
+    // Partners (non-admin) are restricted to sonnet — opus is reserved for admin/dev-server
+    const userRole = (req as any).user?.role;
+    const isAdmin = !isAuthEnabled() || userRole === 'admin';
+    const allowedModels = isAdmin ? VALID_MODELS : ['sonnet', 'haiku'];
+    if (!model || !allowedModels.includes(model)) {
+      res.status(400).json({ error: `Invalid model. Valid: ${allowedModels.join(', ')}` });
       return;
     }
-    const previousModel = convMeta.getModel(sessionId) || 'opus';
+    const previousModel = convMeta.getModel(sessionId) || (isAdmin ? 'opus' : 'sonnet');
     convMeta.saveModel(sessionId, model);
     broadcast({ type: 'conv-model-changed', sessionId, model, previousModel });
     console.log(`[Model] ${sessionId.slice(0, 8)}: ${previousModel} -> ${model}`);
@@ -1828,7 +1870,14 @@ router.post('/start', async (req, res) => {
   try {
   let { accountId, workDir, subject, message, model, parentSessionId } = req.body;
   const VALID_MODELS = ['opus', 'sonnet', 'haiku'];
-  const resolvedModel = (model && VALID_MODELS.includes(model)) ? model : 'opus';
+  // Partners (non-admin) are restricted to sonnet — opus is reserved for admin/dev-server
+  // Dev-server has no auth (isAuthEnabled() = false) — treat as admin so opus remains default
+  const userRole = (req as any).user?.role;
+  const isAdmin = !isAuthEnabled() || userRole === 'admin';
+  const partnerModels = ['sonnet', 'haiku'];
+  const allowedModels = isAdmin ? VALID_MODELS : partnerModels;
+  const defaultModel = isAdmin ? 'opus' : 'sonnet';
+  const resolvedModel = (model && allowedModels.includes(model)) ? model : defaultModel;
   if (!message) {
     res.status(400).json({ error: 'message required' });
     return;
@@ -1876,9 +1925,18 @@ router.post('/start', async (req, res) => {
     return;
   }
 
-  // Enrich first message with team context (only for new conversations)
-  const ctx = buildSessionContext(resolvedWorkDir);
-  const enrichedMessage = ctx ? `${ctx}\n\n---\n\n${message}` : message;
+  // Enrich first message with team context (only for admin — partners get user identity instead)
+  let enrichedMessage = message;
+  if (isAdmin) {
+    const ctx = buildSessionContext(resolvedWorkDir);
+    enrichedMessage = ctx ? `${ctx}\n\n---\n\n${message}` : message;
+  } else {
+    // Inject partner identity so Claude knows who it's talking to
+    const userName = (req as any).user?.name;
+    if (userName) {
+      enrichedMessage = `[Partner: ${userName}]\n\n${message}`;
+    }
+  }
 
   const result = await claudeCli.startConversation(accountId, enrichedMessage, resolvedWorkDir, undefined, resolvedModel);
   if (!result.ok) {
@@ -1894,6 +1952,9 @@ router.post('/start', async (req, res) => {
   convMeta.saveAssignment(sessionId, accountId);
   convMeta.saveWorkDir(sessionId, resolvedWorkDir);
   convMeta.saveModel(sessionId, resolvedModel);
+  // Save userId for partner isolation (non-admin users only see their own conversations)
+  const startUserId = (req as any).user?.sub || (req as any).user?.id;
+  if (startUserId) convMeta.saveUser(sessionId, startUserId);
   convMeta.setLastPrompt(sessionId);
   // Mark as sub-session if parentSessionId is explicitly provided OR subject starts with [Sub]
   const hasExplicitParent = typeof parentSessionId === 'string' && parentSessionId.trim().length > 0;
