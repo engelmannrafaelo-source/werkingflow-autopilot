@@ -17,8 +17,10 @@ export default function OverviewTab() {
   const [data, setData] = useState<OverviewData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [refreshingApps, setRefreshingApps] = useState<Set<string>>(new Set());
 
   const retryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const archRefreshDone = useRef(false);
 
   const fetchData = useCallback(async () => {
     if ((window as any).__cuiServerAlive === false) return;
@@ -38,8 +40,35 @@ export default function OverviewTab() {
     }
   }, []);
 
+  // Auto-refresh stale arch-test results (once per mount, fire-and-forget)
+  const triggerArchRefreshIfStale = useCallback(async () => {
+    if (archRefreshDone.current) return;
+    archRefreshDone.current = true;
+    try {
+      const res = await resilientFetch('/api/qa/arch-test/freshness');
+      if (!res.ok) return;
+      const { apps } = await res.json() as { apps: Record<string, { stale: boolean }> };
+      const staleApps = Object.entries(apps)
+        .filter(([, v]) => v.stale)
+        .map(([appId]) => appId);
+      if (staleApps.length === 0) return;
+      setRefreshingApps(new Set(staleApps));
+      await Promise.all(staleApps.map(appId =>
+        resilientFetch(`/api/qa/arch-test/${appId}/refresh`, { method: 'POST' }).catch(() => null)
+      ));
+      // Re-fetch overview after a delay to pick up fresh results
+      setTimeout(() => {
+        fetchData();
+        setRefreshingApps(new Set());
+      }, 90000); // arch-test takes ~60-90s
+    } catch {
+      // Non-critical — silently ignore
+    }
+  }, [fetchData]);
+
   useEffect(() => {
     fetchData();
+    triggerArchRefreshIfStale();
     const interval = setInterval(fetchData, 30000);
     const onReconnect = () => fetchData();
     window.addEventListener('cui-reconnected', onReconnect);
@@ -48,7 +77,7 @@ export default function OverviewTab() {
       if (retryTimer.current) clearTimeout(retryTimer.current);
       window.removeEventListener('cui-reconnected', onReconnect);
     };
-  }, [fetchData]);
+  }, [fetchData, triggerArchRefreshIfStale]);
 
   if (loading) {
     return (
@@ -87,6 +116,20 @@ export default function OverviewTab() {
 
   return (
     <div style={{ padding: 16, overflow: 'auto' }}>
+      {/* Arch-test auto-refresh indicator */}
+      {refreshingApps.size > 0 && (
+        <div style={{
+          marginBottom: 12,
+          padding: '6px 12px',
+          background: 'var(--tn-bg-secondary)',
+          border: '1px solid var(--tn-border)',
+          borderRadius: 6,
+          fontSize: 12,
+          color: 'var(--tn-text-muted)',
+        }}>
+          Arch-checks werden aktualisiert: {Array.from(refreshingApps).join(', ')} — Ergebnisse in ~90s verfügbar
+        </div>
+      )}
       {/* KPI Cards */}
       <div style={{
         display: 'grid',

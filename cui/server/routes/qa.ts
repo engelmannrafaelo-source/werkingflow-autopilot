@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { join } from 'path';
 import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
-import { execSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
 
 const router = Router();
 
@@ -2069,5 +2069,69 @@ function fmtBytesServer(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
+
+// GET /api/qa/arch-test/freshness — Age of arch-test-results per app (minutes)
+router.get('/api/qa/arch-test/freshness', (_req, res) => {
+  const result: Record<string, { age_minutes: number | null; timestamp: string | null; stale: boolean }> = {};
+  const STALE_THRESHOLD_MINUTES = 60;
+
+  for (const appId of APP_IDS) {
+    const file = join(ARCH_TEST_RESULTS_DIR, `${appId}.json`);
+    if (!existsSync(file)) {
+      result[appId] = { age_minutes: null, timestamp: null, stale: true };
+      continue;
+    }
+    try {
+      const data = readJSON(file);
+      const ts = data?.timestamp ? new Date(data.timestamp) : null;
+      const age_minutes = ts ? Math.floor((Date.now() - ts.getTime()) / 60000) : null;
+      result[appId] = {
+        age_minutes,
+        timestamp: ts?.toISOString() ?? null,
+        stale: age_minutes === null || age_minutes > STALE_THRESHOLD_MINUTES,
+      };
+    } catch {
+      result[appId] = { age_minutes: null, timestamp: null, stale: true };
+    }
+  }
+
+  res.json({ apps: result, stale_threshold_minutes: STALE_THRESHOLD_MINUTES });
+});
+
+// Track in-flight arch-test runs to avoid duplicate spawns
+const archTestRunning = new Set<string>();
+
+// POST /api/qa/arch-test/:appId/refresh — Spawn arch-test.py in background
+router.post('/api/qa/arch-test/:appId/refresh', (req, res) => {
+  const { appId } = req.params;
+
+  if (!VALID_APP_IDS.has(appId)) {
+    return res.status(400).json({ error: `Unknown app: ${appId}` });
+  }
+
+  if (archTestRunning.has(appId)) {
+    return res.json({ queued: false, reason: 'already_running' });
+  }
+
+  const archTestScript = join(UNIFIED_TESTER_ROOT, 'arch-test.py');
+  if (!existsSync(archTestScript)) {
+    return res.status(500).json({ error: 'arch-test.py not found' });
+  }
+
+  archTestRunning.add(appId);
+
+  const child = spawn(
+    'python3',
+    [archTestScript, '--app', appId, '--tier', '2'],
+    { cwd: UNIFIED_TESTER_ROOT, detached: true, stdio: 'ignore' }
+  );
+  child.unref();
+
+  child.on('close', () => archTestRunning.delete(appId));
+  child.on('error', () => archTestRunning.delete(appId));
+
+  console.log(`[QA] arch-test spawned for ${appId} (pid ${child.pid})`);
+  res.json({ queued: true, app: appId, pid: child.pid });
+});
 
 export default router;
