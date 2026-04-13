@@ -822,30 +822,15 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           } catch (err) { console.warn('[LayoutManager] panel-remove doAction failed:', err); }
         }
         if ((msg.type === 'control:conversation-finished' || msg.type === 'control:conversation-deleted') && m) {
-          const closedIds = new Set<string>();
-          // 1) Close panels the server knows about
+          // Only close panels the server explicitly lists — no aggressive search by sessionId
+          // (aggressive deletion caused panels to disappear on any auto-finish event)
           const myPanels = ((msg.panelsToClose || []) as Array<{ panelId: string; projectId: string }>)
             .filter(p => p.projectId === projectId);
+          let closed = 0;
           for (const p of myPanels) {
-            try { m.doAction(Actions.deleteTab(p.panelId)); closedIds.add(p.panelId); } catch (err) { console.warn('[LayoutManager] deleteTab failed for panel', p.panelId, ':', err); }
+            try { m.doAction(Actions.deleteTab(p.panelId)); closed++; } catch (err) { console.warn('[LayoutManager] deleteTab failed for panel', p.panelId, ':', err); }
           }
-          // 2) Also find any CUI tabs in this layout that reference the finished sessionId
-          //    (catches cases where visibilityRegistry was stale or panelsToClose was empty)
-          if (msg.sessionId) {
-            m.visitNodes((node) => {
-              if (node.getType() === 'tab' && !closedIds.has(node.getId())) {
-                const tab = node as TabNode;
-                const comp = tab.getComponent() ?? '';
-                if (comp.startsWith('cui')) {
-                  const cfg = tab.getConfig() ?? {};
-                  if (cfg.initialSessionId === msg.sessionId) {
-                    try { m.doAction(Actions.deleteTab(tab.getId())); closedIds.add(tab.getId()); } catch { /* already removed */ }
-                  }
-                }
-              }
-            });
-          }
-          if (closedIds.size > 0) {
+          if (closed > 0) {
             reportPanels();
             saveLayoutRef.current(m);
           }
