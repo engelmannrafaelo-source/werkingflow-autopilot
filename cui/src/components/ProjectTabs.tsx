@@ -281,6 +281,9 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
   const [pendingCount, setPendingCount] = useState(0);
   const [allLive, setAllLive] = useState(false);
   const [panelHealth, setPanelHealth] = useState<{ running: number; total: number; missing: string[] } | null>(null);
+  const [showSubSessions, setShowSubSessions] = useState<boolean>(() => {
+    try { return localStorage.getItem('cui-show-sub-sessions') === 'true'; } catch { return false; }
+  });
   const { user, authEnabled, logout, canAccessWorkspace } = useAuth();
 
   // Listen for update-available notifications via WebSocket (forwarded by App.tsx)
@@ -442,7 +445,7 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
         }}
       >
         <img src="/werking-logo.png" alt="W" style={{ width: 22, height: 22, borderRadius: 4, marginRight: 4 }} />
-        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--tn-blue)' }}>WerkING Lab</span>
+        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--tn-blue)' }}>WerkING Partner</span>
         <span
           style={{
             fontSize: 8,
@@ -531,7 +534,7 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
           whiteSpace: 'nowrap',
         }}
       >
-        WerkING Lab
+        WerkING Partner
       </span>
       <span
         title={CUI_MODE === 'local'
@@ -910,6 +913,30 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
         } as React.CSSProperties}
       >
         Layout{missingSessions > 0 ? ` (${missingSessions})` : ''}
+      </button>
+
+      <button
+        onClick={() => {
+          const next = !showSubSessions;
+          setShowSubSessions(next);
+          try { localStorage.setItem('cui-show-sub-sessions', String(next)); } catch {}
+          // Trigger immediate layout sync in active LayoutManager
+          window.dispatchEvent(new CustomEvent('cui-auto-layout', { detail: { projectId: activeId } }));
+        }}
+        title={showSubSessions ? 'Sub-Sessions ausblenden' : 'Sub-Sessions einblenden'}
+        style={{
+          background: showSubSessions ? 'rgba(122,162,247,0.15)' : 'none',
+          border: `1px solid ${showSubSessions ? '#7aa2f7' : 'var(--tn-border)'}`,
+          color: showSubSessions ? '#7aa2f7' : 'var(--tn-text-muted)',
+          padding: '2px 6px',
+          fontSize: 9,
+          fontWeight: 600,
+          cursor: 'pointer',
+          borderRadius: 3,
+          whiteSpace: 'nowrap',
+        } as React.CSSProperties}
+      >
+        Sub
       </button>
 
       {/* Spacer */}

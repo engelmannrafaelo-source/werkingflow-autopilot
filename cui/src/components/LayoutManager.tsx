@@ -1667,24 +1667,6 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         display: 'flex', gap: 4,
       }}>
         <button
-          onClick={() => {
-            const next = !showSubSessions;
-            setShowSubSessions(next);
-            try { localStorage.setItem('cui-show-sub-sessions', String(next)); } catch {}
-          }}
-          title={showSubSessions ? 'Sub-Sessions ausblenden' : 'Sub-Sessions einblenden'}
-          style={{
-            background: showSubSessions ? 'var(--tn-accent, #7aa2f7)' : 'var(--tn-bg-dark)',
-            border: '1px solid var(--tn-border)',
-            color: showSubSessions ? '#fff' : 'var(--tn-text-muted)', cursor: 'pointer', fontSize: 11,
-            padding: '3px 7px', borderRadius: 4, opacity: 0.7,
-          }}
-          onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
-          onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.7'; }}
-        >
-          ⌥
-        </button>
-        <button
           onClick={() => setShowBuilder(true)}
           title="Layout Builder"
           style={{
