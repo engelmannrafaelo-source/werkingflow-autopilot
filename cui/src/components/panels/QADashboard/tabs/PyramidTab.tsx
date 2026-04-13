@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { validateApiResponse } from '../../../../lib/validateApiResponse';
+import { resilientFetch } from '../../../../utils/resilientFetch';
+import type { JourneyData, JourneyStep } from '../types';
 
 const APP_IDS = ['werking-report', 'engelmann', 'werking-energy', 'werking-safety', 'werking-noise', 'platform', 'acro-community'];
 const APP_NAMES: Record<string, string> = {
@@ -164,7 +166,7 @@ function TestDetailSidebar({ test, onClose }: {
   test: PyramidTest;
   onClose: () => void;
 }) {
-  const [activePane, setActivePane] = useState<'review' | 'scenario'>('review');
+  const [activePane, setActivePane] = useState<'review' | 'scenario' | 'journey'>('review');
   const statusLabel = (test.score ?? 0) >= 8 ? 'PASS' : (test.score ?? 0) >= 5 ? 'PARTIAL' : (test.score ?? 0) > 0 ? 'FAIL' : 'PENDING';
   const color = scoreColor(test.score ?? 0);
 
@@ -217,7 +219,7 @@ function TestDetailSidebar({ test, onClose }: {
         display: 'flex', borderBottom: '1px solid var(--tn-border, #333)',
         padding: '0 12px', gap: 0,
       }}>
-        {(['review', 'scenario'] as const).map(pane => (
+        {(['review', 'scenario', 'journey'] as const).map(pane => (
           <button
             key={pane}
             onClick={() => setActivePane(pane)}
@@ -228,7 +230,7 @@ function TestDetailSidebar({ test, onClose }: {
               textTransform: 'uppercase', letterSpacing: 0.5,
             }}
           >
-            {pane === 'review' ? 'Review' : 'Scenario'}
+            {pane === 'review' ? 'Review' : pane === 'scenario' ? 'Scenario' : 'Journey'}
           </button>
         ))}
       </div>
@@ -308,6 +310,8 @@ function TestDetailSidebar({ test, onClose }: {
               </pre>
             </Section>
           </>
+        ) : (
+          <JourneyPane scenarioId={test.id} persona={test.id.split('.').pop() ?? test.id} />
         )}
       </div>
     </div>
@@ -328,6 +332,161 @@ const preStyle: React.CSSProperties = {
   margin: 0, whiteSpace: 'pre-wrap', fontSize: 10.5, color: 'var(--tn-text)',
   opacity: 0.9, fontFamily: 'inherit', lineHeight: 1.5,
 };
+
+// --- Journey Pane (inline in sidebar) ---
+
+function JourneyPane({ scenarioId, persona }: { scenarioId: string; persona: string }) {
+  const [journeyData, setJourneyData] = useState<JourneyData | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    resilientFetch(`/api/qa/journey?scenario=${encodeURIComponent(persona)}&latest=true`)
+      .then(res => res.ok ? res.json() : null)
+      .then(data => { if (data) setJourneyData(data); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [persona]);
+
+  if (loading) {
+    return <div style={{ padding: 16, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 10 }}>Loading journey...</div>;
+  }
+
+  const journey = journeyData?.journeys?.[0];
+  if (!journey || journey.steps.length === 0) {
+    return (
+      <div style={{ padding: 16, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 10 }}>
+        <div style={{ marginBottom: 4 }}>No journey data for this scenario.</div>
+        <div style={{ fontSize: 9 }}>Journey logs are created during Playwright tests (Layer 2+).</div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {/* Journey meta */}
+      <div style={{ marginBottom: 10, fontSize: 9, color: 'var(--tn-text-muted)', display: 'flex', gap: 12 }}>
+        <span>{journey.totalSteps} steps</span>
+        <span>{Math.round(journey.duration)}s</span>
+        <span>{new Date(journey.startedAt).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+      </div>
+
+      {/* Timeline */}
+      <div style={{ position: 'relative', paddingLeft: 18 }}>
+        {/* Vertical line */}
+        <div style={{
+          position: 'absolute', left: 5, top: 0, bottom: 0, width: 2,
+          background: 'var(--tn-border, #333)',
+        }} />
+
+        {journey.steps.map((step, idx) => (
+          <JourneyStepCard key={step.nr} step={step} isLast={idx === journey.steps.length - 1} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function JourneyStepCard({ step, isLast }: { step: JourneyStep; isLast: boolean }) {
+  const [imgSrc, setImgSrc] = useState<string | null>(null);
+  const [imgLoading, setImgLoading] = useState(false);
+
+  useEffect(() => {
+    if (!step.screenshotExists) return;
+    setImgLoading(true);
+    resilientFetch(`/api/qa/file-preview?path=${encodeURIComponent(step.screenshotPath)}`)
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data?.type === 'image' && data.base64) {
+          setImgSrc(`data:${data.mimeType ?? 'image/png'};base64,${data.base64}`);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setImgLoading(false));
+  }, [step.screenshotPath, step.screenshotExists]);
+
+  const actionColor = step.action === 'navigate' ? '#7aa2f7'
+    : step.action === 'click' ? '#9ece6a'
+    : '#565f89';
+
+  const time = step.timestamp ? new Date(step.timestamp).toLocaleTimeString('de-DE', {
+    hour: '2-digit', minute: '2-digit', second: '2-digit'
+  }) : '';
+
+  return (
+    <div style={{ position: 'relative', marginBottom: isLast ? 0 : 12 }}>
+      {/* Dot */}
+      <div style={{
+        position: 'absolute', left: -18, top: 2, width: 12, height: 12,
+        borderRadius: '50%', background: actionColor,
+        border: '2px solid var(--tn-bg-surface, #1a1a2e)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: 6, color: '#fff', fontWeight: 700, zIndex: 1,
+      }}>
+        {step.nr}
+      </div>
+
+      {/* Card */}
+      <div style={{
+        background: 'var(--tn-bg-hover, #252540)',
+        border: '1px solid var(--tn-border, #333)',
+        borderRadius: 6, overflow: 'hidden',
+      }}>
+        {/* Header */}
+        <div style={{ padding: '5px 8px', display: 'flex', alignItems: 'center', gap: 6, borderBottom: '1px solid var(--tn-border, #333)' }}>
+          <span style={{
+            fontSize: 7, fontWeight: 700, padding: '1px 4px', borderRadius: 2,
+            background: actionColor + '33', color: actionColor,
+            textTransform: 'uppercase', letterSpacing: 0.3,
+          }}>
+            {step.action}
+          </span>
+          <span style={{
+            flex: 1, fontSize: 9, fontFamily: 'monospace', color: 'var(--tn-text)',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>
+            {step.command}
+          </span>
+          <span style={{ fontSize: 8, color: 'var(--tn-text-muted)', whiteSpace: 'nowrap' }}>{time}</span>
+        </div>
+
+        {/* URL */}
+        {step.url && (
+          <div style={{
+            padding: '2px 8px', fontSize: 8, fontFamily: 'monospace',
+            color: '#7aa2f7', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>
+            {step.url}
+          </div>
+        )}
+
+        {/* Screenshot */}
+        {step.screenshotExists && (
+          <div style={{ padding: 4 }}>
+            {imgLoading && (
+              <div style={{ padding: 8, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 8 }}>Loading...</div>
+            )}
+            {imgSrc && (
+              <img src={imgSrc} alt={`Step ${step.nr}`} style={{
+                width: '100%', borderRadius: 3, border: '1px solid var(--tn-border, #333)',
+              }} />
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Arrow */}
+      {!isLast && (
+        <div style={{
+          position: 'absolute', left: -15, bottom: -10,
+          fontSize: 8, color: 'var(--tn-text-muted)',
+        }}>
+          ▼
+        </div>
+      )}
+    </div>
+  );
+}
 
 function CoverageKPIHeader({ coverage, appId, onRefreshed }: {
   coverage: CoverageSummary;

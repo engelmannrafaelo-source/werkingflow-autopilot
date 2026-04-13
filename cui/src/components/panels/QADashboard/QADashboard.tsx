@@ -8,7 +8,6 @@ import ScenariosTab from './tabs/ScenariosTab';
 import CoverageTab from './tabs/CoverageTab';
 import DependenciesTab from './tabs/DependenciesTab';
 import ProductTab from './tabs/ProductTab';
-import JourneyTab from './tabs/JourneyTab';
 import { resilientFetch } from '../../../utils/resilientFetch';
 
 interface Tab {
@@ -87,12 +86,6 @@ export default function QADashboard() {
       label: 'Product',
       component: <ErrorBoundary componentName="ProductTab"><ProductTab /></ErrorBoundary>,
       group: 'quality'
-    },
-    {
-      key: 'journey',
-      label: 'Journey',
-      component: <ErrorBoundary componentName="JourneyTab"><JourneyTab /></ErrorBoundary>,
-      group: 'monitoring'
     },
     {
       key: 'dependencies',
