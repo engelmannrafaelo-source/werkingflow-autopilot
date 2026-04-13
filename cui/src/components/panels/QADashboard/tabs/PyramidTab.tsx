@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
 
 const APP_IDS = ['werking-report', 'engelmann', 'werking-energy', 'werking-safety', 'werking-noise', 'platform', 'acro-community'];
 const APP_NAMES: Record<string, string> = {
@@ -16,9 +17,9 @@ const APP_NAMES: Record<string, string> = {
 interface PyramidTest {
   id: string;
   status: string; // PASS, FAIL, PARTIAL, PENDING, NOT_RUN
-  score: number | null;
-  lastRun: string | null;
-  reportPath: string | null;
+  score?: number | null;
+  lastRun?: string | null;
+  reportPath?: string | null;
   detail?: string; // e.g. "57/60 routes OK" or "343 endpoint snapshots"
   description?: string | null;
   stepsPreview?: string | null;
@@ -49,14 +50,14 @@ interface CoverageSummary {
   api: { pct: number; total: number; covered: number };
   ui: { pct: number; total: number; covered: number };
   combined: number;
-  timestamp: string | null;
+  timestamp?: string | null;
 }
 
 interface PyramidData {
   app: string;
   layers: PyramidLayer[];
-  timestamp: string;
-  coverage: CoverageSummary | null;
+  timestamp?: string;
+  coverage?: CoverageSummary | null;
 }
 
 // Staleness types
@@ -73,12 +74,12 @@ interface StaleScenario {
 }
 
 interface StalenessData {
-  stale_scenarios: StaleScenario[];
-  per_layer: Record<number, StaleScenario[]>;
-  summary: { total_stale: number; total_scenarios: number; stale_by_layer: Record<number, number> };
-  changed_files_count: number;
-  head_commit: string | null;
-  timestamp: string;
+  stale_scenarios?: StaleScenario[];
+  per_layer?: Record<number, StaleScenario[]>;
+  summary?: { total_stale: number; total_scenarios: number; stale_by_layer: Record<number, number> };
+  changed_files_count?: number;
+  head_commit?: string | null;
+  timestamp?: string;
 }
 
 const coverageColor = (pct: number) => {
@@ -275,13 +276,13 @@ function TestDetailSidebar({ test, onClose }: {
             {test.scenarioJson?.dependencies?.requires_scenarios?.length > 0 && (
               <Section title="Dependencies">
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                  {test.scenarioJson.dependencies.requires_scenarios.map((dep: string, i: number) => (
+                  {test.scenarioJson.dependencies.requires_scenarios.map((dep: string | { id: string }, i: number) => (
                     <div key={i} style={{
                       fontSize: 10, padding: '2px 6px', borderRadius: 3,
                       background: 'var(--tn-bg-hover, #252540)', color: 'var(--tn-text-muted)',
                       fontFamily: 'monospace',
                     }}>
-                      {dep}
+                      {typeof dep === 'string' ? dep : dep.id}
                     </div>
                   ))}
                 </div>
@@ -481,8 +482,8 @@ function StalenessKPIHeader({ staleness, appId, onRefreshed, onRetestLayer }: {
   onRetestLayer: (layer: number) => void;
 }) {
   const [refreshing, setRefreshing] = useState(false);
-  const totalStale = staleness.summary.total_stale;
-  const totalScenarios = staleness.summary.total_scenarios;
+  const totalStale = staleness.summary?.total_stale ?? 0;
+  const totalScenarios = staleness.summary?.total_scenarios ?? 0;
   const freshPct = totalScenarios > 0 ? ((totalScenarios - totalStale) / totalScenarios) * 100 : 100;
   const freshColor = freshPct >= 80 ? 'var(--tn-green)' : freshPct >= 50 ? 'var(--tn-orange)' : 'var(--tn-red)';
 
@@ -542,11 +543,11 @@ function StalenessKPIHeader({ staleness, appId, onRefreshed, onRetestLayer }: {
           </span>
         </div>
         <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginTop: 2 }}>
-          {staleness.changed_files_count} files changed
+          {staleness.changed_files_count ?? 0} files changed
         </div>
-        {staleness.head_commit && (
+        {(staleness.head_commit ?? '') && (
           <div style={{ fontSize: 8, color: 'var(--tn-text-muted)', marginTop: 1, fontFamily: 'monospace' }}>
-            HEAD: {staleness.head_commit}
+            HEAD: {staleness.head_commit ?? ''}
           </div>
         )}
       </div>
@@ -588,18 +589,20 @@ function TestRow({ test, staleIds, staleMap, retesting, onLoadReport, onRetest, 
   sidebarTestId: string | null;
   isLlm?: boolean;
 }) {
-  const isStale = staleIds.has(test.id);
-  const staleInfo = staleMap.get(test.id);
-  const isThisRetesting = retesting === test.id;
-  const notRun = test.status === 'PENDING' || test.status === 'NOT_RUN';
+  const testId = test.id;
+  const testStatus = test.status;
+  const isStale = staleIds.has(testId);
+  const staleInfo = staleMap.get(testId);
+  const isThisRetesting = retesting === testId;
+  const notRun = testStatus === 'PENDING' || testStatus === 'NOT_RUN';
 
-  const isPending = test.status === 'PENDING' || test.status === 'NOT_RUN';
-  const isSidebarSelected = sidebarTestId === test.id;
+  const isPending = testStatus === 'PENDING' || testStatus === 'NOT_RUN';
+  const isSidebarSelected = sidebarTestId === testId;
 
   return (
     <div
       onClick={() => {
-        if (test.reportPath) onLoadReport(test.reportPath, test.id);
+        if (test.reportPath) onLoadReport(test.reportPath, testId);
         onSelectTest(isSidebarSelected ? null : test);
       }}
       style={{
@@ -616,12 +619,12 @@ function TestRow({ test, staleIds, staleMap, retesting, onLoadReport, onRetest, 
       {/* Status dot */}
       <span style={{
         width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-        background: notRun ? 'rgba(147,130,255,0.3)' : statusColor(test.status),
+        background: notRun ? 'rgba(147,130,255,0.3)' : statusColor(testStatus),
         boxShadow: isStale ? '0 0 0 2px #ffaa00' : 'none',
       }} />
       {/* Test ID + detail */}
       <span style={{ flex: 1, fontFamily: 'monospace', color: notRun ? 'var(--tn-text-muted)' : 'var(--tn-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {test.id}
+        {testId}
         {test.detail && (
           <span style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginLeft: 6, fontFamily: 'inherit' }}>
             ({test.detail})
@@ -654,7 +657,7 @@ function TestRow({ test, staleIds, staleMap, retesting, onLoadReport, onRetest, 
       {/* Run button for PENDING tests */}
       {isPending && !isStale && (
         <button
-          onClick={(e) => { e.stopPropagation(); onRetest(test.id); }}
+          onClick={(e) => { e.stopPropagation(); onRetest(testId); }}
           disabled={isThisRetesting}
           title="Run this test"
           style={{
@@ -671,7 +674,7 @@ function TestRow({ test, staleIds, staleMap, retesting, onLoadReport, onRetest, 
       {/* Re-test button for STALE tests */}
       {isStale && (
         <button
-          onClick={(e) => { e.stopPropagation(); onRetest(test.id); }}
+          onClick={(e) => { e.stopPropagation(); onRetest(testId); }}
           disabled={isThisRetesting}
           title="Re-run this test"
           style={{
@@ -741,7 +744,14 @@ export default function PyramidTab() {
 
     // Fetch pyramid data and staleness data in parallel
     const pyramidFetch = fetch(`/api/qa/pyramid/${selectedApp}`, { signal: AbortSignal.timeout(20000) })
-      .then(r => r.ok ? r.json() : null)
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then(raw => validateApiResponse<PyramidData>(raw, `/api/qa/pyramid/${selectedApp}`, {
+        app: 'string',
+        layers: 'array',
+      }))
       .catch(() => null);
 
     const stalenessFetch = fetch(`/api/qa/staleness/${selectedApp}`, { signal: AbortSignal.timeout(20000) })
@@ -1081,12 +1091,14 @@ export default function PyramidTab() {
 
                           {/* Layer 0.5 (LLM): Render with tooltip cards showing what each test does */}
                           {isLlmLayer ? layer.tests.map(test => {
-                            const notRun = test.status === 'PENDING' || test.status === 'NOT_RUN';
-                            const isSkipped = test.status === 'SKIP';
+                            const tId = test.id;
+                            const tStatus = test.status;
+                            const notRun = tStatus === 'PENDING' || tStatus === 'NOT_RUN';
+                            const isSkipped = tStatus === 'SKIP';
                             const isInactive = notRun || isSkipped;
                             return (
                               <div
-                                key={test.id}
+                                key={tId}
                                 style={{
                                   padding: '8px 12px',
                                   borderBottom: '1px solid var(--tn-border)',
@@ -1094,7 +1106,7 @@ export default function PyramidTab() {
                                   cursor: test.reportPath ? 'pointer' : 'default',
                                   opacity: isSkipped ? 0.5 : 1,
                                 }}
-                                onClick={() => test.reportPath && loadReport(test.reportPath, test.id)}
+                                onClick={() => test.reportPath && loadReport(test.reportPath, tId)}
                                 onMouseEnter={(e) => { e.currentTarget.style.background = isSkipped ? 'rgba(255,255,255,0.04)' : 'rgba(147,130,255,0.08)'; }}
                                 onMouseLeave={(e) => { e.currentTarget.style.background = isSkipped ? 'rgba(255,255,255,0.01)' : 'rgba(147,130,255,0.03)'; }}
                               >
@@ -1102,7 +1114,7 @@ export default function PyramidTab() {
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                                   <span style={{
                                     width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                                    background: isSkipped ? 'rgba(255,255,255,0.15)' : notRun ? 'rgba(147,130,255,0.3)' : statusColor(test.status),
+                                    background: isSkipped ? 'rgba(255,255,255,0.15)' : notRun ? 'rgba(147,130,255,0.3)' : statusColor(tStatus),
                                   }} />
                                   <span style={{
                                     flex: 1, fontFamily: 'monospace', fontSize: 11,
@@ -1110,7 +1122,7 @@ export default function PyramidTab() {
                                     fontWeight: 600,
                                     textDecoration: isSkipped ? 'line-through' : 'none',
                                   }}>
-                                    {test.id.split('.').pop()?.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) || test.id}
+                                    {tId.split('.').pop()?.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) || tId}
                                   </span>
                                   {isSkipped && (
                                     <span style={{
