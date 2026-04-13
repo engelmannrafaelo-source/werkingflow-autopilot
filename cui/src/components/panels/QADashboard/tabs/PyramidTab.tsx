@@ -298,7 +298,7 @@ function TestDetailSidebar({ test, onClose }: {
               {test.reportPath && <div style={{ wordBreak: 'break-all', marginTop: 2 }}>{test.reportPath.split('/').pop()}</div>}
             </div>
           </>
-        ) : (
+        ) : activePane === 'scenario' ? (
           <>
             {/* Scenario JSON pane */}
             <Section title="Scenario Definition">
