@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { ACCOUNTS } from '../../types';
+import { useAuth } from '../../contexts/AuthContext';
 
 const API = '/api';
 
@@ -191,7 +192,10 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
   });
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
-  const [model, setModel] = useState<'sonnet' | 'opus'>('opus');
+  const { user: authUser, authEnabled } = useAuth();
+  // Auth disabled = dev-server = admin (opus default). Auth enabled + no admin role = partner (sonnet).
+  const isAdmin = !authEnabled || authUser?.role === 'admin';
+  const [model, setModel] = useState<'sonnet' | 'opus'>(isAdmin ? 'opus' : 'sonnet');
   const [showCompleted, setShowCompleted] = useState(false);
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState('');
@@ -478,7 +482,7 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
                 cursor: 'pointer', fontWeight: model === 'opus' ? 600 : 400,
               }}>
               <option value="sonnet">Sonnet</option>
-              <option value="opus">Opus</option>
+              {isAdmin && <option value="opus">Opus</option>}
             </select>
           </div>
           <div style={{ display: 'flex', gap: 6 }}>

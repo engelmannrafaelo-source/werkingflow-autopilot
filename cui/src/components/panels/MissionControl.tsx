@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { ACCOUNTS } from '../../types';
+import { useAuth } from '../../contexts/AuthContext';
+import { validateApiResponse } from '../../lib/validateApiResponse';
 
 const API = '/api';
 
@@ -10,20 +12,20 @@ type AttentionReason = 'plan' | 'question' | 'permission' | 'error' | 'done';
 interface Conversation {
   sessionId: string;
   accountId: string;
-  accountLabel: string;
-  accountColor: string;
-  proxyPort: number;
-  projectPath: string;
-  projectName: string;
-  summary: string;
-  customName: string;
   status: 'ongoing' | 'completed';
-  streamingId: string | null;
-  model: string;
+  accountLabel?: string;
+  accountColor?: string;
+  proxyPort?: number;
+  projectPath?: string;
+  projectName?: string;
+  summary?: string;
+  customName?: string;
+  streamingId?: string | null;
+  model?: string;
   assignedModel?: string;
-  messageCount: number;
-  updatedAt: string;
-  createdAt: string;
+  messageCount?: number;
+  updatedAt?: string;
+  createdAt?: string;
   lastPromptAt?: string;
   attentionState?: AttentionState;
   attentionReason?: AttentionReason;
@@ -56,12 +58,13 @@ interface Permission {
 }
 
 interface ConversationDetail {
+  sessionId: string;
   messages: Message[];
-  summary: string;
-  status: string;
-  projectPath: string;
-  permissions: Permission[];
-  totalMessages: number;
+  summary?: string;
+  status?: string;
+  projectPath?: string;
+  permissions?: Permission[];
+  totalMessages?: number;
 }
 
 interface CommanderMessage {
@@ -97,19 +100,20 @@ function truncate(text: string, max: number): string {
 function groupByProject(conversations: Conversation[]): ProjectGroup[] {
   const map = new Map<string, ProjectGroup>();
   for (const c of conversations) {
-    let group = map.get(c.projectName);
+    const projName = c.projectName ?? '';
+    let group = map.get(projName);
     if (!group) {
-      group = { name: c.projectName, conversations: [], activeCount: 0, workingCount: 0, attentionCount: 0, accounts: [], lastActivity: '' };
-      map.set(c.projectName, group);
+      group = { name: projName, conversations: [], activeCount: 0, workingCount: 0, attentionCount: 0, accounts: [], lastActivity: '' };
+      map.set(projName, group);
     }
     group.conversations.push(c);
     if (c.status === 'ongoing') group.activeCount++;
     if (c.streamingId || c.attentionState === 'working') group.workingCount++;
     if (c.attentionState === 'needs_attention') group.attentionCount++;
-    if (!group.accounts.find(a => a.id === c.accountId)) {
-      group.accounts.push({ id: c.accountId, label: c.accountLabel, color: c.accountColor });
+    if (!group.accounts.find(a => a.id === (c.accountId))) {
+      group.accounts.push({ id: c.accountId, label: c.accountLabel ?? '', color: c.accountColor ?? '' });
     }
-    if (!group.lastActivity || c.updatedAt > group.lastActivity) group.lastActivity = c.updatedAt;
+    if (!group.lastActivity || (c.updatedAt ?? '') > group.lastActivity) group.lastActivity = c.updatedAt ?? '';
   }
   return Array.from(map.values()).sort((a, b) => {
     // Attention first, then working, then active — stable tiebreaker by name
@@ -215,7 +219,7 @@ function SessionCard({ conv, isSelected, onClick, checked, onCheck, onActivate, 
 }) {
   const needsAttention = conv.attentionState === 'needs_attention';
   const isWorking = !!conv.streamingId || conv.attentionState === 'working';
-  const displayName = conv.customName || truncate(conv.summary.split('\n')[0], 60) || 'Neue Konversation';
+  const displayName = conv.customName || truncate((conv.summary ?? '').split('\n')[0], 60) || 'Neue Konversation';
 
   // Border color: attention > checked > selected > working > default
   const borderColor = needsAttention ? 'rgba(245,158,11,0.5)'
@@ -225,7 +229,7 @@ function SessionCard({ conv, isSelected, onClick, checked, onCheck, onActivate, 
     : 'var(--tn-border)';
 
   // Preview: summary lines that differ from title, plus metadata
-  const summaryText = conv.summary || '';
+  const summaryText = conv.summary ?? '';
   const summaryFirstLine = summaryText.split('\n')[0];
   // If summary first line matches the display name, skip it to avoid repetition
   const extraLines = displayName === truncate(summaryFirstLine, 60)
@@ -264,9 +268,9 @@ function SessionCard({ conv, isSelected, onClick, checked, onCheck, onActivate, 
             {displayName}
           </div>
           <div style={{ display: 'flex', gap: 8, fontSize: 10, color: 'var(--tn-text-muted)', marginTop: 2, alignItems: 'center' }}>
-            <span style={{ fontWeight: 600 }}>{conv.projectName}</span>
-            <span style={{ fontWeight: 700, color: conv.accountColor }}>{conv.accountLabel.slice(0, 3).toUpperCase()}</span>
-            <span style={{ color: 'var(--tn-text-subtle)' }}>{conv.messageCount} msgs</span>
+            <span style={{ fontWeight: 600 }}>{conv.projectName ?? ''}</span>
+            <span style={{ fontWeight: 700, color: conv.accountColor ?? '' }}>{(conv.accountLabel ?? '').slice(0, 3).toUpperCase()}</span>
+            <span style={{ color: 'var(--tn-text-subtle)' }}>{conv.messageCount ?? 0} msgs</span>
           </div>
         </div>
         {!panelLabel && onActivate && (
@@ -306,9 +310,9 @@ function SessionCard({ conv, isSelected, onClick, checked, onCheck, onActivate, 
               padding: '0px 5px', borderRadius: 3, flexShrink: 0, lineHeight: 1,
             }}>&#10005;</button>
         )}
-        <span title={conv.lastPromptAt ? `Letzter Prompt: ${new Date(conv.lastPromptAt).toLocaleString()}` : `Letzte Aktivität: ${new Date(conv.updatedAt).toLocaleString()}`}
+        <span title={conv.lastPromptAt ? `Letzter Prompt: ${new Date(conv.lastPromptAt).toLocaleString()}` : `Letzte Aktivität: ${new Date(conv.updatedAt ?? '').toLocaleString()}`}
           style={{ fontSize: 10, color: conv.lastPromptAt ? 'var(--tn-text-muted)' : 'var(--tn-text-subtle)', flexShrink: 0, fontWeight: 500 }}>
-          {conv.lastPromptAt ? timeAgo(conv.lastPromptAt) : <span style={{ opacity: 0.6 }}>{timeAgo(conv.updatedAt)}</span>}
+          {conv.lastPromptAt ? timeAgo(conv.lastPromptAt) : <span style={{ opacity: 0.6 }}>{timeAgo(conv.updatedAt ?? '')}</span>}
         </span>
       </div>
       {/* Row 2: Snippet preview */}
@@ -331,7 +335,7 @@ function SessionCard({ conv, isSelected, onClick, checked, onCheck, onActivate, 
               : conv.assignedModel === 'sonnet'
               ? <span>Sonnet</span>
               : conv.model ? conv.model.split('-').slice(0, 2).join('-') : ''
-            } &middot; {conv.status}
+            } &middot; {conv.status ?? 'unknown'}
           </div>
         </div>
       )}
@@ -361,7 +365,12 @@ function PreviewPanel({ conv, onSend, onStop, onNameChange, onPermission }: {
     setDetail(null);
     fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}?tail=100`, { signal: AbortSignal.timeout(20000) })
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-      .then(data => { setDetail(data); setLoading(false); })
+      .then(raw => {
+        const data = validateApiResponse<ConversationDetail>(raw, `/api/mission/conversation/${conv.sessionId}`, {
+          messages: 'array',
+        });
+        setDetail(data); setLoading(false);
+      })
       .catch((err) => { console.warn('[MissionControl] PreviewPanel fetch detail failed:', err); setLoading(false); });
   }, [conv.sessionId, conv.accountId]);
 
@@ -372,7 +381,12 @@ function PreviewPanel({ conv, onSend, onStop, onNameChange, onPermission }: {
     // Single refresh when attention state changes to show latest messages
     fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}?tail=100`, { signal: AbortSignal.timeout(20000) })
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-      .then(data => setDetail(data))
+      .then(raw => {
+        const data = validateApiResponse<ConversationDetail>(raw, `/api/mission/conversation/${conv.sessionId}`, {
+          messages: 'array',
+        });
+        setDetail(data);
+      })
       .catch((err) => { console.warn('[MissionControl] PreviewPanel attention-refresh failed:', err); });
   }, [conv.sessionId, conv.accountId, conv.status, conv.attentionState]);
 
@@ -380,7 +394,7 @@ function PreviewPanel({ conv, onSend, onStop, onNameChange, onPermission }: {
   useEffect(() => { if (editingName) { nameInputRef.current?.focus(); nameInputRef.current?.select(); } }, [editingName]);
 
   const handleSend = () => { const msg = inputValue.trim(); if (!msg) return; onSend(msg); setInputValue(''); };
-  const handleNameSave = () => { onNameChange(nameValue); setEditingName(false); };
+  const handleNameSave = () => { onNameChange(nameValue ?? ''); setEditingName(false); };
   const isStreaming = !!conv.streamingId;
 
   return (
@@ -392,26 +406,26 @@ function PreviewPanel({ conv, onSend, onStop, onNameChange, onPermission }: {
         display: 'flex', alignItems: 'center', gap: 8,
       }}>
         <StatusDot conv={conv} />
-        <span style={{ fontSize: 11, fontWeight: 700, color: conv.accountColor }}>{conv.accountLabel}</span>
-        <span style={{ fontSize: 10, color: 'var(--tn-text-subtle)' }}>{conv.projectName}</span>
+        <span style={{ fontSize: 11, fontWeight: 700, color: conv.accountColor ?? '' }}>{conv.accountLabel ?? ''}</span>
+        <span style={{ fontSize: 10, color: 'var(--tn-text-subtle)' }}>{conv.projectName ?? ''}</span>
 
         {editingName ? (
           <div style={{ flex: 1, display: 'flex', gap: 4 }}>
-            <input ref={nameInputRef} value={nameValue} onChange={e => setNameValue(e.target.value)}
+            <input ref={nameInputRef} value={nameValue ?? ''} onChange={e => setNameValue(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') handleNameSave(); if (e.key === 'Escape') setEditingName(false); }}
               style={{ flex: 1, padding: '3px 8px', fontSize: 12, background: 'var(--tn-bg)', color: 'var(--tn-text)', border: '1px solid var(--tn-blue)', borderRadius: 3 }}
               placeholder="Betreff..." />
             <button onClick={handleNameSave} style={{ padding: '3px 8px', fontSize: 10, background: 'var(--tn-blue)', border: 'none', color: '#fff', borderRadius: 3, cursor: 'pointer' }}>OK</button>
           </div>
         ) : (
-          <span onClick={() => { setNameValue(conv.customName); setEditingName(true); }}
+          <span onClick={() => { setNameValue(conv.customName ?? ''); setEditingName(true); }}
             style={{ flex: 1, fontSize: 12, fontWeight: 600, color: 'var(--tn-text)', cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
             title="Klick zum Bearbeiten">
-            {conv.customName || <span style={{ color: 'var(--tn-text-muted)', fontStyle: 'italic', fontWeight: 400, fontSize: 10 }}>+ Betreff</span>}
+            {(conv.customName ?? '') || <span style={{ color: 'var(--tn-text-muted)', fontStyle: 'italic', fontWeight: 400, fontSize: 10 }}>+ Betreff</span>}
           </span>
         )}
 
-        <span style={{ fontSize: 10, color: 'var(--tn-text-subtle)' }}>{detail ? `${detail.totalMessages} msgs` : ''}</span>
+        <span style={{ fontSize: 10, color: 'var(--tn-text-subtle)' }}>{detail ? `${detail.totalMessages ?? 0} msgs` : ''}</span>
         {isStreaming && (
           <button onClick={onStop} style={{ padding: '2px 8px', borderRadius: 3, fontSize: 9, cursor: 'pointer', background: '#EF4444', border: 'none', color: '#fff', fontWeight: 600 }}>Stop</button>
         )}
@@ -420,7 +434,7 @@ function PreviewPanel({ conv, onSend, onStop, onNameChange, onPermission }: {
       {/* Messages */}
       <div style={{ flex: 1, overflow: 'auto', padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 8, minHeight: 0 }}>
         {loading && <div style={{ color: 'var(--tn-text-muted)', fontSize: 13, textAlign: 'center', padding: 20 }}>Lade...</div>}
-        {detail?.messages.map((msg, i) => {
+        {(detail?.messages ?? []).map((msg, i) => {
           const text = extractText(msg.content);
           if (!text) return null;
           const isUser = msg.role === 'user';
@@ -444,12 +458,12 @@ function PreviewPanel({ conv, onSend, onStop, onNameChange, onPermission }: {
       </div>
 
       {/* Permissions */}
-      {detail?.permissions && detail.permissions.length > 0 && (
+      {(detail?.permissions ?? []).length > 0 && (
         <div style={{ padding: '8px 14px', borderTop: '1px solid var(--tn-border)', background: 'rgba(245,158,11,0.08)', flexShrink: 0 }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: '#F59E0B', marginBottom: 4 }}>Genehmigungen</div>
-          {detail.permissions.map(perm => (
-            <div key={perm.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-              <span style={{ fontSize: 12, color: 'var(--tn-text)', flex: 1 }}>{perm.toolName || perm.type}: {perm.title || perm.id.slice(0, 8)}</span>
+          {(detail?.permissions ?? []).map(perm => (
+            <div key={perm.id ?? ''} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+              <span style={{ fontSize: 12, color: 'var(--tn-text)', flex: 1 }}>{perm.toolName || perm.type}: {perm.title || (perm.id ?? '').slice(0, 8)}</span>
               <button onClick={() => onPermission(perm.id, 'approve')} style={{ padding: '3px 10px', fontSize: 11, borderRadius: 3, cursor: 'pointer', background: '#10B981', border: 'none', color: '#fff', fontWeight: 600 }}>OK</button>
               <button onClick={() => onPermission(perm.id, 'deny')} style={{ padding: '3px 10px', fontSize: 11, borderRadius: 3, cursor: 'pointer', background: '#EF4444', border: 'none', color: '#fff', fontWeight: 600 }}>X</button>
             </div>
@@ -597,7 +611,10 @@ function NewConversationDialog({ projects, onStart, onClose }: {
 }) {
   const [accountId, setAccountId] = useState('auto');
   const [projectId, setProjectId] = useState(projects[0]?.id || '');
-  const [model, setModel] = useState<'sonnet' | 'opus'>('opus');
+  const { user: authUser, authEnabled } = useAuth();
+  // Auth disabled = dev-server = admin (opus default). Auth enabled + no admin role = partner (sonnet).
+  const isAdmin = !authEnabled || authUser?.role === 'admin';
+  const [model, setModel] = useState<'sonnet' | 'opus'>(isAdmin ? 'opus' : 'sonnet');
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
   const subjectRef = useRef<HTMLInputElement>(null);
@@ -634,7 +651,7 @@ function NewConversationDialog({ projects, onStart, onClose }: {
         <label style={{ fontSize: 11, color: 'var(--tn-text-muted)', display: 'block', marginBottom: 4 }}>Modell</label>
         <select value={model} onChange={e => setModel(e.target.value as 'sonnet' | 'opus')} style={inputStyle}>
           <option value="sonnet">Sonnet (Standard)</option>
-          <option value="opus">Opus (Premium)</option>
+          {isAdmin && <option value="opus">Opus (Premium)</option>}
         </select>
         <label style={{ fontSize: 11, color: 'var(--tn-text-muted)', display: 'block', marginBottom: 4 }}>Betreff *</label>
         <input ref={subjectRef} value={subject} onChange={e => setSubject(e.target.value)} placeholder="z.B. API Bridge refactoring" style={inputStyle} />
@@ -707,7 +724,17 @@ export default function MissionControl({ projectId }: MissionControlProps) {
       fetch(`${API}/mission/conversations${qs}`, { signal: AbortSignal.timeout(10000) }).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); }),
       fetch(`${API}/mission/visibility`, { signal: AbortSignal.timeout(5000) }).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); }).catch((err) => { console.warn('[MissionControl] visibility fetch failed:', err); return { panels: [], visibleSessionIds: [] }; }),
     ]).then(([convData, visData]) => {
-      setConversations(convData.conversations || []);
+      const wrapper = validateApiResponse<{ conversations: Conversation[] }>(convData, '/api/mission/conversations', {
+        conversations: 'array',
+      });
+      const validatedConvs = wrapper.conversations.map((item: unknown, i: number) =>
+        validateApiResponse<Conversation>(item, `/api/mission/conversations[${i}]`, {
+          sessionId: 'string',
+          accountId: 'string',
+          status: 'string',
+        })
+      );
+      setConversations(validatedConvs);
       setVisibleSessionIds(new Set(visData.visibleSessionIds || []));
       // Build sessionId → panel label map from panel data
       const pm = new Map<string, string>();
@@ -732,7 +759,7 @@ export default function MissionControl({ projectId }: MissionControlProps) {
   }, [fetchConversations, syncEnabled]);
 
   const visibleConversations = useMemo(() =>
-    conversations.filter(c => !hiddenProjects.has(c.projectName)),
+    conversations.filter(c => !hiddenProjects.has(c.projectName ?? '')),
     [conversations, hiddenProjects]
   );
 
@@ -753,7 +780,7 @@ export default function MissionControl({ projectId }: MissionControlProps) {
     orphans: visibleSessionIds.size > 0 ? enrichedConversations.filter(c => !c.isVisible).length : 0,
   }), [enrichedConversations]);
 
-  const selectedConvId = selectedConv ? `${selectedConv.accountId}-${selectedConv.sessionId}` : null;
+  const selectedConvId = selectedConv ? `${selectedConv.accountId ?? ''}-${selectedConv.sessionId ?? ''}` : null;
 
   // Split into active (top) and finished (bottom)
   const projectFiltered = useMemo(() => {
@@ -799,11 +826,11 @@ export default function MissionControl({ projectId }: MissionControlProps) {
     if (needsResort) {
       // Full sort: by priority score, then updatedAt, then sessionId for stability
       sorted = [...active].sort((a, b) => {
-        const diff = (currentScores.get(b.sessionId) || 0) - (currentScores.get(a.sessionId) || 0);
+        const diff = (currentScores.get(b.sessionId ?? '') || 0) - (currentScores.get(a.sessionId ?? '') || 0);
         if (diff !== 0) return diff;
-        const timeDiff = new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+        const timeDiff = new Date(b.updatedAt ?? '').getTime() - new Date(a.updatedAt ?? '').getTime();
         if (timeDiff !== 0) return timeDiff;
-        return a.sessionId.localeCompare(b.sessionId);
+        return (a.sessionId ?? '').localeCompare(b.sessionId ?? '');
       });
     } else {
       // Stable update: keep previous order, just update conversation data in-place
@@ -821,7 +848,7 @@ export default function MissionControl({ projectId }: MissionControlProps) {
 
   const finishedConvs = useMemo(() => {
     return projectFiltered.filter(c => c.manualFinished)
-      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+      .sort((a, b) => new Date(b.updatedAt ?? '').getTime() - new Date(a.updatedAt ?? '').getTime());
   }, [projectFiltered]);
 
   // Fetch snippets (last lines of conversation) when previews are expanded
@@ -839,7 +866,7 @@ export default function MissionControl({ projectId }: MissionControlProps) {
         fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}?tail=3`, { signal: AbortSignal.timeout(20000) })
           .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
           .then((data: ConversationDetail) => {
-            const msgs = data.messages || [];
+            const msgs = data.messages ?? [];
             const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant');
             if (!lastAssistant) return { sessionId: conv.sessionId, snippet: '' };
             const text = extractText(lastAssistant.content);
@@ -868,7 +895,7 @@ export default function MissionControl({ projectId }: MissionControlProps) {
   const handleSend = useCallback((conv: Conversation, message: string) => {
     if ((window as any).__cuiServerAlive === false) { console.warn('[MissionControl] handleSend skipped: server not alive'); return; }
     fetch(`${API}/mission/send`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ accountId: conv.accountId, sessionId: conv.sessionId, message, workDir: conv.projectPath }),
+      body: JSON.stringify({ accountId: conv.accountId, sessionId: conv.sessionId, message, workDir: conv.projectPath ?? '' }),
       signal: AbortSignal.timeout(15000),
     }).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); setTimeout(fetchConversations, 2000); })
       .catch((err) => { console.warn('[MissionControl] handleSend failed:', err); });
@@ -927,7 +954,7 @@ export default function MissionControl({ projectId }: MissionControlProps) {
     const promises = targets.map(conv =>
       fetch(`${API}/mission/send`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accountId: conv.accountId, sessionId: conv.sessionId, message: 'continue', workDir: conv.projectPath }),
+        body: JSON.stringify({ accountId: conv.accountId, sessionId: conv.sessionId, message: 'continue', workDir: conv.projectPath ?? '' }),
         signal: AbortSignal.timeout(15000),
       }).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); })
         .catch((err) => { console.warn('[MissionControl] handleBulkContinue send failed:', err); })
@@ -974,7 +1001,7 @@ export default function MissionControl({ projectId }: MissionControlProps) {
     setBulkStatus(`Aktiviere ${targets.length}...`);
     fetch(`${API}/mission/activate`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conversations: targets.map(c => ({ sessionId: c.sessionId, accountId: c.accountId, projectName: c.projectName })) }),
+      body: JSON.stringify({ conversations: targets.map(c => ({ sessionId: c.sessionId, accountId: c.accountId, projectName: c.projectName ?? '' })) }),
       signal: AbortSignal.timeout(15000),
     }).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); }).then(() => {
       setBulkStatus(`${targets.length} aktiviert`);
@@ -993,7 +1020,7 @@ export default function MissionControl({ projectId }: MissionControlProps) {
     setBulkStatus('Aktiviere...');
     fetch(`${API}/mission/activate`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conversations: [{ sessionId: conv.sessionId, accountId: conv.accountId, projectName: conv.projectName }] }),
+      body: JSON.stringify({ conversations: [{ sessionId: conv.sessionId, accountId: conv.accountId, projectName: conv.projectName ?? '' }] }),
       signal: AbortSignal.timeout(15000),
     }).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); setBulkStatus('Aktiviert'); setTimeout(() => setBulkStatus(null), 2000); })
       .catch((err) => {
@@ -1005,7 +1032,7 @@ export default function MissionControl({ projectId }: MissionControlProps) {
 
   const handleFinish = useCallback((conv: Conversation) => {
     if ((window as any).__cuiServerAlive === false) { console.warn('[MissionControl] handleFinish skipped: server not alive'); return; }
-    const displayName = conv.customName || conv.summary?.slice(0, 40) || conv.sessionId.slice(0, 8);
+    const displayName = conv.customName || conv.summary?.slice(0, 40) || (conv.sessionId).slice(0, 8);
     // First try without confirm — server rejects with 409 if session process is still alive
     fetch(`${API}/mission/conversation/${conv.sessionId}/finish`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ finished: true }),
@@ -1028,7 +1055,7 @@ export default function MissionControl({ projectId }: MissionControlProps) {
 
   const handleHardKill = useCallback((conv: Conversation) => {
     if ((window as any).__cuiServerAlive === false) { console.warn('[MissionControl] handleHardKill skipped: server not alive'); return; }
-    if (!confirm(`HARD KILL: "${conv.customName || conv.summary?.slice(0, 40) || conv.sessionId}" — Alle Prozesse sofort beenden?`)) return;
+    if (!confirm(`HARD KILL: "${conv.customName || conv.summary?.slice(0, 40) || (conv.sessionId)}" — Alle Prozesse sofort beenden?`)) return;
     fetch(`${API}/mission/conversation/${conv.sessionId}/hard-kill`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       signal: AbortSignal.timeout(15000),
@@ -1039,13 +1066,13 @@ export default function MissionControl({ projectId }: MissionControlProps) {
 
   const handleDelete = useCallback((conv: Conversation) => {
     if ((window as any).__cuiServerAlive === false) { console.warn('[MissionControl] handleDelete skipped: server not alive'); return; }
-    if (!confirm(`"${conv.customName || conv.summary?.slice(0, 40) || conv.sessionId}" wirklich loeschen? Die .jsonl Datei wird unwiderruflich geloescht.`)) return;
+    if (!confirm(`"${conv.customName || conv.summary?.slice(0, 40) || (conv.sessionId)}" wirklich loeschen? Die .jsonl Datei wird unwiderruflich geloescht.`)) return;
     fetch(`${API}/mission/conversation/${conv.sessionId}`, { method: 'DELETE', signal: AbortSignal.timeout(15000) })
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then(data => {
         if (data.ok) {
           // Deselect if this was the selected conversation
-          if (selectedConv?.sessionId === conv.sessionId) setSelectedConv(null);
+          if (selectedConv?.sessionId === (conv.sessionId)) setSelectedConv(null);
           setTimeout(fetchConversations, 500);
         }
       })
@@ -1065,7 +1092,7 @@ export default function MissionControl({ projectId }: MissionControlProps) {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ finished: true }),
         signal: AbortSignal.timeout(15000),
       }).then(async r => {
-        if (r.status === 409) { blocked++; blockedNames.push(c.customName || c.sessionId.slice(0, 8)); return; }
+        if (r.status === 409) { blocked++; blockedNames.push(c.customName || (c.sessionId).slice(0, 8)); return; }
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         finished++;
       }).catch((err) => { console.warn('[MissionControl] handleBulkFinish single failed:', err); })
@@ -1372,7 +1399,7 @@ export default function MissionControl({ projectId }: MissionControlProps) {
                     return 1;
                   };
                   const diff = scoreOf(b) - scoreOf(a);
-                  return diff !== 0 ? diff : new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+                  return diff !== 0 ? diff : new Date(b.updatedAt ?? '').getTime() - new Date(a.updatedAt ?? '').getTime();
                 });
                 return (
                   <div key={group.name} style={{ marginBottom: 4 }}>
