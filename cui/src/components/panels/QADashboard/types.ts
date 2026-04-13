@@ -117,3 +117,28 @@ export interface GroupSummary {
   pending: number;
   total: number;
 }
+
+// Journey View — Screenshot Timeline
+export interface JourneyStep {
+  nr: number;
+  action: string;
+  command: string;
+  url: string | null;
+  screenshotPath: string;
+  screenshotExists: boolean;
+  timestamp: string;
+}
+
+export interface Journey {
+  scenario: string;
+  persona: string;
+  startedAt: string;
+  duration: number;
+  totalSteps: number;
+  fileName: string;
+  steps: JourneyStep[];
+}
+
+export interface JourneyData {
+  journeys: Journey[];
+}

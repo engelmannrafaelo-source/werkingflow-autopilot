@@ -2098,6 +2098,102 @@ router.get('/api/qa/arch-test/freshness', (_req, res) => {
   res.json({ apps: result, stale_threshold_minutes: STALE_THRESHOLD_MINUTES });
 });
 
+// ========================================
+// Journey API — Screenshot Timeline for Playwright Tests
+// ========================================
+
+const SCREENSHOTS_DIR = join(UNIFIED_TESTER_ROOT, 'screenshots');
+
+interface JourneyStep {
+  nr: number;
+  action: string;
+  command: string;
+  url: string | null;
+  screenshot: string;
+  timestamp: string;
+}
+
+interface JourneyFile {
+  scenario: string;
+  persona: string;
+  startedAt: string;
+  duration: number;
+  totalSteps: number;
+  steps: JourneyStep[];
+}
+
+// GET /api/qa/journey — List journeys with step data (screenshot paths only, no base64)
+router.get('/api/qa/journey', (req, res) => {
+  const scenarioFilter = req.query.scenario as string | undefined;
+  const latestOnly = req.query.latest === 'true';
+
+  if (!existsSync(SCREENSHOTS_DIR)) {
+    return res.json({ journeys: [] });
+  }
+
+  try {
+    const files = readdirSync(SCREENSHOTS_DIR)
+      .filter(f => f.startsWith('journey_') && f.endsWith('.json'))
+      .map(f => {
+        const fullPath = join(SCREENSHOTS_DIR, f);
+        const stat = statSync(fullPath);
+        return { name: f, path: fullPath, mtime: stat.mtimeMs };
+      })
+      .sort((a, b) => b.mtime - a.mtime); // newest first
+
+    let journeys: Array<JourneyFile & { fileName: string }> = [];
+
+    for (const file of files) {
+      const data = readJSON(file.path) as JourneyFile | null;
+      if (!data || !data.steps || !Array.isArray(data.steps)) continue;
+
+      if (scenarioFilter && data.scenario !== scenarioFilter && data.persona !== scenarioFilter) {
+        continue;
+      }
+
+      journeys.push({ ...data, fileName: file.name });
+    }
+
+    if (latestOnly) {
+      // Keep only the latest journey per scenario
+      const seen = new Set<string>();
+      journeys = journeys.filter(j => {
+        const key = j.scenario || j.persona;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
+
+    // Limit to 20 journeys max to avoid huge responses
+    journeys = journeys.slice(0, 20);
+
+    // Truncate steps to essential fields, verify screenshot exists
+    const result = journeys.map(j => ({
+      scenario: j.scenario,
+      persona: j.persona,
+      startedAt: j.startedAt,
+      duration: j.duration,
+      totalSteps: j.totalSteps,
+      fileName: j.fileName,
+      steps: j.steps.map(s => ({
+        nr: s.nr,
+        action: s.action,
+        command: (s.command || '').slice(0, 100),
+        url: s.url,
+        screenshotPath: s.screenshot,
+        screenshotExists: existsSync(s.screenshot),
+        timestamp: s.timestamp,
+      })),
+    }));
+
+    res.json({ journeys: result });
+  } catch (err) {
+    console.error('[QA] journey list error:', err);
+    res.status(500).json({ error: 'Failed to read journey files' });
+  }
+});
+
 // Track in-flight arch-test runs to avoid duplicate spawns
 const archTestRunning = new Set<string>();
 
