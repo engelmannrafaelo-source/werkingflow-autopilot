@@ -109,7 +109,7 @@ function defaultLayout(workDir: string): IJsonModel {
               children: [
                 {
                   type: 'tab',
-                  name: 'CUI',
+                  name: 'Chat',
                   component: 'cui-lite',
                   config: {},
                 },
@@ -145,7 +145,7 @@ function defaultLayout(workDir: string): IJsonModel {
               children: [
                 {
                   type: 'tab',
-                  name: 'CUI',
+                  name: 'Chat',
                   component: 'cui-lite',
                   config: {},
                 },
@@ -199,6 +199,9 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     return null;
   });
   const [showBuilder, setShowBuilder] = useState(false);
+  const [showSubSessions, setShowSubSessions] = useState<boolean>(() => {
+    try { return localStorage.getItem('cui-show-sub-sessions') === 'true'; } catch { return false; }
+  });
   const [attentionVersion, setAttentionVersion] = useState(0); // triggers re-evaluation of attention state
   const templateRef = useRef<IJsonModel | null>(null);
   const layoutRef = useRef<Layout>(null);
@@ -361,7 +364,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     switch (component) {
       case 'cui':
       case 'cui-lite':
-        return wrapPanel('CUI', <CuiLitePanel accountId={config.accountId} projectId={projectId} workDir={workDir} panelId={nodeId} isTabVisible={node.isVisible()}
+        return wrapPanel('Chat', <CuiLitePanel accountId={config.accountId} projectId={projectId} workDir={workDir} panelId={nodeId} isTabVisible={node.isVisible()}
           initialRoute={config._route}
           initialSessionId={config.initialSessionId}
           onRouteChange={(route) => updateNodeConfig(nodeId, { _route: route })}
@@ -818,13 +821,31 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
             reportPanels();
           } catch (err) { console.warn('[LayoutManager] panel-remove doAction failed:', err); }
         }
-        if ((msg.type === 'control:conversation-finished' || msg.type === 'control:conversation-deleted') && msg.panelsToClose && m) {
-          const myPanels = (msg.panelsToClose as Array<{ panelId: string; projectId: string }>)
+        if ((msg.type === 'control:conversation-finished' || msg.type === 'control:conversation-deleted') && m) {
+          const closedIds = new Set<string>();
+          // 1) Close panels the server knows about
+          const myPanels = ((msg.panelsToClose || []) as Array<{ panelId: string; projectId: string }>)
             .filter(p => p.projectId === projectId);
           for (const p of myPanels) {
-            try { m.doAction(Actions.deleteTab(p.panelId)); } catch (err) { console.warn('[LayoutManager] deleteTab failed for panel', p.panelId, ':', err); }
+            try { m.doAction(Actions.deleteTab(p.panelId)); closedIds.add(p.panelId); } catch (err) { console.warn('[LayoutManager] deleteTab failed for panel', p.panelId, ':', err); }
           }
-          if (myPanels.length > 0) {
+          // 2) Also find any CUI tabs in this layout that reference the finished sessionId
+          //    (catches cases where visibilityRegistry was stale or panelsToClose was empty)
+          if (msg.sessionId) {
+            m.visitNodes((node) => {
+              if (node.getType() === 'tab' && !closedIds.has(node.getId())) {
+                const tab = node as TabNode;
+                const comp = tab.getComponent() ?? '';
+                if (comp.startsWith('cui')) {
+                  const cfg = tab.getConfig() ?? {};
+                  if (cfg.initialSessionId === msg.sessionId) {
+                    try { m.doAction(Actions.deleteTab(tab.getId())); closedIds.add(tab.getId()); } catch { /* already removed */ }
+                  }
+                }
+              }
+            });
+          }
+          if (closedIds.size > 0) {
             reportPanels();
             saveLayoutRef.current(m);
           }
@@ -1030,7 +1051,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
 
             try {
               m.doAction(Actions.addNode(
-                { type: 'tab', name: 'CUI', component: 'cui', config: {} },
+                { type: 'tab', name: 'Chat', component: 'cui', config: {} },
                 targetId, dockLocation, -1
               ));
             } catch (err) { console.warn('[LayoutManager] activate-conversations addNode failed:', err); continue; }
@@ -1201,7 +1222,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
 
         try {
           model.doAction(Actions.addNode(
-            { type: 'tab', name: 'CUI', component: 'cui', config: {} },
+            { type: 'tab', name: 'Chat', component: 'cui', config: {} },
             targetId, dockLocation, -1
           ));
         } catch (err) { console.warn('[LayoutManager] pendingActivation addNode failed:', err); continue; }
@@ -1319,7 +1340,20 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         }
 
         // Find missing conversations (not yet mounted in any panel)
-        const missing = active.filter((c: any) => !mountedSessions.has(c.sessionId));
+        // Filter out sub-sessions when showSubSessions is false
+        const showSubs = localStorage.getItem('cui-show-sub-sessions') === 'true';
+        // Remove mounted sub-session tabs when sub-sessions are hidden
+        if (!showSubs) {
+          const subSessionIds = new Set(conversations.filter((c: any) => c.isSubSession).map((c: any) => c.sessionId));
+          for (const [sid, nodeId] of mountedSessions) {
+            if (!subSessionIds.has(sid)) continue;
+            try {
+              m.doAction(Actions.deleteTab(nodeId));
+              mountedSessions.delete(sid);
+            } catch {}
+          }
+        }
+        const missing = active.filter((c: any) => !mountedSessions.has(c.sessionId) && (showSubs || !c.isSubSession));
 
         // Report missing sessions count to parent (for Layout button indicator)
         onMissingSessionsRef.current?.(missing.length);
@@ -1393,7 +1427,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
 
           try {
             m.doAction(Actions.addNode(
-              { type: 'tab', name: 'CUI', component: 'cui',
+              { type: 'tab', name: 'Chat', component: 'cui',
                 config: { initialSessionId: conv.sessionId, accountId: conv.accountId } },
               targetTabsetId, dockLocation, -1
             ));
@@ -1632,6 +1666,24 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         position: 'absolute', top: 6, right: 6, zIndex: 10,
         display: 'flex', gap: 4,
       }}>
+        <button
+          onClick={() => {
+            const next = !showSubSessions;
+            setShowSubSessions(next);
+            try { localStorage.setItem('cui-show-sub-sessions', String(next)); } catch {}
+          }}
+          title={showSubSessions ? 'Sub-Sessions ausblenden' : 'Sub-Sessions einblenden'}
+          style={{
+            background: showSubSessions ? 'var(--tn-accent, #7aa2f7)' : 'var(--tn-bg-dark)',
+            border: '1px solid var(--tn-border)',
+            color: showSubSessions ? '#fff' : 'var(--tn-text-muted)', cursor: 'pointer', fontSize: 11,
+            padding: '3px 7px', borderRadius: 4, opacity: 0.7,
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.7'; }}
+        >
+          ⌥
+        </button>
         <button
           onClick={() => setShowBuilder(true)}
           title="Layout Builder"
