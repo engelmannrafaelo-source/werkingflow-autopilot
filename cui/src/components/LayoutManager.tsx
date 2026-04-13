@@ -1342,16 +1342,28 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         // Find missing conversations (not yet mounted in any panel)
         // Filter out sub-sessions when showSubSessions is false
         const showSubs = localStorage.getItem('cui-show-sub-sessions') === 'true';
-        // Remove mounted sub-session tabs when sub-sessions are hidden
+        // Remove mounted sub-session tabs when sub-sessions are hidden.
+        // Use global sub-sessions list (not workspace-filtered) so [Arch-Fix] etc. from other workspaces are caught.
         if (!showSubs) {
-          const subSessionIds = new Set(conversations.filter((c: any) => c.isSubSession).map((c: any) => c.sessionId));
-          for (const [sid, nodeId] of mountedSessions) {
-            if (!subSessionIds.has(sid)) continue;
-            try {
-              m.doAction(Actions.deleteTab(nodeId));
-              mountedSessions.delete(sid);
-            } catch {}
-          }
+          try {
+            const subRes = await fetch('/api/mission/sub-sessions', { signal: AbortSignal.timeout(3000) });
+            if (subRes.ok && !disposed) {
+              const subData = await subRes.json();
+              const allSubIds = new Set<string>((subData.sessions || []).map((s: any) => s.sessionId));
+              // Also treat any mounted session whose subject starts with a sub prefix
+              const SUB_PREFIXES = ['[Sub]', '[Arch-Fix]', '[Arch-App]', '[Fix]', '[Analysis]'];
+              for (const [sid, nodeId] of mountedSessions) {
+                const convData = conversations.find((c: any) => c.sessionId === sid);
+                const subject = convData?.subject || convData?.customName || '';
+                const isSub = allSubIds.has(sid) || SUB_PREFIXES.some(p => subject.startsWith(p));
+                if (!isSub) continue;
+                try {
+                  m.doAction(Actions.deleteTab(nodeId));
+                  mountedSessions.delete(sid);
+                } catch {}
+              }
+            }
+          } catch {}
         }
         const missing = active.filter((c: any) => !mountedSessions.has(c.sessionId) && (showSubs || !c.isSubSession));
 
