@@ -822,8 +822,23 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           } catch (err) { console.warn('[LayoutManager] panel-remove doAction failed:', err); }
         }
         if ((msg.type === 'control:conversation-finished' || msg.type === 'control:conversation-deleted') && m) {
-          // Only close panels the server explicitly lists — no aggressive search by sessionId
-          // (aggressive deletion caused panels to disappear on any auto-finish event)
+          // Search by sessionId for manual-finish events (user explicitly clicked Finish)
+          // This ensures finished sessions are removed immediately, not on next 30s sync cycle
+          if (msg.sessionId) {
+            m.visitNodes((node) => {
+              if (node.getType() !== 'tab') return;
+              const tab = node as TabNode;
+              const comp = tab.getComponent?.();
+              if (comp !== 'cui' && comp !== 'cui-lite') return;
+              const route = tab.getConfig()?._route || '';
+              const cfgSid = tab.getConfig()?.initialSessionId || '';
+              const sid = route.startsWith('/c/') ? route.slice(3) : cfgSid;
+              if (sid !== msg.sessionId) return;
+              try { m.doAction(Actions.deleteTab(tab.getId())); } catch {}
+            });
+            saveLayoutRef.current(m);
+            reportPanels();
+          }
           const myPanels = ((msg.panelsToClose || []) as Array<{ panelId: string; projectId: string }>)
             .filter(p => p.projectId === projectId);
           let closed = 0;
