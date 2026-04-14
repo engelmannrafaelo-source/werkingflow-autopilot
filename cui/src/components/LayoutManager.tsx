@@ -1361,7 +1361,9 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
             }
           } catch {}
         }
-        const missing = active.filter((c: any) => !mountedSessions.has(c.sessionId) && (!c.isSubSession || isSubSessionsWorkspace));
+        const SUB_PREFIXES = ['[Sub]', '[Arch-Fix]', '[Arch-App]', '[Fix]', '[Analysis]'];
+        const isEffectivelySub = (c: any) => c.isSubSession || SUB_PREFIXES.some((p: string) => (c.customName || c.subject || '').startsWith(p));
+        const missing = active.filter((c: any) => !mountedSessions.has(c.sessionId) && (!isEffectivelySub(c) || isSubSessionsWorkspace));
 
         // Report missing sessions count to parent (for Layout button indicator)
         onMissingSessionsRef.current?.(missing.length);
