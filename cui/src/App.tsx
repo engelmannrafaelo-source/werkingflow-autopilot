@@ -402,7 +402,7 @@ function AppContent() {
   // Split into two effects:
   // 1. Conversation fetching (every 5s, depends only on projects)
   // 2. Attention computation (reacts to sessionStatesTick from WS events)
-  const convCacheRef = useRef<Array<{ sessionId: string; projectName: string; status: string; updatedAt: string; attentionState?: string; attentionReason?: string; isSubSession?: boolean; processAlive?: boolean; manualFinished?: boolean }>>([]);
+  const convCacheRef = useRef<Array<{ sessionId: string; projectName: string; status: string; updatedAt: string; attentionState?: string; attentionReason?: string; isSubSession?: boolean; processAlive?: boolean; manualFinished?: boolean; customName?: string; subject?: string }>>([]);
   const convTickRef = useRef(0);
   const [convTick, setConvTick] = useState(0);
 
@@ -424,6 +424,8 @@ function AppContent() {
             isSubSession: c.isSubSession || false,
             processAlive: c.processAlive || false,
             manualFinished: c.manualFinished || false,
+            customName: c.customName || '',
+            subject: c.subject || '',
           }));
           convTickRef.current++;
           setConvTick(convTickRef.current);
@@ -443,11 +445,15 @@ function AppContent() {
     const nameToId = new Map<string, string>();
     for (const p of projects) nameToId.set(p.name.toLowerCase(), p.id);
 
+    const SUB_PREFIXES = ['[Sub]', '[Arch-Fix]', '[Arch-App]', '[Fix]', '[Analysis]'];
     const now = Date.now();
     for (const conv of convCacheRef.current) {
       if (conv.manualFinished) continue;
+      // Detect sub-sessions by flag OR by name prefix (API doesn't always return isSubSession)
+      const subjectName = (conv as any).customName || (conv as any).subject || '';
+      const isEffectivelySub = conv.isSubSession || SUB_PREFIXES.some(p => subjectName.startsWith(p));
       // Sub-sessions belong to the sub-sessions workspace for attention tracking
-      const projId = conv.isSubSession
+      const projId = isEffectivelySub
         ? 'sub-sessions'
         : nameToId.get(conv.projectName.toLowerCase());
       if (!projId) continue;
