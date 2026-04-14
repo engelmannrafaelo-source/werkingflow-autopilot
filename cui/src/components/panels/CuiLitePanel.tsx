@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ACCOUNTS } from '../../types';
 import QueueOverlay from './QueueOverlay';
+import { validateApiResponse } from '../../lib/validateApiResponse';
 
 // --- Types ---
 const SWITCHABLE_ACCOUNTS = ACCOUNTS.filter(a => a.id !== 'local');
@@ -550,6 +551,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   const selectedIdRef = useRef<string>(selectedId);
   // Track last poll data to skip redundant setState (avoids re-render + LCP shift)
   const lastPollHashRef = useRef('');
+  const autoUnfinishedRef = useRef(false); // Track if we've already auto-unfinished for current session
 
   const account = ACCOUNTS.find(a => a.id === selectedId) || ACCOUNTS[0];
   const pollInterval = liveMode ? 3000 : 0; // STATIC=0 (no polling, WS only), LIVE=3s fallback
@@ -566,9 +568,24 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       if (convResp.ok) {
         const data = await convResp.json().catch(() => null);
         if (!data) { console.warn('[CuiLite] Poll: invalid JSON response'); return; }
+        // Opening a finished session unfinishes it — "visible = not finished"
+        if (data.manualFinished === true && !autoUnfinishedRef.current && sessionId) {
+          autoUnfinishedRef.current = true;
+          fetch(`/api/mission/conversation/${sessionId}/finish`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ finished: false }),
+            signal: AbortSignal.timeout(5000),
+          }).catch(() => {});
+        }
         const newMsgs: Message[] = data.messages || [];
         const newStatus = data.status === 'ongoing' ? 'ongoing' : 'completed';
-        const newPerms: Permission[] = data.permissions || [];
+        const newPerms: Permission[] = (data.permissions || []).map((item: unknown, i: number) =>
+          validateApiResponse<Permission>(item, `/api/mission/conversation/permissions[${i}]`, {
+            id: 'string',
+            type: 'string',
+          })
+        );
         const newName = data.customName || data.summary || '';
         const newDone = !!data.isAgentDone;
         // Fast hash: skip redundant setState when nothing changed
@@ -696,6 +713,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   useEffect(() => {
     sessionIdRef.current = sessionId;
     selectedIdRef.current = selectedId;
+    autoUnfinishedRef.current = false; // Reset on session change so new session can be auto-unfinished
     // Report visibility change to server (session exclusivity)
     const ws = panelWsRef.current;
     if (ws?.readyState === WebSocket.OPEN) {
