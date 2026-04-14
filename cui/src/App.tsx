@@ -402,7 +402,7 @@ function AppContent() {
   // Split into two effects:
   // 1. Conversation fetching (every 5s, depends only on projects)
   // 2. Attention computation (reacts to sessionStatesTick from WS events)
-  const convCacheRef = useRef<Array<{ sessionId: string; projectName: string; status: string; updatedAt: string; attentionState?: string; attentionReason?: string; isSubSession?: boolean; processAlive?: boolean }>>([]);
+  const convCacheRef = useRef<Array<{ sessionId: string; projectName: string; status: string; updatedAt: string; attentionState?: string; attentionReason?: string; isSubSession?: boolean; processAlive?: boolean; manualFinished?: boolean }>>([]);
   const convTickRef = useRef(0);
   const [convTick, setConvTick] = useState(0);
 
@@ -423,6 +423,7 @@ function AppContent() {
             attentionReason: c.attentionReason,
             isSubSession: c.isSubSession || false,
             processAlive: c.processAlive || false,
+            manualFinished: c.manualFinished || false,
           }));
           convTickRef.current++;
           setConvTick(convTickRef.current);
@@ -444,7 +445,7 @@ function AppContent() {
 
     const now = Date.now();
     for (const conv of convCacheRef.current) {
-      if (conv.status !== 'ongoing' && !conv.attentionState) continue;
+      if (conv.manualFinished) continue;
       // Sub-sessions belong to the sub-sessions workspace for attention tracking
       const projId = conv.isSubSession
         ? 'sub-sessions'
@@ -477,6 +478,9 @@ function AppContent() {
       } else if (conv.processAlive && rawState !== 'needs_attention') {
         // Process is alive → treat as working even if temporarily idle between tool calls
         effectiveState = 'working';
+      } else if (!conv.processAlive && !conv.manualFinished) {
+        // Process stopped but not manually finished → needs attention (orange)
+        effectiveState = 'needs_attention';
       } else {
         effectiveState = 'idle';
       }

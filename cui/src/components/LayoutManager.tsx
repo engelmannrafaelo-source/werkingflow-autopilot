@@ -1389,11 +1389,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
             }
           }
 
-          // Priority 2: Add as separate split panel — only when explicitly triggered
-          if (!(window as any).__cuiAutoLayoutActive) {
-            console.log(`[LM] auto-sync: skipping new panel creation for session ${conv.sessionId} (auto-layout disabled)`);
-            continue;
-          }
+          // Priority 2: Add as separate split panel — always allowed for non-finished sessions
           // Find a CUI tabset to split from (prefer one with existing CUI panels)
           let targetTabsetId = '';
           m.visitNodes((node) => {
