@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import rehypeRaw from 'rehype-raw';
 
 const API = '/api';
 
@@ -124,6 +125,8 @@ const credentialsMdComponents = {
   ul: ({ node, ...props }: any) => <ul style={{ marginLeft: 16, marginBottom: 6, listStyleType: 'disc', fontSize: 11 }} {...props} />,
   li: ({ node, ...props }: any) => <li style={{ marginBottom: 2, color: 'var(--tn-text-subtle)' }} {...props} />,
   a: ({ node, ...props }: any) => <a style={{ color: 'var(--tn-blue)', textDecoration: 'none', fontSize: 11 }} target="_blank" {...props} />,
+  details: ({ node, ...props }: any) => <details style={{ margin: '6px 0', padding: '4px 0', borderTop: '1px solid var(--tn-border)' }} {...props} />,
+  summary: ({ node, ...props }: any) => <summary style={{ cursor: 'pointer', fontSize: 11, color: 'var(--tn-text-muted)', fontWeight: 600, padding: '4px 0', userSelect: 'none' }} {...props} />,
 };
 
 export default function NotesPanel({ projectId }: NotesPanelProps) {
@@ -348,6 +351,7 @@ export default function NotesPanel({ projectId }: NotesPanelProps) {
             }}>
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
+                rehypePlugins={[rehypeRaw]}
                 components={credentialsMdComponents}
               >
                 {sharedNotes}

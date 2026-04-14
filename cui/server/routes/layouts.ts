@@ -144,41 +144,107 @@ export default function createLayoutsRouter(deps: LayoutsDeps): Router {
     res.json({ ok: true });
   });
 
-  // Shared Notes: auto-generated credentials (read-only)
-  router.get('/shared-notes', (_req: Request, res: Response) => {
-    const sharedPath = join(NOTES_DIR, 'shared.md');
-    if (!existsSync(sharedPath)) {
-      // Try generating on-the-fly
-      const credPath = join(DATA_DIR, 'credentials.json');
-      if (existsSync(credPath)) {
+  // Shared Notes: auto-generated credentials (read-only, user-aware)
+  // - Admins see everything including partnerCuiLogin
+  // - Partners only see their app's credentials, no partnerCuiLogin
+  // - Primary users shown prominently, rest in collapsible section
+  router.get('/shared-notes', (req: Request, res: Response) => {
+    const credPath = join(DATA_DIR, 'credentials.json');
+    if (!existsSync(credPath)) { res.json({ content: '' }); return; }
+    try {
+      const creds = JSON.parse(readFileSync(credPath, 'utf8'));
+      const userId = (req as any).user?.sub;
+      const isAdmin = (req as any).user?.role === 'admin';
+
+      // Determine which apps this user can see
+      let allowedApps: string[] | null = null; // null = all (admin)
+      if (!isAdmin && userId) {
         try {
-          const creds = JSON.parse(readFileSync(credPath, 'utf8'));
-          const now = new Date().toISOString().split('T')[0];
-          let md = `# Shared Notes - Zugangsdaten\n\n*Auto-generated: ${now}*\n\n---\n\n`;
-          for (const [_appId, appData] of Object.entries(creds) as [string, any][]) {
-            md += `## ${appData.name}`;
-            if (appData.productionUrl) md += ` — [${appData.productionUrl}](${appData.productionUrl})`;
-            md += `\n\n`;
-            if (!appData.users?.length) { md += `*No users*\n\n`; continue; }
-            md += `| Email | Password | Role | Notes |\n|-------|----------|------|-------|\n`;
-            for (const u of appData.users) {
-              md += `| ${u.email} | \`${u.password || '—'}\` | ${u.role || '—'} | ${u.notes || u.userId || '—'} |\n`;
+          const usersPath = join(DATA_DIR, 'users.json');
+          if (existsSync(usersPath)) {
+            const usersData = JSON.parse(readFileSync(usersPath, 'utf8'));
+            const cuiUser = usersData.users?.find((u: any) => u.id === userId);
+            if (cuiUser?.allowedWorkspaces && cuiUser.allowedWorkspaces !== '*') {
+              allowedApps = cuiUser.allowedWorkspaces;
             }
-            if (appData.extras?.length) {
-              md += `\n`;
-              for (const e of appData.extras) md += `> ${e}\n`;
-            }
-            md += `\n---\n\n`;
           }
-          md += `\n*Refresh: aggregate-credentials + generate-shared-notes*\n`;
-          res.json({ content: md });
-          return;
-        } catch (err) { console.warn('[Server] shared-notes generation error:', err); }
+        } catch { /* ignore */ }
       }
-      res.json({ content: '' });
-      return;
-    }
-    res.json({ content: readFileSync(sharedPath, 'utf8') });
+
+      // Map workspace IDs to credential keys
+      const wsToCredKey: Record<string, string[]> = {
+        'engelmann-ai-hub': ['engelmann-ai-hub', '_global'],
+        'engelmann-developer': ['engelmann-ai-hub', '_global'],
+        'engelmann-dashboards': ['engelmann-ai-hub', '_global'],
+        'werking-energy': ['werking-energy', '_global'],
+        'werking-report': ['werking-report', '_global'],
+        'werkingsafety': ['werking-safety', '_global'],
+      };
+
+      const now = new Date().toISOString().split('T')[0];
+      let md = `# Zugangsdaten\n\n*Stand: ${now}*\n\n`;
+
+      for (const [appId, appData] of Object.entries(creds) as [string, any][]) {
+        // Filter: non-admin only sees their allowed apps
+        if (allowedApps) {
+          const visible = allowedApps.some(ws => (wsToCredKey[ws] || []).includes(appId));
+          if (!visible) continue;
+        }
+
+        md += `---\n\n## ${appData.name}`;
+        if (appData.productionUrl) md += ` — [${appData.productionUrl}](${appData.productionUrl})`;
+        md += `\n\n`;
+
+        if (!appData.users?.length) { md += `*Keine Benutzer*\n\n`; continue; }
+
+        // Split into primary (first user or marked primary) and secondary
+        const primary = appData.users.filter((u: any) => u.primary);
+        const secondary = appData.users.filter((u: any) => !u.primary);
+        // If no one is marked primary, first user is primary
+        if (primary.length === 0 && appData.users.length > 0) {
+          primary.push(appData.users[0]);
+          secondary.shift();  // remove from secondary if it was there
+        }
+
+        // Primary credentials table
+        if (primary.length > 0) {
+          md += `| Email | Passwort | Rolle |\n|-------|----------|-------|\n`;
+          for (const u of primary) {
+            const name = u.name ? `**${u.name}** — ` : '';
+            md += `| ${name}${u.email} | \`${u.password || '—'}\` | ${u.role || '—'} |\n`;
+          }
+          md += `\n`;
+        }
+
+        // Secondary credentials in collapsible section
+        if (secondary.length > 0) {
+          md += `<details><summary>Weitere Benutzer (${secondary.length})</summary>\n\n`;
+          md += `| Email | Passwort | Rolle |\n|-------|----------|-------|\n`;
+          for (const u of secondary) {
+            const name = u.name ? `**${u.name}** — ` : '';
+            md += `| ${name}${u.email} | \`${u.password || '—'}\` | ${u.role || '—'} |\n`;
+          }
+          md += `\n</details>\n\n`;
+        }
+
+        if (appData.extras?.length) {
+          for (const e of appData.extras) md += `> ${e}\n`;
+          md += `\n`;
+        }
+
+        // Partner CUI Login: ONLY for admins
+        if (isAdmin && appData.partnerCuiLogin?.users?.length) {
+          md += `<details><summary>Partner CUI Login (${appData.partnerCuiLogin.users.length})</summary>\n\n`;
+          md += `| Name | Username | Passwort |\n|------|----------|----------|\n`;
+          for (const u of appData.partnerCuiLogin.users) {
+            md += `| ${u.name} | \`${u.username}\` | \`${u.password}\` |\n`;
+          }
+          md += `\n</details>\n\n`;
+        }
+      }
+
+      res.json({ content: md });
+    } catch (err) { console.warn('[Server] shared-notes generation error:', err); res.json({ content: '' }); }
   });
 
   // Shared Notes: trigger regeneration

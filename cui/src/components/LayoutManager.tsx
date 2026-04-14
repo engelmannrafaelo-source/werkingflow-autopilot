@@ -81,6 +81,20 @@ const PanelLoader = () => (
 
 const API = '/api';
 
+// Map workspace to default browser URL for new panels
+// Host comes from env (partner=Tailscale IP, dev=localhost)
+const CUI_APP_HOST = (typeof window !== 'undefined' && (window as any).__CUI_APP_HOST__) || 'http://localhost';
+const WORKSPACE_BROWSER_PORTS: Record<string, number> = {
+  "engelmann-ai-hub": 3009,
+  "engelmann-dashboards": 3010,
+  "werking-energy": 3007,
+  "werking-report": 3008,
+  "werkingsafety": 3006,
+};
+const WORKSPACE_BROWSER_URLS: Record<string, string> = Object.fromEntries(
+  Object.entries(WORKSPACE_BROWSER_PORTS).map(([ws, port]) => [ws, `${CUI_APP_HOST}:${port}`])
+);
+
 function defaultLayout(workDir: string): IJsonModel {
   return {
     global: {
@@ -563,6 +577,10 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     if (type === 'preview' && !config.watchPath) {
       config.watchPath = activeDirRef.current || workDir;
     }
+    if (type === "browser" && !config.url) {
+      const wsId = workDir.split("/").pop() || "";
+      if (WORKSPACE_BROWSER_URLS[wsId]) config.url = WORKSPACE_BROWSER_URLS[wsId];
+    }
     try {
       m.doAction(
         Actions.addNode(
@@ -824,23 +842,8 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           } catch (err) { console.warn('[LayoutManager] panel-remove doAction failed:', err); }
         }
         if ((msg.type === 'control:conversation-finished' || msg.type === 'control:conversation-deleted') && m) {
-          // Search by sessionId for manual-finish events (user explicitly clicked Finish)
-          // This ensures finished sessions are removed immediately, not on next 30s sync cycle
-          if (msg.sessionId) {
-            m.visitNodes((node) => {
-              if (node.getType() !== 'tab') return;
-              const tab = node as TabNode;
-              const comp = tab.getComponent?.();
-              if (comp !== 'cui' && comp !== 'cui-lite') return;
-              const route = tab.getConfig()?._route || '';
-              const cfgSid = tab.getConfig()?.initialSessionId || '';
-              const sid = route.startsWith('/c/') ? route.slice(3) : cfgSid;
-              if (sid !== msg.sessionId) return;
-              try { m.doAction(Actions.deleteTab(tab.getId())); } catch {}
-            });
-            saveLayoutRef.current(m);
-            reportPanels();
-          }
+          // Only close panels the server explicitly lists — no aggressive search by sessionId
+          // (aggressive deletion caused panels to disappear on any auto-finish event)
           const myPanels = ((msg.panelsToClose || []) as Array<{ panelId: string; projectId: string }>)
             .filter(p => p.projectId === projectId);
           let closed = 0;
@@ -1320,40 +1323,41 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         );
         const activeSessionIds = new Set(active.map((c: any) => c.sessionId));
 
-        // Cleanup: remove tabs whose session is no longer active
-        // - manualFinished sessions: always remove immediately (finished = not shown)
-        // - other stale tabs: only remove when user explicitly clicked Layout button
+        // Cleanup: remove tabs whose session is no longer active (finished or too old)
+        // ONLY when user explicitly clicked Layout button (prevents sessions from disappearing)
         let removed = 0;
-        for (const [sid, nodeId] of mountedSessions) {
-          if (activeSessionIds.has(sid)) continue;
-          if (sid === '_starting') continue;
-          const conv = conversations.find((c: any) => c.sessionId === sid);
-          const isExplicitlyFinished = conv?.manualFinished === true;
-          if (!isExplicitlyFinished && !(window as any).__cuiAutoLayoutActive) continue;
-          try {
-            m.doAction(Actions.deleteTab(nodeId));
-            removed++;
-          } catch (err) { console.warn('[LM] cleanup deleteTab failed:', err); }
-        }
-        if (removed > 0) {
-          saveLayoutRef.current(m);
-          console.log(`[LM] Cleanup: removed ${removed} stale/finished tabs`);
+        if ((window as any).__cuiAutoLayoutActive) {
+          for (const [sid, nodeId] of mountedSessions) {
+            // Keep if session is in active list
+            if (activeSessionIds.has(sid)) continue;
+            // Keep panels reserved for new session creation (placeholder route)
+            if (sid === '_starting') continue;
+            // Remove stale tab
+            try {
+              m.doAction(Actions.deleteTab(nodeId));
+              removed++;
+            } catch (err) { console.warn('[LM] cleanup deleteTab failed:', err); }
+          }
+          if (removed > 0) {
+            saveLayoutRef.current(m);
+            console.log(`[LM] Cleanup: removed ${removed} stale tabs`);
+          }
         }
 
-        // Find missing conversations (not yet mounted in any panel)
-        // Sub-sessions are ONLY shown in the sub-sessions workspace — never in parent workspaces
-        const isSubSessionsWorkspace = projectId === 'sub-sessions';
-        if (!isSubSessionsWorkspace) {
+        // Filter out sub-sessions when showSubSessions is false
+        const showSubs = localStorage.getItem('cui-show-sub-sessions') === 'true';
+        // Remove mounted sub-session tabs when sub-sessions are hidden.
+        // Use global sub-sessions list (not workspace-filtered) so [Arch-Fix] etc. from other workspaces are caught.
+        if (!showSubs) {
           try {
             const subRes = await fetch('/api/mission/sub-sessions', { signal: AbortSignal.timeout(3000) });
             if (subRes.ok && !disposed) {
               const subData = await subRes.json();
               const allSubIds = new Set<string>((subData.sessions || []).map((s: any) => s.sessionId));
-              const SUB_PREFIXES = ['[Sub]', '[Arch-Fix]', '[Arch-App]', '[Fix]', '[Analysis]'];
               for (const [sid, nodeId] of mountedSessions) {
+                // Also treat any mounted session whose subject starts with a sub prefix
                 const convData = conversations.find((c: any) => c.sessionId === sid);
-                const subject = convData?.subject || convData?.customName || '';
-                const isSub = allSubIds.has(sid) || SUB_PREFIXES.some(p => subject.startsWith(p));
+                const isSub = allSubIds.has(sid) || convData?.isSubSession;
                 if (!isSub) continue;
                 try {
                   m.doAction(Actions.deleteTab(nodeId));
@@ -1363,9 +1367,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
             }
           } catch {}
         }
-        const SUB_PREFIXES = ['[Sub]', '[Arch-Fix]', '[Arch-App]', '[Fix]', '[Analysis]'];
-        const isEffectivelySub = (c: any) => c.isSubSession || SUB_PREFIXES.some((p: string) => (c.customName || c.subject || '').startsWith(p));
-        const missing = active.filter((c: any) => !mountedSessions.has(c.sessionId) && (!isEffectivelySub(c) || isSubSessionsWorkspace));
+        const missing = active.filter((c: any) => !mountedSessions.has(c.sessionId) && (showSubs || !c.isSubSession));
 
         // Report missing sessions count to parent (for Layout button indicator)
         onMissingSessionsRef.current?.(missing.length);
@@ -1404,8 +1406,9 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
             }
           }
 
-          // Priority 2: Add as separate split panel — only when explicitly triggered (Layout button)
+          // Priority 2: Add as separate split panel — only when explicitly triggered
           if (!(window as any).__cuiAutoLayoutActive) {
+            console.log(`[LM] auto-sync: skipping new panel creation for session ${conv.sessionId} (auto-layout disabled)`);
             continue;
           }
           // Find a CUI tabset to split from (prefer one with existing CUI panels)

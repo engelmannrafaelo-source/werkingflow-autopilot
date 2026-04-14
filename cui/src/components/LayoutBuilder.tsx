@@ -6,12 +6,12 @@ const ACCOUNT_LABELS: Record<string, string> = Object.fromEntries(ACCOUNTS.map(a
 
 // --- Panel options for cell assignment ---
 const PANEL_OPTIONS = [
-  { value: 'cui:engelmann', label: 'CUI: Engelmann' },
-  { value: 'cui:office', label: 'CUI: Office' },
-  { value: 'cui:gmail', label: 'CUI: Gmail' },
-  { value: 'cui:local', label: 'CUI: Local' },
-  { value: 'cui:gemini', label: 'CUI: Gemini' },
-  { value: 'cui:werking', label: 'CUI: Werking' },
+  { value: 'cui:engelmann', label: 'Chat: Engelmann' },
+  { value: 'cui:office', label: 'Chat: Office' },
+  { value: 'cui:gmail', label: 'Chat: Gmail' },
+  { value: 'cui:local', label: 'Chat: Local' },
+  { value: 'cui:gemini', label: 'Chat: Gemini' },
+  { value: 'cui:werking', label: 'Chat: Werking' },
   { value: 'images', label: 'Images' },
   { value: 'browser', label: 'Browser' },
   { value: 'preview', label: 'File Preview' },
@@ -89,6 +89,21 @@ interface PanelConfig {
   config: Record<string, string>;
 }
 
+// Map workspace workDir to default browser URL
+const CUI_APP_HOST_LB = (typeof window !== 'undefined' && (window as any).__CUI_APP_HOST__) || 'http://localhost';
+const WORKSPACE_BROWSER_PORTS_LB: Record<string, number> = {
+  "engelmann-ai-hub": 3009,
+  "engelmann-dashboards": 3010,
+  "werking-energy": 3007,
+  "werking-report": 3008,
+  "werkingsafety": 3006,
+};
+function browserUrlFromWorkDir(workDir: string): string {
+  const wsId = workDir.split("/").pop() || "";
+  const port = WORKSPACE_BROWSER_PORTS_LB[wsId];
+  return port ? `${CUI_APP_HOST_LB}:${port}` : "";
+}
+
 function panelFromValue(value: string, workDir: string): PanelConfig {
   if (value.startsWith('cui:')) {
     const accountId = value.split(':')[1];
@@ -96,7 +111,7 @@ function panelFromValue(value: string, workDir: string): PanelConfig {
   }
   switch (value) {
     case 'images':   return { component: 'images', name: 'Images', config: {} };
-    case 'browser':  return { component: 'browser', name: 'Browser', config: { url: '' } };
+    case 'browser':  return { component: 'browser', name: 'Browser', config: { url: browserUrlFromWorkDir(workDir) } };
     case 'preview':  return { component: 'preview', name: 'File Preview', config: { watchPath: workDir } };
     case 'notes':    return { component: 'notes', name: 'Notes', config: {} };
     case 'mission':  return { component: 'mission', name: 'Mission Control', config: {} };
@@ -460,7 +475,7 @@ export default function LayoutBuilder({ workDir, onApply, onClose }: LayoutBuild
                     cursor: 'pointer',
                   }}
                 >
-                  <optgroup label="CUI">
+                  <optgroup label="Chat">
                     {filteredPanelOptions.filter(o => o.value.startsWith('cui:')).map(o => (
                       <option key={o.value} value={o.value} disabled={!o.allowed}>
                         {o.allowed ? o.label : `${o.label} (nicht verfügbar)`}
