@@ -22,7 +22,7 @@ function isValidWorkDir(d: string): boolean {
   if (d === '/root/projekte' || d === '/root/projekte/') return false; // Guard: no bare root-projekte
   return d.startsWith("/root/projekte/") || d.startsWith("/root/orchestrator/") || d.startsWith("/home/claude-user") || d.startsWith("/opt/");
 }
-import { IS_LOCAL_MODE, onSessionStateChange, setSessionState } from './state.js';
+import { IS_LOCAL_MODE, onSessionStateChange, setSessionState, LAYOUTS_DIR } from './state.js';
 import * as claudeCli from './claude-cli.js';
 
 const execAsync = promisify(exec);
@@ -1584,9 +1584,45 @@ router.post('/conversation/:sessionId/finish', async (req, res) => {
       }
     }
     broadcast({ type: 'control:conversation-finished', sessionId: sid, panelsToClose });
+    // Also remove the session from all layout files on disk.
+    // This covers workspaces not currently open (visibilityRegistry only tracks visible panels).
+    try {
+      const layoutFiles = readdirSync(LAYOUTS_DIR).filter((f: string) => f.endsWith('.json') && !f.includes('.bak'));
+      for (const file of layoutFiles) {
+        const layoutPath = `${LAYOUTS_DIR}/${file}`;
+        try {
+          const layout = JSON.parse(readFileSync(layoutPath, 'utf8'));
+          const before = JSON.stringify(layout);
+          removeSessionFromLayout(layout, sid);
+          const after = JSON.stringify(layout);
+          if (before !== after) {
+            writeFileSync(layoutPath, JSON.stringify(layout, null, 2));
+            console.log(`[Finish] Removed session ${sid.slice(0, 8)} from layout ${file}`);
+          }
+        } catch { /* skip unreadable files */ }
+      }
+    } catch (err) {
+      console.warn('[Finish] Layout cleanup failed:', err);
+    }
   }
   res.json({ ok: true, sessionId: sid, finished });
 });
+
+function removeSessionFromLayout(node: any, sessionId: string): void {
+  if (!node || typeof node !== 'object') return;
+  if (node.type === 'tabset' && Array.isArray(node.children)) {
+    node.children = node.children.filter((tab: any) => {
+      if (tab.type !== 'tab') return true;
+      const route = tab.config?._route || '';
+      const cfgSid = tab.config?.initialSessionId || '';
+      const sid = route.startsWith('/c/') ? route.slice(3) : cfgSid;
+      return sid !== sessionId;
+    });
+  }
+  for (const val of Object.values(node)) {
+    if (val && typeof val === 'object') removeSessionFromLayout(val, sessionId);
+  }
+}
 
 // 5e. Start a review session for a conversation
 // Extracts user inputs, starts independent review session, auto-injects result when done
