@@ -1303,25 +1303,24 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         );
         const activeSessionIds = new Set(active.map((c: any) => c.sessionId));
 
-        // Cleanup: remove tabs whose session is no longer active (finished or too old)
-        // ONLY when user explicitly clicked Layout button (prevents sessions from disappearing)
+        // Cleanup: remove tabs whose session is no longer active
+        // - manualFinished sessions: always remove immediately (finished = not shown)
+        // - other stale tabs: only remove when user explicitly clicked Layout button
         let removed = 0;
-        if ((window as any).__cuiAutoLayoutActive) {
-          for (const [sid, nodeId] of mountedSessions) {
-            // Keep if session is in active list
-            if (activeSessionIds.has(sid)) continue;
-            // Keep panels reserved for new session creation (placeholder route)
-            if (sid === '_starting') continue;
-            // Remove stale tab
-            try {
-              m.doAction(Actions.deleteTab(nodeId));
-              removed++;
-            } catch (err) { console.warn('[LM] cleanup deleteTab failed:', err); }
-          }
-          if (removed > 0) {
-            saveLayoutRef.current(m);
-            console.log(`[LM] Cleanup: removed ${removed} stale tabs`);
-          }
+        for (const [sid, nodeId] of mountedSessions) {
+          if (activeSessionIds.has(sid)) continue;
+          if (sid === '_starting') continue;
+          const conv = conversations.find((c: any) => c.sessionId === sid);
+          const isExplicitlyFinished = conv?.manualFinished === true;
+          if (!isExplicitlyFinished && !(window as any).__cuiAutoLayoutActive) continue;
+          try {
+            m.doAction(Actions.deleteTab(nodeId));
+            removed++;
+          } catch (err) { console.warn('[LM] cleanup deleteTab failed:', err); }
+        }
+        if (removed > 0) {
+          saveLayoutRef.current(m);
+          console.log(`[LM] Cleanup: removed ${removed} stale/finished tabs`);
         }
 
         // Find missing conversations (not yet mounted in any panel)
