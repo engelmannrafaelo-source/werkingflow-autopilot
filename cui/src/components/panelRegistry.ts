@@ -39,12 +39,13 @@ export const ActivityFeedPanel = lazy(() => import('./panels/ActivityFeedPanel')
 export const PartnerInboxPanel = lazy(() => import('./panels/PartnerInboxPanel'));
 export const FeedbackPanel = lazy(() => import('./panels/FeedbackPanel'));
 export const TeamStatusPanel = lazy(() => import('./panels/TeamStatusPanel'));
+export const UploadPanel = lazy(() => import('./panels/UploadPanel'));
 
 // --- Panel ID → Display Name ---
 // Aliases (virtual-office, gmail, knowledge-fullscreen, infrastructure) sind enthalten.
 export const PANEL_NAMES: Record<string, string> = {
-  cui: 'CUI',
-  'cui-lite': 'CUI',
+  cui: 'Chat',
+  'cui-lite': 'Chat',
   browser: 'Browser',
   preview: 'File Preview',
   notes: 'Notes',
@@ -81,6 +82,7 @@ export const PANEL_NAMES: Record<string, string> = {
   'partner-inbox': 'Partner Inbox',
   feedback: 'Feedback',
   'team-status': 'Team Status',
+  'uploads': 'Uploads',
 };
 
 // --- Dropdown-Optionen für den [+] Tab-Picker (grouped) ---
@@ -92,7 +94,7 @@ export const PANEL_MENU_OPTIONS: PanelMenuGroup[] = [
   {
     category: 'Workspace',
     items: [
-      { value: 'cui', label: 'CUI' },
+      { value: 'cui', label: 'Chat' },
       { value: 'browser', label: 'Browser' },
       { value: 'preview', label: 'File Preview' },
       { value: 'notes', label: 'Notes' },
@@ -150,6 +152,7 @@ export const PANEL_MENU_OPTIONS: PanelMenuGroup[] = [
       { value: 'partner-inbox', label: 'Partner Inbox' },
       { value: 'feedback', label: 'Feedback' },
       { value: 'team-status', label: 'Team Status' },
+      { value: 'uploads', label: 'Uploads' },
     ],
   },
 ];

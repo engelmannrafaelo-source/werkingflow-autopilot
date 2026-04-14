@@ -64,7 +64,7 @@ import {
   ConversationQueuePanel, MaintenancePanel, UserInputAuditPanel,
   ArchitectureExplorer, ReportBuilder, PromptExplorer, BusinessAngelPanel, SubSessionPanel,
   MyTasksPanel, ActivityFeedPanel, PartnerInboxPanel,
-  FeedbackPanel, TeamStatusPanel, BusinessDocsPanel,
+  FeedbackPanel, TeamStatusPanel, BusinessDocsPanel, UploadPanel,
   PANEL_NAMES, PANEL_MENU_OPTIONS,
 } from './panelRegistry';
 // LayoutBuilder ist Desktop-only — bleibt hier
@@ -462,6 +462,8 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         return wrapPanel('Team Status', withSuspense(<TeamStatusPanel />));
       case 'business-docs':
         return wrapPanel('Business Docs', withSuspense(<BusinessDocsPanel />));
+      case 'uploads':
+        return wrapPanel('Uploads', withSuspense(<UploadPanel />));
       default:
         return wrapPanel(`Unknown:${component}`,
           <div style={{ padding: 20, color: 'var(--tn-text-muted)' }}>
@@ -554,7 +556,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
   const saveLayoutRef = useRef(saveLayout);
   saveLayoutRef.current = saveLayout;
 
-  const addTab = useCallback((type: 'cui' | 'cui-lite' | 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'gmail' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'repo-dashboard' | 'watchdog' | 'background-ops' | 'conversation-queue' | 'maintenance' | 'input-audit' | 'qa-dashboard' | 'peer-awareness' | 'infisical-monitor' | 'mission-chat' | 'architecture' | 'report-builder' | 'prompt-explorer' | 'sub-sessions' | 'business-docs' | 'my-tasks' | 'activity-feed' | 'partner-inbox' | 'feedback' | 'team-status', config: Record<string, string>, targetId: string) => {
+  const addTab = useCallback((type: 'cui' | 'cui-lite' | 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'gmail' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'repo-dashboard' | 'watchdog' | 'background-ops' | 'conversation-queue' | 'maintenance' | 'input-audit' | 'qa-dashboard' | 'peer-awareness' | 'infisical-monitor' | 'mission-chat' | 'architecture' | 'report-builder' | 'prompt-explorer' | 'sub-sessions' | 'business-docs' | 'my-tasks' | 'activity-feed' | 'partner-inbox' | 'feedback' | 'team-status' | 'uploads', config: Record<string, string>, targetId: string) => {
     const m = modelRef.current;
     if (!m) return;
     // Panel-Namen kommen aus der Registry (SSoT)
@@ -586,7 +588,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           if (val === 'cui') {
             addTab('cui', { _userReserved: String(Date.now()) }, node.getId());
           } else {
-            addTab(val as 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'gmail' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'repo-dashboard' | 'watchdog' | 'background-ops' | 'conversation-queue' | 'maintenance' | 'input-audit' | 'qa-dashboard' | 'peer-awareness' | 'infisical-monitor' | 'mission-chat' | 'architecture' | 'report-builder' | 'prompt-explorer' | 'sub-sessions' | 'business-docs' | 'my-tasks' | 'activity-feed' | 'partner-inbox' | 'feedback' | 'team-status', {}, node.getId());
+            addTab(val as 'browser' | 'preview' | 'notes' | 'images' | 'mission' | 'gmail' | 'admin-wr' | 'linkedin' | 'system-health' | 'bridge-monitor' | 'repo-dashboard' | 'watchdog' | 'background-ops' | 'conversation-queue' | 'maintenance' | 'input-audit' | 'qa-dashboard' | 'peer-awareness' | 'infisical-monitor' | 'mission-chat' | 'architecture' | 'report-builder' | 'prompt-explorer' | 'sub-sessions' | 'business-docs' | 'my-tasks' | 'activity-feed' | 'partner-inbox' | 'feedback' | 'team-status' | 'uploads', {}, node.getId());
           }
           e.target.value = '';
         }}

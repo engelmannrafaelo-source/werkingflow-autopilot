@@ -3,6 +3,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { IS_LOCAL_MODE, broadcast } from './state.js';
 import { readFileSync, readdirSync, statSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
+import Busboy from 'busboy';
 
 interface LayoutsDeps {
   LAYOUTS_DIR: string;
@@ -273,6 +274,56 @@ export default function createLayoutsRouter(deps: LayoutsDeps): Router {
     }
     writeFileSync(join(LAYOUTS_DIR, `${req.params.projectId}_template.json`), JSON.stringify(req.body, null, 2));
     res.json({ ok: true });
+  });
+
+
+  // ============================================================================
+  // File Upload API (multipart FormData — for UploadPanel)
+  // ============================================================================
+  const FILE_UPLOADS_DIR = '/tmp/cui-uploads';
+  mkdirSync(FILE_UPLOADS_DIR, { recursive: true });
+
+  router.post('/uploads/file', (req: Request, res: Response) => {
+    let bb: any;
+    try {
+      bb = Busboy({ headers: req.headers, limits: { fileSize: 100 * 1024 * 1024 } });
+    } catch (e: any) {
+      res.status(400).json({ error: 'Invalid multipart request: ' + e.message });
+      return;
+    }
+
+    let handled = false;
+    bb.on('file', (fieldname: string, file: any, info: any) => {
+      if (handled) return;
+      handled = true;
+
+      const originalName = info.filename || 'upload';
+      const ext = originalName.match(/\.[^.]+$/)?.[0] || '';
+      const safeName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
+      const finalPath = join(FILE_UPLOADS_DIR, safeName);
+
+      const chunks: Buffer[] = [];
+      file.on('data', (chunk: Buffer) => chunks.push(chunk));
+      file.on('end', () => {
+        const buffer = Buffer.concat(chunks);
+        writeFileSync(finalPath, buffer);
+        console.log(`[FileUpload] Saved ${originalName} -> ${finalPath} (${Math.round(buffer.length / 1024)}KB)`);
+        res.json({ path: finalPath, filename: originalName, size: buffer.length });
+      });
+      file.on('error', (err: Error) => {
+        res.status(500).json({ error: 'Upload stream error: ' + err.message });
+      });
+    });
+
+    bb.on('error', (err: Error) => {
+      if (!handled) res.status(400).json({ error: 'Parse error: ' + err.message });
+    });
+
+    bb.on('close', () => {
+      if (!handled) res.status(400).json({ error: 'No file field found in upload' });
+    });
+
+    req.pipe(bb);
   });
 
   // ============================================================================

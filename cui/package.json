@@ -21,10 +21,12 @@
     "generate:shared-notes": "tsx scripts/generate-shared-notes-simple.ts"
   },
   "dependencies": {
+    "@types/busboy": "^1.5.4",
     "@types/d3": "^7.4.3",
     "@types/d3-sankey": "^0.12.5",
     "@types/diff": "^7.0.2",
     "@types/http-proxy": "^1.17.17",
+    "busboy": "^1.6.0",
     "chokidar": "^5.0.0",
     "d3": "^7.9.0",
     "d3-sankey": "^0.12.3",
