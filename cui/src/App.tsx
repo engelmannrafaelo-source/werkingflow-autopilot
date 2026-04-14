@@ -466,7 +466,8 @@ function AppContent() {
       // Stale detection: if "working" but no WS update in 90s, treat as needs_attention
       // UNLESS the process is still alive (it may just be running a long tool)
       let isStale = false;
-      if (rawState === 'working' && !conv.processAlive) {
+      if (rawState === 'working') {
+        // Stale if no WS update in 90s — applies even when process is alive (tool-heartbeats keep it fresh)
         const lastUpdate = ss?.since || (conv.updatedAt ? new Date(conv.updatedAt).getTime() : 0);
         if (lastUpdate > 0) {
           isStale = (now - lastUpdate) > 90_000;
