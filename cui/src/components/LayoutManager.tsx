@@ -204,6 +204,79 @@ interface LayoutManagerProps {
 export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAttentionChange, onCuiStateReset, pendingActivation, onActivationProcessed, isActive, onMissingSessions }: LayoutManagerProps) {
   const { canAccessPanel } = useAuth();
 
+  // Pinned panels state: set of pinned tabset IDs
+  const [pinnedTabsetIds, setPinnedTabsetIds] = useState<Set<string>>(new Set());
+  const pinnedTabsetIdsRef = useRef(pinnedTabsetIds);
+  pinnedTabsetIdsRef.current = pinnedTabsetIds;
+
+  // Fetch pinned panels config on mount
+  useEffect(() => {
+    fetch(`${API}/pinned-panels`, { signal: AbortSignal.timeout(5000) })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data?.pinnedTabsets) {
+          setPinnedTabsetIds(new Set(data.pinnedTabsets.map((pt: any) => pt.id)));
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Pin/unpin a tabset
+  const togglePinTabset = useCallback((tabsetId: string) => {
+    const m = modelRef.current;
+    if (!m) return;
+
+    const isPinned = pinnedTabsetIdsRef.current.has(tabsetId);
+
+    if (isPinned) {
+      // Unpin
+      fetch(`${API}/pinned-panels/${encodeURIComponent(tabsetId.replace(/^#/, ''))}`, {
+        method: 'DELETE',
+        signal: AbortSignal.timeout(5000),
+      }).then(r => r.ok ? r.json() : null).then(() => {
+        setPinnedTabsetIds(prev => { const next = new Set(prev); next.delete(tabsetId); return next; });
+      }).catch(err => console.warn('[LayoutManager] unpin failed:', err));
+    } else {
+      // Pin: extract tab info + actual weight from the tabset
+      const node = m.getNodeById(tabsetId);
+      if (!node || !(node instanceof TabSetNode)) return;
+
+      // Check if tabset has non-CUI tabs
+      const tabs: Array<{ name: string; component: string }> = [];
+      node.getChildren().forEach(child => {
+        if (child instanceof TabNode) {
+          const comp = child.getComponent();
+          if (comp !== 'cui' && comp !== 'cui-lite') {
+            tabs.push({ name: child.getName(), component: comp || 'unknown' });
+          }
+        }
+      });
+      if (tabs.length === 0) {
+        console.warn('[LayoutManager] Cannot pin tabset: only CUI panels');
+        return;
+      }
+
+      // Extract actual weight from layout model for exact size reproduction
+      const actualWeight = (node as any).getWeight?.() ?? 50;
+      // Determine position: if tabset is the last child in its parent row, it's "right"
+      const parent = node.getParent();
+      const siblings = parent?.getChildren() ?? [];
+      const idx = siblings.indexOf(node);
+      const position = idx === 0 ? 'left' : 'right';
+
+      fetch(`${API}/pinned-panels/pin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tabsetId, projectId, position, weight: actualWeight }),
+        signal: AbortSignal.timeout(5000),
+      }).then(r => r.ok ? r.json() : null).then(data => {
+        if (data?.pinnedId) {
+          setPinnedTabsetIds(prev => new Set([...prev, data.pinnedId]));
+        }
+      }).catch(err => console.warn('[LayoutManager] pin failed:', err));
+    }
+  }, [projectId]);
+
   // Stale-while-revalidate: use cached layout instantly, refresh in background
   const [model, setModel] = useState<Model | null>(() => {
     try {
@@ -594,7 +667,48 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
   }, [workDir]);
 
   const onRenderTabSet = useCallback((node: TabSetNode | BorderNode, renderValues: ITabSetRenderValues) => {
-    const nodeId = node.getId().replace(/^#/, '');
+    if (node instanceof BorderNode) return;
+    const fullNodeId = node.getId();
+    const nodeId = fullNodeId.replace(/^#/, '');
+    const isPinned = pinnedTabsetIdsRef.current.has(fullNodeId);
+
+    // Pin/unpin button — only show for non-CUI-only tabsets
+    const hasPinnableTabs = node.getChildren().some(child => {
+      if (child instanceof TabNode) {
+        const comp = child.getComponent();
+        return comp !== 'cui' && comp !== 'cui-lite';
+      }
+      return false;
+    });
+
+    if (hasPinnableTabs) {
+      renderValues.stickyButtons.push(
+        <button
+          key="pin-toggle"
+          data-ai-id={`pin-toggle-${nodeId}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            togglePinTabset(fullNodeId);
+          }}
+          title={isPinned ? 'Panel loslösen (Unpin)' : 'Panel fixieren (Pin) — wird in allen Layouts angezeigt'}
+          className={isPinned ? 'pinned-panel-btn pinned-panel-btn--active' : 'pinned-panel-btn'}
+          style={{
+            background: 'none',
+            border: 'none',
+            color: isPinned ? 'var(--tn-blue, #7aa2f7)' : 'var(--tn-text-muted)',
+            fontSize: 13,
+            cursor: 'pointer',
+            padding: '0 3px',
+            opacity: isPinned ? 1 : 0.6,
+            transition: 'opacity 0.2s, color 0.2s',
+          }}
+        >
+          {isPinned ? '\u{1F4CC}' : '\u{1F4CC}'}
+        </button>
+      );
+    }
+
+    // Add-tab dropdown
     renderValues.stickyButtons.push(
       <select
         key="add-tab"
@@ -641,7 +755,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         )}
       </select>
     );
-  }, [addTab, canAccessPanel]);
+  }, [addTab, canAccessPanel, togglePinTabset]);
 
   // When cuiStates changes, update tab header dots via DOM (no React re-render needed).
   // Direct DOM manipulation avoids triggering flexlayout's expensive render/layout cycle.
@@ -871,6 +985,10 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
             console.log(`[LayoutManager] Nuked ${keys.length} layout cache entries, reloading...`);
           } catch (e) { console.warn('[LayoutManager] nuke-layout-cache error:', e); }
           setTimeout(() => window.location.reload(), 500);
+        }
+        // Pinned panels changed: update local state
+        if (msg.type === 'pinned-panels-changed' && msg.config?.pinnedTabsets) {
+          setPinnedTabsetIds(new Set(msg.config.pinnedTabsets.map((pt: any) => pt.id)));
         }
         // Server-pushed layout update: apply without reload (triggered by POST /api/layouts/:projectId)
         if (msg.type === 'control:apply-layout' && msg.projectId === projectId && msg.layout) {

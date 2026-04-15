@@ -284,27 +284,42 @@ export default function createControlRouter(deps: ControlDeps): Router {
       utilityTabs.push({ type: 'tab' as const, id: nextId(), name: 'Sub-Sessions', component: 'sub-sessions', config: {} });
     }
 
+    // Layout strategy: ALL children are tabsets at the SAME level (no nested rows!)
+    // flexlayout alternates direction on nesting: row→horizontal, nested row→VERTICAL.
+    // Keeping everything flat in one top-level row = all panels side by side horizontally.
     let layoutChildren: any[];
     if (cuiTabs.length <= 1) {
+      // 1 CUI + utility: simple 60/40 split
       layoutChildren = [
         { type: 'tabset', id: nextId(), weight: 60, children: cuiTabs.length > 0 ? cuiTabs : [{ type: 'tab', id: nextId(), name: 'CUI', component: 'cui', config: {} }] },
         { type: 'tabset', id: nextId(), weight: 40, children: utilityTabs },
       ];
     } else if (cuiTabs.length === 2) {
+      // 2 CUI panels + utility: flat row with 3 tabsets (all horizontal)
       layoutChildren = [
-        { type: 'row', id: nextId(), weight: 60, children: [
-          { type: 'tabset', id: nextId(), weight: 50, children: [cuiTabs[0]] },
-          { type: 'tabset', id: nextId(), weight: 50, children: [cuiTabs[1]] },
-        ]},
-        { type: 'tabset', id: nextId(), weight: 40, children: utilityTabs },
+        { type: 'tabset', id: nextId(), weight: 35, children: [cuiTabs[0]] },
+        { type: 'tabset', id: nextId(), weight: 35, children: [cuiTabs[1]] },
+        { type: 'tabset', id: nextId(), weight: 30, children: utilityTabs },
+      ];
+    } else if (cuiTabs.length === 3) {
+      // 3 CUI panels + utility: flat row with 4 tabsets
+      layoutChildren = [
+        { type: 'tabset', id: nextId(), weight: 25, children: [cuiTabs[0]] },
+        { type: 'tabset', id: nextId(), weight: 25, children: [cuiTabs[1]] },
+        { type: 'tabset', id: nextId(), weight: 25, children: [cuiTabs[2]] },
+        { type: 'tabset', id: nextId(), weight: 25, children: utilityTabs },
       ];
     } else {
-      const cuiTabsets = cuiTabs.map(tab => ({
-        type: 'tabset', id: nextId(), weight: Math.floor(100 / cuiTabs.length), children: [tab],
-      }));
+      // 4+ CUI panels: stack CUI tabs into fewer tabsets to avoid too many columns
+      // Group CUI tabs into pairs, each pair in one tabset (as tabs, not separate panels)
+      const cuiTabsets: any[] = [];
+      for (let i = 0; i < cuiTabs.length; i += 2) {
+        const tabs = cuiTabs.slice(i, i + 2);
+        cuiTabsets.push({ type: 'tabset', id: nextId(), weight: Math.floor(70 / Math.ceil(cuiTabs.length / 2)), children: tabs });
+      }
       layoutChildren = [
-        { type: 'row', id: nextId(), weight: 65, children: cuiTabsets },
-        { type: 'tabset', id: nextId(), weight: 35, children: utilityTabs },
+        ...cuiTabsets,
+        { type: 'tabset', id: nextId(), weight: 30, children: utilityTabs },
       ];
     }
 
@@ -321,8 +336,26 @@ export default function createControlRouter(deps: ControlDeps): Router {
 
     const layoutWithVersion = { ...newLayout, _v: currentVersion + 1 };
     try { mkdirSync(LAYOUTS_DIR, { recursive: true }); } catch { /* exists */ }
+    // Save without pinned panels (they're stored separately)
     writeFileSync(layoutPath, JSON.stringify(layoutWithVersion, null, 2));
-    broadcast({ type: 'control:apply-layout', projectId, layout: layoutWithVersion });
+
+    // Broadcast merged version (with pinned panels) to clients
+    let broadcastLayout = layoutWithVersion;
+    try {
+      const pinnedPath = join(DATA_DIR, 'pinned-panels.json');
+      if (existsSync(pinnedPath)) {
+        const pinned = JSON.parse(readFileSync(pinnedPath, 'utf8'));
+        if (pinned?.pinnedTabsets?.length > 0) {
+          // Import merge logic inline to avoid circular deps
+          const { mergePinnedIntoLayout } = await import('./layouts.js');
+          const merged = mergePinnedIntoLayout(JSON.parse(JSON.stringify(layoutWithVersion)), pinned);
+          merged._v = currentVersion + 1;
+          broadcastLayout = merged;
+        }
+      }
+    } catch (err) { console.warn('[AutoLayout] Pinned merge error:', err); }
+
+    broadcast({ type: 'control:apply-layout', projectId, layout: broadcastLayout });
     console.log(`[AutoLayout] ${projectId}: Generated fresh layout with ${mainConvs.length} main + ${subConvs.length} sub-sessions`);
 
     return { triggered: true, total: mainConvs.length + subConvs.length, subSessions: subConvs.length };
@@ -347,7 +380,8 @@ export default function createControlRouter(deps: ControlDeps): Router {
     const projectFile = join(PROJECTS_DIR, `${projectId}.json`);
     if (!existsSync(projectFile)) { res.status(404).json({ error: `project ${projectId} not found` }); return; }
     workspaceState.activeProjectId = projectId;
-    broadcast({ type: 'control:project-switch', projectId });
+    // Don't broadcast project-switch to avoid feedback loop between multiple CUI windows
+    // Other windows should NOT auto-switch when one window navigates
     // Auto-layout on project/switch: ensure all conversations get a panel
     const layoutResult = await runAutoLayout(projectId);
     if (layoutResult.triggered) {
