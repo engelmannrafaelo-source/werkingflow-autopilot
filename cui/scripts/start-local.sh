@@ -72,11 +72,13 @@ _inject_infisical_secret() {
 if [ "$INFISICAL_LOADED" = "true" ]; then
   echo "[Startup] Injecting secrets from Infisical..."
 
-  # CUI operational secrets — all sourced from dev-server/dev (UA token has local+dev access only)
-  # AI_BRIDGE_API_KEY and AI_BRIDGE_URL already loaded from dev-server/dev via .bashrc
+  # CUI operational secrets
+  # AI_BRIDGE_API_KEY/URL: from dev-server/dev (CUI infra secret, not an app secret)
   _inject_infisical_secret AI_BRIDGE_API_KEY "${INFISICAL_WS_DEV_SERVER:-}" dev AI_BRIDGE_API_KEY
-  _inject_infisical_secret WERKING_REPORT_ADMIN_SECRET "${INFISICAL_WS_DEV_SERVER:-}" dev WERKING_REPORT_ADMIN_SECRET
+  # VERCEL_TOKEN: from dev-server/dev (CUI infra secret for ops/deployments panel)
   _inject_infisical_secret VERCEL_TOKEN "${INFISICAL_WS_DEV_SERVER:-}" dev VERCEL_TOKEN
+  # WR Admin Secret: read directly from werking-report/dev (SST — no copy in dev-server)
+  _inject_infisical_secret WERKING_REPORT_ADMIN_SECRET "${INFISICAL_WS_WERKING_REPORT:-}" dev ADMIN_SECRET
 
   # Infisical API Token (fresh JWT for Infisical Monitor panel)
   if [ -z "$INFISICAL_API_TOKEN" ] && type _infisical_token &>/dev/null; then
