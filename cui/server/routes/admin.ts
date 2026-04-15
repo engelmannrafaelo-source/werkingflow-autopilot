@@ -88,7 +88,7 @@ async function wrProxy(url: string, init?: RequestInit): Promise<{ status: numbe
 const VERCEL_APPS = [
   { name: 'werking-report', projectSlug: 'werking-report' },
   { name: 'werking-energy', projectSlug: 'werking-energy' },
-  { name: 'platform', projectSlug: 'platform-werkingflow' },
+  { name: 'platform', projectSlug: 'werkingflow-platform' },
   { name: 'engelmann', projectSlug: 'engelmann' },
   { name: 'werking-safety', projectSlug: 'werking-safety' },
 ];
@@ -475,6 +475,22 @@ export default function createAdminRouter(deps: AdminDeps): Router {
     catch (err: any) { console.warn('[Admin] Proxy error:', err.message); res.status(500).json({ error: err.message }); }
   });
 
+  // Notification proxy routes
+  router.get("/admin/wr/notifications", async (_req: Request, res: Response) => {
+    try { const r = await wrProxy(`${wrBase()}/api/admin/notifications`); res.status(r.status).json(r.body); }
+    catch (err: any) { console.warn("[Admin] Proxy error:", err.message); res.status(500).json({ error: err.message }); }
+  });
+
+  router.post("/admin/wr/notifications/:id/read", async (req: Request, res: Response) => {
+    try { const r = await wrProxy(`${wrBase()}/api/admin/notifications/${req.params.id}/read`, { method: "POST" }); res.status(r.status).json(r.body); }
+    catch (err: any) { console.warn("[Admin] Proxy error:", err.message); res.status(500).json({ error: err.message }); }
+  });
+
+  router.post("/admin/wr/notifications/read-all", async (_req: Request, res: Response) => {
+    try { const r = await wrProxy(`${wrBase()}/api/admin/notifications/read-all`, { method: "POST" }); res.status(r.status).json(r.body); }
+    catch (err: any) { console.warn("[Admin] Proxy error:", err.message); res.status(500).json({ error: err.message }); }
+  });
+
   // ============================================================
   // Ops - Vercel Deployment Status
   // ============================================================
@@ -482,6 +498,7 @@ export default function createAdminRouter(deps: AdminDeps): Router {
   // GET /api/ops/deployments -- Vercel deployment status for all tracked apps
   router.get('/ops/deployments', async (_req: Request, res: Response) => {
     const VERCEL_TOKEN = process.env.VERCEL_TOKEN ?? '';
+    const VERCEL_TEAM_ID = process.env.VERCEL_TEAM_ID ?? '';
     if (!VERCEL_TOKEN) {
       res.status(500).json({ error: 'VERCEL_TOKEN not set' });
       return;
@@ -489,7 +506,8 @@ export default function createAdminRouter(deps: AdminDeps): Router {
     try {
       const results = await Promise.all(VERCEL_APPS.map(async (app) => {
         try {
-          const url = `https://api.vercel.com/v6/deployments?projectId=${app.projectSlug}&limit=1&target=production`;
+          const teamParam = VERCEL_TEAM_ID ? `&teamId=${VERCEL_TEAM_ID}` : '';
+          const url = `https://api.vercel.com/v6/deployments?projectId=${app.projectSlug}&limit=1&state=READY${teamParam}`;
           const response = await fetch(url, {
             headers: { Authorization: `Bearer ${VERCEL_TOKEN}` },
             signal: AbortSignal.timeout(10000),

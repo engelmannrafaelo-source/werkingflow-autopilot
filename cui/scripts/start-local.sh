@@ -72,17 +72,11 @@ _inject_infisical_secret() {
 if [ "$INFISICAL_LOADED" = "true" ]; then
   echo "[Startup] Injecting secrets from Infisical..."
 
-  # AI Bridge API Key (from Engelmann workspace, shared across all apps)
-  _inject_infisical_secret AI_BRIDGE_API_KEY "${INFISICAL_WS_ENGELMANN:-}" prod AI_BRIDGE_API_KEY
-
-  # WR Admin Secret (from werking-report workspace)
-  _inject_infisical_secret WERKING_REPORT_ADMIN_SECRET "${INFISICAL_WS_WERKING_REPORT:-}" prod ADMIN_SECRET
-
-  # Admin Seed Secret (from werking-report workspace)
-  _inject_infisical_secret ADMIN_SEED_SECRET "${INFISICAL_WS_WERKING_REPORT:-}" prod ADMIN_SEED_SECRET
-
-  # Vercel API Token (from platform workspace)
-  _inject_infisical_secret VERCEL_TOKEN "${INFISICAL_WS_PLATFORM:-}" prod VERCEL_TOKEN
+  # CUI operational secrets — all sourced from dev-server/dev (UA token has local+dev access only)
+  # AI_BRIDGE_API_KEY and AI_BRIDGE_URL already loaded from dev-server/dev via .bashrc
+  _inject_infisical_secret AI_BRIDGE_API_KEY "${INFISICAL_WS_DEV_SERVER:-}" dev AI_BRIDGE_API_KEY
+  _inject_infisical_secret WERKING_REPORT_ADMIN_SECRET "${INFISICAL_WS_DEV_SERVER:-}" dev WERKING_REPORT_ADMIN_SECRET
+  _inject_infisical_secret VERCEL_TOKEN "${INFISICAL_WS_DEV_SERVER:-}" dev VERCEL_TOKEN
 
   # Infisical API Token (fresh JWT for Infisical Monitor panel)
   if [ -z "$INFISICAL_API_TOKEN" ] && type _infisical_token &>/dev/null; then
@@ -117,8 +111,6 @@ if [ "$INFISICAL_LOADED" = "true" ]; then
     if [ -n "$_skey" ]; then
       export SYNCTHING_API_KEY="$_skey"
       echo "[Startup] SYNCTHING_API_KEY loaded from syncthing config"
-    else
-      _inject_infisical_secret SYNCTHING_API_KEY "${INFISICAL_WS_DEV_SERVER:-}" prod SYNCTHING_API_KEY
     fi
     unset _skey
   fi
