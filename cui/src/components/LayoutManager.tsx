@@ -97,6 +97,10 @@ const WORKSPACE_BROWSER_URLS: Record<string, string> = Object.fromEntries(
 );
 
 function defaultLayout(_workDir: string): IJsonModel {
+  // Standard layout:
+  //   [ Chat (top)             | Tool Hub ]
+  //   [ Browser (workspace-App)|          ]
+  // Browser URL auto-fills from WORKSPACE_BROWSER_URLS via the factory (config.url empty).
   return {
     global: {
       tabEnableClose: true,
@@ -110,33 +114,37 @@ function defaultLayout(_workDir: string): IJsonModel {
       tabSetMinHeight: 150,
     },
     borders: [],
-    // Variante A: Chat 70% (workspace-specific) | Tool Hub 30% (tools + pin control)
     layout: {
       type: 'row',
       weight: 100,
       children: [
         {
-          type: 'tabset',
+          // Left column: Chat top, Browser bottom (workspace-specific App)
+          type: 'row',
           weight: 70,
           children: [
             {
-              type: 'tab',
-              name: 'Chat',
-              component: 'cui',
-              config: {},
+              type: 'tabset',
+              weight: 60,
+              children: [
+                { type: 'tab', name: 'Chat', component: 'cui', config: {} },
+              ],
+            },
+            {
+              type: 'tabset',
+              weight: 40,
+              children: [
+                { type: 'tab', name: 'Browser', component: 'browser', config: {} },
+              ],
             },
           ],
         },
         {
+          // Right column: Tool Hub
           type: 'tabset',
           weight: 30,
           children: [
-            {
-              type: 'tab',
-              name: 'Tool Hub',
-              component: 'tool-hub',
-              config: {},
-            },
+            { type: 'tab', name: 'Tool Hub', component: 'tool-hub', config: {} },
           ],
         },
       ],
