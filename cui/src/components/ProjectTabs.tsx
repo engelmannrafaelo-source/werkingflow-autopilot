@@ -310,6 +310,8 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
 
   // --- Category Navigation state ---
   const [categories, setCategories] = useState<WorkspaceCategory[]>(FALLBACK_CATEGORIES);
+  // Toggle between Active-Bar (default, only working/needs_attention/active) and Full Categories View
+  const [showAllWorkspaces, setShowAllWorkspaces] = useState<boolean>(false);
   const [lastWorkspacePerCat, _setLastWorkspacePerCat] = useState<Record<string, string>>(() => {
     try {
       const raw = localStorage.getItem('cui-last-workspace-per-category');
@@ -442,7 +444,7 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
       .sort((a, b) => scoreFn(a) - scoreFn(b));
   }, [projects, attention, canAccessWorkspace]);
 
-  // Group projects by category for multi-row rendering
+  // Group projects by category for multi-row rendering (Full View)
   const projectsByCategory = useMemo(() => {
     const map: Record<string, Project[]> = {};
     for (const p of sortedProjects) {
@@ -453,12 +455,115 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
     return map;
   }, [sortedProjects]);
 
-  // Click on a workspace tab: persist last-workspace-per-category then delegate to onSelect
+  // Active-Bar projects: only working/needs_attention + active workspace (always)
+  const activeOnlyProjects = useMemo(() => {
+    return sortedProjects.filter(p => {
+      const a = attention?.[p.id];
+      return p.id === activeId || a === 'working' || a === 'needs_attention';
+    });
+  }, [sortedProjects, attention, activeId]);
+
+  // Click on a workspace tab: persist last-workspace-per-category, auto-close Full View, then select
   const handleWorkspaceSelect = useCallback((wsId: string) => {
     const proj = sortedProjects.find(p => p.id === wsId);
     if (proj) persistLastWorkspace(getProjectCategory(proj), wsId);
+    setShowAllWorkspaces(false);
     onSelect(wsId);
   }, [sortedProjects, onSelect, persistLastWorkspace]);
+
+  // Workspace pill — used by both Active-Bar and Full-View
+  const renderProjectPill = (p: Project) => {
+    const origIdx = projects.indexOf(p);
+    return (
+      <div
+        key={p.id}
+        ref={p.id === activeId ? (el) => { el?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } : undefined}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          background: attention?.[p.id] === 'needs_attention'
+            ? 'rgba(255, 158, 100, 0.25)'
+            : attention?.[p.id] === 'working'
+              ? 'rgba(158, 206, 106, 0.18)'
+              : p.id === activeId ? 'var(--tn-surface)' : 'transparent',
+          borderBottom: attention?.[p.id] === 'needs_attention'
+            ? '3px solid #ff9e64'
+            : attention?.[p.id] === 'working'
+              ? '3px solid #9ece6a'
+              : p.id === activeId ? '2px solid var(--tn-blue)' : '2px solid transparent',
+          borderRadius: '4px 4px 0 0',
+          transition: 'all 0.15s',
+          flexShrink: 0,
+        }}
+      >
+        <button
+          onClick={() => handleWorkspaceSelect(p.id)}
+          onDoubleClick={(e) => { e.preventDefault(); onEdit(p.id); }}
+          title={`${p.name} — ${p.workDir}\nDoppelklick zum Bearbeiten${origIdx < 9 ? `\nCmd+${origIdx + 1}` : ''}`}
+          style={{
+            background: 'none',
+            color: p.id === activeId ? 'var(--tn-text)' : 'var(--tn-text-muted)',
+            border: 'none',
+            padding: '2px 8px 2px 10px',
+            fontSize: 11,
+            cursor: 'pointer',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            WebkitAppRegion: 'no-drag',
+          } as React.CSSProperties}
+        >
+          {attention?.[p.id] && (
+            <span style={{
+              width: 7, height: 7, borderRadius: '50%',
+              background: attention[p.id] === 'needs_attention' ? '#ff9e64'
+                : attention[p.id] === 'working' ? '#9ece6a'
+                : '#565f89',
+              boxShadow: attention[p.id] === 'needs_attention'
+                ? '0 0 8px #ff9e64aa, 0 0 3px #ff9e64'
+                : attention[p.id] === 'working'
+                ? '0 0 6px #9ece6a88'
+                : 'none',
+              display: 'inline-block', marginRight: 5, flexShrink: 0,
+              animation: attention[p.id] === 'needs_attention' ? 'pulse-attention 0.8s ease-in-out infinite'
+                : attention[p.id] === 'working' ? 'pulse 1.5s ease-in-out infinite'
+                : 'none',
+            }} />
+          )}
+          {origIdx < 9 && (
+            <span style={{ fontSize: 9, opacity: 0.4, marginRight: 4, fontFamily: 'monospace' }}>
+              {origIdx + 1}
+            </span>
+          )}
+          {p.name}
+        </button>
+        {projects.length > 1 && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete(p.id);
+            }}
+            title={`Delete ${p.name}`}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'var(--tn-text-muted)',
+              cursor: 'pointer',
+              fontSize: 10,
+              padding: '2px 6px 2px 0',
+              opacity: 0.5,
+              transition: 'opacity 0.15s',
+              WebkitAppRegion: 'no-drag',
+            } as React.CSSProperties}
+            onMouseEnter={(e) => { (e.target as HTMLElement).style.opacity = '1'; (e.target as HTMLElement).style.color = 'var(--tn-red)'; }}
+            onMouseLeave={(e) => { (e.target as HTMLElement).style.opacity = '0.5'; (e.target as HTMLElement).style.color = 'var(--tn-text-muted)'; }}
+          >
+            ✕
+          </button>
+        )}
+      </div>
+    );
+  };
 
   const handleRebuild = useCallback(async () => {
     if ((window as any).__cuiServerAlive === false) return;
@@ -711,170 +816,152 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
       <div style={{ flex: 1 }} />
     </div>{/* end Row 1 */}
 
-    {/* Row 2..N: One row per category, each with all its workspaces (1-click) */}
-    {categories.map((cat, catIdx) => {
-      const catProjects = projectsByCategory[cat.id] || [];
-      const isLastCategory = catIdx === categories.length - 1;
-      // Hide empty categories except the last (so + Projekt button always has a home)
-      if (catProjects.length === 0 && !isLastCategory) return null;
-      return (
+    {/* Active-Bar: only working/needs_attention/active workspaces (1 row, default view) */}
+    {!showAllWorkspaces && (
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 1,
+          padding: '1px 8px',
+          borderTop: '1px solid rgba(255,255,255,0.04)',
+          flexWrap: 'wrap',
+          minHeight: 24,
+          WebkitAppRegion: 'no-drag',
+        } as React.CSSProperties}
+      >
+        {activeOnlyProjects.map(renderProjectPill)}
+        {activeOnlyProjects.length === 0 && (
+          <span style={{ fontSize: 10, color: 'var(--tn-text-muted)', opacity: 0.5, padding: '2px 4px' }}>
+            Keine aktiven Workspaces
+          </span>
+        )}
+        <button
+          onClick={() => setShowAllWorkspaces(true)}
+          title="Alle Workspaces zeigen (klick auf Workspace zum Wechseln)"
+          style={{
+            background: 'none',
+            border: '1px dashed var(--tn-border)',
+            color: 'var(--tn-text-muted)',
+            padding: '2px 8px',
+            fontSize: 10,
+            fontWeight: 600,
+            cursor: 'pointer',
+            borderRadius: 3,
+            marginLeft: 6,
+            flexShrink: 0,
+            WebkitAppRegion: 'no-drag',
+          } as React.CSSProperties}
+        >
+          ▼ Alle ({sortedProjects.length})
+        </button>
+      </div>
+    )}
+
+    {/* Full View: One row per category — opens on toggle, auto-closes on workspace select */}
+    {showAllWorkspaces && (
+      <>
         <div
-          key={cat.id}
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: 4,
-            padding: '1px 8px',
+            justifyContent: 'space-between',
+            padding: '2px 8px',
             borderTop: '1px solid rgba(255,255,255,0.04)',
+            background: 'rgba(122,162,247,0.06)',
             minHeight: 22,
             WebkitAppRegion: 'no-drag',
           } as React.CSSProperties}
         >
-          {/* Category label (left, fixed width) */}
-          <div
-            title={cat.label}
+          <span style={{ fontSize: 10, color: 'var(--tn-blue)', fontWeight: 600 }}>
+            Alle Workspaces — Klick zum Wechseln
+          </span>
+          <button
+            onClick={() => setShowAllWorkspaces(false)}
+            title="Vollansicht schliessen"
             style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 4,
-              minWidth: 110,
-              maxWidth: 110,
+              background: 'none',
+              border: '1px solid var(--tn-border)',
+              color: 'var(--tn-text-muted)',
+              padding: '1px 8px',
               fontSize: 10,
               fontWeight: 600,
-              color: 'var(--tn-text-muted)',
-              opacity: 0.7,
-              padding: '2px 4px',
-              borderRight: '1px solid rgba(255,255,255,0.06)',
-              flexShrink: 0,
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-            }}
+              cursor: 'pointer',
+              borderRadius: 3,
+              WebkitAppRegion: 'no-drag',
+            } as React.CSSProperties}
           >
-            <span style={{ fontSize: 12 }}>{cat.icon}</span>
-            <span>{cat.label}</span>
-          </div>
-
-          {/* Workspaces in this category (right, flex-wrap) */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', flex: 1, minWidth: 0 }}>
-            {catProjects.map((p) => {
-              const origIdx = projects.indexOf(p);
-              return (
-                <div
-                  key={p.id}
-                  ref={p.id === activeId ? (el) => { el?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } : undefined}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    background: attention?.[p.id] === 'needs_attention'
-                      ? 'rgba(255, 158, 100, 0.25)'
-                      : attention?.[p.id] === 'working'
-                        ? 'rgba(158, 206, 106, 0.18)'
-                        : p.id === activeId ? 'var(--tn-surface)' : 'transparent',
-                    borderBottom: attention?.[p.id] === 'needs_attention'
-                      ? '3px solid #ff9e64'
-                      : attention?.[p.id] === 'working'
-                        ? '3px solid #9ece6a'
-                        : p.id === activeId ? '2px solid var(--tn-blue)' : '2px solid transparent',
-                    borderRadius: '4px 4px 0 0',
-                    transition: 'all 0.15s',
-                    flexShrink: 0,
-                  }}
-                >
+            ▲ Schliessen
+          </button>
+        </div>
+        {categories.map((cat, catIdx) => {
+          const catProjects = projectsByCategory[cat.id] || [];
+          const isLastCategory = catIdx === categories.length - 1;
+          if (catProjects.length === 0 && !isLastCategory) return null;
+          return (
+            <div
+              key={cat.id}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+                padding: '1px 8px',
+                borderTop: '1px solid rgba(255,255,255,0.04)',
+                minHeight: 22,
+                WebkitAppRegion: 'no-drag',
+              } as React.CSSProperties}
+            >
+              <div
+                title={cat.label}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  minWidth: 110,
+                  maxWidth: 110,
+                  fontSize: 10,
+                  fontWeight: 600,
+                  color: 'var(--tn-text-muted)',
+                  opacity: 0.7,
+                  padding: '2px 4px',
+                  borderRight: '1px solid rgba(255,255,255,0.06)',
+                  flexShrink: 0,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
+                <span style={{ fontSize: 12 }}>{cat.icon}</span>
+                <span>{cat.label}</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', flex: 1, minWidth: 0 }}>
+                {catProjects.map(renderProjectPill)}
+                {isLastCategory && (
                   <button
-                    onClick={() => handleWorkspaceSelect(p.id)}
-                    onDoubleClick={(e) => { e.preventDefault(); onEdit(p.id); }}
-                    title={`${p.name} — ${p.workDir}\nDoppelklick zum Bearbeiten${origIdx < 9 ? `\nCmd+${origIdx + 1}` : ''}`}
+                    onClick={onNew}
+                    title="Neues Projekt (Cmd+N)"
                     style={{
                       background: 'none',
-                      color: p.id === activeId ? 'var(--tn-text)' : 'var(--tn-text-muted)',
-                      border: 'none',
-                      padding: '2px 8px 2px 10px',
-                      fontSize: 11,
+                      border: '1px dashed var(--tn-border)',
+                      color: 'var(--tn-text-muted)',
+                      padding: '2px 8px',
+                      fontSize: 10,
                       cursor: 'pointer',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
+                      borderRadius: 3,
+                      marginLeft: 4,
+                      flexShrink: 0,
                       WebkitAppRegion: 'no-drag',
                     } as React.CSSProperties}
                   >
-                    {attention?.[p.id] && (
-                      <span style={{
-                        width: 7, height: 7, borderRadius: '50%',
-                        background: attention[p.id] === 'needs_attention' ? '#ff9e64'
-                          : attention[p.id] === 'working' ? '#9ece6a'
-                          : '#565f89',
-                        boxShadow: attention[p.id] === 'needs_attention'
-                          ? '0 0 8px #ff9e64aa, 0 0 3px #ff9e64'
-                          : attention[p.id] === 'working'
-                          ? '0 0 6px #9ece6a88'
-                          : 'none',
-                        display: 'inline-block', marginRight: 5, flexShrink: 0,
-                        animation: attention[p.id] === 'needs_attention' ? 'pulse-attention 0.8s ease-in-out infinite'
-                          : attention[p.id] === 'working' ? 'pulse 1.5s ease-in-out infinite'
-                          : 'none',
-                      }} />
-                    )}
-                    {origIdx < 9 && (
-                      <span style={{ fontSize: 9, opacity: 0.4, marginRight: 4, fontFamily: 'monospace' }}>
-                        {origIdx + 1}
-                      </span>
-                    )}
-                    {p.name}
+                    + Projekt
                   </button>
-                  {projects.length > 1 && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDelete(p.id);
-                      }}
-                      title={`Delete ${p.name}`}
-                      style={{
-                        background: 'none',
-                        border: 'none',
-                        color: 'var(--tn-text-muted)',
-                        cursor: 'pointer',
-                        fontSize: 10,
-                        padding: '2px 6px 2px 0',
-                        opacity: 0.5,
-                        transition: 'opacity 0.15s',
-                        WebkitAppRegion: 'no-drag',
-                      } as React.CSSProperties}
-                      onMouseEnter={(e) => { (e.target as HTMLElement).style.opacity = '1'; (e.target as HTMLElement).style.color = 'var(--tn-red)'; }}
-                      onMouseLeave={(e) => { (e.target as HTMLElement).style.opacity = '0.5'; (e.target as HTMLElement).style.color = 'var(--tn-text-muted)'; }}
-                    >
-                      ✕
-                    </button>
-                  )}
-                </div>
-              );
-            })}
-
-            {/* + Projekt button only on the last visible category row */}
-            {isLastCategory && (
-              <button
-                onClick={onNew}
-                title="Neues Projekt (Cmd+N)"
-                style={{
-                  background: 'none',
-                  border: '1px dashed var(--tn-border)',
-                  color: 'var(--tn-text-muted)',
-                  padding: '2px 8px',
-                  fontSize: 10,
-                  cursor: 'pointer',
-                  borderRadius: 3,
-                  marginLeft: 4,
-                  flexShrink: 0,
-                  WebkitAppRegion: 'no-drag',
-                } as React.CSSProperties}
-              >
-                + Projekt
-              </button>
-            )}
-          </div>
-        </div>
-      );
-    })}
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </>
+    )}
 
     {/* Row 2: Account usage pills + toolbar */}
     <div
