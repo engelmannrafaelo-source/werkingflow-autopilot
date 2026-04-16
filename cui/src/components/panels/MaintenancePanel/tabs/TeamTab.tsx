@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
 
 interface WorklistEntry {
   name: string;
@@ -35,8 +36,12 @@ export default function TeamTab() {
     try {
       const res = await fetch('/api/maintenance/status', { signal: AbortSignal.timeout(15000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      setWorklists(data.team?.worklists ?? []);
+      const raw = await res.json();
+      const data = validateApiResponse<{ team: { worklists: WorklistEntry[] } }>(raw, '/api/maintenance/status', {
+        team: 'object',
+      });
+      if (!Array.isArray(data.team?.worklists)) throw new Error('API /api/maintenance/status: missing team.worklists (expected array)');
+      setWorklists(data.team.worklists);
     } catch (err) {
       console.warn('[TeamTab] fetch failed:', err);
     } finally {

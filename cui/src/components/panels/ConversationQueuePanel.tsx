@@ -1,24 +1,25 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSessionStore } from '../../contexts/SessionStore';
 import { ACCOUNTS } from '../../types';
+import { validateApiResponse } from '../../lib/validateApiResponse';
 
 const API = '/api';
 
 interface Conversation {
   sessionId: string;
   accountId: string;
-  accountLabel: string;
-  accountColor: string;
-  projectPath: string;
-  projectName: string;
-  summary: string;
-  customName: string;
   status: 'ongoing' | 'completed';
-  streamingId: string | null;
-  model: string;
-  messageCount: number;
-  updatedAt: string;
-  createdAt: string;
+  accountLabel?: string;
+  accountColor?: string;
+  projectPath?: string;
+  projectName?: string;
+  summary?: string;
+  customName?: string;
+  streamingId?: string | null;
+  model?: string;
+  messageCount?: number;
+  updatedAt?: string;
+  createdAt?: string;
   lastPromptAt?: string;
   attentionState?: 'working' | 'needs_attention' | 'idle';
   attentionReason?: string;
@@ -27,7 +28,7 @@ interface Conversation {
   manualFinished?: boolean;
 }
 
-interface ProjectInfo { id: string; name: string; workDir: string; }
+interface ProjectInfo { id: string; name: string; workDir?: string; }
 type TimeFilter = 'today' | 'yesterday' | 'week' | 'all';
 type StatusFilter = 'all' | 'working' | 'needs_input' | 'idle';
 
@@ -126,7 +127,18 @@ export default function ConversationQueuePanel({ projectId: _projectId }: { proj
 
   useEffect(() => {
     fetch(`${API}/projects`, { signal: AbortSignal.timeout(5000) })
-      .then(r => r.json()).then(d => setProjects(Array.isArray(d) ? d : [])).catch(() => {});
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(d => {
+        const arr = Array.isArray(d) ? d : [];
+        const validated = arr.map((item: unknown, i: number) =>
+          validateApiResponse<ProjectInfo>(item, `/api/projects[${i}]`, {
+            id: 'string',
+            name: 'string',
+          })
+        );
+        setProjects(validated);
+      })
+      .catch(err => console.warn('[ConversationQueue] projects fetch:', err));
   }, []);
 
   const showFeedback = (msg: string) => { setFeedback(msg); setTimeout(() => setFeedback(null), 2500); };
@@ -137,7 +149,20 @@ export default function ConversationQueuePanel({ projectId: _projectId }: { proj
         fetch(`${API}/mission/conversations`, { signal: AbortSignal.timeout(10000) }),
         fetch(`${API}/mission/visibility`, { signal: AbortSignal.timeout(5000) }).catch(() => null),
       ]);
-      if (convRes.ok) setConversations((await convRes.json()).conversations || []);
+      if (convRes.ok) {
+        const raw = await convRes.json();
+        const wrapper = validateApiResponse<{ conversations: Conversation[] }>(raw, '/api/mission/conversations', {
+          conversations: 'array',
+        });
+        const validated = wrapper.conversations.map((item: unknown, i: number) =>
+          validateApiResponse<Conversation>(item, `/api/mission/conversations[${i}]`, {
+            sessionId: 'string',
+            accountId: 'string',
+            status: 'string',
+          })
+        );
+        setConversations(validated);
+      }
       if (visRes?.ok) {
         const v = await visRes.json();
         setVisibleSessionIds(new Set(v.visibleSessionIds || []));
@@ -182,16 +207,16 @@ export default function ConversationQueuePanel({ projectId: _projectId }: { proj
 
   // Filter
   const filtered = useMemo(() => enriched.filter(c => {
-    const d = new Date(c.updatedAt);
+    const d = new Date(c.updatedAt ?? '');
     if (timeFilter === 'today' && !isToday(d)) return false;
     if (timeFilter === 'yesterday' && !isYesterday(d)) return false;
     if (timeFilter === 'week' && !isThisWeek(d)) return false;
-    if (accountFilter !== 'all' && c.accountId !== accountFilter) return false;
-    if (projectFilter !== 'all' && c.projectName !== projectFilter) return false;
+    if (accountFilter !== 'all' && (c.accountId) !== accountFilter) return false;
+    if (projectFilter !== 'all' && (c.projectName ?? '') !== projectFilter) return false;
     if (statusFilter !== 'all') {
       const isActive = !c.manualFinished && c.status === 'ongoing';
       if (!isActive) return false;
-      if (statusFilter === 'working' && c.attentionState !== 'working' && !c.streamingId) return false;
+      if (statusFilter === 'working' && c.attentionState !== 'working' && !(c.streamingId)) return false;
       if (statusFilter === 'needs_input' && c.attentionState !== 'needs_attention') return false;
       if (statusFilter === 'idle' && c.attentionState !== 'idle') return false;
     }
@@ -208,34 +233,34 @@ export default function ConversationQueuePanel({ projectId: _projectId }: { proj
       return 2;
     };
     const d = s(b) - s(a);
-    return d !== 0 ? d : new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+    return d !== 0 ? d : new Date(b.updatedAt ?? '').getTime() - new Date(a.updatedAt ?? '').getTime();
   });
 
   const ongoing = useMemo(() => sortP(filtered.filter(c => c.status === 'ongoing' && !c.manualFinished)), [filtered]);
-  const completed = useMemo(() => filtered.filter(c => c.status === 'completed' || c.manualFinished).sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()), [filtered]);
-  const projectNames = useMemo(() => [...new Set(enriched.map(c => c.projectName))].sort(), [enriched]);
+  const completed = useMemo(() => filtered.filter(c => c.status === 'completed' || c.manualFinished).sort((a, b) => new Date(b.updatedAt ?? '').getTime() - new Date(a.updatedAt ?? '').getTime()), [filtered]);
+  const projectNames = useMemo(() => [...new Set(enriched.map(c => c.projectName ?? ''))].sort(), [enriched]);
 
   // Stats
   const stats = useMemo(() => {
     const active = enriched.filter(c => c.status === 'ongoing' && !c.manualFinished);
     return {
-      working: active.filter(c => c.attentionState === 'working' || !!c.streamingId).length,
+      working: active.filter(c => c.attentionState === 'working' || !!(c.streamingId)).length,
       needsInput: active.filter(c => c.attentionState === 'needs_attention' && c.attentionReason !== 'done' && c.attentionReason !== 'rate_limit').length,
       rateLimited: active.filter(c => c.attentionReason === 'rate_limit').length,
       idle: active.filter(c => c.attentionState === 'idle').length,
-      unknown: active.filter(c => !c.attentionState && !c.streamingId).length,
+      unknown: active.filter(c => !c.attentionState && !(c.streamingId)).length,
       finished: enriched.filter(c => c.status === 'completed' || c.manualFinished).length,
     };
   }, [enriched]);
 
   // Actions
   const doFinish = useCallback(async (sid: string, finished = true) => {
-    await fetch(`${API}/mission/conversation/${sid}/finish`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ finished }), signal: AbortSignal.timeout(10000) }).catch(() => {});
+    await fetch(`${API}/mission/conversation/${sid ?? ''}/finish`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ finished }), signal: AbortSignal.timeout(10000) }).catch(() => {});
     showFeedback(finished ? 'Beendet' : 'Wiederhergestellt'); fetchData();
   }, [fetchData]);
 
   const doDelete = useCallback(async (conv: Conversation) => {
-    if (!confirm(`"${conv.customName || conv.summary?.slice(0, 40) || conv.sessionId}" löschen?`)) return;
+    if (!confirm(`"${conv.customName || conv.summary?.slice(0, 40) || (conv.sessionId)}" löschen?`)) return;
     await fetch(`${API}/mission/conversation/${conv.sessionId}`, { method: 'DELETE', signal: AbortSignal.timeout(10000) }).catch(() => {});
     showFeedback('Gelöscht'); fetchData();
   }, [fetchData]);
@@ -258,8 +283,8 @@ export default function ConversationQueuePanel({ projectId: _projectId }: { proj
 
   const toggleSelect = (sid: string) => setSelected(p => { const n = new Set(p); n.has(sid) ? n.delete(sid) : n.add(sid); return n; });
   const toggleExpand = (conv: Conversation) => {
-    if (expandedId === conv.sessionId) { setExpandedId(null); return; }
-    setExpandedId(conv.sessionId);
+    if (expandedId === (conv.sessionId)) { setExpandedId(null); return; }
+    setExpandedId(conv.sessionId ?? null);
     fetchSnippet(conv);
   };
 
@@ -311,8 +336,8 @@ export default function ConversationQueuePanel({ projectId: _projectId }: { proj
       {/* List */}
       <div style={{ flex: 1, overflow: 'auto' }}>
         {ongoing.length > 0 && ongoing.map(c => (
-          <ConvRow key={c.sessionId} conv={c} expanded={expandedId === c.sessionId} snippet={snippets.get(c.sessionId)}
-            isVisible={visibleSessionIds.has(c.sessionId)} isWrong={!KNOWN_PROJECTS.has(c.projectName)}
+          <ConvRow key={c.sessionId} conv={c} expanded={expandedId === (c.sessionId)} snippet={snippets.get(c.sessionId)}
+            isVisible={visibleSessionIds.has(c.sessionId)} isWrong={!KNOWN_PROJECTS.has(c.projectName ?? '')}
             isSelected={selected.has(c.sessionId)} projects={projects}
             onToggleSelect={() => toggleSelect(c.sessionId)} onClick={() => toggleExpand(c)}
             onActivate={(t) => doActivate(c, t)} onFinish={() => doFinish(c.sessionId)} onDelete={() => doDelete(c)} />
@@ -321,8 +346,8 @@ export default function ConversationQueuePanel({ projectId: _projectId }: { proj
           <>
             <div style={{ padding: '8px 12px 4px', fontSize: 10, fontWeight: 700, color: 'var(--tn-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Fertig ({completed.length})</div>
             {completed.map(c => (
-              <ConvRow key={c.sessionId} conv={c} expanded={expandedId === c.sessionId} snippet={snippets.get(c.sessionId)}
-                isVisible={visibleSessionIds.has(c.sessionId)} isWrong={!KNOWN_PROJECTS.has(c.projectName)}
+              <ConvRow key={c.sessionId} conv={c} expanded={expandedId === (c.sessionId)} snippet={snippets.get(c.sessionId)}
+                isVisible={visibleSessionIds.has(c.sessionId)} isWrong={!KNOWN_PROJECTS.has(c.projectName ?? '')}
                 isSelected={selected.has(c.sessionId)} projects={projects} isCompleted
                 onToggleSelect={() => toggleSelect(c.sessionId)} onClick={() => toggleExpand(c)}
                 onActivate={(t) => doActivate(c, t)} onFinish={() => doFinish(c.sessionId, false)} onDelete={() => doDelete(c)} />
@@ -359,11 +384,11 @@ function ConvRow({ conv, expanded, snippet, isVisible, isWrong, isSelected, isCo
   onToggleSelect: () => void; onClick: () => void; onActivate: (target: string) => void; onFinish: () => void; onDelete: () => void;
 }) {
   const [openMenu, setOpenMenu] = useState<null | 'move'>(null);
-  const account = ACCOUNTS.find(a => a.id === conv.accountId);
-  const displayName = conv.customName || (conv.summary?.split('\n')[0] || '').slice(0, 70) || 'Neue Konversation';
+  const account = ACCOUNTS.find(a => a.id === (conv.accountId));
+  const displayName = conv.customName || ((conv.summary ?? '').split('\n')[0] || '').slice(0, 70) || 'Neue Konversation';
   const colors = getConvColor(conv);
   const reasonLabel = conv.attentionReason ? REASON_LABELS[conv.attentionReason] || conv.attentionReason : '';
-  const isWorking = conv.attentionState === 'working' || !!conv.streamingId;
+  const isWorking = conv.attentionState === 'working' || !!(conv.streamingId);
   const isNeedsInput = conv.attentionState === 'needs_attention' && conv.attentionReason !== 'done';
 
   useEffect(() => {
@@ -406,12 +431,12 @@ function ConvRow({ conv, expanded, snippet, isVisible, isWrong, isSelected, isCo
         {/* Content */}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-            <span style={{ fontWeight: 600, fontSize: 12, color: colors.text }}>{conv.projectName}</span>
+            <span style={{ fontWeight: 600, fontSize: 12, color: colors.text }}>{conv.projectName ?? ''}</span>
             {isWrong && <span style={{ fontSize: 8, padding: '0 3px', borderRadius: 2, background: '#e0af68', color: '#1a1b26', fontWeight: 700 }}>?</span>}
-            <span style={{ fontSize: 9, padding: '0 4px', borderRadius: 3, background: account?.color || '#565a6e', color: '#1a1b26', fontWeight: 600 }}>{account?.label || conv.accountId}</span>
+            <span style={{ fontSize: 9, padding: '0 4px', borderRadius: 3, background: account?.color || '#565a6e', color: '#1a1b26', fontWeight: 600 }}>{account?.label || conv.accountId || ''}</span>
             {isVisible && <span style={{ fontSize: 8, padding: '0 4px', borderRadius: 3, background: 'rgba(16,185,129,0.2)', color: '#10B981', fontWeight: 600 }}>Panel</span>}
             <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--tn-text-secondary)', whiteSpace: 'nowrap' }}>
-              {conv.messageCount} msgs · {timeAgo(conv.lastPromptAt || conv.updatedAt)}
+              {conv.messageCount ?? 0} msgs · {timeAgo(conv.lastPromptAt || conv.updatedAt || '')}
             </span>
           </div>
           <div style={{ fontSize: 11, color: isCompleted ? '#565a6e' : 'var(--tn-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }}>{displayName}</div>
@@ -431,7 +456,7 @@ function ConvRow({ conv, expanded, snippet, isVisible, isWrong, isSelected, isCo
                 boxShadow: '0 4px 16px rgba(0,0,0,0.5)', minWidth: 180, padding: '4px 0', maxHeight: 300, overflow: 'auto',
               }}>
                 <div style={{ padding: '4px 10px', fontSize: 9, color: 'var(--tn-text-secondary)', fontWeight: 700, textTransform: 'uppercase' }}>Workspace wählen</div>
-                {projects.filter(p => p.name === conv.projectName).map(p => (
+                {projects.filter(p => (p.name) === (conv.projectName ?? '')).map(p => (
                   <div key={p.id} onClick={() => { onActivate(p.name); setOpenMenu(null); }}
                     style={{ padding: '5px 10px', fontSize: 11, cursor: 'pointer', color: '#10B981', fontWeight: 600 }}
                     onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.06)')}
@@ -439,7 +464,7 @@ function ConvRow({ conv, expanded, snippet, isVisible, isWrong, isSelected, isCo
                     {p.name} <span style={{ fontSize: 8, opacity: 0.6 }}>(aktuell)</span>
                   </div>
                 ))}
-                {projects.filter(p => p.name !== conv.projectName).map(p => (
+                {projects.filter(p => (p.name) !== (conv.projectName ?? '')).map(p => (
                   <div key={p.id} onClick={() => { onActivate(p.name); setOpenMenu(null); }}
                     style={{ padding: '5px 10px', fontSize: 11, cursor: 'pointer', color: 'var(--tn-text)' }}
                     onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.06)')}
@@ -475,7 +500,7 @@ function ConvRow({ conv, expanded, snippet, isVisible, isWrong, isSelected, isCo
           </div>
           <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginTop: 3 }}>
             {conv.model && <span>{conv.model.split('-').slice(0, 3).join('-')} · </span>}
-            {conv.sessionId.slice(0, 12)}
+            {(conv.sessionId).slice(0, 12)}
           </div>
         </div>
       )}

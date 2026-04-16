@@ -728,5 +728,29 @@ export default function createLayoutsRouter(deps: LayoutsDeps): Router {
     res.json({ ok: true, removed });
   });
 
+  // --- ToolHub: persist active tool selection ---
+  const TOOLHUB_PATH = join(DATA_DIR, 'toolhub.json');
+
+  router.get('/toolhub/active', (_req: Request, res: Response) => {
+    try {
+      if (existsSync(TOOLHUB_PATH)) {
+        res.json(JSON.parse(readFileSync(TOOLHUB_PATH, 'utf8')));
+      } else {
+        res.json({ activeTool: null });
+      }
+    } catch { res.json({ activeTool: null }); }
+  });
+
+  router.post('/toolhub/active', (req: Request, res: Response) => {
+    const { activeTool } = req.body;
+    if (typeof activeTool !== 'string') {
+      res.status(400).json({ error: 'activeTool required' });
+      return;
+    }
+    writeFileSync(TOOLHUB_PATH, JSON.stringify({ activeTool }, null, 2));
+    broadcast({ type: 'toolhub-changed', activeTool });
+    res.json({ ok: true, activeTool });
+  });
+
   return router;
 }

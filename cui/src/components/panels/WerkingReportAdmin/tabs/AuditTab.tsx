@@ -1,21 +1,22 @@
 import { useState, useEffect, useCallback } from 'react';
 import ExportButton from '@/components/shared/ExportButton';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
 
 interface AuditEntry {
   id: string;
-  timestamp: string;
   action: string;
-  actor: {
-    id: string;
-    email: string;
-    ip: string;
+  timestamp: string;
+  actor?: {
+    id?: string;
+    email?: string;
+    ip?: string;
   };
-  resource: {
-    type: string;
-    id: string;
+  resource?: {
+    type?: string;
+    id?: string;
   };
-  metadata: Record<string, any>;
-  userAgent: string;
+  metadata?: Record<string, any>;
+  userAgent?: string;
   // Alternative field names from backend
   userId?: string;
   userEmail?: string;
@@ -57,9 +58,18 @@ export default function AuditTab({ envMode }: { envMode?: string }) {
 
       const res = await fetch(`/api/admin/wr/audit?${params}`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
-      setLogs(data.logs || data.entries || data || []);
-      setTotal(data.total || 0);
+      const raw = await res.json();
+      // API may return { logs: [...] } or { entries: [...] } or bare array
+      const logsArray = Array.isArray(raw) ? raw : (raw.logs || raw.entries || []);
+      logsArray.forEach((entry: unknown, i: number) => {
+        validateApiResponse<AuditEntry>(entry, `/api/admin/wr/audit[${i}]`, {
+          id: 'string',
+          action: 'string',
+          timestamp: 'string',
+        });
+      });
+      setLogs(logsArray as AuditEntry[]);
+      setTotal(raw.total ?? logsArray.length);
     } catch (err: any) {
       console.warn('[WRAudit] fetchLogs:', err);
       setError(err.message);
@@ -80,7 +90,7 @@ export default function AuditTab({ envMode }: { envMode?: string }) {
   }, [actionFilter, userFilter, dateFrom, dateTo, limit]);
 
   const uniqueActions = [...new Set(logs.map(l => l.action))].sort();
-  const uniqueUsers = [...new Set(logs.map(l => l.actor?.email || l.userEmail).filter(Boolean))].sort();
+  const uniqueUsers = [...new Set(logs.map(l => l.actor?.email || l.userEmail || '').filter(Boolean))].sort();
 
   const handleClearFilters = () => {
     setActionFilter('');
@@ -94,7 +104,7 @@ export default function AuditTab({ envMode }: { envMode?: string }) {
   const exportData = logs.map(log => ({
     timestamp: new Date(log.timestamp).toISOString(),
     adminUser: log.actor?.email || log.userEmail || '—',
-    action: log.action || '—',
+    action: log.action ?? '—',
     targetType: log.resource?.type || (log.tenantId ? 'tenant' : log.userId ? 'user' : '—'),
     targetId: log.resource?.id || log.tenantId || log.userId || '—',
     ipAddress: log.actor?.ip || log.ipAddress || '—',
@@ -107,7 +117,8 @@ export default function AuditTab({ envMode }: { envMode?: string }) {
           : '—',
   }));
 
-  const actionColor = (action: string) => {
+  const actionColor = (action: string | undefined) => {
+    if (!action) return 'var(--tn-text-muted)';
     if (action.includes('delete') || action.includes('remove')) return 'var(--tn-red)';
     if (action.includes('create') || action.includes('add')) return 'var(--tn-green)';
     if (action.includes('update') || action.includes('edit')) return 'var(--tn-blue)';
@@ -346,7 +357,7 @@ export default function AuditTab({ envMode }: { envMode?: string }) {
 
           {/* Table Rows */}
           {logs.map(log => {
-            const isExpanded = expandedId === log.id;
+            const isExpanded = expandedId === (log.id);
             const userEmail = log.actor?.email || log.userEmail || '—';
             const targetType = log.resource?.type || (log.tenantId ? 'tenant' : log.userId ? 'user' : '—');
             const targetId = log.resource?.id || log.tenantId || log.userId || '—';
@@ -356,7 +367,7 @@ export default function AuditTab({ envMode }: { envMode?: string }) {
               <div key={log.id} data-ai-id={`wr-audit-row-${log.id}`}>
                 <div
                   data-ai-id={`wr-audit-row-main-${log.id}`}
-                  onClick={() => setExpandedId(isExpanded ? null : log.id)}
+                  onClick={() => setExpandedId(isExpanded ? null : (log.id))}
                   style={{
                     display: 'grid',
                     gridTemplateColumns: '130px 120px 150px 90px 100px 1fr',

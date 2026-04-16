@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { validateApiResponse } from '../../lib/validateApiResponse';
 
 interface SubSession {
   sessionId: string;
   subject: string;
   parentSessionId?: string;
   parentSubject?: string;
-  accountId: string;
-  workDir: string;
+  accountId?: string;
+  workDir?: string;
   attentionState?: string;
   attentionReason?: string;
   lastSnippet?: string;
@@ -43,8 +44,17 @@ export default function SubSessionPanel({ workDir, isVisible = true, onOpenSessi
       const params = workDir ? `?workDir=${encodeURIComponent(workDir)}` : '';
       const resp = await fetch(`/api/mission/sub-sessions${params}`, { signal: AbortSignal.timeout(10000) });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = await resp.json();
-      setSessions(data.sessions || []);
+      const raw = await resp.json();
+      const validated = validateApiResponse<{ sessions: SubSession[] }>(raw, '/api/mission/sub-sessions', {
+        sessions: 'array',
+      });
+      const sessions = validated.sessions.map((item: unknown, i: number) =>
+        validateApiResponse<SubSession>(item, `/api/mission/sub-sessions[${i}]`, {
+          sessionId: 'string',
+          subject: 'string',
+        })
+      );
+      setSessions(sessions);
       setError('');
     } catch (err) {
       setError((err as Error).message);
@@ -89,8 +99,8 @@ export default function SubSessionPanel({ workDir, isVisible = true, onOpenSessi
         <button onClick={fetchSessions} style={btnStyle} title="Aktualisieren">↻</button>
       </div>
       <div style={{ flex: 1, overflow: 'auto', padding: 4 }}>
-        {sessions.map(s => (
-          <SubSessionCard key={s.sessionId} session={s} onOpen={onOpenSession} />
+        {sessions.map((s, i) => (
+          <SubSessionCard key={s.sessionId ?? i} session={s} onOpen={onOpenSession} />
         ))}
       </div>
     </div>
@@ -101,7 +111,7 @@ function SubSessionCard({ session, onOpen }: { session: SubSession; onOpen?: (si
   const stateColor = STATE_COLORS[session.attentionState || 'idle'] || '#6b7280';
   const stateLabel = STATE_LABELS[session.attentionState || 'idle'] || session.attentionState || 'unknown';
   const shortId = session.sessionId.slice(0, 8);
-  const subject = session.subject?.replace(/^\[Sub\]\s*/, '').replace(/^[^-]+ - /, '') || shortId;
+  const subject = session.subject.replace(/^\[Sub\]\s*/, '').replace(/^[^-]+ - /, '') || shortId;
 
   return (
     <div
@@ -143,7 +153,7 @@ function SubSessionCard({ session, onOpen }: { session: SubSession; onOpen?: (si
         </div>
       )}
       <div style={{ fontSize: 10, color: '#4b5563', marginTop: 3 }}>
-        {shortId} · {session.accountId}
+        {shortId} · {session.accountId ?? ''}
         {session.updatedAt && ` · ${new Date(session.updatedAt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}`}
       </div>
     </div>

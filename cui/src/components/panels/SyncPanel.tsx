@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { validateApiResponse } from '../../lib/validateApiResponse';
 
 interface ConvSnapshot {
   sessionId: string;
@@ -29,12 +30,12 @@ interface SyncState {
   message: string;
   startedAt?: number;
   completedAt?: number;
-  snapshots: ConvSnapshot[];
-  clusters: SyncCluster[];
-  feedback: SyncFeedback[];
+  snapshots?: ConvSnapshot[];
+  clusters?: SyncCluster[];
+  feedback?: SyncFeedback[];
   error?: string;
-  stoppedSessions: string[];
-  resumedSessions: string[];
+  stoppedSessions?: string[];
+  resumedSessions?: string[];
 }
 
 const PHASES: SyncPhase[] = ['discovering', 'clustering', 'stopping', 'analyzing', 'injecting', 'complete'];
@@ -55,8 +56,16 @@ export function SyncPanel({ onClose }: { onClose: () => void }) {
   const fetchStatus = useCallback(async () => {
     try {
       const r = await fetch('/api/sync/status', { signal: AbortSignal.timeout(5000) });
-      if (r.ok) setState(await r.json());
-    } catch { /* ignore */ }
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const raw = await r.json();
+      const validated = validateApiResponse<SyncState>(raw, '/api/sync/status', {
+        phase: 'string',
+        message: 'string',
+      });
+      setState(validated);
+    } catch (err) {
+      console.warn('[SyncPanel] fetchStatus:', err);
+    }
   }, []);
 
   // Poll while running
@@ -67,12 +76,12 @@ export function SyncPanel({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     if (pollRef.current) clearInterval(pollRef.current);
-    const isRunning = state && !['idle', 'complete', 'error', 'aborted'].includes(state.phase);
+    const isRunning = state && !['idle', 'complete', 'error', 'aborted'].includes(state.phase ?? 'idle');
     if (isRunning) {
       pollRef.current = setInterval(fetchStatus, 2000);
     }
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [state?.phase, fetchStatus]);
+  }, [state?.phase ?? 'idle', fetchStatus]);
 
   // WebSocket listener for real-time updates
   useEffect(() => {
@@ -107,9 +116,9 @@ export function SyncPanel({ onClose }: { onClose: () => void }) {
     } catch { /* ignore */ }
   };
 
-  const phase = state?.phase || 'idle';
+  const phase = state?.phase ?? 'idle';
   const isRunning = !['idle', 'complete', 'error', 'aborted'].includes(phase);
-  const phaseIdx = PHASES.indexOf(phase as SyncPhase);
+  const phaseIdx = PHASES.indexOf(phase);
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--tn-bg)', color: 'var(--tn-text)' }}>
@@ -117,7 +126,7 @@ export function SyncPanel({ onClose }: { onClose: () => void }) {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid var(--tn-border)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ fontSize: 16, fontWeight: 700, color: '#bb9af7' }}>Synchronise</span>
-          {isRunning && <span style={{ fontSize: 11, color: 'var(--tn-text-muted)', animation: 'pulse 2s infinite' }}>{state?.message}</span>}
+          {isRunning && <span style={{ fontSize: 11, color: 'var(--tn-text-muted)', animation: 'pulse 2s infinite' }}>{state?.message ?? ''}</span>}
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           {isRunning && (
@@ -174,7 +183,7 @@ export function SyncPanel({ onClose }: { onClose: () => void }) {
           <div style={{ padding: 16 }}>
             <div style={{ padding: 12, background: '#f7768e11', border: '1px solid #f7768e33', borderRadius: 6, marginBottom: 16 }}>
               <div style={{ color: '#f7768e', fontWeight: 600, marginBottom: 4 }}>Fehler</div>
-              <div style={{ color: 'var(--tn-text-muted)', fontSize: 13 }}>{state?.error || state?.message}</div>
+              <div style={{ color: 'var(--tn-text-muted)', fontSize: 13 }}>{state?.error ?? state?.message ?? ''}</div>
             </div>
             <button onClick={startSync} style={{ ...btnStyle, background: '#bb9af722', color: '#bb9af7', border: '1px solid #bb9af744' }}>
               Erneut starten
@@ -187,7 +196,7 @@ export function SyncPanel({ onClose }: { onClose: () => void }) {
           <div style={{ padding: 16 }}>
             <div style={{ padding: 12, background: '#e0af6811', border: '1px solid #e0af6833', borderRadius: 6, marginBottom: 16 }}>
               <div style={{ color: '#e0af68', fontWeight: 600 }}>Abgebrochen</div>
-              <div style={{ color: 'var(--tn-text-muted)', fontSize: 13, marginTop: 4 }}>{state?.message}</div>
+              <div style={{ color: 'var(--tn-text-muted)', fontSize: 13, marginTop: 4 }}>{state?.message ?? ''}</div>
             </div>
             <button onClick={startSync} style={{ ...btnStyle, background: '#bb9af722', color: '#bb9af7', border: '1px solid #bb9af744' }}>
               Neu starten
@@ -196,10 +205,10 @@ export function SyncPanel({ onClose }: { onClose: () => void }) {
         )}
 
         {/* Running: Show snapshots during discover */}
-        {phase === 'discovering' && state?.snapshots && state.snapshots.length > 0 && (
+        {phase === 'discovering' && (state?.snapshots ?? []).length > 0 && (
           <div>
-            <div style={{ fontSize: 12, color: 'var(--tn-text-muted)', marginBottom: 8 }}>{state.snapshots.length} Conversations analysiert</div>
-            {state.snapshots.map(s => (
+            <div style={{ fontSize: 12, color: 'var(--tn-text-muted)', marginBottom: 8 }}>{(state?.snapshots ?? []).length} Conversations analysiert</div>
+            {(state?.snapshots ?? []).map(s => (
               <div key={s.sessionId} style={{ ...cardStyle, marginBottom: 4 }}>
                 <span style={{ fontWeight: 600, fontSize: 12 }}>{s.title}</span>
                 <span style={{ fontSize: 11, color: 'var(--tn-text-muted)', marginLeft: 8 }}>{s.workDir}</span>
@@ -209,12 +218,12 @@ export function SyncPanel({ onClose }: { onClose: () => void }) {
         )}
 
         {/* Clusters view */}
-        {(phase === 'clustering' || phase === 'stopping' || phase === 'analyzing' || phase === 'injecting' || phase === 'complete') && state?.clusters && state.clusters.length > 0 && (
+        {(phase === 'clustering' || phase === 'stopping' || phase === 'analyzing' || phase === 'injecting' || phase === 'complete') && (state?.clusters ?? []).length > 0 && (
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: '#bb9af7' }}>
-              {state.clusters.length} Cluster
+              {(state?.clusters ?? []).length} Cluster
             </div>
-            {state.clusters.map(cluster => (
+            {(state?.clusters ?? []).map(cluster => (
               <div key={cluster.id} style={{ ...cardStyle, marginBottom: 12, padding: 12 }}>
                 <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, color: '#bb9af7' }}>
                   {cluster.label}
@@ -223,9 +232,9 @@ export function SyncPanel({ onClose }: { onClose: () => void }) {
                   </span>
                 </div>
                 {cluster.conversations.map(conv => {
-                  const fb = state.feedback?.find(f => f.sessionId === conv.sessionId);
-                  const hasConflicts = fb && fb.conflicts.length > 0;
-                  const wasResumed = state.resumedSessions?.includes(conv.sessionId);
+                  const fb = (state?.feedback ?? []).find(f => f.sessionId === conv.sessionId);
+                  const hasConflicts = fb && (fb.conflicts ?? []).length > 0;
+                  const wasResumed = (state?.resumedSessions ?? []).includes(conv.sessionId);
                   return (
                     <div key={conv.sessionId} style={{
                       padding: '6px 8px', marginBottom: 4, borderRadius: 4, fontSize: 12,
@@ -250,7 +259,7 @@ export function SyncPanel({ onClose }: { onClose: () => void }) {
                           <div style={{ fontSize: 11, color: hasConflicts ? '#f7768e' : '#9ece6a' }}>
                             {fb.feedbackPrompt.replace(/^\[Sync[^\]]*\]\s*/, '')}
                           </div>
-                          {fb.conflicts.map((c, i) => (
+                          {(fb.conflicts ?? []).map((c, i) => (
                             <div key={i} style={{ fontSize: 11, color: '#f7768e', marginTop: 2, paddingLeft: 8 }}>
                               - {c}
                             </div>
@@ -270,9 +279,9 @@ export function SyncPanel({ onClose }: { onClose: () => void }) {
           <div style={{ marginTop: 16, padding: 12, background: '#9ece6a11', border: '1px solid #9ece6a33', borderRadius: 6 }}>
             <div style={{ color: '#9ece6a', fontWeight: 700, marginBottom: 4 }}>Sync abgeschlossen</div>
             <div style={{ fontSize: 12, color: 'var(--tn-text-muted)' }}>
-              {state.clusters.length} Cluster | {state.feedback.length} Feedback |{' '}
-              {state.feedback.reduce((s, f) => s + f.conflicts.length, 0)} Konflikte |{' '}
-              {state.resumedSessions?.length || 0} resumed
+              {(state.clusters ?? []).length} Cluster | {(state.feedback ?? []).length} Feedback |{' '}
+              {(state.feedback ?? []).reduce((s, f) => s + (f.conflicts ?? []).length, 0)} Konflikte |{' '}
+              {(state.resumedSessions ?? []).length} resumed
             </div>
             <div style={{ marginTop: 8 }}>
               <button onClick={startSync} style={{ ...btnStyle, fontSize: 12, background: '#bb9af722', color: '#bb9af7', border: '1px solid #bb9af744' }}>

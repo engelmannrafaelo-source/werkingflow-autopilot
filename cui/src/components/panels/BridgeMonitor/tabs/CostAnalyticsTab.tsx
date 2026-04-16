@@ -1,7 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
+import ContractBanner from '../../../ContractBanner';
+import { extractViolations, BridgeContracts } from '../../../../lib/dataContracts';
 
-// Bridge /metrics/cost response format
+// Validated shape — after validation these fields are guaranteed present
 interface CostData {
   total_requests: number;
   estimated_tokens: number;
@@ -11,7 +14,7 @@ interface CostData {
     tokens: number;
     cost_usd: number;
   }>;
-  note: string;
+  note?: string;
   timestamp: string;
 }
 
@@ -34,10 +37,16 @@ export default function CostAnalyticsTab() {
     try {
       const res = await fetch('/api/bridge/metrics/cost', { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(await res.text());
-      const result = await res.json();
-      setData(result);
+      const raw = await res.json();
+      const validated = validateApiResponse<CostData & { _contractViolations?: any[] }>(raw, '/api/bridge/metrics/cost', {
+        total_requests: 'number',
+        estimated_tokens: 'number',
+        estimated_cost_usd: 'number',
+        breakdown: 'object',
+        timestamp: 'string',
+      });
+      setData(validated);
     } catch (err: any) {
-      console.warn('[BridgeCost] fetch cost data failed:', err);
       setError(err.message);
     } finally {
       setLoading(false);
@@ -51,7 +60,7 @@ export default function CostAnalyticsTab() {
   }, [fetchData]);
 
   const getChartData = () => {
-    if (!data || !data.breakdown) return [];
+    if (!data) return [];
     return Object.entries(data.breakdown).map(([model, stats]) => ({
       model,
       cost: stats.cost_usd,
@@ -98,8 +107,15 @@ export default function CostAnalyticsTab() {
     </div>
   );
 
+  const violations = useMemo(() => {
+    if (!data) return [];
+    return [...extractViolations(data), ...BridgeContracts.checkCostReliability(data)];
+  }, [data]);
+
   return (
-    <div data-ai-id="bridge-cost-tab" style={{ padding: 12 }}>
+    <div data-ai-id="bridge-cost-tab" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <ContractBanner violations={violations} />
+      <div style={{ padding: 12, flex: 1, overflowY: 'auto' }}>
       {/* Header */}
       <div data-ai-id="bridge-cost-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <h3 data-ai-id="bridge-cost-title" style={{ fontSize: 14, fontWeight: 600, margin: 0, color: 'var(--tn-text)' }}>
@@ -152,7 +168,7 @@ export default function CostAnalyticsTab() {
           <div data-ai-id="bridge-cost-stats-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 20 }}>
             {statCard(
               'Total Cost (USD)',
-              `$${(data.estimated_cost_usd ?? 0).toFixed(2)}`,
+              `$${data.estimated_cost_usd.toFixed(2)}`,
               'var(--tn-green)',
               '💰',
               'bridge-cost-total-usd-stat'
@@ -272,7 +288,7 @@ export default function CostAnalyticsTab() {
                       {formatNumber(entry.tokens)}
                     </div>
                     <div style={{ color: 'var(--tn-green)' }}>
-                      ${(entry.cost ?? 0).toFixed(4)}
+                      ${entry.cost.toFixed(4)}
                     </div>
                   </div>
                 ))}
@@ -296,10 +312,11 @@ export default function CostAnalyticsTab() {
 
           {/* Timestamp */}
           <div data-ai-id="bridge-cost-timestamp" style={{ fontSize: 9, color: 'var(--tn-text-muted)', textAlign: 'right', marginTop: 20 }}>
-            Last updated: {data.timestamp ? new Date(data.timestamp).toLocaleString() : 'N/A'}
+            Last updated: {new Date(data.timestamp).toLocaleString()}
           </div>
         </>
       )}
+      </div>
     </div>
   );
 }

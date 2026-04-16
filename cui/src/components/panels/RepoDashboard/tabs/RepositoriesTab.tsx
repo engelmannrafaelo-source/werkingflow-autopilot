@@ -1,28 +1,35 @@
 import React, { useState, useEffect } from 'react';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
 
 interface Repo {
   name: string;
   path: string;
-  branch: string;
-  uncommitted: number;
-  lastCommit: {
-    hash: string;
-    author: string;
-    message: string;
-    date: string;
+  isGit: boolean;
+  branch?: string;
+  uncommitted?: number;
+  lastCommit?: {
+    hash?: string;
+    author?: string;
+    message?: string;
+    date?: string;
   };
-  diskSize: {
-    bytes: number;
-    human: string;
+  diskSize?: {
+    bytes?: number;
+    human?: string;
   };
-  lastModified: string;
-  remoteUrl: string;
-  status: 'clean' | 'dirty';
+  lastModified?: string;
+  remoteUrl?: string;
+  status?: 'clean' | 'dirty';
+}
+
+interface ReposApiResponse {
+  repos: Repo[];
 }
 
 export default function RepositoriesTab() {
   const [repos, setRepos] = useState<Repo[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [sortBy, setSortBy] = useState<'size' | 'name' | 'modified'>('size');
 
   useEffect(() => {
@@ -52,13 +59,17 @@ export default function RepositoriesTab() {
   const fetchRepos = async () => {
     if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
+    setError('');
     try {
       const res = await fetch('/api/repo-dashboard/repositories', { signal: AbortSignal.timeout(30000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      const raw = await res.json();
+      const data = validateApiResponse<ReposApiResponse>(raw, '/api/repo-dashboard/repositories', {
+        repos: 'array',
+      });
       setRepos(data.repos);
-    } catch (err) {
-      console.warn('[RepoTab] fetch repositories failed:', err);
+    } catch (err: any) {
+      setError(err.message);
     } finally {
       setLoading(false);
     }
@@ -66,9 +77,9 @@ export default function RepositoriesTab() {
 
   const sortedRepos = [...repos].sort((a, b) => {
     switch (sortBy) {
-      case 'size': return b.diskSize.bytes - a.diskSize.bytes;
+      case 'size': return (b.diskSize?.bytes ?? 0) - (a.diskSize?.bytes ?? 0);
       case 'name': return a.name.localeCompare(b.name);
-      case 'modified': return new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime();
+      case 'modified': return new Date(b.lastModified ?? 0).getTime() - new Date(a.lastModified ?? 0).getTime();
       default: return 0;
     }
   });
@@ -77,6 +88,14 @@ export default function RepositoriesTab() {
     return (
       <div style={{ padding: 20, color: 'var(--tn-text-muted)' }}>
         Loading repositories...
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div style={{ padding: 20, color: 'var(--tn-red)' }}>
+        {error}
       </div>
     );
   }
@@ -152,10 +171,10 @@ export default function RepositoriesTab() {
             {sortedRepos.map((repo) => (
               <tr
                 key={repo.path}
-                data-ai-id={`repo-row-${repo.name}`}
+                data-ai-id={`repo-row-${repo.name ?? 'unknown'}`}
                 style={{
                   borderTop: '1px solid var(--tn-border)',
-                  background: getAgeColor(repo.lastModified),
+                  background: getAgeColor(repo.lastModified ?? ''),
                   transition: 'all 0.2s',
                 }}
               >
@@ -173,11 +192,11 @@ export default function RepositoriesTab() {
                     borderRadius: 3,
                     fontSize: 10,
                   }}>
-                    {repo.branch}
+                    {repo.branch ?? ''}
                   </span>
                 </td>
                 <td style={{ padding: '8px 12px' }}>
-                  {repo.status === 'dirty' ? (
+                  {(repo.status ?? 'clean') === 'dirty' ? (
                     <span style={{
                       background: 'rgba(224,175,104,0.15)',
                       color: 'var(--tn-yellow)',
@@ -185,7 +204,7 @@ export default function RepositoriesTab() {
                       borderRadius: 3,
                       fontSize: 10,
                     }}>
-                      {repo.uncommitted} uncommitted
+                      {repo.uncommitted ?? 0} uncommitted
                     </span>
                   ) : (
                     <span style={{
@@ -206,25 +225,25 @@ export default function RepositoriesTab() {
                     color: 'var(--tn-text)',
                     fontFamily: 'monospace',
                   }}>
-                    {getAgeLabel(repo.lastModified)}
+                    {getAgeLabel(repo.lastModified ?? '')}
                   </span>
                 </td>
                 <td style={{ padding: '8px 12px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                     <span style={{ color: 'var(--tn-text)' }}>
-                      {repo.lastCommit.hash} {repo.lastCommit.message.slice(0, 50)}
+                      {repo.lastCommit?.hash ?? ''} {(repo.lastCommit?.message ?? '').slice(0, 50)}
                     </span>
                     <span style={{ fontSize: 9, color: 'var(--tn-text-muted)' }}>
-                      {repo.lastCommit.author} • {new Date(repo.lastCommit.date).toLocaleString()}
+                      {repo.lastCommit?.author ?? ''} • {new Date(repo.lastCommit?.date ?? '').toLocaleString()}
                     </span>
                   </div>
                 </td>
                 <td style={{ padding: '8px 12px', textAlign: 'right' }}>
                   <span style={{
                     fontWeight: 600,
-                    color: repo.diskSize.bytes > 1e9 ? 'var(--tn-red)' : 'var(--tn-text)',
+                    color: (repo.diskSize?.bytes ?? 0) > 1e9 ? 'var(--tn-red)' : 'var(--tn-text)',
                   }}>
-                    {repo.diskSize.human}
+                    {repo.diskSize?.human ?? ''}
                   </span>
                 </td>
               </tr>

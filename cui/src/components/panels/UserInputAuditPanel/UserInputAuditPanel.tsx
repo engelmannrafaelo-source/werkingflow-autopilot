@@ -1,17 +1,20 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { shortenPath } from '../../../utils/paths';
+import { validateApiResponse } from '../../../lib/validateApiResponse';
 
 // --- Types ---
 
 interface AuditEntry {
-  ts: string;
-  type: string;
-  accountId: string;
+  sessionId: string;
+  timestamp: string;
+  content: string;
+  ts?: string;
+  type?: string;
+  accountId?: string;
   workDir?: string;
   subject?: string;
-  message: string;
-  sessionId?: string;
-  result: 'ok' | 'error';
+  message?: string;
+  result?: 'ok' | 'error';
   error?: string;
   convTitle?: string;
   convStatus?: 'ongoing' | 'finished';
@@ -20,20 +23,26 @@ interface AuditEntry {
 }
 
 interface AuditSummary {
-  hours: number;
   totalInputs: number;
-  totalSessions: number;
-  byAccount: Record<string, number>;
-  byType: Record<string, number>;
-  errorCount: number;
+  sessions: number;
+  hours?: number;
+  totalSessions?: number;
+  byAccount?: Record<string, number>;
+  byType?: Record<string, number>;
+  errorCount?: number;
 }
 
 interface ConversationContext {
   sessionId: string;
-  title: string;
-  status: string;
-  totalMessages: number;
   messages: Array<{ role: string; text: string; timestamp: string }>;
+  title?: string;
+  status?: string;
+  totalMessages?: number;
+}
+
+interface InputsApiResponse {
+  entries: AuditEntry[];
+  total: number;
 }
 
 // --- Constants ---
@@ -76,17 +85,28 @@ export default function UserInputAuditPanel() {
     if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
     try {
+      const inputsEndpoint = `/api/audit/inputs?hours=${hours}`;
+      const summaryEndpoint = `/api/audit/summary?hours=${hours}`;
       const [inputsRes, summaryRes] = await Promise.all([
-        fetch(`/api/audit/inputs?hours=${hours}`, { signal: AbortSignal.timeout(15000) }),
-        fetch(`/api/audit/summary?hours=${hours}`, { signal: AbortSignal.timeout(15000) }),
+        fetch(inputsEndpoint, { signal: AbortSignal.timeout(15000) }),
+        fetch(summaryEndpoint, { signal: AbortSignal.timeout(15000) }),
       ]);
       if (inputsRes.ok) {
-        const data = await inputsRes.json();
-        setEntries(data.entries || []);
-        setTotal(data.total || 0);
+        const raw = await inputsRes.json();
+        const validated = validateApiResponse<InputsApiResponse>(raw, inputsEndpoint, {
+          entries: 'array',
+          total: 'number',
+        });
+        setEntries(validated.entries);
+        setTotal(validated.total);
       }
       if (summaryRes.ok) {
-        setSummary(await summaryRes.json());
+        const rawSummary = await summaryRes.json();
+        const validatedSummary = validateApiResponse<AuditSummary>(rawSummary, summaryEndpoint, {
+          totalInputs: 'number',
+          sessions: 'number',
+        });
+        setSummary(validatedSummary);
       }
     } catch (err) {
       console.warn('[UserInputAudit] fetch failed:', err);
@@ -108,9 +128,15 @@ export default function UserInputAuditPanel() {
     setExpandedId(sessionId);
     setContextLoading(true);
     try {
-      const res = await fetch(`/api/audit/inputs/${sessionId}/context?tail=10`, { signal: AbortSignal.timeout(15000) });
+      const endpoint = `/api/audit/inputs/${sessionId}/context?tail=10`;
+      const res = await fetch(endpoint, { signal: AbortSignal.timeout(15000) });
       if (res.ok) {
-        setContextData(await res.json());
+        const raw = await res.json();
+        const validated = validateApiResponse<ConversationContext>(raw, endpoint, {
+          sessionId: 'string',
+          messages: 'array',
+        });
+        setContextData(validated);
       }
     } catch (err) {
       console.warn('[UserInputAudit] context fetch failed:', err);
@@ -169,12 +195,12 @@ export default function UserInputAuditPanel() {
               fontWeight: 700,
               padding: '2px 6px',
               borderRadius: 3,
-              background: summary.errorCount > 0 ? 'rgba(247,118,142,0.25)' : 'rgba(122,162,247,0.15)',
-              color: summary.errorCount > 0 ? '#f7768e' : '#7aa2f7',
-              border: `1px solid ${summary.errorCount > 0 ? 'rgba(247,118,142,0.5)' : 'rgba(122,162,247,0.3)'}`,
+              background: (summary.errorCount ?? 0) > 0 ? 'rgba(247,118,142,0.25)' : 'rgba(122,162,247,0.15)',
+              color: (summary.errorCount ?? 0) > 0 ? '#f7768e' : '#7aa2f7',
+              border: `1px solid ${(summary.errorCount ?? 0) > 0 ? 'rgba(247,118,142,0.5)' : 'rgba(122,162,247,0.3)'}`,
               fontFamily: 'monospace',
             }}>
-              {total} inputs / {summary.totalSessions} sessions
+              {total} inputs / {summary.sessions} sessions
             </span>
           )}
 
@@ -239,7 +265,7 @@ export default function UserInputAuditPanel() {
           </div>
         ) : (
           entries.map((entry, idx) => {
-            const entryKey = `${entry.ts}-${idx}`;
+            const entryKey = `${entry.ts ?? ''}-${idx}`;
             const isExpanded = expandedId === entry.sessionId;
 
             return (
@@ -264,7 +290,7 @@ export default function UserInputAuditPanel() {
                       color: 'var(--tn-text-muted)',
                       minWidth: 70,
                     }}>
-                      {formatDate(entry.ts)} {formatTime(entry.ts)}
+                      {formatDate(entry.ts ?? '')} {formatTime(entry.ts ?? '')}
                     </span>
 
                     {/* Type badge */}
@@ -273,13 +299,13 @@ export default function UserInputAuditPanel() {
                       fontWeight: 700,
                       padding: '1px 5px',
                       borderRadius: 3,
-                      background: `${TYPE_COLORS[entry.type] || '#565f89'}22`,
-                      color: TYPE_COLORS[entry.type] || '#565f89',
-                      border: `1px solid ${TYPE_COLORS[entry.type] || '#565f89'}44`,
+                      background: `${TYPE_COLORS[entry.type ?? ''] || '#565f89'}22`,
+                      color: TYPE_COLORS[entry.type ?? ''] || '#565f89',
+                      border: `1px solid ${TYPE_COLORS[entry.type ?? ''] || '#565f89'}44`,
                       fontFamily: 'monospace',
                       textTransform: 'uppercase',
                     }}>
-                      {entry.type}
+                      {entry.type ?? ''}
                     </span>
 
                     {/* Account badge */}
@@ -288,15 +314,15 @@ export default function UserInputAuditPanel() {
                       fontWeight: 700,
                       padding: '1px 5px',
                       borderRadius: 3,
-                      background: `${ACCOUNT_COLORS[entry.accountId] || '#565f89'}22`,
-                      color: ACCOUNT_COLORS[entry.accountId] || '#565f89',
+                      background: `${ACCOUNT_COLORS[entry.accountId ?? ''] || '#565f89'}22`,
+                      color: ACCOUNT_COLORS[entry.accountId ?? ''] || '#565f89',
                       fontFamily: 'monospace',
                     }}>
-                      {entry.accountId}
+                      {entry.accountId ?? ''}
                     </span>
 
                     {/* Result */}
-                    {entry.result === 'error' && (
+                    {(entry.result ?? 'ok') === 'error' && (
                       <span style={{
                         fontSize: 8,
                         fontWeight: 700,
@@ -354,7 +380,7 @@ export default function UserInputAuditPanel() {
                     whiteSpace: 'pre-wrap',
                     wordBreak: 'break-word',
                   }}>
-                    {entry.message}
+                    {entry.message ?? ''}
                   </div>
 
                   {/* WorkDir */}
@@ -387,7 +413,7 @@ export default function UserInputAuditPanel() {
                           color: 'var(--tn-text)',
                           marginBottom: 6,
                         }}>
-                          Conversation: {contextData.title} ({contextData.totalMessages} messages, {contextData.status})
+                          Conversation: {contextData.title ?? ''} ({contextData.totalMessages ?? 0} messages, {contextData.status ?? 'unknown'})
                         </div>
                         {contextData.messages.map((msg, mi) => (
                           <div key={mi} style={{
@@ -440,7 +466,7 @@ export default function UserInputAuditPanel() {
           flexWrap: 'wrap',
           flexShrink: 0,
         }}>
-          {Object.entries(summary.byAccount).map(([acc, count]) => (
+          {Object.entries(summary.byAccount ?? {}).map(([acc, count]) => (
             <span key={acc} style={{
               fontSize: 9,
               fontFamily: 'monospace',
@@ -449,7 +475,7 @@ export default function UserInputAuditPanel() {
               {acc}: {count}
             </span>
           ))}
-          {Object.entries(summary.byType).map(([type, count]) => (
+          {Object.entries(summary.byType ?? {}).map(([type, count]) => (
             <span key={type} style={{
               fontSize: 9,
               fontFamily: 'monospace',
@@ -458,9 +484,9 @@ export default function UserInputAuditPanel() {
               {type}: {count}
             </span>
           ))}
-          {summary.errorCount > 0 && (
+          {(summary.errorCount ?? 0) > 0 && (
             <span style={{ fontSize: 9, fontFamily: 'monospace', color: '#f7768e' }}>
-              errors: {summary.errorCount}
+              errors: {summary.errorCount ?? 0}
             </span>
           )}
         </div>

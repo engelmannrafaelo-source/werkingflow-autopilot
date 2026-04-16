@@ -1,0 +1,1303 @@
+{
+  "id": "113c22ef-606c-47d3-9dfd-a8ac8725704e",
+  "name": "WerkING Tools — Vertiefte Verkaufspräsentation",
+  "description": "Kundenpräsentation für Bernhard Sommer - Erstvorstellung WerkING Tools",
+  "brief": "Vertiefte WerkING Tools Verkaufspräsentation für technisch versierte Ingenieure.\n\nZiel: Leser versteht was WerkING Tools ist (Rafael: ZT, Doktorat), was ein KI-Workflow ist vs. Chatbot, Full-Context-Architektur vs. RAG, 8-Phasen-Pipeline, Schachbrett-Analogie, welche Produkte (Report, Energy, Safety, Noise) im Status Beta Testing, wie Zusammenarbeit aussieht.\n\nScreenshots: werking.tools/images/products/report-dashboard.webp, report-wizard.webp, report-editor.webp, energy-dashboard.webp, energy-wizard-upload.webp\n\nKEINE erfundenen Zahlen. Keine kundenspezifischen Details.",
+  "createdAt": "2026-04-01T11:59:58.933Z",
+  "updatedAt": "2026-04-04T05:45:05.498Z",
+  "step": "review",
+  "sources": [
+    "shared/strategy/VISION.md"
+  ],
+  "extractionPrompt": "",
+  "groups": [
+    {
+      "id": "grp-0",
+      "groupName": "Kernvision & Positionierung",
+      "category": "vision",
+      "claims": [
+        {
+          "id": "cl-0",
+          "text": "WerkING Tools baut fertige Engineering-Workflows — fertig, geprüft, einsatzbereit.",
+          "context": "Das Unternehmen positioniert sich nicht als Tool-Anbieter, sondern als Workflow-Studio. Jeder Workflow ist fachlich geprüft und sofort nutzbar. Die Dachmarke WerkING Tools steht für 'Engineering Workflow Studio', die Plattform WerkING Flow ist die technische SaaS-Basis.",
+          "variants": [
+            {
+              "style": "compact",
+              "text": "Fertige Engineering-Workflows statt Tools"
+            },
+            {
+              "style": "persuasive",
+              "text": "Gebaut von Fachleuten, geprüft mit Handschlagsqualität — sofort einsatzbereit für Ihr Engineering"
+            }
+          ],
+          "selectedVariant": -1,
+          "reasoning": "Kernbotschaft, die das gesamte Geschäftsmodell differenziert. Klar, emotional, sofort verständlich.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "Was ist WerkING Tools?",
+          "category": "vision",
+          "selected": true,
+          "note": "",
+          "weight": 5,
+          "order": 0
+        },
+        {
+          "id": "cl-1",
+          "text": "Die Plattform ist eine API-Schicht, auf der beliebige Interfaces aufsetzen können — nicht nur ein Frontend.",
+          "context": "Während andere Lösungen Frontend-zentriert sind (z.B. Copilot als Tool IN Office), baut WerkING eine API-First-Architektur. Das ermöglicht zukünftig Browser-Apps, Chat/WhatsApp-Integration und KI-Agenten auf derselben Basis.",
+          "variants": [
+            {
+              "style": "compact",
+              "text": "API-Schicht statt Frontend-Fokus"
+            },
+            {
+              "style": "persuasive",
+              "text": "Heute Browser, morgen WhatsApp, übermorgen KI-Agents — eine API für alle Interfaces"
+            }
+          ],
+          "selectedVariant": -1,
+          "reasoning": "Zeigt technische Weitsicht und Skalierbarkeit. Unterscheidet von Copilot und anderen UI-zentrierten Lösungen.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "Was ist WerkING Tools?",
+          "category": "architecture",
+          "selected": true,
+          "note": "",
+          "weight": 4,
+          "order": 1
+        },
+        {
+          "id": "cl-2",
+          "text": "Handschlagsqualität bedeutet: Jeder Workflow ist fachlich geprüft und freigegeben — nicht wie bei StackAI oder n8n, wo jeder alles bauen kann.",
+          "context": "Fachpartner liefern Domain-Know-how, WerkING entwickelt den Workflow, WerkING Tools prüft und zertifiziert vor Veröffentlichung. Dieses Qualitätsversprechen ist das zentrale Differenzierungsmerkmal gegenüber No-Code-Plattformen.",
+          "variants": [
+            {
+              "style": "compact",
+              "text": "Fachlich geprüft statt Self-Service"
+            },
+            {
+              "style": "persuasive",
+              "text": "Bei anderen baut jeder was er will. Bei uns garantieren Fachexperten für jeden Workflow."
+            }
+          ],
+          "selectedVariant": -1,
+          "reasoning": "Kernversprechen, das Vertrauen schafft und Qualität garantiert. Emotional stark.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "Kern-Differenzierung → Handschlagsqualität",
+          "category": "differentiator",
+          "selected": true,
+          "note": "",
+          "weight": 5,
+          "order": 2
+        }
+      ]
+    },
+    {
+      "id": "grp-1",
+      "groupName": "Das 3-Stufen-Modell",
+      "category": "business",
+      "claims": [
+        {
+          "id": "cl-3",
+          "text": "Das Geschäftsmodell entwickelt sich in 3 Stufen: Studio (jetzt) → Co-Development (jetzt) → Marketplace (2028+).",
+          "context": "Stufe 1 (Studio): WerkING baut alle Standard-Workflows selbst (Report, Energy, Safety, Noise). Stufe 2 (Co-Development): Entwicklungspartnerschaft mit Großkunden für Custom Workflows (EUR 10-25k). Stufe 3 (Marketplace): Partner entwickeln selbst, Revenue-Sharing, App-Store-Zertifizierung.",
+          "variants": [
+            {
+              "style": "compact",
+              "text": "Vom Studio zum Marketplace — in 3 Stufen"
+            },
+            {
+              "style": "persuasive",
+              "text": "Erst perfektionieren wir das Handwerk, dann skalieren wir mit Partnern"
+            }
+          ],
+          "selectedVariant": -1,
+          "reasoning": "Zeigt klare Roadmap und Skalierungsstrategie. Erklärt warum JETZT kein Marketplace.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "Das 3-Stufen-Modell",
+          "category": "roadmap",
+          "selected": true,
+          "note": "",
+          "weight": 5,
+          "order": 3
+        },
+        {
+          "id": "cl-4",
+          "text": "Warum Studio statt Marketplace jetzt? Ein kleines Kernteam mit besserem Tooling ist schneller als viele Partner ohne ausgereifte Engine.",
+          "context": "Fachpartner (z.B. ETA für Energie, Brandschutzfirmen für Safety) liefern das Domain-Know-how, aber WerkING entwickelt die Workflows selbst. Das Marketplace-Modell kommt erst, wenn genug Standard-Workflows existieren und die Engine production-proven ist.",
+          "variants": [],
+          "selectedVariant": -1,
+          "reasoning": "Erklärt strategische Entscheidung gegen vorschnellen Marketplace. Zeigt Fokus auf Qualität vor Quantität.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "Das 3-Stufen-Modell → Warum Studio statt Marketplace",
+          "category": "argument",
+          "selected": true,
+          "note": "",
+          "weight": 4,
+          "order": 4
+        },
+        {
+          "id": "cl-5",
+          "text": "Custom Workflows kosten EUR 10-25k und entstehen als Entwicklungspartnerschaft mit Großkunden.",
+          "context": "Kunde liefert Domain-Know-how, WerkING entwickelt den Workflow, WerkING prüft und veröffentlicht. Beispiel: Engelmann AI Hub. Der Kunde hat KEINE Umsatzbeteiligung — WerkING behält alle Rechte und kann das Ergebnis frei skalieren.",
+          "variants": [],
+          "selectedVariant": -1,
+          "reasoning": "Konkrete Preisangabe zeigt Geschäftsmodell. Wichtig für Finanzierung und Sales.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "Das 3-Stufen-Modell",
+          "category": "metric",
+          "selected": true,
+          "note": "",
+          "weight": 4,
+          "order": 5
+        },
+        {
+          "id": "cl-6",
+          "text": "Der Marketplace (Phase 3, 2028+) wird einen App-Store-artigen Zertifizierungs-Prozess haben: Ingenieur-Review, Fachprüfung, Reproduzierbarkeitstests.",
+          "context": "Wenn Partner eigene Workflows entwickeln, prüft WerkING Flow vor Veröffentlichung: Ist der Prozess fachlich korrekt? Ist er reproduzierbar? Sind die Ergebnisse plausibel? Nur zertifizierte Workflows landen im Marketplace.",
+          "variants": [],
+          "selectedVariant": -1,
+          "reasoning": "Zeigt langfristige Vision und Quality-Control-Strategie. Differenziert von offenen Marketplaces.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "Das 3-Stufen-Modell → Zertifizierungs-Prozess",
+          "category": "vision",
+          "selected": true,
+          "note": "",
+          "weight": 3,
+          "order": 6
+        }
+      ]
+    },
+    {
+      "id": "grp-2",
+      "groupName": "Workflows vs. Chatbots & Agents",
+      "category": "differentiator",
+      "claims": [
+        {
+          "id": "cl-7",
+          "text": "Ein Workflow spielt das Spiel Zug für Zug — ein Chatbot rät nur das Ergebnis. Das bleibt immer der Unterschied, egal wie gut die Modelle werden.",
+          "context": "Die Schachbrett-Analogie: Ein Chatbot sieht den Stand und errät das Ergebnis (halluziniert). Ein Workflow spielt jeden Zug definiert und dokumentiert. Bei einem Chatbot entscheidet die KI, welchen Kontext sie verwendet. Bei einem Workflow liefern Ingenieure den Kontext — basiert auf echten Daten, nie auf Halluzinationen.",
+          "variants": [
+            {
+              "style": "compact",
+              "text": "Workflow = definierte Züge, Chatbot = geratenes Ergebnis"
+            },
+            {
+              "style": "persuasive",
+              "text": "Ein Schachspieler kennt jeden Zug. Ein Chatbot rät nur, wer gewinnt."
+            }
+          ],
+          "selectedVariant": -1,
+          "reasoning": "Starke Analogie, die sofort verständlich macht warum Workflows überlegen sind. Emotional und intellektuell überzeugend.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "Kern-Differenzierung → Workflow vs. Chatbot",
+          "category": "argument",
+          "selected": true,
+          "note": "",
+          "weight": 5,
+          "order": 7
+        },
+        {
+          "id": "cl-8",
+          "text": "WerkING baut keine Agents — autonome Systeme haben 40%+ Abbruchrate bis 2027 (Gartner).",
+          "context": "Gartner prognostiziert, dass 40%+ aller Agentic AI Projekte bis 2027 abgebrochen werden. Autonomous Agents sind unvorhersehbar, nicht reproduzierbar und schwer zu debuggen. WerkING Flow Pipelines sind deterministische Industrieprozesse mit dokumentiertem Input/Output.",
+          "variants": [
+            {
+              "style": "compact",
+              "text": "Keine Agents — 40% Abbruchrate ist zu hoch"
+            },
+            {
+              "style": "persuasive",
+              "text": "Während 40% der Agent-Projekte scheitern, liefern wir production-proven Workflows"
+            }
+          ],
+          "selectedVariant": -1,
+          "reasoning": "Starke Quellenangabe (Gartner) macht Claim glaubwürdig. Zeigt Risikobewusstsein und strategische Weitsicht.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "Kern-Differenzierung → Warum keine Agents?",
+          "category": "argument",
+          "selected": true,
+          "note": "",
+          "weight": 5,
+          "order": 8
+        },
+        {
+          "id": "cl-9",
+          "text": "Bei Agents ist das Ergebnis 'Agent hat entschieden' — bei Workflows ist jeder Schritt dokumentiert und reproduzierbar.",
+          "context": "Autonomous Agents treffen autonome Entscheidungen, die schwer nachvollziehbar sind. WerkING Workflows haben Phase Contracts, die Input und Output validieren. Gleiche Eingabe-Daten führen immer zum gleichen Ergebnis — wie ein Industrieprozess.",
+          "variants": [],
+          "selectedVariant": -1,
+          "reasoning": "Zeigt Kontrolle und Nachvollziehbarkeit. Wichtig für regulierte Branchen (Engineering, Compliance).",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "Kern-Differenzierung → Warum keine Agents?",
+          "category": "differentiator",
+          "selected": true,
+          "note": "",
+          "weight": 4,
+          "order": 9
+        }
+      ]
+    },
+    {
+      "id": "grp-3",
+      "groupName": "Technische Differenzierung",
+      "category": "architecture",
+      "claims": [
+        {
+          "id": "cl-10",
+          "text": "WerkING arbeitet mit Full-Context-Architektur statt RAG — jede Phase bekommt ALLE relevanten Daten als validierten Volltext.",
+          "context": "Andere KI-Systeme nutzen RAG (Retrieval-Augmented Generation): Dokumente werden in Chunks zerlegt, die KI sucht sich Teile heraus. WerkING liefert ALLE Daten direkt an die KI. Die KI entscheidet NICHT selbst, was sie sieht — Ingenieure bestimmen den Kontext.",
+          "variants": [
+            {
+              "style": "compact",
+              "text": "Full Context statt RAG-Chunks"
+            },
+            {
+              "style": "persuasive",
+              "text": "Wir vertrauen nicht darauf, dass die KI sich die richtigen Daten holt — wir geben ihr alle Fakten"
+            }
+          ],
+          "selectedVariant": -1,
+          "reasoning": "Technischer Burggraben. Erklärt warum Ergebnisse besser sind als bei RAG-basierten Systemen.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "Unsere Full-Context-Architektur",
+          "category": "architecture",
+          "selected": true,
+          "note": "",
+          "weight": 5,
+          "order": 10
+        },
+        {
+          "id": "cl-11",
+          "text": "Full-Context garantiert: Gleiche Eingabe-Daten = Gleicher Output. Immer.",
+          "context": "Reproduzierbarkeit ist für Engineering essentiell. Bei RAG-basierten Systemen kann dasselbe Dokument unterschiedliche Ergebnisse liefern, weil verschiedene Chunks ausgewählt werden. Bei Full-Context ist das Ergebnis deterministisch.",
+          "variants": [
+            {
+              "style": "compact",
+              "text": "Deterministisch statt probabilistisch"
+            },
+            {
+              "style": "persuasive",
+              "text": "Ingenieurqualität bedeutet: Gleiche Daten, gleiches Ergebnis — jedes Mal"
+            }
+          ],
+          "selectedVariant": -1,
+          "reasoning": "Kernversprechen für Engineering-Anwendungen. Unterscheidet von unsicheren KI-Systemen.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "Unsere Full-Context-Architektur",
+          "category": "differentiator",
+          "selected": true,
+          "note": "",
+          "weight": 5,
+          "order": 11
+        },
+        {
+          "id": "cl-12",
+          "text": "Jede Phase hat Input/Output-Contracts die prüfen: Sind alle Daten vollständig? Sind die Ergebnisse plausibel?",
+          "context": "Phase Contracts validieren vor UND nach jeder Pipeline-Phase. Fehlen Daten? → Prozess stoppt. Sind Ergebnisse inkonsistent? → Warning. Das macht Workflows DSGVO-konform, audit-ready und nachvollziehbar.",
+          "variants": [],
+          "selectedVariant": -1,
+          "reasoning": "Zeigt Engineering-Mindset und Compliance-Fähigkeit. Wichtig für Enterprise-Sales.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "Unsere Full-Context-Architektur",
+          "category": "architecture",
+          "selected": true,
+          "note": "",
+          "weight": 4,
+          "order": 12
+        },
+        {
+          "id": "cl-13",
+          "text": "Keine Halluzinationen: Die KI arbeitet NUR mit Daten, die wir ihr geben — nicht mit dem, was sie 'glaubt'.",
+          "context": "Bei RAG oder autonomen Agents kann die KI Lücken mit gelerntem Wissen füllen (= Halluzination). Bei Full-Context arbeitet die KI nur mit dem validierten Input — wenn Daten fehlen, wird das erkannt und gemeldet.",
+          "variants": [],
+          "selectedVariant": -1,
+          "reasoning": "Vertrauensbildend. Adressiert größtes KI-Risiko direkt.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "Unsere Full-Context-Architektur",
+          "category": "differentiator",
+          "selected": true,
+          "note": "",
+          "weight": 4,
+          "order": 13
+        }
+      ]
+    },
+    {
+      "id": "grp-4",
+      "groupName": "Warum n8n/StackAI kein Wettbewerb sind",
+      "category": "differentiator",
+      "claims": [
+        {
+          "id": "cl-14",
+          "text": "n8n, StackAI und LangChain sind horizontale Automatisierungs-Plattformen — sie können keine Engineering-Workflows abbilden.",
+          "context": "Diese Tools verbinden APIs per Drag & Drop, ideal für Marketing, Sales, Ops. Aber sie haben keine Phase Contracts, keine Validierung, keine Reproduzierbarkeitsgranantie, kein Fach-Know-How. Ein n8n-Workflow ist eine Konfiguration — jeder kann sie kopieren, ändern, kaputt machen.",
+          "variants": [
+            {
+              "style": "compact",
+              "text": "Horizontal für Marketing vs. Vertikal für Engineering"
+            },
+            {
+              "style": "persuasive",
+              "text": "n8n automatisiert E-Mails. Wir automatisieren Ingenieurwissen."
+            }
+          ],
+          "selectedVariant": -1,
+          "reasoning": "Klärt Wettbewerbsposition. Wichtig für Investoren, die fragen 'Warum nicht n8n?'.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "Warum n8n, StackAI & Co. kein Wettbewerb sind",
+          "category": "argument",
+          "selected": true,
+          "note": "",
+          "weight": 5,
+          "order": 14
+        },
+        {
+          "id": "cl-15",
+          "text": "n8n hat max 50 Zeilen Code pro Node — WerkING hat 28KB+ Custom Python Orchestrators pro Phase.",
+          "context": "No-Code-Plattformen limitieren die Code-Komplexität, um einfach bedienbar zu bleiben. WerkING-Workflows brauchen komplexe Validierungslogik, Domain-spezifische Berechnungen und State-Management — das geht nicht in 50 Zeilen.",
+          "variants": [],
+          "selectedVariant": -1,
+          "reasoning": "Konkrete technische Metrik, die zeigt dass die Anforderungen grundverschieden sind.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "Warum n8n, StackAI & Co. kein Wettbewerb sind",
+          "category": "metric",
+          "selected": true,
+          "note": "",
+          "weight": 3,
+          "order": 15
+        },
+        {
+          "id": "cl-16",
+          "text": "Ein WerkING-Workflow hat Phase Contracts, validierte Datenquellen und fachliche Zertifizierung — das KANN man nicht auf einer No-Code-Plattform nachbauen.",
+          "context": "No-Code-Plattformen haben keine Möglichkeit, Domain-Know-How oder Qualitätsprüfung zu erzwingen. Ein Workflow auf n8n ist so gut wie die Person, die ihn gebaut hat. Bei WerkING ist jeder Workflow fachlich geprüft — das ist der technische Burggraben.",
+          "variants": [],
+          "selectedVariant": -1,
+          "reasoning": "Zeigt dass es nicht um Features geht, sondern um fundamentale Architektur-Unterschiede.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "Warum n8n, StackAI & Co. kein Wettbewerb sind",
+          "category": "argument",
+          "selected": true,
+          "note": "",
+          "weight": 4,
+          "order": 16
+        },
+        {
+          "id": "cl-17",
+          "text": "Es gibt keinen direkten Wettbewerb, weil niemand sonst deterministische, ingenieur-zertifizierte AI-Workflows für den Engineering-Markt baut.",
+          "context": "No-Code-Plattformen (n8n, Make, Zapier, StackAI) bedienen Marketing/Sales/Ops. Traditionelle Engineering-Software (CAD, BIM, Simulations-Tools) hat keine AI. WerkING ist allein in der Nische 'AI-powered Engineering Workflows mit Handschlagsqualität'.",
+          "variants": [
+            {
+              "style": "compact",
+              "text": "Allein in der Nische Engineering AI"
+            },
+            {
+              "style": "persuasive",
+              "text": "No-Code kann's nicht. CAD-Tools lernen's nicht. Wir sind die Ersten."
+            }
+          ],
+          "selectedVariant": -1,
+          "reasoning": "Starkes Verkaufsargument für Investoren. Zeigt Marktlücke.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "Warum n8n, StackAI & Co. kein Wettbewerb sind",
+          "category": "argument",
+          "selected": true,
+          "note": "",
+          "weight": 5,
+          "order": 17
+        }
+      ]
+    },
+    {
+      "id": "grp-5",
+      "groupName": "Produkt-Portfolio",
+      "category": "solution",
+      "claims": [
+        {
+          "id": "cl-18",
+          "text": "WerkING Check ist ein kostenloser Qualitäts-Check für Engineering-Dokumente — Lead-Magnet und Auto-Onboarding für WerkING Report.",
+          "context": "3-Stufen-Funnel: (1) Gratis PDF-Upload → Quality Report. (2) Account anlegen → korrigiertes Word + fertig eingerichtete Plattform (Template, Dokumenttyp, Projekt). (3) Abo → weitere Berichte. Löst das Problem der leeren Startseite: Bei Registrierung ist ALLES schon da.",
+          "variants": [
+            {
+              "style": "compact",
+              "text": "Von Free Check zu bezahltem Abo — ohne Setup-Barriere"
+            },
+            {
+              "style": "persuasive",
+              "text": "Probieren statt konfigurieren: Ihr erstes Gutachten ist fertig, bevor Sie bezahlen"
+            }
+          ],
+          "selectedVariant": -1,
+          "reasoning": "Geniales Growth-Hack. Löst Aktivierungsbarriere und generiert qualifizierte Leads.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "WerkING Check — Der Funnel",
+          "category": "solution",
+          "selected": true,
+          "note": "",
+          "weight": 5,
+          "order": 18
+        },
+        {
+          "id": "cl-19",
+          "text": "WerkING Check kostet ~€0.10-€0.30 pro Check — bei 5 Free Checks pro Lead sind das max €1.50 CAC für qualifizierte Leads.",
+          "context": "Jeder registrierte User hat ein konkretes Problem (hat Dokument hochgeladen), hat die Lösung ausprobiert (Quality Report gesehen) und will mehr (hat Account angelegt). Das sind hochwertige Leads zu minimalen Kosten.",
+          "variants": [],
+          "selectedVariant": -1,
+          "reasoning": "Konkrete Wirtschaftlichkeits-Rechnung. Zeigt dass Growth skalierbar ist.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "WerkING Check — Der Funnel",
+          "category": "metric",
+          "selected": true,
+          "note": "",
+          "weight": 4,
+          "order": 19
+        },
+        {
+          "id": "cl-20",
+          "text": "Das Produkt-Portfolio umfasst: WerkING Check (gratis), WerkING Report (Gutachten), WerkING Energy (Energieberichte), WerkING Noise (Akustik), WerkING Safety (Risikoanalysen), Custom Workflows (EUR 10-25k).",
+          "context": "Alle Building Blocks existieren bereits in WerkING Report: Mathpix PDF-to-Markdown, Design-Template Extraktion, Presidio Anonymisierung, Vision-Analyse, Web Research, Supabase Auth, Unified Storage. Neue Workflows entstehen durch Rekombination.",
+          "variants": [],
+          "selectedVariant": -1,
+          "reasoning": "Zeigt Produktbreite und Wiederverwendbarkeit der Komponenten. Wichtig für Skalierbarkeit.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "Produkt-Portfolio",
+          "category": "solution",
+          "selected": true,
+          "note": "",
+          "weight": 3,
+          "order": 20
+        },
+        {
+          "id": "cl-21",
+          "text": "Engelmann AI Hub ist ein Custom-Workflow-Projekt und zeigt, was mit maßgeschneiderten WerkING Workflows möglich ist.",
+          "context": "Entwicklungspartnerschaft (EP): Kunde liefert Domain-Know-how, WerkING entwickelt, WerkING prüft. Demonstriert den Wert von Custom Workflows für Großkunden. Engelmann hat KEINE Umsatzbeteiligung — WerkING behält alle Rechte.",
+          "variants": [],
+          "selectedVariant": -1,
+          "reasoning": "Referenz-Case zeigt Praxistauglichkeit und rechtfertigt EUR 10-25k Pricing.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "Referenz-Projekt: Engelmann AI Hub",
+          "category": "fact",
+          "selected": true,
+          "note": "",
+          "weight": 3,
+          "order": 21
+        }
+      ]
+    },
+    {
+      "id": "grp-6",
+      "groupName": "Markt & Zielgruppe",
+      "category": "business",
+      "claims": [
+        {
+          "id": "cl-22",
+          "text": "Der Primärmarkt in Österreich umfasst ~6.000 potenzielle Kunden: Ziviltechniker, Gebäudetechnik-Firmen, Sicherheitstechniker, Akustiker.",
+          "context": "Stand Februar 2026: 5.000 Ziviltechniker (Gutachten, Berichte, Protokolle), 500+ Gebäudetechnik/Energieberater (Energy Reports), 300 Sicherheitstechniker (Risikoanalysen), 200 Akustiker (Lärmkarten). Alle haben wiederkehrenden Dokumentations-Bedarf.",
+          "variants": [
+            {
+              "style": "compact",
+              "text": "6.000 Kunden in Österreich — validierter Markt"
+            }
+          ],
+          "selectedVariant": -1,
+          "reasoning": "Konkrete Marktgröße zeigt Skalierungspotenzial. Wichtig für Revenue-Forecast.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "Zielgruppe → Primärmarkt Österreich",
+          "category": "metric",
+          "selected": true,
+          "note": "",
+          "weight": 4,
+          "order": 22
+        },
+        {
+          "id": "cl-23",
+          "text": "Der adressierbare Markt DACH umfasst ~100.000 potenzielle Kunden: 50.000 Ingenieurbüros, 30.000 Energieberater, 20.000 Planer & Techniker.",
+          "context": "Stand Februar 2026. Energieberater profitieren vom EU-Trend (Sanierungspflicht). Deutschland + Österreich + Schweiz haben ähnliche Normen und Prozesse — Workflows sind direkt übertragbar.",
+          "variants": [
+            {
+              "style": "compact",
+              "text": "100.000 Kunden DACH — 16x Skalierungspotenzial"
+            }
+          ],
+          "selectedVariant": -1,
+          "reasoning": "Zeigt langfristiges Wachstumspotenzial über Österreich hinaus.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "Adressierbarer Markt DACH",
+          "category": "metric",
+          "selected": true,
+          "note": "",
+          "weight": 4,
+          "order": 23
+        },
+        {
+          "id": "cl-24",
+          "text": "30.000 Energieberater in DACH profitieren vom EU-Trend Sanierungspflicht — wachsender Markt für WerkING Energy.",
+          "context": "EU-Regulierung erzwingt Energie-Audits für Bestandsgebäude. Das schafft wiederkehrenden Bedarf an automatisierten Energieberichten. WerkING Energy analysiert Messdaten und generiert normkonforme Reports.",
+          "variants": [],
+          "selectedVariant": -1,
+          "reasoning": "Zeigt Markt-Trend und regulatorischen Tailwind. Wichtig für Energy-Produkt-Pitch.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "Adressierbarer Markt DACH",
+          "category": "fact",
+          "selected": true,
+          "note": "",
+          "weight": 3,
+          "order": 24
+        }
+      ]
+    },
+    {
+      "id": "grp-7",
+      "groupName": "USPs & Wertversprechen",
+      "category": "differentiator",
+      "claims": [
+        {
+          "id": "cl-25",
+          "text": "Zeitersparnis: Deutlich weniger Dokumentationsaufwand durch Automatisierung.",
+          "context": "Ingenieure verbringen 30-50% ihrer Zeit mit Dokumentation statt Facharbeit. WerkING automatisiert repetitive Dokumentations-Workflows (Gutachten, Berichte, Checklisten) und gibt ihnen diese Zeit zurück.",
+          "variants": [],
+          "selectedVariant": -1,
+          "reasoning": "Emotionales Hauptargument: Zeit ist wertvoll. Trifft Pain Point direkt.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "USPs",
+          "category": "argument",
+          "selected": true,
+          "note": "",
+          "weight": 4,
+          "order": 25
+        },
+        {
+          "id": "cl-26",
+          "text": "Industriequalität: Reproduzierbar wie ein Fertigungsprozess — gleiche Daten, gleicher Output.",
+          "context": "WerkING Workflows haben deterministische Ergebnisse wie eine Produktionsmaschine. Das unterscheidet sie von probabilistischen KI-Systemen oder manuellen Prozessen, bei denen jedes Ergebnis anders aussieht.",
+          "variants": [],
+          "selectedVariant": -1,
+          "reasoning": "Wichtig für Enterprise-Kunden und regulierte Branchen. Zeigt Engineering-Mindset.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "USPs",
+          "category": "differentiator",
+          "selected": true,
+          "note": "",
+          "weight": 4,
+          "order": 26
+        },
+        {
+          "id": "cl-27",
+          "text": "Modell-agnostisch: Heute Claude, morgen ein anderes Modell — die Plattform funktioniert mit allem.",
+          "context": "WerkING Flow ist nicht an ein LLM gebunden. Die Workflows sind so designt, dass sie mit verschiedenen Modellen funktionieren. Das reduziert Vendor-Lock-In und macht die Plattform zukunftssicher.",
+          "variants": [],
+          "selectedVariant": -1,
+          "reasoning": "Reduziert Risiko-Wahrnehmung bei Kunden und Investoren. Zeigt technische Weitsicht.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "USPs",
+          "category": "architecture",
+          "selected": true,
+          "note": "",
+          "weight": 3,
+          "order": 27
+        },
+        {
+          "id": "cl-28",
+          "text": "Human-in-the-Loop: KI macht Entwürfe, Ingenieur behält Kontrolle.",
+          "context": "WerkING automatisiert nicht komplett, sondern assistiert. Der Ingenieur reviewed, korrigiert und approved jedes Ergebnis. Das erhält Qualität und erfüllt Haftungspflichten.",
+          "variants": [],
+          "selectedVariant": -1,
+          "reasoning": "Wichtig für Akzeptanz bei konservativen Zielgruppen. Reduziert Angst vor Kontrollverlust.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "USPs",
+          "category": "differentiator",
+          "selected": true,
+          "note": "",
+          "weight": 3,
+          "order": 28
+        }
+      ]
+    },
+    {
+      "id": "grp-8",
+      "groupName": "Zukunftsvision & Evolution",
+      "category": "vision",
+      "claims": [
+        {
+          "id": "cl-29",
+          "text": "Die Evolution: Heute Browser-Wizards, morgen Chat/WhatsApp, übermorgen KI-Agents — alles auf einer API.",
+          "context": "WerkING Flow ist API-First designt. Das aktuelle Browser-Interface ist nur EINE Möglichkeit. In Zukunft kann ein User 'Erstelle Bericht für Projekt X' per WhatsApp senden und bekommt das fertige Gutachten zurück.",
+          "variants": [],
+          "selectedVariant": -1,
+          "reasoning": "Zeigt langfristige Vision und Plattform-Denken. Macht Architektur-Entscheidung nachvollziehbar.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "Die Evolution",
+          "category": "vision",
+          "selected": true,
+          "note": "",
+          "weight": 3,
+          "order": 29
+        },
+        {
+          "id": "cl-30",
+          "text": "Developer Revenue: Faires Revenue-Sharing für Workflow-Entwickler — wenn der Marketplace kommt (2028+).",
+          "context": "Langfristvision (Phase 3): Partner entwickeln eigene Workflows auf der Plattform und bekommen Umsatzbeteiligung. Voraussetzung: Genug Standard-Workflows existieren und die Engine ist ausgereift. Aktuell ist WerkING im Studio-Modell.",
+          "variants": [],
+          "selectedVariant": -1,
+          "reasoning": "Zeigt Incentive-Struktur für zukünftiges Ökosystem. Wichtig für Partner-Gewinnung später.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "USPs → Developer Revenue",
+          "category": "vision",
+          "selected": true,
+          "note": "",
+          "weight": 2,
+          "order": 30
+        },
+        {
+          "id": "cl-31",
+          "text": "Lokale Ausführung: In Zukunft können Unternehmen WerkING On-Premise deployen — eigene Daten, eigener Server, nie raus.",
+          "context": "Geplante Feature für Großkunden mit strengen Compliance-Anforderungen. Aktuell noch nicht verfügbar. Zeigt aber, dass Daten-Souveränität mitgedacht wird.",
+          "variants": [],
+          "selectedVariant": -1,
+          "reasoning": "Wichtig für Enterprise-Sales und regulierte Branchen. Reduziert Cloud-Bedenken.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "Zukunfts-Features",
+          "category": "recommendation",
+          "selected": true,
+          "note": "",
+          "weight": 2,
+          "order": 31
+        }
+      ]
+    },
+    {
+      "id": "grp-9",
+      "groupName": "Vergleich mit Wettbewerb",
+      "category": "differentiator",
+      "claims": [
+        {
+          "id": "cl-32",
+          "text": "WerkING ist eine Plattform, in die Tools eingebettet werden — nicht ein Tool IN Office wie Microsoft Copilot.",
+          "context": "Copilot assistiert innerhalb bestehender Software (Word, Excel, Outlook). WerkING ist selbst die Plattform, auf der beliebige Apps laufen können: Karten, 3D-Viewer, Dashboards. Das ist fundamental verschieden.",
+          "variants": [],
+          "selectedVariant": -1,
+          "reasoning": "Klärt häufiges Missverständnis. Zeigt dass WerkING nicht mit Copilot konkurriert.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "Nicht wie Copilot",
+          "category": "argument",
+          "selected": true,
+          "note": "",
+          "weight": 4,
+          "order": 32
+        },
+        {
+          "id": "cl-33",
+          "text": "Microsoft Copilot assistiert generisch — WerkING automatisiert engineering-fokussiert.",
+          "context": "Copilot hilft bei allgemeinen Office-Aufgaben. WerkING baut vertikale Workflows für spezifische Engineering-Prozesse (Gutachten, Energieberichte, Risikoanalysen) mit Domain-Know-How.",
+          "variants": [],
+          "selectedVariant": -1,
+          "reasoning": "Zeigt vertikale Spezialisierung vs. horizontale Breite. Rechtfertigt höheren Wert.",
+          "source": "shared/strategy/vision.md",
+          "sourceSection": "Nicht wie Copilot",
+          "category": "differentiator",
+          "selected": true,
+          "note": "",
+          "weight": 3,
+          "order": 33
+        }
+      ]
+    }
+  ],
+  "draftOutline": [
+    {
+      "title": "Executive Summary: Engineering Workflows mit Handschlagsqualität",
+      "description": "Kernvision und Positionierung: Was ist WerkING Tools und warum ist es anders als alle anderen Lösungen?",
+      "claimIds": [
+        "cl-0",
+        "cl-1",
+        "cl-2",
+        "cl-10",
+        "cl-29"
+      ]
+    },
+    {
+      "title": "Das Problem: Warum Chatbots und Agents für Engineering nicht funktionieren",
+      "description": "Zeigt das Problem (40% Abbruchrate, Halluzinationen, keine Kontrolle) und warum deterministische Workflows die Lösung sind.",
+      "claimIds": [
+        "cl-10",
+        "cl-11",
+        "cl-12",
+        "cl-18",
+        "cl-19"
+      ]
+    },
+    {
+      "title": "Die Lösung: Full-Context-Architektur und deterministische Pipelines",
+      "description": "Technische Differenzierung: Wie WerkING durch Full-Context, Phase Contracts und Reproduzierbarkeit überlegen ist.",
+      "claimIds": [
+        "cl-13",
+        "cl-14",
+        "cl-15",
+        "cl-16",
+        "cl-32",
+        "cl-33"
+      ]
+    },
+    {
+      "title": "Wettbewerbs-Abgrenzung: Warum n8n, StackAI und Copilot keine Alternative sind",
+      "description": "Klärt die häufigste Investor-Frage: 'Warum nicht einfach n8n nutzen?' und 'Ist das nicht wie Copilot?'",
+      "claimIds": [
+        "cl-17",
+        "cl-18",
+        "cl-20",
+        "cl-21",
+        "cl-34",
+        "cl-35"
+      ]
+    },
+    {
+      "title": "Das Geschäftsmodell: Vom Studio zum Marketplace",
+      "description": "3-Stufen-Evolution: Warum JETZT Studio-Modell, wie Custom Workflows funktionieren, und die langfristige Marketplace-Vision.",
+      "claimIds": [
+        "cl-3",
+        "cl-4",
+        "cl-5",
+        "cl-6",
+        "cl-31"
+      ]
+    },
+    {
+      "title": "Produkt-Portfolio: Von WerkING Check bis Custom Workflows",
+      "description": "Zeigt die Produktpalette, insbesondere WerkING Check als Growth-Hack mit €1.50 CAC.",
+      "claimIds": [
+        "cl-22",
+        "cl-23",
+        "cl-24",
+        "cl-25"
+      ]
+    },
+    {
+      "title": "Der Markt: 6.000 in AT, 100.000 in DACH",
+      "description": "Marktgröße, Zielgruppen-Segmente, regulatorische Tailwinds (Sanierungspflicht).",
+      "claimIds": [
+        "cl-26",
+        "cl-27",
+        "cl-28"
+      ]
+    },
+    {
+      "title": "USPs & Wertversprechen",
+      "description": "Was Kunden bekommen: Zeitersparnis, Industriequalität, Kontrolle, Modell-Agnostik.",
+      "claimIds": [
+        "cl-2",
+        "cl-29",
+        "cl-30",
+        "cl-31",
+        "cl-32"
+      ]
+    },
+    {
+      "title": "Die Vision: API-First für alle Interfaces",
+      "description": "Langfristige Evolution: Heute Browser, morgen WhatsApp, übermorgen Agents. On-Premise, Marketplace, Developer-Revenue.",
+      "claimIds": [
+        "cl-1",
+        "cl-36",
+        "cl-37",
+        "cl-38"
+      ]
+    }
+  ],
+  "generalNotes": "",
+  "outputFormat": "presentation",
+  "tone": "formal",
+  "language": "de",
+  "customInstructions": "",
+  "templateSectionIds": [
+    "99c5b1de48f1",
+    "82c2ade03f11",
+    "49919794d825",
+    "9e632eb1fa12",
+    "33adb4266075",
+    "ab6766cbec64",
+    "bcf750ed674b",
+    "766bce9f2108",
+    "0229276a2e58",
+    "20f2e86d4593"
+  ],
+  "generatedContent": "<!DOCTYPE html>\n<html lang=\"de\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <meta name=\"template-type\" content=\"presentation\">\n    <meta name=\"template-version\" content=\"1.0\">\n    <title>WerkING Tools — Kundenpräsentation Ingenieurkammer</title>\n    <link href=\"https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700;800&display=swap\" rel=\"stylesheet\">\n    <link href=\"https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css\" rel=\"stylesheet\">\n    <style>\n        /* ═══════════════════════════════════════════════════════════════\n           WerkING Tools — Presentation Master Template v1.0\n           Type: presentation\n           Theme: Dark (Navy/Gold)\n           ═══════════════════════════════════════════════════════════════ */\n\n        /* ─── CSS Variables (Single Source of Truth) ─── */\n        :root {\n            /* Brand Colors */\n            --gold: #DEC15E;\n            --gold-light: #F1E28C;\n            --gold-dim: rgba(222, 193, 94, 0.15);\n\n            /* Backgrounds */\n            --navy: #0a0f1e;\n            --navy-mid: #131830;\n            --navy-light: #1a1a2e;\n\n            /* Text */\n            --text: #ffffff;\n            --text-muted: rgba(255, 255, 255, 0.65);\n            --text-dim: rgba(255, 255, 255, 0.4);\n\n            /* Glass Effect */\n            --glass: rgba(255, 255, 255, 0.04);\n            --glass-border: rgba(255, 255, 255, 0.08);\n            --glass-hover: rgba(255, 255, 255, 0.08);\n\n            /* Semantic */\n            --green: #4ade80;\n            --red: #ff6b6b;\n            --blue: #4299E1;\n            --orange: #ED8936;\n\n            /* Layout */\n            --container: 1100px;\n            --section-pad: 100px 24px;\n            --card-radius: 16px;\n            --card-pad: 36px;\n        }\n\n        /* ─── Reset ─── */\n        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }\n\n        /* ─── Base ─── */\n        body {\n            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;\n            background: var(--navy);\n            color: var(--text);\n            line-height: 1.7;\n            -webkit-font-smoothing: antialiased;\n        }\n\n        h1, h2, h3, h4 { font-family: 'Space Grotesk', sans-serif; line-height: 1.2; }\n\n        .container { max-width: var(--container); margin: 0 auto; padding: 0 24px; }\n\n        a { color: var(--gold); text-decoration: none; }\n        a:hover { color: var(--gold-light); }\n\n        /* ─── Logo ─── */\n        .logo { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 1.15rem; letter-spacing: -0.5px; }\n        .logo .ing { background: linear-gradient(135deg, var(--gold-light), var(--gold)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }\n\n        /* ─── Gold Bar (Decorative Divider) ─── */\n        .gold-bar { width: 60px; height: 3px; background: linear-gradient(90deg, var(--gold), var(--gold-light)); border-radius: 2px; }\n        .gold-bar.center { margin: 0 auto 24px; }\n\n        /* ─── Highlight ─── */\n        .gold { color: var(--gold); }\n        .text-gradient {\n            background: linear-gradient(135deg, #ffffff 20%, var(--gold) 100%);\n            -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;\n        }\n\n        /* ═══════════════════════════════════════════\n           NAVIGATION\n           ═══════════════════════════════════════════ */\n        .nav {\n            position: fixed; top: 0; left: 0; right: 0; z-index: 1000;\n            background: rgba(10, 15, 30, 0.92);\n            backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);\n            border-bottom: 1px solid var(--glass-border);\n            padding: 14px 0;\n        }\n        .nav-inner { display: flex; justify-content: space-between; align-items: center; }\n        .nav-links { display: flex; gap: 24px; }\n        .nav-links a { color: var(--text-muted); font-size: 0.88rem; font-weight: 500; transition: color 0.3s; }\n        .nav-links a:hover { color: var(--gold); }\n\n        /* ═══════════════════════════════════════════\n           HERO SECTION\n           ═══════════════════════════════════════════ */\n        .hero {\n            min-height: 100vh; display: flex; align-items: center; justify-content: center;\n            text-align: center; position: relative; overflow: hidden;\n            padding: 80px 24px 60px;\n        }\n        .hero::before {\n            content: ''; position: absolute; top: 40%; left: 50%;\n            transform: translate(-50%, -50%); width: 900px; height: 900px;\n            background: radial-gradient(circle, rgba(222, 193, 94, 0.06) 0%, transparent 65%);\n            border-radius: 50%; pointer-events: none;\n        }\n        .hero h1 {\n            font-size: clamp(2.5rem, 6vw, 4.2rem); font-weight: 800;\n            margin-bottom: 24px;\n        }\n        .hero .subtitle {\n            font-size: clamp(1rem, 2vw, 1.25rem); color: var(--text-muted);\n            max-width: 700px; margin: 0 auto 32px; line-height: 1.6;\n        }\n        .hero .meta { font-size: 0.85rem; color: var(--text-dim); }\n\n        /* ═══════════════════════════════════════════\n           SECTION DIVIDER\n           ═══════════════════════════════════════════ */\n        .divider {\n            text-align: center; padding: 80px 24px;\n            background: linear-gradient(180deg, rgba(222, 193, 94, 0.04) 0%, transparent 100%);\n        }\n        .divider h2 { font-size: 2.2rem; color: var(--gold); font-weight: 700; }\n        .divider p { color: var(--text-muted); margin-top: 12px; font-size: 1.05rem; }\n\n        /* ═══════════════════════════════════════════\n           CONTENT SECTIONS\n           ═══════════════════════════════════════════ */\n        section { padding: var(--section-pad); }\n\n        .section-header { margin-bottom: 48px; }\n        .section-header h2 { font-size: 2rem; font-weight: 700; margin-top: 16px; }\n        .section-header p { color: var(--text-muted); font-size: 1.05rem; margin-top: 12px; max-width: 700px; }\n        .section-header.center { text-align: center; }\n        .section-header.center p { margin-left: auto; margin-right: auto; }\n\n        /* ═══════════════════════════════════════════\n           CARDS\n           ═══════════════════════════════════════════ */\n        .card {\n            background: var(--glass); border: 1px solid var(--glass-border);\n            border-radius: var(--card-radius); padding: var(--card-pad);\n            transition: all 0.3s ease;\n        }\n        .card:hover { border-color: rgba(222, 193, 94, 0.25); background: var(--glass-hover); }\n\n        .card-icon {\n            width: 52px; height: 52px;\n            background: rgba(222, 193, 94, 0.12); border-radius: 14px;\n            display: flex; align-items: center; justify-content: center;\n            margin-bottom: 20px; font-size: 1.5rem; color: var(--gold);\n        }\n\n        .card h3 { font-size: 1.15rem; font-weight: 600; margin-bottom: 12px; }\n        .card p { color: var(--text-muted); font-size: 0.92rem; }\n\n        .card.highlight { border: 2px solid rgba(222, 193, 94, 0.4); background: rgba(222, 193, 94, 0.04); }\n\n        /* ═══════════════════════════════════════════\n           GRIDS\n           ═══════════════════════════════════════════ */\n        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }\n        .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }\n        .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; }\n\n        /* ═══════════════════════════════════════════\n           STATUS BADGES\n           ═══════════════════════════════════════════ */\n        .badge {\n            display: inline-flex; align-items: center; gap: 8px;\n            padding: 6px 16px; border-radius: 24px;\n            font-size: 0.78rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;\n        }\n        .badge-gold { background: linear-gradient(135deg, var(--gold), var(--gold-light)); color: var(--navy); }\n        .badge-glass { background: var(--glass); border: 1px solid var(--glass-border); color: var(--text-muted); }\n\n        .status { display: inline-block; padding: 4px 14px; border-radius: 20px; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }\n        .status-live { background: rgba(74, 222, 128, 0.15); color: var(--green); border: 1px solid rgba(74, 222, 128, 0.25); }\n        .status-preview { background: var(--gold-dim); color: var(--gold); border: 1px solid rgba(222, 193, 94, 0.25); }\n        .status-dev { background: rgba(255, 255, 255, 0.08); color: var(--text-dim); border: 1px solid var(--glass-border); }\n\n        /* ═══════════════════════════════════════════\n           QUOTE / CALLOUT\n           ═══════════════════════════════════════════ */\n        .quote {\n            background: rgba(222, 193, 94, 0.04); border-left: 3px solid var(--gold);\n            padding: 28px 32px; border-radius: 0 12px 12px 0; margin: 40px 0;\n        }\n        .quote p { color: var(--text-muted); font-size: 1rem; font-style: italic; }\n        .quote .attribution { margin-top: 12px; font-size: 0.85rem; color: var(--text-dim); font-style: normal; }\n\n        /* ═══════════════════════════════════════════\n           COMPARISON TABLE\n           ═══════════════════════════════════════════ */\n        .compare-table { width: 100%; border-collapse: collapse; margin-top: 32px; }\n        .compare-table th {\n            font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 0.82rem;\n            color: var(--text-dim); text-transform: uppercase; letter-spacing: 1.5px;\n            padding: 14px 20px; text-align: left; border-bottom: 2px solid var(--glass-border);\n        }\n        .compare-table td { padding: 14px 20px; border-bottom: 1px solid var(--glass-border); color: var(--text-muted); font-size: 0.9rem; }\n        .compare-table tr:hover td { background: var(--glass); }\n\n        /* ═══════════════════════════════════════════\n           PIPELINE / STEPS\n           ═══════════════════════════════════════════ */\n        .pipeline { display: flex; align-items: stretch; gap: 0; margin-top: 40px; }\n        .pipeline-step {\n            flex: 1; padding: 24px 20px; text-align: center; position: relative;\n            background: var(--glass); border: 1px solid var(--glass-border);\n        }\n        .pipeline-step:first-child { border-radius: var(--card-radius) 0 0 var(--card-radius); }\n        .pipeline-step:last-child { border-radius: 0 var(--card-radius) var(--card-radius) 0; }\n        .pipeline-step::after {\n            content: '\\2192'; position: absolute; right: -14px; top: 50%; transform: translateY(-50%);\n            color: var(--gold); font-size: 1.2rem; font-weight: 700; z-index: 1;\n        }\n        .pipeline-step:last-child::after { display: none; }\n        .pipeline-step .num {\n            display: inline-flex; align-items: center; justify-content: center;\n            width: 28px; height: 28px; background: var(--gold); color: var(--navy);\n            border-radius: 50%; font-size: 0.8rem; font-weight: 700; margin-bottom: 12px;\n        }\n        .pipeline-step h4 { font-size: 0.92rem; margin-bottom: 8px; }\n        .pipeline-step p { font-size: 0.82rem; color: var(--text-muted); }\n\n        /* ═══════════════════════════════════════════\n           STATS\n           ═══════════════════════════════════════════ */\n        .stat-number { font-family: 'Space Grotesk', sans-serif; font-size: 2.8rem; font-weight: 800; color: var(--gold); line-height: 1; }\n        .stat-label { font-size: 0.85rem; color: var(--text-muted); margin-top: 8px; }\n\n        /* ═══════════════════════════════════════════\n           VISION / HIGHLIGHT BOX\n           ═══════════════════════════════════════════ */\n        .highlight-box {\n            background: rgba(222, 193, 94, 0.03); border: 1px solid rgba(222, 193, 94, 0.12);\n            border-radius: var(--card-radius); padding: 40px; margin-top: 40px;\n        }\n        .highlight-box h3 { font-size: 1.5rem; color: var(--gold); margin-bottom: 16px; }\n\n        /* ═══════════════════════════════════════════\n           PRODUCT CARDS\n           ═══════════════════════════════════════════ */\n        .product-card { padding: var(--card-pad); background: var(--glass); border: 1px solid var(--glass-border); border-radius: var(--card-radius); transition: all 0.3s; }\n        .product-card:hover { border-color: rgba(222, 193, 94, 0.25); }\n        .product-card.highlight { border: 2px solid rgba(222, 193, 94, 0.4); background: rgba(222, 193, 94, 0.04); }\n        .product-card h3 { font-size: 1.2rem; margin: 12px 0 8px; }\n        .product-card .tagline { color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px; }\n        .product-card ul { list-style: none; }\n        .product-card li { display: flex; align-items: flex-start; gap: 10px; padding: 6px 0; color: var(--text-muted); font-size: 0.88rem; }\n        .product-card li::before { content: '\\2192'; color: var(--gold); font-weight: 700; flex-shrink: 0; }\n\n        /* ═══════════════════════════════════════════\n           CTA / FOOTER\n           ═══════════════════════════════════════════ */\n        .cta {\n            text-align: center; padding: 100px 24px;\n            background: linear-gradient(180deg, transparent 0%, rgba(222, 193, 94, 0.04) 100%);\n        }\n        .cta h2 { font-size: 2.2rem; margin-bottom: 16px; }\n        .cta p { color: var(--text-muted); font-size: 1.05rem; max-width: 600px; margin: 0 auto 32px; }\n        .cta-btn {\n            display: inline-flex; align-items: center; gap: 10px;\n            padding: 16px 40px; background: linear-gradient(135deg, var(--gold), var(--gold-light));\n            color: var(--navy); font-weight: 700; font-size: 1rem;\n            border-radius: 14px; text-decoration: none; transition: transform 0.3s, box-shadow 0.3s;\n        }\n        .cta-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(222, 193, 94, 0.25); }\n\n        footer {\n            text-align: center; padding: 40px 24px; font-size: 0.82rem; color: var(--text-dim);\n            border-top: 1px solid var(--glass-border);\n        }\n\n        /* ═══════════════════════════════════════════\n           CUSTOM ELEMENTS\n           ═══════════════════════════════════════════ */\n        .problem-stat {\n            text-align: center; padding: 50px 40px;\n            background: rgba(222, 193, 94, 0.03); border: 1px solid rgba(222, 193, 94, 0.12);\n            border-radius: var(--card-radius); margin: 40px 0;\n        }\n        .problem-stat .big-number {\n            font-family: 'Space Grotesk', sans-serif;\n            font-size: 5rem; font-weight: 800; color: var(--gold); line-height: 1;\n        }\n        .problem-stat .label {\n            font-size: 1.2rem; color: var(--text-muted); margin-top: 16px;\n        }\n\n        /* ═══════════════════════════════════════════\n           RESPONSIVE\n           ═══════════════════════════════════════════ */\n        @media (max-width: 900px) {\n            .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }\n            .pipeline { flex-direction: column; }\n            .pipeline-step { border-radius: var(--card-radius) !important; }\n            .pipeline-step::after { display: none; }\n            .nav-links { display: none; }\n        }\n    </style>\n</head>\n<body>\n\n    <!-- ═══════════════════════════════════════════════════════════════\n         NAVIGATION\n         ═══════════════════════════════════════════════════════════════ -->\n    <nav class=\"nav\">\n        <div class=\"container\">\n            <div class=\"nav-inner\">\n                <div class=\"logo\">Werk<span class=\"ing\">ING</span> Tools</div>\n                <div class=\"nav-links\">\n                    <a href=\"#problem\">Das Problem</a>\n                    <a href=\"#loesung\">Die Lösung</a>\n                    <a href=\"#team\">Team</a>\n                    <a href=\"#produkte\">Produkte</a>\n                    <a href=\"#ffg\">FFG-Projekt</a>\n                </div>\n            </div>\n        </div>\n    </nav>\n\n    <!-- ═══════════════════════════════════════════════════════════════\n         HERO\n         ═══════════════════════════════════════════════════════════════ -->\n    <section class=\"hero\">\n        <div class=\"container\">\n            <div class=\"gold-bar center\"></div>\n            <h1 class=\"text-gradient\">Werk<span class=\"gold\">ING</span> Tools</h1>\n            <p class=\"subtitle\">KI-Workflows für Ingenieure — Reproduzierbar. Nachvollziehbar. Haftungssicher.</p>\n            <p class=\"meta\">Kundenpräsentation Ingenieurkammer | April 2026</p>\n        </div>\n    </section>\n\n    <!-- ═══════════════════════════════════════════════════════════════\n         DAS PROBLEM\n         ═══════════════════════════════════════════════════════════════ -->\n    <div class=\"divider\" id=\"problem\">\n        <h2>Das Problem</h2>\n        <p>Warum Ingenieure KI nicht nutzen</p>\n    </div>\n\n    <section>\n        <div class=\"container\">\n            <div class=\"section-header center\">\n                <div class=\"gold-bar center\"></div>\n                <h2>Hochqualifizierte Fachkräfte verschwenden ihre <span class=\"gold\">Zeit</span></h2>\n            </div>\n\n            <div class=\"problem-stat\">\n                <div class=\"big-number\">40–60<span style=\"font-size: 3rem;\">%</span></div>\n                <div class=\"label\">der Arbeitszeit geht für repetitive Dokumentation verloren</div>\n            </div>\n\n            <div class=\"quote\">\n                <p>Gutachten schreiben, Berechnungen durchführen, Normen prüfen, Berichte formatieren — hochqualifizierte Fachkräfte werden für Aufgaben eingesetzt, für die sie überqualifiziert sind. Das bindet Ressourcen, die für Analyse, Beratung und kreative Problemlösung fehlen.</p>\n            </div>\n\n            <div class=\"grid-3\" style=\"margin-top: 60px;\">\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-repeat'></i></div>\n                    <h3>Reproduzierbarkeit fehlt</h3>\n                    <p>Ein Ingenieur muss bei gleichen Eingabedaten das gleiche Ergebnis erhalten. ChatGPT liefert jedes Mal eine andere Antwort.</p>\n                </div>\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-search-alt'></i></div>\n                    <h3>Nachvollziehbarkeit fehlt</h3>\n                    <p>Jeder Verarbeitungsschritt muss auditiert werden können. Chatbots sind Black Boxes — man weiß nicht, wie das Ergebnis zustande kam.</p>\n                </div>\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-shield-quarter'></i></div>\n                    <h3>Validierung fehlt</h3>\n                    <p>Fachliche Prüfung nach Normen und Haftungsrecht ist notwendig. Generische KI-Tools erfüllen diese Anforderung nicht.</p>\n                </div>\n            </div>\n\n            <div class=\"highlight-box\" style=\"margin-top: 60px;\">\n                <h3>Persönliche Haftung — Vertrauen ist der Kern</h3>\n                <p style=\"color: var(--text-muted); font-size: 1.05rem; line-height: 1.8;\">\n                    Was ein Ziviltechniker unterschreibt, ist haftungsrelevant und teils gerichtsrelevant. Ingenieure sind Sicherheitsmenschen. Ein KI-generiertes Ergebnis, das sie nicht nachvollziehen können, unterschreiben sie nie — egal wie gut es aussieht.\n                </p>\n            </div>\n        </div>\n    </section>\n\n    <!-- ═══════════════════════════════════════════════════════════════\n         DIE LÖSUNG\n         ═══════════════════════════════════════════════════════════════ -->\n    <div class=\"divider\" id=\"loesung\">\n        <h2>Die Lösung</h2>\n        <p>Workflows statt Chatbots</p>\n    </div>\n\n    <section>\n        <div class=\"container\">\n            <div class=\"section-header center\">\n                <div class=\"gold-bar center\"></div>\n                <h2>Deterministische <span class=\"gold\">Pipelines</span></h2>\n                <p>Jeder Verarbeitungsschritt ist definiert: Welche Daten eingehen, welche KI-Anweisungen verwendet werden, welche Validierung stattfindet. Das Ergebnis ist reproduzierbar und auditierbar.</p>\n            </div>\n\n            <table class=\"compare-table\">\n                <thead>\n                    <tr>\n                        <th style=\"width: 25%;\">&nbsp;</th>\n                        <th style=\"background: rgba(255, 100, 100, 0.08); color: var(--red);\">ChatGPT / Konversationsbasiert</th>\n                        <th style=\"background: rgba(74, 222, 128, 0.08); color: var(--green);\">WerkING Tools / Pipeline-basiert</th>\n                    </tr>\n                </thead>\n                <tbody>\n                    <tr>\n                        <td style=\"color: var(--gold); font-weight: 600;\">Datenverarbeitung</td>\n                        <td>KI wählt selbst aus, was relevant ist</td>\n                        <td>Vollständige Daten (50.000–130.000 Zeichen), validiert</td>\n                    </tr>\n                    <tr>\n                        <td style=\"color: var(--gold); font-weight: 600;\">Reproduzierbarkeit</td>\n                        <td>Jedes Mal anderes Ergebnis</td>\n                        <td>Gleiche Eingabe = Gleicher Output</td>\n                    </tr>\n                    <tr>\n                        <td style=\"color: var(--gold); font-weight: 600;\">Nachvollziehbarkeit</td>\n                        <td>Entscheidungsweg unbekannt</td>\n                        <td>Jeder Schritt dokumentiert und auditierbar</td>\n                    </tr>\n                    <tr>\n                        <td style=\"color: var(--gold); font-weight: 600;\">Validierung</td>\n                        <td>Keine fachliche Prüfung</td>\n                        <td>Phase Contracts vor und nach jedem Schritt</td>\n                    </tr>\n                    <tr>\n                        <td style=\"color: var(--gold); font-weight: 600;\">Fehlerbehandlung</td>\n                        <td>Agenten entscheiden autonom</td>\n                        <td>Pipeline stoppt bei Fehler, meldet exakten Grund</td>\n                    </tr>\n                </tbody>\n            </table>\n\n            <div class=\"grid-2\" style=\"margin-top: 60px;\">\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-git-merge'></i></div>\n                    <h3>Full-Context-Architektur</h3>\n                    <p>Jede Phase erhält vollständige Daten (50.000–130.000 Zeichen), nicht fragmentierte RAG-Chunks. Keine Informationsverluste, keine Missverständnisse. Wenn Token-Limits eine Reduktion erfordern, wird die Datei strukturerhaltend zusammengefasst — nicht beliebig zerlegt.</p>\n                </div>\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-check-shield'></i></div>\n                    <h3>Phase Contracts</h3>\n                    <p>Jede Phase definiert präzise, was hineingeht und was herauskommen muss. Validierung findet vor UND nach jeder Phase statt. Bei Fehler stoppt die Pipeline und meldet warum — kein autonomes Weiterlaufen wie bei Agenten-Systemen.</p>\n                </div>\n            </div>\n\n            <div class=\"quote\" style=\"margin-top: 40px;\">\n                <p>Gartner prognostiziert: Über 40% aller Agentic-AI-Projekte werden bis Ende 2027 abgebrochen. Autonome KI-Agenten — Systeme, bei denen die KI selbst entscheidet, welche Schritte sie ausführt — scheitern in der Praxis, weil Ergebnisse nicht reproduzierbar und Entscheidungswege nicht nachvollziehbar sind. Für haftungsrelevante Engineering-Dokumente ist dieser Ansatz ungeeignet.</p>\n                <div class=\"attribution\">— Quelle: Gartner Market Insights</div>\n            </div>\n        </div>\n    </section>\n\n    <!-- ═══════════════════════════════════════════════════════════════\n         TEAM\n         ═══════════════════════════════════════════════════════════════ -->\n    <div class=\"divider\" id=\"team\">\n        <h2>Wer steckt dahinter</h2>\n        <p>Ingenieur zu Ingenieur</p>\n    </div>\n\n    <section>\n        <div class=\"container\">\n            <div class=\"section-header center\">\n                <div class=\"gold-bar center\"></div>\n                <h2>Ingenieure, die <span class=\"gold\">Werkzeuge</span> bauen</h2>\n                <p>WerkING Tools wird von Ziviltechniker Dr. Engelmann entwickelt — gemeinsam mit Fachpartnern aus der Praxis.</p>\n            </div>\n\n            <div class=\"card\" style=\"max-width: 900px; margin: 0 auto 60px;\">\n                <div style=\"display: flex; gap: 40px; align-items: start;\">\n                    <div style=\"flex-shrink: 0; width: 120px; height: 120px; border-radius: 50%; background: var(--gold-dim); border: 3px solid rgba(222, 193, 94, 0.3); display: flex; align-items: center; justify-content: center; font-size: 2.5rem; font-weight: 800; color: var(--gold);\">\n                        RE\n                    </div>\n                    <div style=\"flex: 1;\">\n                        <h3 style=\"font-size: 1.5rem; margin-bottom: 6px;\">Dr. Engelmann</h3>\n                        <div style=\"font-size: 1rem; color: var(--gold); margin-bottom: 16px; font-weight: 600;\">Ziviltechniker für Maschinenbau | Gründer WerkING Tools</div>\n                        <p style=\"color: var(--text-muted); line-height: 1.8;\">\n                            Doktorat in Aeroakustik (TU Wien, 2023), 5 peer-reviewed Publikationen, 1 Patent. Aktives Mitglied der Fachgruppe der Ziviltechniker (Wien/Niederösterreich/Burgenland). Erstellt selbst Gutachten, Energiekonzepte, Schallschutz- und Brandschutzgutachten — die tägliche Erfahrung mit repetitiver Dokumentation ist der Ausgangspunkt der Entwicklung.\n                        </p>\n                    </div>\n                </div>\n            </div>\n\n            <div class=\"section-header center\" style=\"margin-top: 80px;\">\n                <h2>Fachpartner <span class=\"gold\">validieren</span> jeden Workflow</h2>\n                <p>Jedes Produkt hat einen externen Fachpartner — einen Domänenexperten, der das Produkt in seiner täglichen Arbeit einsetzt, fachlich validiert und Vetorecht über die Qualität hat.</p>\n            </div>\n\n            <div class=\"grid-2\" style=\"margin-top: 40px;\">\n                <div class=\"card\">\n                    <div style=\"display: flex; align-items: center; gap: 16px; margin-bottom: 16px;\">\n                        <div style=\"width: 60px; height: 60px; border-radius: 50%; background: var(--gold-dim); border: 2px solid rgba(222, 193, 94, 0.3); display: flex; align-items: center; justify-content: center; font-size: 1.3rem; font-weight: 700; color: var(--gold); flex-shrink: 0;\">\n                            MP\n                        </div>\n                        <div>\n                            <h3 style=\"margin-bottom: 2px;\">Markus Plasser</h3>\n                            <div style=\"font-size: 0.85rem; color: var(--gold);\">WerkING Energy</div>\n                        </div>\n                    </div>\n                    <p style=\"color: var(--text-muted); font-size: 0.9rem;\">ReFit Energy GmbH — 20+ Jahre Erfahrung in HVAC-Anlagenoptimierung und Energieberatung.</p>\n                </div>\n\n                <div class=\"card\">\n                    <div style=\"display: flex; align-items: center; gap: 16px; margin-bottom: 16px;\">\n                        <div style=\"width: 60px; height: 60px; border-radius: 50%; background: var(--gold-dim); border: 2px solid rgba(222, 193, 94, 0.3); display: flex; align-items: center; justify-content: center; font-size: 1.3rem; font-weight: 700; color: var(--gold); flex-shrink: 0;\">\n                            T\n                        </div>\n                        <div>\n                            <h3 style=\"margin-bottom: 2px;\">Teufel PhD</h3>\n                            <div style=\"font-size: 0.85rem; color: var(--gold);\">WerkING Safety</div>\n                        </div>\n                    </div>\n                    <p style=\"color: var(--text-muted); font-size: 0.9rem;\">Ziviltechniker (TECC) — gerichtlich beeideter Sachverständiger für Automatisierte Anlagen- & Prozesstechnik.</p>\n                </div>\n            </div>\n\n            <div class=\"quote\" style=\"margin-top: 50px;\">\n                <p>Feedback von 15–20 Ziviltechnikern bei Kammerversammlung (Dezember 2025) bestätigt: Generische Chatbots erfüllen die Anforderungen an strukturierte, normkonforme Dokumentation nicht. Der direkte Zugang zum Berufsstand über die Kammermitgliedschaft ist ein zentraler Vertriebskanal.</p>\n            </div>\n        </div>\n    </section>\n\n    <!-- ═══════════════════════════════════════════════════════════════\n         PRODUKTE\n         ═══════════════════════════════════════════════════════════════ -->\n    <div class=\"divider\" id=\"produkte\">\n        <h2>Produktpalette</h2>\n        <p>Spezialisierte Workflows für verschiedene Engineering-Domänen</p>\n    </div>\n\n    <section>\n        <div class=\"container\">\n            <div class=\"section-header center\">\n                <div class=\"gold-bar center\"></div>\n                <h2>Alle Produkte laufen auf <span class=\"gold\">einer Plattform</span></h2>\n                <p>Nicht einzelne Tools zusammengeklebt, sondern eine durchgängige Engineering Workflow Platform. Gemeinsame Benutzerverwaltung, Datenhaltung, AI-Bridge, Anonymisierung.</p>\n            </div>\n\n            <div class=\"grid-2\" style=\"margin-top: 50px;\">\n                <div class=\"product-card highlight\">\n                    <span class=\"status status-live\">Beta Testing</span>\n                    <h3><i class='bx bx-bolt-circle' style=\"color: var(--gold);\"></i> WerkING Energy</h3>\n                    <p class=\"tagline\">8-Phasen-Pipeline analysiert Gebäude-Messdaten und liefert in ~40 Minuten einen fertigen Energiebericht</p>\n                    <ul>\n                        <li>Messdaten hochladen (CSV, Excel, BMS-Export)</li>\n                        <li>8 koordinierte Phasen: Datenverständnis, Qualitätsprüfung, Formelentwicklung (iterativ, max 10 Runden), Verhaltensanalyse, Einsparungsrecherche, Berechnung, Berichterstellung</li>\n                        <li>Vollständiger Bericht mit COP-Analyse, Anomalien, Grafiken und Handlungsempfehlungen</li>\n                        <li>Konventionell: 2–3 Arbeitstage</li>\n                    </ul>\n                    <div class=\"product-partner\">\n                        <strong>Fachpartner:</strong> Markus Plasser (ReFit Energy GmbH, 20+ Jahre HVAC)\n                    </div>\n                </div>\n\n                <div class=\"product-card\">\n                    <span class=\"status status-preview\">Alpha</span>\n                    <h3><i class='bx bx-file-blank' style=\"color: var(--gold);\"></i> WerkING Report</h3>\n                    <p class=\"tagline\">KI-gestützte Gutachtenerstellung für Ziviltechniker — Dokumenttyp definieren, Wizard starten, Bericht entsteht</p>\n                    <ul>\n                        <li>Beliebige Berichtstypen definieren</li>\n                        <li>Muster hochladen — Stil wird übernommen</li>\n                        <li>Wizard führt durch Prozess (Projekt, Titel, Auftraggeber)</li>\n                        <li>KI generiert Bericht formatiert und im eigenen Stil</li>\n                        <li>Direkt bearbeitbar im Editor mit Toolbar und Versionierung</li>\n                        <li>Größter Markt: ~50.000 Ingenieurbüros DACH</li>\n                    </ul>\n                </div>\n\n                <div class=\"product-card\">\n                    <span class=\"status status-preview\">Alpha</span>\n                    <h3><i class='bx bx-shield-alt-2' style=\"color: var(--gold);\"></i> WerkING Safety</h3>\n                    <p class=\"tagline\">Automatisierte Gefährdungsbeurteilung aus Maschinendokumentation mit Vision-AI</p>\n                    <ul>\n                        <li>Betriebsanleitung und Fotos hochladen</li>\n                        <li>Vision-AI analysiert PDFs und Bilder</li>\n                        <li>Identifiziert automatisch Gefährdungen</li>\n                        <li>Erstellt CE-konforme Risikoanalyse</li>\n                        <li>Export für Safe Expert (Industriestandard)</li>\n                    </ul>\n                    <div class=\"product-partner\">\n                        <strong>Fachpartner:</strong> Teufel PhD (ZT TECC, gerichtl. Sachverständiger)\n                    </div>\n                </div>\n\n                <div class=\"product-card\">\n                    <span class=\"status status-dev\">In Entwicklung</span>\n                    <h3><i class='bx bx-sitemap' style=\"color: var(--gold);\"></i> WerkingFlow Platform</h3>\n                    <p class=\"tagline\">Engineering Workflow Platform — Unternehmen können eigene Workflows entwickeln oder bestehende nutzen</p>\n                    <ul>\n                        <li>Gemeinsame Infrastruktur für alle Produkte</li>\n                        <li>Wizard-Engine, PDF-Export, Container-Integration</li>\n                        <li>White-Label-Lösung für Partnerunternehmen</li>\n                        <li>Beispiel: Engelmann AI Hub (4 Generationen Gebäudetechnik) mit firmenspezifischen Workflows</li>\n                    </ul>\n                </div>\n            </div>\n        </div>\n    </section>\n\n    <!-- ═══════════════════════════════════════════════════════════════\n         WERKING ENERGY — DETAIL\n         ═══════════════════════════════════════════════════════════════ -->\n    <div class=\"divider\">\n        <h2>WerkING Energy</h2>\n        <p>Wie die 8-Phasen-Pipeline funktioniert</p>\n    </div>\n\n    <section>\n        <div class=\"container\">\n            <div class=\"section-header center\">\n                <div class=\"gold-bar center\"></div>\n                <h2>Von Messdaten zum <span class=\"gold\">fertigen Bericht</span></h2>\n                <p>Ein Energieberater lädt Messdaten hoch. Die Pipeline führt 8 koordinierte Phasen aus. Das Ergebnis: vollständiger Bericht mit COP-Analyse, Anomalien, Grafiken und Handlungsempfehlungen.</p>\n            </div>\n\n            <div class=\"pipeline\">\n                <div class=\"pipeline-step\">\n                    <div class=\"num\">1–2</div>\n                    <h4>Datenverständnis</h4>\n                    <p>Spalten erkennen, Anlage verstehen</p>\n                </div>\n                <div class=\"pipeline-step\">\n                    <div class=\"num\">3</div>\n                    <h4>Datenqualität</h4>\n                    <p>Baseline, Lücken, Plausibilität</p>\n                </div>\n                <div class=\"pipeline-step\">\n                    <div class=\"num\">4</div>\n                    <h4>Formeln</h4>\n                    <p>Iterativ entwickeln, max 10 Runden</p>\n                </div>\n                <div class=\"pipeline-step\">\n                    <div class=\"num\">5–6</div>\n                    <h4>Verhaltensanalyse</h4>\n                    <p>COP, Anomalien, Einsparungen</p>\n                </div>\n                <div class=\"pipeline-step\">\n                    <div class=\"num\">7–8</div>\n                    <h4>Report</h4>\n                    <p>Berechnung, Grafiken, PDF</p>\n                </div>\n            </div>\n\n            <div class=\"highlight-box\" style=\"margin-top: 60px;\">\n                <h3>Phase 4: Vision-Feedback-Loop</h3>\n                <p style=\"color: var(--text-muted); font-size: 1rem; line-height: 1.8;\">\n                    Die KI generiert Python-Code für Berechnungen, führt ihn gegen echte Messdaten aus, erstellt Grafiken und lässt sie von der Vision-API prüfen ('Sieht die Kurve plausibel aus?'). Bei Abweichungen korrigiert sie sich selbst — automatisch. Dieser selbstkorrigierende Ansatz ist der Unterschied zwischen einem Prompt und einem Industrieprozess.\n                </p>\n            </div>\n\n            <div class=\"grid-2\" style=\"margin-top: 50px;\">\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-network-chart'></i></div>\n                    <h3>Phasenübergreifende Daten</h3>\n                    <p>Jede Phase nutzt alle vorherigen Daten — nicht linear, sondern phasenübergreifend abhängig. Phase 5 (Verhaltensanalyse) nutzt die in Phase 4 entwickelten Formeln als Werkzeuge. Phase 8 (Bericht) greift auf alle vorherigen Phasen zu.</p>\n                </div>\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-save'></i></div>\n                    <h3>Checkpointing</h3>\n                    <p>Jede Phase speichert ihren Zustand. Wenn etwas schiefgeht, kann die Pipeline von jeder Phase aus neu gestartet werden — ohne die vorherigen Schritte zu wiederholen. Bei WerkING Energy (~40 Minuten Laufzeit) wichtig, bei komplexeren Workflows absolut notwendig.</p>\n                </div>\n            </div>\n        </div>\n    </section>\n\n    <!-- ═══════════════════════════════════════════════════════════════\n         FFG-PROJEKT\n         ═══════════════════════════════════════════════════════════════ -->\n    <div class=\"divider\" id=\"ffg\">\n        <h2>FFG-Projekt „Einfach Bauen\"</h2>\n        <p>Konkreter Anwendungsfall: Normen-Analyse</p>\n    </div>\n\n    <section>\n        <div class=\"container\">\n            <div class=\"section-header center\">\n                <div class=\"gold-bar center\"></div>\n                <h2>KI-Pipeline für automatisierte Erkennung von <span class=\"gold\">Abweichungspotenzialen</span></h2>\n                <p>Das Projekt untersucht Innovationspotenziale im Bauwesen durch 'gleichwertiges Abweichen' von Regelwerken. WerkING Tools liefert als Werkvertragsnehmer eine KI-Pipeline, die OIB-Richtlinien, Bauordnungen und EU-Verordnungen systematisch analysiert.</p>\n            </div>\n\n            <div class=\"card highlight\" style=\"max-width: 900px; margin: 0 auto;\">\n                <h3 style=\"font-size: 1.4rem; margin-bottom: 20px;\">Was die Pipeline leistet</h3>\n                <ul style=\"list-style: none; padding: 0;\">\n                    <li style=\"display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--glass-border);\">\n                        <i class='bx bx-book-open' style=\"color: var(--gold); font-size: 1.3rem; flex-shrink: 0;\"></i>\n                        <div>\n                            <strong style=\"color: var(--text);\">OIB-Richtlinien analysieren</strong><br>\n                            <span style=\"color: var(--text-muted); font-size: 0.9rem;\">Systematische Extraktion aller Anforderungen aus OIB-Richtlinien</span>\n                        </div>\n                    </li>\n                    <li style=\"display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--glass-border);\">\n                        <i class='bx bx-search-alt' style=\"color: var(--gold); font-size: 1.3rem; flex-shrink: 0;\"></i>\n                        <div>\n                            <strong style=\"color: var(--text);\">Abweichungspotenziale identifizieren</strong><br>\n                            <span style=\"color: var(--text-muted); font-size: 0.9rem;\">Stellen identifizieren, wo man von der Norm abweichen darf, wenn Gleichwertigkeit nachgewiesen wird</span>\n                        </div>\n                    </li>\n                    <li style=\"display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--glass-border);\">\n                        <i class='bx bx-git-compare' style=\"color: var(--gold); font-size: 1.3rem; flex-shrink: 0;\"></i>\n                        <div>\n                            <strong style=\"color: var(--text);\">Bauordnungen & EU-Verordnungen quervergleichen</strong><br>\n                            <span style=\"color: var(--text-muted); font-size: 0.9rem;\">Automatisierter Abgleich zwischen unterschiedlichen Regelwerken</span>\n                        </div>\n                    </li>\n                    <li style=\"display: flex; gap: 12px; padding: 12px 0;\">\n                        <i class='bx bx-time-five' style=\"color: var(--gold); font-size: 1.3rem; flex-shrink: 0;\"></i>\n                        <div>\n                            <strong style=\"color: var(--text);\">Zeitersparnis</strong><br>\n                            <span style=\"color: var(--text-muted); font-size: 0.9rem;\">Heute wird das händisch gemacht — extrem zeitaufwändig und fehleranfällig</span>\n                        </div>\n                    </li>\n                </ul>\n            </div>\n\n            <div class=\"grid-2\" style=\"margin-top: 60px;\">\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-file-find'></i></div>\n                    <h3>Werkvertrag statt Konsortialpartner</h3>\n                    <p>Als Werkvertragsnehmer liefert WerkING Tools eine definierte Leistung (Pipeline für Normen-Analyse) — keine Forschungsverpflichtung, keine quartalsweisen FFG-Berichte, keine Bindung an Konsortialvertrag. Das reduziert Risiko und Overhead. Das Projekt funktioniert auch ohne KI, die Pipeline ist der Beschleuniger, nicht der Enabler.</p>\n                </div>\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-bulb'></i></div>\n                    <h3>Innovationspotenzial im Bauwesen</h3>\n                    <p>Die Pipeline ermöglicht systematische Identifikation von Innovationspotenzialen: Wo kann man von starren Regelwerken abweichen, wenn die Gleichwertigkeit nachgewiesen wird? Das öffnet neue Wege für innovative Bauweisen und beschleunigt Genehmigungsprozesse.</p>\n                </div>\n            </div>\n        </div>\n    </section>\n\n    <!-- ═══════════════════════════════════════════════════════════════\n         DATENSCHUTZ & SICHERHEIT\n         ═══════════════════════════════════════════════════════════════ -->\n    <div class=\"divider\">\n        <h2>Datenschutz & Sicherheit</h2>\n        <p>DSGVO-konform, EU-gehostet, kein KI-Training</p>\n    </div>\n\n    <section style=\"background: rgba(255, 255, 255, 0.02);\">\n        <div class=\"container\">\n            <div class=\"section-header center\">\n                <div class=\"gold-bar center\"></div>\n                <h2>Ihre Daten bleiben <span class=\"gold\">Ihre Daten</span></h2>\n            </div>\n\n            <div class=\"grid-3\">\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-shield-quarter'></i></div>\n                    <h3>DSGVO-konform</h3>\n                    <p>Alle Daten laufen über eine eigene Bridge auf einem deutschen Hetzner-Server. Automatische Pseudonymisierung entfernt personenbezogene Daten, bevor die KI irgendetwas sieht. Kein Vendor-Lock-in, keine Daten bei OpenAI oder Google.</p>\n                </div>\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-lock-alt'></i></div>\n                    <h3>Kein KI-Training mit Kundendaten</h3>\n                    <p>Ihre Daten werden nicht zum Training von Large Language Models verwendet. Was durch die Pipeline geht, wird verarbeitet und gespeichert — aber niemals an AI-Anbieter für Trainingszwecke weitergegeben. Know-how bleibt bei Ihnen, nicht beim Vendor.</p>\n                </div>\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-brain'></i></div>\n                    <h3>Modell-agnostisch</h3>\n                    <p>Die Workflows, die Daten, die Pipelines — alles ist unabhängig vom verwendeten LLM. Wenn ein besserer Anbieter kommt oder Claude ausfällt, wird das Modell gewechselt. Keine Abhängigkeit von einem einzelnen AI-Anbieter. Die Architektur ist darauf ausgelegt, über Jahrzehnte zu funktionieren.</p>\n                </div>\n            </div>\n\n            <div class=\"highlight-box\" style=\"margin-top: 60px;\">\n                <h3>Multi-Worker-Architektur mit automatischem Failover</h3>\n                <p style=\"color: var(--text-muted); font-size: 1rem; line-height: 1.8;\">\n                    Die Bridge ist ein isoliertes System mit Multi-Worker-Architektur (2 Worker + nginx Load Balancer). Bei Ausfall eines Workers übernimmt automatisch der andere. EU-gehostete Server (Hetzner Deutschland), automatische Pseudonymisierung vor AI-Verarbeitung.\n                </p>\n            </div>\n        </div>\n    </section>\n\n    <!-- ═══════════════════════════════════════════════════════════════\n         VISION & MARKT\n         ═══════════════════════════════════════════════════════════════ -->\n    <div class=\"divider\">\n        <h2>Vision & Markt</h2>\n        <p>Engineering Workflow Marketplace</p>\n    </div>\n\n    <section>\n        <div class=\"container\">\n            <div class=\"section-header center\">\n                <div class=\"gold-bar center\"></div>\n                <h2>Wie ein App Store für <span class=\"gold\">Engineering</span></h2>\n                <p>Langfristig können Ingenieure fertige, fachlich geprüfte Workflows nutzen, eigene Workflows entwickeln (Know-How bleibt in der Firma), oder Workflows im Marketplace anbieten. WerkING zertifiziert die fachliche Korrektheit (Bronze/Silber/Gold-Stufen).</p>\n            </div>\n\n            <div class=\"grid-3\" style=\"margin-top: 50px;\">\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-store'></i></div>\n                    <h3>Fertige Workflows nutzen</h3>\n                    <p>Fachlich geprüfte Workflows für Standard-Aufgaben direkt verwenden. Jeder Workflow von einem Fachpartner validiert.</p>\n                </div>\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-code-block'></i></div>\n                    <h3>Eigene Workflows entwickeln</h3>\n                    <p>Unternehmen können eigene, firmenspezifische Workflows entwickeln. Know-How bleibt intern, keine Weitergabe an Dritte.</p>\n                </div>\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-badge-check'></i></div>\n                    <h3>Workflows zertifizieren lassen</h3>\n                    <p>Workflows im Marketplace anbieten mit fachlicher Zertifizierung. Das ist der Unterschied zu generischen Plattformen: Jeder Workflow wird von einem Fachpartner validiert.</p>\n                </div>\n            </div>\n\n            <div class=\"problem-stat\" style=\"margin-top: 70px;\">\n                <div class=\"big-number\">~80.000</div>\n                <div class=\"label\">Ingenieurbüros und Energieberater im DACH-Raum</div>\n            </div>\n\n            <div class=\"quote\">\n                <p>Total Addressable Market: ca. 8.000 Ziviltechniker in Österreich (davon 3.000 im Bauwesen), über 22.800 registrierte Energieeffizienz-Experten in Deutschland (davon 53% aus dem Ingenieurwesen), konservativ ~15.000–20.000 weitere Planer in der Schweiz. Kein Anbieter kombiniert deterministische KI-Pipelines mit fachlicher Zertifizierung im Engineering-Bereich.</p>\n            </div>\n\n            <div class=\"grid-2\" style=\"margin-top: 60px;\">\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-trending-up'></i></div>\n                    <h3>Horizontale Plattformen sind ungeeignet</h3>\n                    <p>Visuelle Workflow-Builder (n8n, Make, StackAI) bauen Agenten, nicht Pipelines. Sie sind branchenunabhängig und für CRM, Marketing, E-Mails gebaut — nicht für Engineering. Sie haben künstliche Limitierungen: Timeout nach 10 Sekunden, maximale Codegröße, keine Validierung zwischen Schritten. WerkING-Pipelines laufen auf eigenen Linux-Servern ohne Limits und können Stunden dauern.</p>\n                </div>\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-chip'></i></div>\n                    <h3>Big Tech baut Modelle, nicht Lösungen</h3>\n                    <p>Die großen AI-Anbieter (OpenAI, Anthropic, Google) liefern den Rohstoff. Aber ein Modell allein schreibt kein Gutachten, berechnet keine Heizlast und prüft keine Maschinenrichtlinie. WerkING kombiniert diese Modelle mit Fach-Know-How, Berechnungstools und validierten Workflows zu unterschreibbaren Engineering-Dokumenten.</p>\n                </div>\n            </div>\n        </div>\n    </section>\n\n    <!-- ═══════════════════════════════════════════════════════════════\n         CTA\n         ═══════════════════════════════════════════════════════════════ -->\n    <section class=\"cta\">\n        <div class=\"container\">\n            <h2 class=\"text-gradient\">Nächster Schritt</h2>\n            <p>Vereinbaren Sie ein persönliches Gespräch. Wir zeigen Ihnen WerkING Energy in Aktion — mit Ihren Daten.</p>\n            <a href=\"mailto:rafael@werking.tools\" class=\"cta-btn\">\n                <i class='bx bx-envelope'></i> Kontakt aufnehmen\n            </a>\n        </div>\n    </section>\n\n    <footer>\n        <div class=\"container\">\n            <span class=\"logo\">Werk<span class=\"ing\">ING</span> Tools</span> — werking.tools | rafael@werking.tools\n        </div>\n    </footer>\n\n</body>\n</html>",
+  "generationStatus": "idle",
+  "error": null,
+  "revisions": [
+    {
+      "id": "R1",
+      "html": "<!DOCTYPE html>\n<html lang=\"de\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <meta name=\"template-type\" content=\"presentation\">\n    <meta name=\"template-version\" content=\"1.0\">\n    <title>WerkING Tools — Kundenpräsentation Ingenieurkammer</title>\n    <link href=\"https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700;800&display=swap\" rel=\"stylesheet\">\n    <link href=\"https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css\" rel=\"stylesheet\">\n    <style>\n        /* ═══════════════════════════════════════════════════════════════\n           WerkING Tools — Presentation Master Template v1.0\n           Type: presentation\n           Theme: Dark (Navy/Gold)\n           ═══════════════════════════════════════════════════════════════ */\n\n        /* ─── CSS Variables (Single Source of Truth) ─── */\n        :root {\n            /* Brand Colors */\n            --gold: #DEC15E;\n            --gold-light: #F1E28C;\n            --gold-dim: rgba(222, 193, 94, 0.15);\n\n            /* Backgrounds */\n            --navy: #0a0f1e;\n            --navy-mid: #131830;\n            --navy-light: #1a1a2e;\n\n            /* Text */\n            --text: #ffffff;\n            --text-muted: rgba(255, 255, 255, 0.65);\n            --text-dim: rgba(255, 255, 255, 0.4);\n\n            /* Glass Effect */\n            --glass: rgba(255, 255, 255, 0.04);\n            --glass-border: rgba(255, 255, 255, 0.08);\n            --glass-hover: rgba(255, 255, 255, 0.08);\n\n            /* Semantic */\n            --green: #4ade80;\n            --red: #ff6b6b;\n            --blue: #4299E1;\n            --orange: #ED8936;\n\n            /* Layout */\n            --container: 1100px;\n            --section-pad: 100px 24px;\n            --card-radius: 16px;\n            --card-pad: 36px;\n        }\n\n        /* ─── Reset ─── */\n        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }\n\n        /* ─── Base ─── */\n        body {\n            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;\n            background: var(--navy);\n            color: var(--text);\n            line-height: 1.7;\n            -webkit-font-smoothing: antialiased;\n        }\n\n        h1, h2, h3, h4 { font-family: 'Space Grotesk', sans-serif; line-height: 1.2; }\n\n        .container { max-width: var(--container); margin: 0 auto; padding: 0 24px; }\n\n        a { color: var(--gold); text-decoration: none; }\n        a:hover { color: var(--gold-light); }\n\n        /* ─── Logo ─── */\n        .logo { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 1.15rem; letter-spacing: -0.5px; }\n        .logo .ing { background: linear-gradient(135deg, var(--gold-light), var(--gold)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }\n\n        /* ─── Gold Bar (Decorative Divider) ─── */\n        .gold-bar { width: 60px; height: 3px; background: linear-gradient(90deg, var(--gold), var(--gold-light)); border-radius: 2px; }\n        .gold-bar.center { margin: 0 auto 24px; }\n\n        /* ─── Highlight ─── */\n        .gold { color: var(--gold); }\n        .text-gradient {\n            background: linear-gradient(135deg, #ffffff 20%, var(--gold) 100%);\n            -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;\n        }\n\n        /* ═══════════════════════════════════════════\n           NAVIGATION\n           ═══════════════════════════════════════════ */\n        .nav {\n            position: fixed; top: 0; left: 0; right: 0; z-index: 1000;\n            background: rgba(10, 15, 30, 0.92);\n            backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);\n            border-bottom: 1px solid var(--glass-border);\n            padding: 14px 0;\n        }\n        .nav-inner { display: flex; justify-content: space-between; align-items: center; }\n        .nav-links { display: flex; gap: 24px; }\n        .nav-links a { color: var(--text-muted); font-size: 0.88rem; font-weight: 500; transition: color 0.3s; }\n        .nav-links a:hover { color: var(--gold); }\n\n        /* ═══════════════════════════════════════════\n           HERO SECTION\n           ═══════════════════════════════════════════ */\n        .hero {\n            min-height: 100vh; display: flex; align-items: center; justify-content: center;\n            text-align: center; position: relative; overflow: hidden;\n            padding: 80px 24px 60px;\n        }\n        .hero::before {\n            content: ''; position: absolute; top: 40%; left: 50%;\n            transform: translate(-50%, -50%); width: 900px; height: 900px;\n            background: radial-gradient(circle, rgba(222, 193, 94, 0.06) 0%, transparent 65%);\n            border-radius: 50%; pointer-events: none;\n        }\n        .hero h1 {\n            font-size: clamp(2.5rem, 6vw, 4.2rem); font-weight: 800;\n            margin-bottom: 24px;\n        }\n        .hero .subtitle {\n            font-size: clamp(1rem, 2vw, 1.25rem); color: var(--text-muted);\n            max-width: 700px; margin: 0 auto 32px; line-height: 1.6;\n        }\n        .hero .meta { font-size: 0.85rem; color: var(--text-dim); }\n\n        /* ═══════════════════════════════════════════\n           SECTION DIVIDER\n           ═══════════════════════════════════════════ */\n        .divider {\n            text-align: center; padding: 80px 24px;\n            background: linear-gradient(180deg, rgba(222, 193, 94, 0.04) 0%, transparent 100%);\n        }\n        .divider h2 { font-size: 2.2rem; color: var(--gold); font-weight: 700; }\n        .divider p { color: var(--text-muted); margin-top: 12px; font-size: 1.05rem; }\n\n        /* ═══════════════════════════════════════════\n           CONTENT SECTIONS\n           ═══════════════════════════════════════════ */\n        section { padding: var(--section-pad); }\n\n        .section-header { margin-bottom: 48px; }\n        .section-header h2 { font-size: 2rem; font-weight: 700; margin-top: 16px; }\n        .section-header p { color: var(--text-muted); font-size: 1.05rem; margin-top: 12px; max-width: 700px; }\n        .section-header.center { text-align: center; }\n        .section-header.center p { margin-left: auto; margin-right: auto; }\n\n        /* ═══════════════════════════════════════════\n           CARDS\n           ═══════════════════════════════════════════ */\n        .card {\n            background: var(--glass); border: 1px solid var(--glass-border);\n            border-radius: var(--card-radius); padding: var(--card-pad);\n            transition: all 0.3s ease;\n        }\n        .card:hover { border-color: rgba(222, 193, 94, 0.25); background: var(--glass-hover); }\n\n        .card-icon {\n            width: 52px; height: 52px;\n            background: rgba(222, 193, 94, 0.12); border-radius: 14px;\n            display: flex; align-items: center; justify-content: center;\n            margin-bottom: 20px; font-size: 1.5rem; color: var(--gold);\n        }\n\n        .card h3 { font-size: 1.15rem; font-weight: 600; margin-bottom: 12px; }\n        .card p { color: var(--text-muted); font-size: 0.92rem; }\n\n        .card.highlight { border: 2px solid rgba(222, 193, 94, 0.4); background: rgba(222, 193, 94, 0.04); }\n\n        /* ═══════════════════════════════════════════\n           GRIDS\n           ═══════════════════════════════════════════ */\n        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }\n        .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }\n        .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; }\n\n        /* ═══════════════════════════════════════════\n           STATUS BADGES\n           ═══════════════════════════════════════════ */\n        .badge {\n            display: inline-flex; align-items: center; gap: 8px;\n            padding: 6px 16px; border-radius: 24px;\n            font-size: 0.78rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;\n        }\n        .badge-gold { background: linear-gradient(135deg, var(--gold), var(--gold-light)); color: var(--navy); }\n        .badge-glass { background: var(--glass); border: 1px solid var(--glass-border); color: var(--text-muted); }\n\n        .status { display: inline-block; padding: 4px 14px; border-radius: 20px; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }\n        .status-live { background: rgba(74, 222, 128, 0.15); color: var(--green); border: 1px solid rgba(74, 222, 128, 0.25); }\n        .status-preview { background: var(--gold-dim); color: var(--gold); border: 1px solid rgba(222, 193, 94, 0.25); }\n        .status-dev { background: rgba(255, 255, 255, 0.08); color: var(--text-dim); border: 1px solid var(--glass-border); }\n\n        /* ═══════════════════════════════════════════\n           QUOTE / CALLOUT\n           ═══════════════════════════════════════════ */\n        .quote {\n            background: rgba(222, 193, 94, 0.04); border-left: 3px solid var(--gold);\n            padding: 28px 32px; border-radius: 0 12px 12px 0; margin: 40px 0;\n        }\n        .quote p { color: var(--text-muted); font-size: 1rem; font-style: italic; }\n        .quote .attribution { margin-top: 12px; font-size: 0.85rem; color: var(--text-dim); font-style: normal; }\n\n        /* ═══════════════════════════════════════════\n           COMPARISON TABLE\n           ═══════════════════════════════════════════ */\n        .compare-table { width: 100%; border-collapse: collapse; margin-top: 32px; }\n        .compare-table th {\n            font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 0.82rem;\n            color: var(--text-dim); text-transform: uppercase; letter-spacing: 1.5px;\n            padding: 14px 20px; text-align: left; border-bottom: 2px solid var(--glass-border);\n        }\n        .compare-table td { padding: 14px 20px; border-bottom: 1px solid var(--glass-border); color: var(--text-muted); font-size: 0.9rem; }\n        .compare-table tr:hover td { background: var(--glass); }\n\n        /* ═══════════════════════════════════════════\n           PIPELINE / STEPS\n           ═══════════════════════════════════════════ */\n        .pipeline { display: flex; align-items: stretch; gap: 0; margin-top: 40px; }\n        .pipeline-step {\n            flex: 1; padding: 24px 20px; text-align: center; position: relative;\n            background: var(--glass); border: 1px solid var(--glass-border);\n        }\n        .pipeline-step:first-child { border-radius: var(--card-radius) 0 0 var(--card-radius); }\n        .pipeline-step:last-child { border-radius: 0 var(--card-radius) var(--card-radius) 0; }\n        .pipeline-step::after {\n            content: '\\2192'; position: absolute; right: -14px; top: 50%; transform: translateY(-50%);\n            color: var(--gold); font-size: 1.2rem; font-weight: 700; z-index: 1;\n        }\n        .pipeline-step:last-child::after { display: none; }\n        .pipeline-step .num {\n            display: inline-flex; align-items: center; justify-content: center;\n            width: 28px; height: 28px; background: var(--gold); color: var(--navy);\n            border-radius: 50%; font-size: 0.8rem; font-weight: 700; margin-bottom: 12px;\n        }\n        .pipeline-step h4 { font-size: 0.92rem; margin-bottom: 8px; }\n        .pipeline-step p { font-size: 0.82rem; color: var(--text-muted); }\n\n        /* ═══════════════════════════════════════════\n           STATS\n           ═══════════════════════════════════════════ */\n        .stat-number { font-family: 'Space Grotesk', sans-serif; font-size: 2.8rem; font-weight: 800; color: var(--gold); line-height: 1; }\n        .stat-label { font-size: 0.85rem; color: var(--text-muted); margin-top: 8px; }\n\n        /* ═══════════════════════════════════════════\n           VISION / HIGHLIGHT BOX\n           ═══════════════════════════════════════════ */\n        .highlight-box {\n            background: rgba(222, 193, 94, 0.03); border: 1px solid rgba(222, 193, 94, 0.12);\n            border-radius: var(--card-radius); padding: 40px; margin-top: 40px;\n        }\n        .highlight-box h3 { font-size: 1.5rem; color: var(--gold); margin-bottom: 16px; }\n\n        /* ═══════════════════════════════════════════\n           PRODUCT CARDS\n           ═══════════════════════════════════════════ */\n        .product-card { padding: var(--card-pad); background: var(--glass); border: 1px solid var(--glass-border); border-radius: var(--card-radius); transition: all 0.3s; }\n        .product-card:hover { border-color: rgba(222, 193, 94, 0.25); }\n        .product-card.highlight { border: 2px solid rgba(222, 193, 94, 0.4); background: rgba(222, 193, 94, 0.04); }\n        .product-card h3 { font-size: 1.2rem; margin: 12px 0 8px; }\n        .product-card .tagline { color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px; }\n        .product-card ul { list-style: none; }\n        .product-card li { display: flex; align-items: flex-start; gap: 10px; padding: 6px 0; color: var(--text-muted); font-size: 0.88rem; }\n        .product-card li::before { content: '\\2192'; color: var(--gold); font-weight: 700; flex-shrink: 0; }\n\n        /* ═══════════════════════════════════════════\n           CTA / FOOTER\n           ═══════════════════════════════════════════ */\n        .cta {\n            text-align: center; padding: 100px 24px;\n            background: linear-gradient(180deg, transparent 0%, rgba(222, 193, 94, 0.04) 100%);\n        }\n        .cta h2 { font-size: 2.2rem; margin-bottom: 16px; }\n        .cta p { color: var(--text-muted); font-size: 1.05rem; max-width: 600px; margin: 0 auto 32px; }\n        .cta-btn {\n            display: inline-flex; align-items: center; gap: 10px;\n            padding: 16px 40px; background: linear-gradient(135deg, var(--gold), var(--gold-light));\n            color: var(--navy); font-weight: 700; font-size: 1rem;\n            border-radius: 14px; text-decoration: none; transition: transform 0.3s, box-shadow 0.3s;\n        }\n        .cta-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(222, 193, 94, 0.25); }\n\n        footer {\n            text-align: center; padding: 40px 24px; font-size: 0.82rem; color: var(--text-dim);\n            border-top: 1px solid var(--glass-border);\n        }\n\n        /* ═══════════════════════════════════════════\n           CUSTOM ELEMENTS\n           ═══════════════════════════════════════════ */\n        .problem-stat {\n            text-align: center; padding: 50px 40px;\n            background: rgba(222, 193, 94, 0.03); border: 1px solid rgba(222, 193, 94, 0.12);\n            border-radius: var(--card-radius); margin: 40px 0;\n        }\n        .problem-stat .big-number {\n            font-family: 'Space Grotesk', sans-serif;\n            font-size: 5rem; font-weight: 800; color: var(--gold); line-height: 1;\n        }\n        .problem-stat .label {\n            font-size: 1.2rem; color: var(--text-muted); margin-top: 16px;\n        }\n\n        /* ═══════════════════════════════════════════\n           RESPONSIVE\n           ═══════════════════════════════════════════ */\n        @media (max-width: 900px) {\n            .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }\n            .pipeline { flex-direction: column; }\n            .pipeline-step { border-radius: var(--card-radius) !important; }\n            .pipeline-step::after { display: none; }\n            .nav-links { display: none; }\n        }\n    </style>\n</head>\n<body>\n\n    <!-- ═══════════════════════════════════════════════════════════════\n         NAVIGATION\n         ═══════════════════════════════════════════════════════════════ -->\n    <nav class=\"nav\">\n        <div class=\"container\">\n            <div class=\"nav-inner\">\n                <div class=\"logo\">Werk<span class=\"ing\">ING</span> Tools</div>\n                <div class=\"nav-links\">\n                    <a href=\"#problem\">Das Problem</a>\n                    <a href=\"#loesung\">Die Lösung</a>\n                    <a href=\"#team\">Team</a>\n                    <a href=\"#produkte\">Produkte</a>\n                    <a href=\"#ffg\">FFG-Projekt</a>\n                </div>\n            </div>\n        </div>\n    </nav>\n\n    <!-- ═══════════════════════════════════════════════════════════════\n         HERO\n         ═══════════════════════════════════════════════════════════════ -->\n    <section class=\"hero\">\n        <div class=\"container\">\n            <div class=\"gold-bar center\"></div>\n            <h1 class=\"text-gradient\">Werk<span class=\"gold\">ING</span> Tools</h1>\n            <p class=\"subtitle\">KI-Workflows für Ingenieure — Reproduzierbar. Nachvollziehbar. Haftungssicher.</p>\n            <p class=\"meta\">Kundenpräsentation Ingenieurkammer | April 2026</p>\n        </div>\n    </section>\n\n    <!-- ═══════════════════════════════════════════════════════════════\n         DAS PROBLEM\n         ═══════════════════════════════════════════════════════════════ -->\n    <div class=\"divider\" id=\"problem\">\n        <h2>Das Problem</h2>\n        <p>Warum Ingenieure KI nicht nutzen</p>\n    </div>\n\n    <section>\n        <div class=\"container\">\n            <div class=\"section-header center\">\n                <div class=\"gold-bar center\"></div>\n                <h2>Hochqualifizierte Fachkräfte verschwenden ihre <span class=\"gold\">Zeit</span></h2>\n            </div>\n\n            <div class=\"problem-stat\">\n                <div class=\"big-number\">40–60<span style=\"font-size: 3rem;\">%</span></div>\n                <div class=\"label\">der Arbeitszeit geht für repetitive Dokumentation verloren</div>\n            </div>\n\n            <div class=\"quote\">\n                <p>Gutachten schreiben, Berechnungen durchführen, Normen prüfen, Berichte formatieren — hochqualifizierte Fachkräfte werden für Aufgaben eingesetzt, für die sie überqualifiziert sind. Das bindet Ressourcen, die für Analyse, Beratung und kreative Problemlösung fehlen.</p>\n            </div>\n\n            <div class=\"grid-3\" style=\"margin-top: 60px;\">\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-repeat'></i></div>\n                    <h3>Reproduzierbarkeit fehlt</h3>\n                    <p>Ein Ingenieur muss bei gleichen Eingabedaten das gleiche Ergebnis erhalten. ChatGPT liefert jedes Mal eine andere Antwort.</p>\n                </div>\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-search-alt'></i></div>\n                    <h3>Nachvollziehbarkeit fehlt</h3>\n                    <p>Jeder Verarbeitungsschritt muss auditiert werden können. Chatbots sind Black Boxes — man weiß nicht, wie das Ergebnis zustande kam.</p>\n                </div>\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-shield-quarter'></i></div>\n                    <h3>Validierung fehlt</h3>\n                    <p>Fachliche Prüfung nach Normen und Haftungsrecht ist notwendig. Generische KI-Tools erfüllen diese Anforderung nicht.</p>\n                </div>\n            </div>\n\n            <div class=\"highlight-box\" style=\"margin-top: 60px;\">\n                <h3>Persönliche Haftung — Vertrauen ist der Kern</h3>\n                <p style=\"color: var(--text-muted); font-size: 1.05rem; line-height: 1.8;\">\n                    Was ein Ziviltechniker unterschreibt, ist haftungsrelevant und teils gerichtsrelevant. Ingenieure sind Sicherheitsmenschen. Ein KI-generiertes Ergebnis, das sie nicht nachvollziehen können, unterschreiben sie nie — egal wie gut es aussieht.\n                </p>\n            </div>\n        </div>\n    </section>\n\n    <!-- ═══════════════════════════════════════════════════════════════\n         DIE LÖSUNG\n         ═══════════════════════════════════════════════════════════════ -->\n    <div class=\"divider\" id=\"loesung\">\n        <h2>Die Lösung</h2>\n        <p>Workflows statt Chatbots</p>\n    </div>\n\n    <section>\n        <div class=\"container\">\n            <div class=\"section-header center\">\n                <div class=\"gold-bar center\"></div>\n                <h2>Deterministische <span class=\"gold\">Pipelines</span></h2>\n                <p>Jeder Verarbeitungsschritt ist definiert: Welche Daten eingehen, welche KI-Anweisungen verwendet werden, welche Validierung stattfindet. Das Ergebnis ist reproduzierbar und auditierbar.</p>\n            </div>\n\n            <table class=\"compare-table\">\n                <thead>\n                    <tr>\n                        <th style=\"width: 25%;\">&nbsp;</th>\n                        <th style=\"background: rgba(255, 100, 100, 0.08); color: var(--red);\">ChatGPT / Konversationsbasiert</th>\n                        <th style=\"background: rgba(74, 222, 128, 0.08); color: var(--green);\">WerkING Tools / Pipeline-basiert</th>\n                    </tr>\n                </thead>\n                <tbody>\n                    <tr>\n                        <td style=\"color: var(--gold); font-weight: 600;\">Datenverarbeitung</td>\n                        <td>KI wählt selbst aus, was relevant ist</td>\n                        <td>Vollständige Daten (50.000–130.000 Zeichen), validiert</td>\n                    </tr>\n                    <tr>\n                        <td style=\"color: var(--gold); font-weight: 600;\">Reproduzierbarkeit</td>\n                        <td>Jedes Mal anderes Ergebnis</td>\n                        <td>Gleiche Eingabe = Gleicher Output</td>\n                    </tr>\n                    <tr>\n                        <td style=\"color: var(--gold); font-weight: 600;\">Nachvollziehbarkeit</td>\n                        <td>Entscheidungsweg unbekannt</td>\n                        <td>Jeder Schritt dokumentiert und auditierbar</td>\n                    </tr>\n                    <tr>\n                        <td style=\"color: var(--gold); font-weight: 600;\">Validierung</td>\n                        <td>Keine fachliche Prüfung</td>\n                        <td>Phase Contracts vor und nach jedem Schritt</td>\n                    </tr>\n                    <tr>\n                        <td style=\"color: var(--gold); font-weight: 600;\">Fehlerbehandlung</td>\n                        <td>Agenten entscheiden autonom</td>\n                        <td>Pipeline stoppt bei Fehler, meldet exakten Grund</td>\n                    </tr>\n                </tbody>\n            </table>\n\n            <div class=\"grid-2\" style=\"margin-top: 60px;\">\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-git-merge'></i></div>\n                    <h3>Full-Context-Architektur</h3>\n                    <p>Jede Phase erhält vollständige Daten (50.000–130.000 Zeichen), nicht fragmentierte RAG-Chunks. Keine Informationsverluste, keine Missverständnisse. Wenn Token-Limits eine Reduktion erfordern, wird die Datei strukturerhaltend zusammengefasst — nicht beliebig zerlegt.</p>\n                </div>\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-check-shield'></i></div>\n                    <h3>Phase Contracts</h3>\n                    <p>Jede Phase definiert präzise, was hineingeht und was herauskommen muss. Validierung findet vor UND nach jeder Phase statt. Bei Fehler stoppt die Pipeline und meldet warum — kein autonomes Weiterlaufen wie bei Agenten-Systemen.</p>\n                </div>\n            </div>\n\n            <div class=\"quote\" style=\"margin-top: 40px;\">\n                <p>Gartner prognostiziert: Über 40% aller Agentic-AI-Projekte werden bis Ende 2027 abgebrochen. Autonome KI-Agenten — Systeme, bei denen die KI selbst entscheidet, welche Schritte sie ausführt — scheitern in der Praxis, weil Ergebnisse nicht reproduzierbar und Entscheidungswege nicht nachvollziehbar sind. Für haftungsrelevante Engineering-Dokumente ist dieser Ansatz ungeeignet.</p>\n                <div class=\"attribution\">— Quelle: Gartner Market Insights</div>\n            </div>\n        </div>\n    </section>\n\n    <!-- ═══════════════════════════════════════════════════════════════\n         TEAM\n         ═══════════════════════════════════════════════════════════════ -->\n    <div class=\"divider\" id=\"team\">\n        <h2>Wer steckt dahinter</h2>\n        <p>Ingenieur zu Ingenieur</p>\n    </div>\n\n    <section>\n        <div class=\"container\">\n            <div class=\"section-header center\">\n                <div class=\"gold-bar center\"></div>\n                <h2>Ingenieure, die <span class=\"gold\">Werkzeuge</span> bauen</h2>\n                <p>WerkING Tools wird von Ziviltechniker Dr. Engelmann entwickelt — gemeinsam mit Fachpartnern aus der Praxis.</p>\n            </div>\n\n            <div class=\"card\" style=\"max-width: 900px; margin: 0 auto 60px;\">\n                <div style=\"display: flex; gap: 40px; align-items: start;\">\n                    <div style=\"flex-shrink: 0; width: 120px; height: 120px; border-radius: 50%; background: var(--gold-dim); border: 3px solid rgba(222, 193, 94, 0.3); display: flex; align-items: center; justify-content: center; font-size: 2.5rem; font-weight: 800; color: var(--gold);\">\n                        RE\n                    </div>\n                    <div style=\"flex: 1;\">\n                        <h3 style=\"font-size: 1.5rem; margin-bottom: 6px;\">Dr. Engelmann</h3>\n                        <div style=\"font-size: 1rem; color: var(--gold); margin-bottom: 16px; font-weight: 600;\">Ziviltechniker für Maschinenbau | Gründer WerkING Tools</div>\n                        <p style=\"color: var(--text-muted); line-height: 1.8;\">\n                            Doktorat in Aeroakustik (TU Wien, 2023), 5 peer-reviewed Publikationen, 1 Patent. Aktives Mitglied der Fachgruppe der Ziviltechniker (Wien/Niederösterreich/Burgenland). Erstellt selbst Gutachten, Energiekonzepte, Schallschutz- und Brandschutzgutachten — die tägliche Erfahrung mit repetitiver Dokumentation ist der Ausgangspunkt der Entwicklung.\n                        </p>\n                    </div>\n                </div>\n            </div>\n\n            <div class=\"section-header center\" style=\"margin-top: 80px;\">\n                <h2>Fachpartner <span class=\"gold\">validieren</span> jeden Workflow</h2>\n                <p>Jedes Produkt hat einen externen Fachpartner — einen Domänenexperten, der das Produkt in seiner täglichen Arbeit einsetzt, fachlich validiert und Vetorecht über die Qualität hat.</p>\n            </div>\n\n            <div class=\"grid-2\" style=\"margin-top: 40px;\">\n                <div class=\"card\">\n                    <div style=\"display: flex; align-items: center; gap: 16px; margin-bottom: 16px;\">\n                        <div style=\"width: 60px; height: 60px; border-radius: 50%; background: var(--gold-dim); border: 2px solid rgba(222, 193, 94, 0.3); display: flex; align-items: center; justify-content: center; font-size: 1.3rem; font-weight: 700; color: var(--gold); flex-shrink: 0;\">\n                            MP\n                        </div>\n                        <div>\n                            <h3 style=\"margin-bottom: 2px;\">Markus Plasser</h3>\n                            <div style=\"font-size: 0.85rem; color: var(--gold);\">WerkING Energy</div>\n                        </div>\n                    </div>\n                    <p style=\"color: var(--text-muted); font-size: 0.9rem;\">ReFit Energy GmbH — 20+ Jahre Erfahrung in HVAC-Anlagenoptimierung und Energieberatung.</p>\n                </div>\n\n                <div class=\"card\">\n                    <div style=\"display: flex; align-items: center; gap: 16px; margin-bottom: 16px;\">\n                        <div style=\"width: 60px; height: 60px; border-radius: 50%; background: var(--gold-dim); border: 2px solid rgba(222, 193, 94, 0.3); display: flex; align-items: center; justify-content: center; font-size: 1.3rem; font-weight: 700; color: var(--gold); flex-shrink: 0;\">\n                            T\n                        </div>\n                        <div>\n                            <h3 style=\"margin-bottom: 2px;\">Teufel PhD</h3>\n                            <div style=\"font-size: 0.85rem; color: var(--gold);\">WerkING Safety</div>\n                        </div>\n                    </div>\n                    <p style=\"color: var(--text-muted); font-size: 0.9rem;\">Ziviltechniker (TECC) — gerichtlich beeideter Sachverständiger für Automatisierte Anlagen- & Prozesstechnik.</p>\n                </div>\n            </div>\n\n            <div class=\"quote\" style=\"margin-top: 50px;\">\n                <p>Feedback von 15–20 Ziviltechnikern bei Kammerversammlung (Dezember 2025) bestätigt: Generische Chatbots erfüllen die Anforderungen an strukturierte, normkonforme Dokumentation nicht. Der direkte Zugang zum Berufsstand über die Kammermitgliedschaft ist ein zentraler Vertriebskanal.</p>\n            </div>\n        </div>\n    </section>\n\n    <!-- ═══════════════════════════════════════════════════════════════\n         PRODUKTE\n         ═══════════════════════════════════════════════════════════════ -->\n    <div class=\"divider\" id=\"produkte\">\n        <h2>Produktpalette</h2>\n        <p>Spezialisierte Workflows für verschiedene Engineering-Domänen</p>\n    </div>\n\n    <section>\n        <div class=\"container\">\n            <div class=\"section-header center\">\n                <div class=\"gold-bar center\"></div>\n                <h2>Alle Produkte laufen auf <span class=\"gold\">einer Plattform</span></h2>\n                <p>Nicht einzelne Tools zusammengeklebt, sondern eine durchgängige Engineering Workflow Platform. Gemeinsame Benutzerverwaltung, Datenhaltung, AI-Bridge, Anonymisierung.</p>\n            </div>\n\n            <div class=\"grid-2\" style=\"margin-top: 50px;\">\n                <div class=\"product-card highlight\">\n                    <span class=\"status status-live\">Beta Testing</span>\n                    <h3><i class='bx bx-bolt-circle' style=\"color: var(--gold);\"></i> WerkING Energy</h3>\n                    <p class=\"tagline\">8-Phasen-Pipeline analysiert Gebäude-Messdaten und liefert in ~40 Minuten einen fertigen Energiebericht</p>\n                    <ul>\n                        <li>Messdaten hochladen (CSV, Excel, BMS-Export)</li>\n                        <li>8 koordinierte Phasen: Datenverständnis, Qualitätsprüfung, Formelentwicklung (iterativ, max 10 Runden), Verhaltensanalyse, Einsparungsrecherche, Berechnung, Berichterstellung</li>\n                        <li>Vollständiger Bericht mit COP-Analyse, Anomalien, Grafiken und Handlungsempfehlungen</li>\n                        <li>Konventionell: 2–3 Arbeitstage</li>\n                    </ul>\n                    <div class=\"product-partner\">\n                        <strong>Fachpartner:</strong> Markus Plasser (ReFit Energy GmbH, 20+ Jahre HVAC)\n                    </div>\n                </div>\n\n                <div class=\"product-card\">\n                    <span class=\"status status-preview\">Alpha</span>\n                    <h3><i class='bx bx-file-blank' style=\"color: var(--gold);\"></i> WerkING Report</h3>\n                    <p class=\"tagline\">KI-gestützte Gutachtenerstellung für Ziviltechniker — Dokumenttyp definieren, Wizard starten, Bericht entsteht</p>\n                    <ul>\n                        <li>Beliebige Berichtstypen definieren</li>\n                        <li>Muster hochladen — Stil wird übernommen</li>\n                        <li>Wizard führt durch Prozess (Projekt, Titel, Auftraggeber)</li>\n                        <li>KI generiert Bericht formatiert und im eigenen Stil</li>\n                        <li>Direkt bearbeitbar im Editor mit Toolbar und Versionierung</li>\n                        <li>Größter Markt: ~50.000 Ingenieurbüros DACH</li>\n                    </ul>\n                </div>\n\n                <div class=\"product-card\">\n                    <span class=\"status status-preview\">Alpha</span>\n                    <h3><i class='bx bx-shield-alt-2' style=\"color: var(--gold);\"></i> WerkING Safety</h3>\n                    <p class=\"tagline\">Automatisierte Gefährdungsbeurteilung aus Maschinendokumentation mit Vision-AI</p>\n                    <ul>\n                        <li>Betriebsanleitung und Fotos hochladen</li>\n                        <li>Vision-AI analysiert PDFs und Bilder</li>\n                        <li>Identifiziert automatisch Gefährdungen</li>\n                        <li>Erstellt CE-konforme Risikoanalyse</li>\n                        <li>Export für Safe Expert (Industriestandard)</li>\n                    </ul>\n                    <div class=\"product-partner\">\n                        <strong>Fachpartner:</strong> Teufel PhD (ZT TECC, gerichtl. Sachverständiger)\n                    </div>\n                </div>\n\n                <div class=\"product-card\">\n                    <span class=\"status status-dev\">In Entwicklung</span>\n                    <h3><i class='bx bx-sitemap' style=\"color: var(--gold);\"></i> WerkingFlow Platform</h3>\n                    <p class=\"tagline\">Engineering Workflow Platform — Unternehmen können eigene Workflows entwickeln oder bestehende nutzen</p>\n                    <ul>\n                        <li>Gemeinsame Infrastruktur für alle Produkte</li>\n                        <li>Wizard-Engine, PDF-Export, Container-Integration</li>\n                        <li>White-Label-Lösung für Partnerunternehmen</li>\n                        <li>Beispiel: Engelmann AI Hub (4 Generationen Gebäudetechnik) mit firmenspezifischen Workflows</li>\n                    </ul>\n                </div>\n            </div>\n        </div>\n    </section>\n\n    <!-- ═══════════════════════════════════════════════════════════════\n         WERKING ENERGY — DETAIL\n         ═══════════════════════════════════════════════════════════════ -->\n    <div class=\"divider\">\n        <h2>WerkING Energy</h2>\n        <p>Wie die 8-Phasen-Pipeline funktioniert</p>\n    </div>\n\n    <section>\n        <div class=\"container\">\n            <div class=\"section-header center\">\n                <div class=\"gold-bar center\"></div>\n                <h2>Von Messdaten zum <span class=\"gold\">fertigen Bericht</span></h2>\n                <p>Ein Energieberater lädt Messdaten hoch. Die Pipeline führt 8 koordinierte Phasen aus. Das Ergebnis: vollständiger Bericht mit COP-Analyse, Anomalien, Grafiken und Handlungsempfehlungen.</p>\n            </div>\n\n            <div class=\"pipeline\">\n                <div class=\"pipeline-step\">\n                    <div class=\"num\">1–2</div>\n                    <h4>Datenverständnis</h4>\n                    <p>Spalten erkennen, Anlage verstehen</p>\n                </div>\n                <div class=\"pipeline-step\">\n                    <div class=\"num\">3</div>\n                    <h4>Datenqualität</h4>\n                    <p>Baseline, Lücken, Plausibilität</p>\n                </div>\n                <div class=\"pipeline-step\">\n                    <div class=\"num\">4</div>\n                    <h4>Formeln</h4>\n                    <p>Iterativ entwickeln, max 10 Runden</p>\n                </div>\n                <div class=\"pipeline-step\">\n                    <div class=\"num\">5–6</div>\n                    <h4>Verhaltensanalyse</h4>\n                    <p>COP, Anomalien, Einsparungen</p>\n                </div>\n                <div class=\"pipeline-step\">\n                    <div class=\"num\">7–8</div>\n                    <h4>Report</h4>\n                    <p>Berechnung, Grafiken, PDF</p>\n                </div>\n            </div>\n\n            <div class=\"highlight-box\" style=\"margin-top: 60px;\">\n                <h3>Phase 4: Vision-Feedback-Loop</h3>\n                <p style=\"color: var(--text-muted); font-size: 1rem; line-height: 1.8;\">\n                    Die KI generiert Python-Code für Berechnungen, führt ihn gegen echte Messdaten aus, erstellt Grafiken und lässt sie von der Vision-API prüfen ('Sieht die Kurve plausibel aus?'). Bei Abweichungen korrigiert sie sich selbst — automatisch. Dieser selbstkorrigierende Ansatz ist der Unterschied zwischen einem Prompt und einem Industrieprozess.\n                </p>\n            </div>\n\n            <div class=\"grid-2\" style=\"margin-top: 50px;\">\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-network-chart'></i></div>\n                    <h3>Phasenübergreifende Daten</h3>\n                    <p>Jede Phase nutzt alle vorherigen Daten — nicht linear, sondern phasenübergreifend abhängig. Phase 5 (Verhaltensanalyse) nutzt die in Phase 4 entwickelten Formeln als Werkzeuge. Phase 8 (Bericht) greift auf alle vorherigen Phasen zu.</p>\n                </div>\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-save'></i></div>\n                    <h3>Checkpointing</h3>\n                    <p>Jede Phase speichert ihren Zustand. Wenn etwas schiefgeht, kann die Pipeline von jeder Phase aus neu gestartet werden — ohne die vorherigen Schritte zu wiederholen. Bei WerkING Energy (~40 Minuten Laufzeit) wichtig, bei komplexeren Workflows absolut notwendig.</p>\n                </div>\n            </div>\n        </div>\n    </section>\n\n    <!-- ═══════════════════════════════════════════════════════════════\n         FFG-PROJEKT\n         ═══════════════════════════════════════════════════════════════ -->\n    <div class=\"divider\" id=\"ffg\">\n        <h2>FFG-Projekt „Einfach Bauen\"</h2>\n        <p>Konkreter Anwendungsfall: Normen-Analyse</p>\n    </div>\n\n    <section>\n        <div class=\"container\">\n            <div class=\"section-header center\">\n                <div class=\"gold-bar center\"></div>\n                <h2>KI-Pipeline für automatisierte Erkennung von <span class=\"gold\">Abweichungspotenzialen</span></h2>\n                <p>Das Projekt untersucht Innovationspotenziale im Bauwesen durch 'gleichwertiges Abweichen' von Regelwerken. WerkING Tools liefert als Werkvertragsnehmer eine KI-Pipeline, die OIB-Richtlinien, Bauordnungen und EU-Verordnungen systematisch analysiert.</p>\n            </div>\n\n            <div class=\"card highlight\" style=\"max-width: 900px; margin: 0 auto;\">\n                <h3 style=\"font-size: 1.4rem; margin-bottom: 20px;\">Was die Pipeline leistet</h3>\n                <ul style=\"list-style: none; padding: 0;\">\n                    <li style=\"display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--glass-border);\">\n                        <i class='bx bx-book-open' style=\"color: var(--gold); font-size: 1.3rem; flex-shrink: 0;\"></i>\n                        <div>\n                            <strong style=\"color: var(--text);\">OIB-Richtlinien analysieren</strong><br>\n                            <span style=\"color: var(--text-muted); font-size: 0.9rem;\">Systematische Extraktion aller Anforderungen aus OIB-Richtlinien</span>\n                        </div>\n                    </li>\n                    <li style=\"display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--glass-border);\">\n                        <i class='bx bx-search-alt' style=\"color: var(--gold); font-size: 1.3rem; flex-shrink: 0;\"></i>\n                        <div>\n                            <strong style=\"color: var(--text);\">Abweichungspotenziale identifizieren</strong><br>\n                            <span style=\"color: var(--text-muted); font-size: 0.9rem;\">Stellen identifizieren, wo man von der Norm abweichen darf, wenn Gleichwertigkeit nachgewiesen wird</span>\n                        </div>\n                    </li>\n                    <li style=\"display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--glass-border);\">\n                        <i class='bx bx-git-compare' style=\"color: var(--gold); font-size: 1.3rem; flex-shrink: 0;\"></i>\n                        <div>\n                            <strong style=\"color: var(--text);\">Bauordnungen & EU-Verordnungen quervergleichen</strong><br>\n                            <span style=\"color: var(--text-muted); font-size: 0.9rem;\">Automatisierter Abgleich zwischen unterschiedlichen Regelwerken</span>\n                        </div>\n                    </li>\n                    <li style=\"display: flex; gap: 12px; padding: 12px 0;\">\n                        <i class='bx bx-time-five' style=\"color: var(--gold); font-size: 1.3rem; flex-shrink: 0;\"></i>\n                        <div>\n                            <strong style=\"color: var(--text);\">Zeitersparnis</strong><br>\n                            <span style=\"color: var(--text-muted); font-size: 0.9rem;\">Heute wird das händisch gemacht — extrem zeitaufwändig und fehleranfällig</span>\n                        </div>\n                    </li>\n                </ul>\n            </div>\n\n            <div class=\"grid-2\" style=\"margin-top: 60px;\">\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-file-find'></i></div>\n                    <h3>Werkvertrag statt Konsortialpartner</h3>\n                    <p>Als Werkvertragsnehmer liefert WerkING Tools eine definierte Leistung (Pipeline für Normen-Analyse) — keine Forschungsverpflichtung, keine quartalsweisen FFG-Berichte, keine Bindung an Konsortialvertrag. Das reduziert Risiko und Overhead. Das Projekt funktioniert auch ohne KI, die Pipeline ist der Beschleuniger, nicht der Enabler.</p>\n                </div>\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-bulb'></i></div>\n                    <h3>Innovationspotenzial im Bauwesen</h3>\n                    <p>Die Pipeline ermöglicht systematische Identifikation von Innovationspotenzialen: Wo kann man von starren Regelwerken abweichen, wenn die Gleichwertigkeit nachgewiesen wird? Das öffnet neue Wege für innovative Bauweisen und beschleunigt Genehmigungsprozesse.</p>\n                </div>\n            </div>\n        </div>\n    </section>\n\n    <!-- ═══════════════════════════════════════════════════════════════\n         DATENSCHUTZ & SICHERHEIT\n         ═══════════════════════════════════════════════════════════════ -->\n    <div class=\"divider\">\n        <h2>Datenschutz & Sicherheit</h2>\n        <p>DSGVO-konform, EU-gehostet, kein KI-Training</p>\n    </div>\n\n    <section style=\"background: rgba(255, 255, 255, 0.02);\">\n        <div class=\"container\">\n            <div class=\"section-header center\">\n                <div class=\"gold-bar center\"></div>\n                <h2>Ihre Daten bleiben <span class=\"gold\">Ihre Daten</span></h2>\n            </div>\n\n            <div class=\"grid-3\">\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-shield-quarter'></i></div>\n                    <h3>DSGVO-konform</h3>\n                    <p>Alle Daten laufen über eine eigene Bridge auf einem deutschen Hetzner-Server. Automatische Pseudonymisierung entfernt personenbezogene Daten, bevor die KI irgendetwas sieht. Kein Vendor-Lock-in, keine Daten bei OpenAI oder Google.</p>\n                </div>\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-lock-alt'></i></div>\n                    <h3>Kein KI-Training mit Kundendaten</h3>\n                    <p>Ihre Daten werden nicht zum Training von Large Language Models verwendet. Was durch die Pipeline geht, wird verarbeitet und gespeichert — aber niemals an AI-Anbieter für Trainingszwecke weitergegeben. Know-how bleibt bei Ihnen, nicht beim Vendor.</p>\n                </div>\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-brain'></i></div>\n                    <h3>Modell-agnostisch</h3>\n                    <p>Die Workflows, die Daten, die Pipelines — alles ist unabhängig vom verwendeten LLM. Wenn ein besserer Anbieter kommt oder Claude ausfällt, wird das Modell gewechselt. Keine Abhängigkeit von einem einzelnen AI-Anbieter. Die Architektur ist darauf ausgelegt, über Jahrzehnte zu funktionieren.</p>\n                </div>\n            </div>\n\n            <div class=\"highlight-box\" style=\"margin-top: 60px;\">\n                <h3>Multi-Worker-Architektur mit automatischem Failover</h3>\n                <p style=\"color: var(--text-muted); font-size: 1rem; line-height: 1.8;\">\n                    Die Bridge ist ein isoliertes System mit Multi-Worker-Architektur (2 Worker + nginx Load Balancer). Bei Ausfall eines Workers übernimmt automatisch der andere. EU-gehostete Server (Hetzner Deutschland), automatische Pseudonymisierung vor AI-Verarbeitung.\n                </p>\n            </div>\n        </div>\n    </section>\n\n    <!-- ═══════════════════════════════════════════════════════════════\n         VISION & MARKT\n         ═══════════════════════════════════════════════════════════════ -->\n    <div class=\"divider\">\n        <h2>Vision & Markt</h2>\n        <p>Engineering Workflow Marketplace</p>\n    </div>\n\n    <section>\n        <div class=\"container\">\n            <div class=\"section-header center\">\n                <div class=\"gold-bar center\"></div>\n                <h2>Wie ein App Store für <span class=\"gold\">Engineering</span></h2>\n                <p>Langfristig können Ingenieure fertige, fachlich geprüfte Workflows nutzen, eigene Workflows entwickeln (Know-How bleibt in der Firma), oder Workflows im Marketplace anbieten. WerkING zertifiziert die fachliche Korrektheit (Bronze/Silber/Gold-Stufen).</p>\n            </div>\n\n            <div class=\"grid-3\" style=\"margin-top: 50px;\">\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-store'></i></div>\n                    <h3>Fertige Workflows nutzen</h3>\n                    <p>Fachlich geprüfte Workflows für Standard-Aufgaben direkt verwenden. Jeder Workflow von einem Fachpartner validiert.</p>\n                </div>\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-code-block'></i></div>\n                    <h3>Eigene Workflows entwickeln</h3>\n                    <p>Unternehmen können eigene, firmenspezifische Workflows entwickeln. Know-How bleibt intern, keine Weitergabe an Dritte.</p>\n                </div>\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-badge-check'></i></div>\n                    <h3>Workflows zertifizieren lassen</h3>\n                    <p>Workflows im Marketplace anbieten mit fachlicher Zertifizierung. Das ist der Unterschied zu generischen Plattformen: Jeder Workflow wird von einem Fachpartner validiert.</p>\n                </div>\n            </div>\n\n            <div class=\"problem-stat\" style=\"margin-top: 70px;\">\n                <div class=\"big-number\">~80.000</div>\n                <div class=\"label\">Ingenieurbüros und Energieberater im DACH-Raum</div>\n            </div>\n\n            <div class=\"quote\">\n                <p>Total Addressable Market: ca. 8.000 Ziviltechniker in Österreich (davon 3.000 im Bauwesen), über 22.800 registrierte Energieeffizienz-Experten in Deutschland (davon 53% aus dem Ingenieurwesen), konservativ ~15.000–20.000 weitere Planer in der Schweiz. Kein Anbieter kombiniert deterministische KI-Pipelines mit fachlicher Zertifizierung im Engineering-Bereich.</p>\n            </div>\n\n            <div class=\"grid-2\" style=\"margin-top: 60px;\">\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-trending-up'></i></div>\n                    <h3>Horizontale Plattformen sind ungeeignet</h3>\n                    <p>Visuelle Workflow-Builder (n8n, Make, StackAI) bauen Agenten, nicht Pipelines. Sie sind branchenunabhängig und für CRM, Marketing, E-Mails gebaut — nicht für Engineering. Sie haben künstliche Limitierungen: Timeout nach 10 Sekunden, maximale Codegröße, keine Validierung zwischen Schritten. WerkING-Pipelines laufen auf eigenen Linux-Servern ohne Limits und können Stunden dauern.</p>\n                </div>\n                <div class=\"card\">\n                    <div class=\"card-icon\"><i class='bx bx-chip'></i></div>\n                    <h3>Big Tech baut Modelle, nicht Lösungen</h3>\n                    <p>Die großen AI-Anbieter (OpenAI, Anthropic, Google) liefern den Rohstoff. Aber ein Modell allein schreibt kein Gutachten, berechnet keine Heizlast und prüft keine Maschinenrichtlinie. WerkING kombiniert diese Modelle mit Fach-Know-How, Berechnungstools und validierten Workflows zu unterschreibbaren Engineering-Dokumenten.</p>\n                </div>\n            </div>\n        </div>\n    </section>\n\n    <!-- ═══════════════════════════════════════════════════════════════\n         CTA\n         ═══════════════════════════════════════════════════════════════ -->\n    <section class=\"cta\">\n        <div class=\"container\">\n            <h2 class=\"text-gradient\">Nächster Schritt</h2>\n            <p>Vereinbaren Sie ein persönliches Gespräch. Wir zeigen Ihnen WerkING Energy in Aktion — mit Ihren Daten.</p>\n            <a href=\"mailto:rafael@werking.tools\" class=\"cta-btn\">\n                <i class='bx bx-envelope'></i> Kontakt aufnehmen\n            </a>\n        </div>\n    </section>\n\n    <footer>\n        <div class=\"container\">\n            <span class=\"logo\">Werk<span class=\"ing\">ING</span> Tools</span> — werking.tools | rafael@werking.tools\n        </div>\n    </footer>\n\n</body>\n</html>",
+      "changePrompt": "",
+      "addedSources": [],
+      "designHints": [
+        "99c5b1de48f1",
+        "82c2ade03f11",
+        "49919794d825",
+        "9e632eb1fa12",
+        "33adb4266075",
+        "ab6766cbec64",
+        "bcf750ed674b",
+        "766bce9f2108",
+        "0229276a2e58",
+        "20f2e86d4593"
+      ],
+      "timestamp": "2026-04-02T06:20:13.027Z"
+    }
+  ],
+  "activeRevisionIndex": 0,
+  "claimTemplateMatches": [
+    {
+      "claimId": "cl-0",
+      "templateId": "d8aa389d76e3",
+      "reason": "3-Schichten-Architektur als Kernkonzept — exakte Übereinstimmung",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "Schicht 1: Datenquellen-Integration",
+      "templateType": "content",
+      "templateFile": "ENGELMANN-KONZEPT-2026-04.html",
+      "templatePreview": "Der AI Hub ist in drei Schichten aufgebaut. Diese Architektur ermöglicht schritt",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-1",
+      "templateId": "c47a66d28278",
+      "reason": "Adapter-Integration bestehender Programme ohne Austausch",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "BLEIBT",
+      "templateType": "features",
+      "templateFile": "ENGELMANN-KONZEPT-2026-04.html",
+      "templatePreview": "Bestehende Fach-Software bleibt erhalten. Die Facharbeit passiert weiterhin in b",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-2",
+      "templateId": "c5ae9d9f9107",
+      "reason": "Milestone-Übersicht mit Arbeitsplattform-Features",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "Zusätzlich: WerkING Energy & Report produktiv",
+      "templateType": "content",
+      "templateFile": "ENGELMANN-KONZEPT-2026-04.html",
+      "templatePreview": "Drei Milestones in 10 Wochen — von produktiv nutzbar bis vollintegriertes System",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-3",
+      "templateId": "74dfc1691fef",
+      "reason": "Rollenbasierte Dashboards mit echten Daten",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "Das Konzept",
+      "templateType": "pricing",
+      "templateFile": "ENGELMANN-KONZEPT-2026-04.html",
+      "templatePreview": "Das Konzept Statt abstrakt über Dashboards zu reden: Ein konkretes Dashboard mit",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-4",
+      "templateId": "3846b10a623d",
+      "reason": "Anatomie Workflow — reproduzierbar, Input/Output-Contracts",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "Was ist ein Workflow?",
+      "templateType": "diagram",
+      "templateFile": "PARTNER-PITCH-2026-03.html",
+      "templatePreview": "Anatomie eines Workflows Was ist ein Workflow? Ein Workflow ist kein Chatbot-Pro",
+      "hasSvg": true
+    },
+    {
+      "claimId": "cl-4",
+      "templateId": "f311c8976427",
+      "reason": "Schach-Analogie: Workflow vs. Raterei",
+      "rank": 2,
+      "selected": false,
+      "templateTitle": "Chatbot-Ansatz",
+      "templateType": "pricing",
+      "templateFile": "ENGELMANN-KONZEPT-2026-04.html",
+      "templatePreview": "Ein Workflow ist eine definierte Abfolge von Zügen: reproduzierbar, nachvollzieh",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-5",
+      "templateId": "c3810b5254d9",
+      "reason": "Kern-Differenzierung: Wer bestimmt den Kontext?",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "Chatbot vs. Workflow",
+      "templateType": "pricing",
+      "templateFile": "VISION-PITCH-2026-03.html",
+      "templatePreview": "Chatbot vs. Workflow Der entscheidende Unterschied ist eine Frage: Wer bestimmt ",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-6",
+      "templateId": "6f0ca83b3ac7",
+      "reason": "Plattform-Architektur mit Pipeline und Workflow-Definition",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "Drei Schichten &mdash; unbegrenzt erweiterbar",
+      "templateType": "features",
+      "templateFile": "PARTNER-PITCH-2026-03.html",
+      "templatePreview": "Plattform-Architektur Drei Schichten unbegrenzt erweiterbar Andere bauen Fronten",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-7",
+      "templateId": "cf7034499a75",
+      "reason": "Team-Zusammenarbeit — Workflow-Entwicklung mit Partnern",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "Eigene Workflows entwickeln",
+      "templateType": "features",
+      "templateFile": "SOMMER-PRAESENTATION-2026.html",
+      "templatePreview": "Eigene Workflows entwickeln Alle WerkING-Produkte laufen auf einer gemeinsamen I",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-8",
+      "templateId": "5edb7e48b07f",
+      "reason": "Plattform statt Tool — Infrastruktur für eingebettete Tools",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "Nicht wie Copilot &mdash; eine Plattform",
+      "templateType": "content",
+      "templateFile": "PARTNER-PITCH-2026-03.html",
+      "templatePreview": "Zukunftssicher Nicht wie Copilot eine Plattform Copilot ist ein Tool in Office. ",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-9",
+      "templateId": "b0f2f4218d24",
+      "reason": "Evolution in Stufen: Frontend → KI-gesteuerte Plattform",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "Die Evolution",
+      "templateType": "content",
+      "templateFile": "WIM-MEETING-2026-02-05.html",
+      "templatePreview": "Die Evolution Vom klassischen Frontend zur KI-gesteuerten Plattform HEUTE Web-Fr",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-10",
+      "templateId": "c5ae9d9f9107",
+      "reason": "M1 sofort nutzbar ohne Wartezeit auf M2/M3",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "Zusätzlich: WerkING Energy & Report produktiv",
+      "templateType": "content",
+      "templateFile": "ENGELMANN-KONZEPT-2026-04.html",
+      "templatePreview": "Drei Milestones in 10 Wochen — von produktiv nutzbar bis vollintegriertes System",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-11",
+      "templateId": "916b0692d13a",
+      "reason": "EUR 25.000 Entwicklungspartnerschaft — exakte Finanzstruktur",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "8 Benutzer-Sitze mit degressivem Rabatt",
+      "templateType": "pricing",
+      "templateFile": "ENGELMANN-KONZEPT-2026-04.html",
+      "templatePreview": "ENTWICKLUNGSPARTNERSCHAFT € 25.000 Einmalzahlung — keine Umsatzbeteiligung € 10.",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-12",
+      "templateId": "916b0692d13a",
+      "reason": "Keine Umsatzbeteiligung — Geschäftsmodell-Kern",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "8 Benutzer-Sitze mit degressivem Rabatt",
+      "templateType": "pricing",
+      "templateFile": "ENGELMANN-KONZEPT-2026-04.html",
+      "templatePreview": "ENTWICKLUNGSPARTNERSCHAFT € 25.000 Einmalzahlung — keine Umsatzbeteiligung € 10.",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-13",
+      "templateId": "916b0692d13a",
+      "reason": "20% Provision — Kompensationsmodell",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "8 Benutzer-Sitze mit degressivem Rabatt",
+      "templateType": "pricing",
+      "templateFile": "ENGELMANN-KONZEPT-2026-04.html",
+      "templatePreview": "ENTWICKLUNGSPARTNERSCHAFT € 25.000 Einmalzahlung — keine Umsatzbeteiligung € 10.",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-14",
+      "templateId": "916b0692d13a",
+      "reason": "Gratis-Nutzung für Kunde — Business-Voraussetzung",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "8 Benutzer-Sitze mit degressivem Rabatt",
+      "templateType": "pricing",
+      "templateFile": "ENGELMANN-KONZEPT-2026-04.html",
+      "templatePreview": "ENTWICKLUNGSPARTNERSCHAFT € 25.000 Einmalzahlung — keine Umsatzbeteiligung € 10.",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-15",
+      "templateId": "6e625e258a86",
+      "reason": "Marketplace-Vision als langfristiges Wachstumsziel",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "Engineering Workflow Marketplace",
+      "templateType": "pricing",
+      "templateFile": "VATER-MEETING-2026-03-04.html",
+      "templatePreview": "Engineering Workflow Marketplace Die Plattform hinter den Tools. Die langfristig",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-16",
+      "templateId": "c5ae9d9f9107",
+      "reason": "M1: Azure AD, Workflow end-to-end in 3 Wochen",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "Zusätzlich: WerkING Energy & Report produktiv",
+      "templateType": "content",
+      "templateFile": "ENGELMANN-KONZEPT-2026-04.html",
+      "templatePreview": "Drei Milestones in 10 Wochen — von produktiv nutzbar bis vollintegriertes System",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-17",
+      "templateId": "c5ae9d9f9107",
+      "reason": "M2: SharePoint, Benutzerrollen in +3 Wochen",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "Zusätzlich: WerkING Energy & Report produktiv",
+      "templateType": "content",
+      "templateFile": "ENGELMANN-KONZEPT-2026-04.html",
+      "templatePreview": "Drei Milestones in 10 Wochen — von produktiv nutzbar bis vollintegriertes System",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-18",
+      "templateId": "c5ae9d9f9107",
+      "reason": "M3: RAG-System, Export in +4 Wochen",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "Zusätzlich: WerkING Energy & Report produktiv",
+      "templateType": "content",
+      "templateFile": "ENGELMANN-KONZEPT-2026-04.html",
+      "templatePreview": "Drei Milestones in 10 Wochen — von produktiv nutzbar bis vollintegriertes System",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-19",
+      "templateId": "c5ae9d9f9107",
+      "reason": "Parallele Integration WIKO Explorer und WerkING Tools",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "Zusätzlich: WerkING Energy & Report produktiv",
+      "templateType": "content",
+      "templateFile": "ENGELMANN-KONZEPT-2026-04.html",
+      "templatePreview": "Drei Milestones in 10 Wochen — von produktiv nutzbar bis vollintegriertes System",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-20",
+      "templateId": "74dfc1691fef",
+      "reason": "WIKO-Prototyp mit SQL-Backup als Demonstrationsprojekt",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "Das Konzept",
+      "templateType": "pricing",
+      "templateFile": "ENGELMANN-KONZEPT-2026-04.html",
+      "templatePreview": "Das Konzept Statt abstrakt über Dashboards zu reden: Ein konkretes Dashboard mit",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-21",
+      "templateId": "6c2b56251bfa",
+      "reason": "Architektur-Detail: SharePoint, Outlook Graph API",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "Die Architektur",
+      "templateType": "features",
+      "templateFile": "WIM-MEETING-2026-02-05.html",
+      "templatePreview": "Die Architektur Alles fließt zusammen - Input, Verarbeitung, Output SharePoint D",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-22",
+      "templateId": "c47a66d28278",
+      "reason": "Tool-Strategie: BLEIBT/ANGEDOCKT/ABGELÖST Matrix",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "BLEIBT",
+      "templateType": "features",
+      "templateFile": "ENGELMANN-KONZEPT-2026-04.html",
+      "templatePreview": "Bestehende Fach-Software bleibt erhalten. Die Facharbeit passiert weiterhin in b",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-23",
+      "templateId": "d8aa389d76e3",
+      "reason": "Adapter für Datenquellen — Schicht 1 Datenquellen-Integration",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "Schicht 1: Datenquellen-Integration",
+      "templateType": "content",
+      "templateFile": "ENGELMANN-KONZEPT-2026-04.html",
+      "templatePreview": "Der AI Hub ist in drei Schichten aufgebaut. Diese Architektur ermöglicht schritt",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-24",
+      "templateId": "4f1e50b9fe1a",
+      "reason": "CUI als durchgängige Plattform-Infrastruktur",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "Eine durchgaengige Infrastruktur",
+      "templateType": "features",
+      "templateFile": "VISION-PITCH-2026-03.html",
+      "templatePreview": "Eine durchgaengige Infrastruktur Nicht einzelne Tools zusammengeklebt sondern ei",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-25",
+      "templateId": "74dfc1691fef",
+      "reason": "Konkreter Dashboard-Prototyp mit Live-Daten",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "Das Konzept",
+      "templateType": "pricing",
+      "templateFile": "ENGELMANN-KONZEPT-2026-04.html",
+      "templatePreview": "Das Konzept Statt abstrakt über Dashboards zu reden: Ein konkretes Dashboard mit",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-26",
+      "templateId": "4f1e50b9fe1a",
+      "reason": "Skalierbare Architektur — neue Panels beliebig erweiterbar",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "Eine durchgaengige Infrastruktur",
+      "templateType": "features",
+      "templateFile": "VISION-PITCH-2026-03.html",
+      "templatePreview": "Eine durchgaengige Infrastruktur Nicht einzelne Tools zusammengeklebt sondern ei",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-27",
+      "templateId": "0da5415eb9e0",
+      "reason": "WerkING Tools als gemeinsame Plattform-Basis",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "FOOTER",
+      "templateType": "footer",
+      "templateFile": "PARTNER-PITCH-2026-03.html",
+      "templatePreview": "Werk ING Tools Dr. Rafael Engelmann Ziviltechniker f r Maschinenbau Vertrauliche",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-28",
+      "templateId": "7c788fadebec",
+      "reason": "Produktportfolio: Report, Energy, Safety als Module",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "Das Produktportfolio",
+      "templateType": "pricing",
+      "templateFile": "DAVID-MEETING-2026-02-02.html",
+      "templatePreview": "Das Produktportfolio 5 Standalone-Apps unter einer Dachmarke LIVE Werk ING Repor",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-29",
+      "templateId": "1aa377b959c0",
+      "reason": "Implementierter Stand — nicht nur Konzept sondern live System",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "Core-Features LIVE",
+      "templateType": "features",
+      "templateFile": "ENGELMANN-KONZEPT-2026-04.html",
+      "templatePreview": "Der AI Hub ist kein Konzept sondern ein funktionierendes System. Die App ist als",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-30",
+      "templateId": "1aa377b959c0",
+      "reason": "Workflow-System: Logik existiert, Entwicklung geplant",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "Core-Features LIVE",
+      "templateType": "features",
+      "templateFile": "ENGELMANN-KONZEPT-2026-04.html",
+      "templatePreview": "Der AI Hub ist kein Konzept sondern ein funktionierendes System. Die App ist als",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-31",
+      "templateId": "1aa377b959c0",
+      "reason": "Produktbeschreibung automatisch generiert",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "Core-Features LIVE",
+      "templateType": "features",
+      "templateFile": "ENGELMANN-KONZEPT-2026-04.html",
+      "templatePreview": "Der AI Hub ist kein Konzept sondern ein funktionierendes System. Die App ist als",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-32",
+      "templateId": "e076726c9dfa",
+      "reason": "Copilot IN Office vs. Platform ÜBER die Tools",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "Microsoft Copilot",
+      "templateType": "features",
+      "templateFile": "ENGELMANN-KONZEPT-2026-04.html",
+      "templatePreview": "Microsoft Copilot Ein Tool das in Microsoft 365 eingebettet ist. Hilft bei Word,",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-32",
+      "templateId": "5edb7e48b07f",
+      "reason": "Alternative Darstellung: Nicht wie Copilot",
+      "rank": 2,
+      "selected": false,
+      "templateTitle": "Nicht wie Copilot &mdash; eine Plattform",
+      "templateType": "content",
+      "templateFile": "PARTNER-PITCH-2026-03.html",
+      "templatePreview": "Zukunftssicher Nicht wie Copilot eine Plattform Copilot ist ein Tool in Office. ",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-33",
+      "templateId": "a406e6224da3",
+      "reason": "Nächste Schritte & technische Anforderungen",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "Nächste Schritte",
+      "templateType": "cta",
+      "templateFile": "ENGELMANN-KONZEPT-2026-04.html",
+      "templatePreview": "Nächste Schritte M1 startet in 3 Wochen — vom Konzept zur produktiven Nutzung Fr",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-34",
+      "templateId": "a406e6224da3",
+      "reason": "Meeting 12. April als Meilenstein",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "Nächste Schritte",
+      "templateType": "cta",
+      "templateFile": "ENGELMANN-KONZEPT-2026-04.html",
+      "templatePreview": "Nächste Schritte M1 startet in 3 Wochen — vom Konzept zur produktiven Nutzung Fr",
+      "hasSvg": false
+    },
+    {
+      "claimId": "cl-35",
+      "templateId": "916b0692d13a",
+      "reason": "EUR 500/Monat Betriebskosten als Business-Komponente",
+      "rank": 1,
+      "selected": true,
+      "templateTitle": "8 Benutzer-Sitze mit degressivem Rabatt",
+      "templateType": "pricing",
+      "templateFile": "ENGELMANN-KONZEPT-2026-04.html",
+      "templatePreview": "ENTWICKLUNGSPARTNERSCHAFT € 25.000 Einmalzahlung — keine Umsatzbeteiligung € 10.",
+      "hasSvg": false
+    }
+  ]
+}

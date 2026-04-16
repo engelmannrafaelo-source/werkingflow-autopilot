@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
 
 interface ServiceHealth {
   name: string;
@@ -12,8 +13,8 @@ interface ServiceHealth {
 interface SystemHealthResponse {
   ok: boolean;
   checkedAt: string;
-  errorCount: number;
-  services: ServiceHealth[];
+  errorCount?: number;
+  services?: ServiceHealth[];
 }
 
 interface HealthHistory {
@@ -75,12 +76,16 @@ export default function SystemHealthTab({ envMode }: { envMode?: string }) {
     try {
       const res = await fetch('/api/admin/wr/system-health', { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: SystemHealthResponse = await res.json();
+      const raw = await res.json();
+      const data = validateApiResponse<SystemHealthResponse>(raw, '/api/admin/wr/system-health', {
+        ok: 'boolean',
+        checkedAt: 'string',
+      });
       setHealth(data);
       setLastCheck(new Date());
 
       // Save each service's result to history
-      data.services.forEach((svc) => {
+      (data.services ?? []).forEach((svc) => {
         saveHistory(svc.name, {
           timestamp: data.checkedAt,
           ok: svc.status === 'ok',
@@ -301,23 +306,23 @@ export default function SystemHealthTab({ envMode }: { envMode?: string }) {
       {health && (
         <div
           data-ai-id="wr-system-health-overall"
-          data-status={health.ok ? 'ok' : 'error'}
+          data-status={(health.ok) ? 'ok' : 'error'}
           style={{
             padding: 12,
-            background: health.ok ? 'rgba(158,206,106,0.1)' : 'rgba(247,118,142,0.1)',
-            border: `2px solid ${health.ok ? 'var(--tn-green)' : 'var(--tn-red)'}`,
+            background: (health.ok) ? 'rgba(158,206,106,0.1)' : 'rgba(247,118,142,0.1)',
+            border: `2px solid ${(health.ok) ? 'var(--tn-green)' : 'var(--tn-red)'}`,
             borderRadius: 8,
             marginBottom: 16,
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-            <span style={{ fontSize: 20 }}>{health.ok ? '✅' : '❌'}</span>
+            <span style={{ fontSize: 20 }}>{(health.ok) ? '✅' : '❌'}</span>
             <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--tn-text)' }}>
-              {health.ok ? 'All Systems Operational' : `${health.errorCount} Service(s) Down`}
+              {(health.ok) ? 'All Systems Operational' : `${health.errorCount ?? 0} Service(s) Down`}
             </span>
           </div>
           <div style={{ fontSize: 9, color: 'var(--tn-text-muted)' }}>
-            {health.services.length} services monitored
+            {(health.services ?? []).length} services monitored
           </div>
         </div>
       )}
@@ -332,7 +337,7 @@ export default function SystemHealthTab({ envMode }: { envMode?: string }) {
             gap: 12,
           }}
         >
-          {health.services.map(serviceCard)}
+          {(health.services ?? []).map(serviceCard)}
         </div>
       )}
 
@@ -353,7 +358,7 @@ export default function SystemHealthTab({ envMode }: { envMode?: string }) {
 
       {/* Service Detail Modal */}
       {selectedService && health && (() => {
-        const service = health.services.find((s) => s.name === selectedService);
+        const service = (health.services ?? []).find((s) => s.name === selectedService);
         if (!service) return null;
 
         const serviceHistory = history.get(selectedService) || [];

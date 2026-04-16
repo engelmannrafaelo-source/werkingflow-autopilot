@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { validateApiResponse } from '../../lib/validateApiResponse';
 
 const API = '/api';
 
@@ -6,6 +7,10 @@ interface Message {
   role: 'user' | 'assistant';
   content: string;
   timestamp?: string;
+}
+
+interface HistoryApiResponse {
+  messages: Message[];
 }
 
 interface PersonaChatProps {
@@ -32,13 +37,17 @@ export default function PersonaChat({ personaId, personaName }: PersonaChatProps
   async function loadHistory() {
     if ((window as any).__cuiServerAlive === false) return;
     try {
-      const response = await fetch(`${API}/team/chat/${personaId}/history`, { signal: AbortSignal.timeout(20000) });
+      const endpoint = `${API}/team/chat/${personaId}/history`;
+      const response = await fetch(endpoint, { signal: AbortSignal.timeout(20000) });
       if (!response.ok) {
         console.warn(`[PersonaChat] History not available: HTTP ${response.status}`);
         return;
       }
-      const data = await response.json();
-      setMessages(data.messages || []);
+      const raw = await response.json();
+      const validated = validateApiResponse<HistoryApiResponse>(raw, endpoint, {
+        messages: 'array',
+      });
+      setMessages(validated.messages);
     } catch (err: any) {
       console.warn('[PersonaChat] load history error:', err);
     }

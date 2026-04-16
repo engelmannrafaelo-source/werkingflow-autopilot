@@ -1,0 +1,6 @@
+{
+  "id": "backend-watcher",
+  "name": "Backend Watcher",
+  "workDir": "/root/orchestrator/workspaces/backend-watcher",
+  "_auto": true
+}

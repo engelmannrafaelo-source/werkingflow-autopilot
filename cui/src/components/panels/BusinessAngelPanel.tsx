@@ -7,6 +7,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { diffLines } from 'diff';
 import { markdownComponents } from './cui/ChatMessages';
+import { validateApiResponse } from '../../lib/validateApiResponse';
 
 // --- Types ---
 
@@ -17,11 +18,11 @@ interface FileTokenInfo {
 }
 
 interface ContextData {
-  kern_files: FileTokenInfo[];
-  kern_tokens: number;
-  temp_files: Array<{ name: string; tokens: number }>;
-  temp_tokens: number;
-  temp_dir: string;
+  kern_files?: FileTokenInfo[];
+  kern_tokens?: number;
+  temp_files?: Array<{ name: string; tokens: number }>;
+  temp_tokens?: number;
+  temp_dir?: string;
 }
 
 interface TreeFile {
@@ -46,9 +47,10 @@ interface LoadResult {
   session_id: string;
   token_count: number;
   files_loaded: number;
-  temp_files: string[];
+  temp_files?: string[];
   conversation?: ChatMessage[];
   conversation_turns?: number;
+  excluded?: string[];
 }
 
 interface ChatMessage {
@@ -58,23 +60,23 @@ interface ChatMessage {
 
 interface SessionListItem {
   id: string;
-  title: string;
+  title?: string;
   created_at: number;
-  updated_at: number;
-  turns: number;
-  filename: string;
+  updated_at?: number;
+  turns?: number;
+  filename?: string;
 }
 
 interface DiffCard {
   id: string;
   file: string;
-  old: string;
-  newText: string;
+  old?: string;
+  newText?: string;
   rawHunk?: string;
-  status: 'unchecked' | 'ok' | 'error' | 'applied' | 'skipped';
+  status?: 'unchecked' | 'ok' | 'error' | 'applied' | 'skipped';
   reason?: string;
-  oldExpanded: boolean;
-  newExpanded: boolean;
+  oldExpanded?: boolean;
+  newExpanded?: boolean;
 }
 
 // --- Helpers ---
@@ -369,7 +371,7 @@ const S = {
   statusBadge: (s: DiffCard['status']) => {
     const bg: Record<string, string> = { unchecked: 'rgba(255,255,255,0.08)', ok: 'rgba(158,206,106,0.18)', error: 'rgba(247,118,142,0.18)', applied: 'rgba(122,162,247,0.18)', skipped: 'rgba(255,255,255,0.04)' };
     const fg: Record<string, string> = { unchecked: 'var(--tn-text-muted)', ok: 'var(--tn-green,#9ece6a)', error: 'var(--tn-red,#f7768e)', applied: 'var(--tn-blue,#7aa2f7)', skipped: 'var(--tn-text-muted)' };
-    return { padding: '2px 6px', borderRadius: '8px', fontSize: '10px', fontWeight: 600, background: bg[s] ?? bg.unchecked, color: fg[s] ?? fg.unchecked };
+    return { padding: '2px 6px', borderRadius: '8px', fontSize: '10px', fontWeight: 600, background: bg[s ?? 'unchecked'] ?? bg.unchecked, color: fg[s ?? 'unchecked'] ?? fg.unchecked };
   },
 };
 
@@ -535,9 +537,10 @@ export default function BusinessAngelPanel() {
         return;
       }
       const data = await r.json();
-      setSnapshotFiles(data.files ?? {});
+      const validated = validateApiResponse<{ files: Record<string, string> }>(data, '/api/business-angel/snapshot', { files: 'object' });
+      setSnapshotFiles(validated.files);
       setSnapshotLoaded(true);
-      console.log(`[BusinessAngel] Snapshot loaded: ${Object.keys(data.files ?? {}).length} files`);
+      console.log(`[BusinessAngel] Snapshot loaded: ${Object.keys(validated.files).length} files`);
     } catch {
       setSnapshotLoaded(true);
     }
@@ -564,8 +567,9 @@ export default function BusinessAngelPanel() {
     try {
       const resp = await fetch('/api/business-angel/files');
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = await resp.json();
-      setFileTree(data.tree ?? []);
+      const raw = await resp.json();
+      const data = validateApiResponse<{ tree: TreeNode[] }>(raw, '/api/business-angel/files', { tree: 'array' });
+      setFileTree(data.tree);
     } catch {
       // non-critical — tree just stays empty
     } finally {
@@ -627,9 +631,14 @@ export default function BusinessAngelPanel() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ extra_files: [...selectedFiles], restore }),
       });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
-      setSession(data as LoadResult);
+      const raw = await resp.json();
+      if (!resp.ok) throw new Error(raw.error || `HTTP ${resp.status}`);
+      const data = validateApiResponse<LoadResult>(raw, '/api/business-angel/load', {
+        session_id: 'string',
+        token_count: 'number',
+        files_loaded: 'number',
+      });
+      setSession(data);
       setContextCollapsed(true);
       setActiveSessionInfo(null);
       // Load snapshot for diff baseline
@@ -648,7 +657,7 @@ export default function BusinessAngelPanel() {
           },
         ]);
         // Re-inject diffs from the last assistant message that contains diffs
-        const assistantMsgs = (data.conversation as Array<{role: string; content: string}>)
+        const assistantMsgs = data.conversation
           .filter(m => m.role === 'assistant');
         for (let i = assistantMsgs.length - 1; i >= 0; i--) {
           const parsed = parseDiffsClient(assistantMsgs[i].content);
@@ -691,8 +700,9 @@ export default function BusinessAngelPanel() {
     try {
       const resp = await fetch('/api/business-angel/sessions');
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = await resp.json();
-      setSessionList(data.sessions ?? []);
+      const raw = await resp.json();
+      const data = validateApiResponse<{ sessions: SessionListItem[] }>(raw, '/api/business-angel/sessions', { sessions: 'array' });
+      setSessionList(data.sessions);
     } catch {
       setSessionList([]);
     } finally {
@@ -851,7 +861,7 @@ Wichtig:
   };
 
   const updateNewText = (id: string, text: string) =>
-    setDiffCards(prev => prev.map(c => c.id === id ? { ...c, newText: text } : c));
+    setDiffCards(prev => prev.map(c => (c.id) === id ? { ...c, newText: text } : c));
 
   // startEdit/cancelEdit removed — were using undefined state (setEditingId/setEditBuffer)
 
@@ -862,31 +872,31 @@ Wichtig:
   };
 
   const toggleExpand = (id: string, side: 'old' | 'new') =>
-    setDiffCards(prev => prev.map(d => d.id !== id ? d : {
+    setDiffCards(prev => prev.map(d => (d.id) !== id ? d : {
       ...d,
-      oldExpanded: side === 'old' ? !d.oldExpanded : d.oldExpanded,
-      newExpanded: side === 'new' ? !d.newExpanded : d.newExpanded,
+      oldExpanded: side === 'old' ? !(d.oldExpanded ?? false) : (d.oldExpanded ?? false),
+      newExpanded: side === 'new' ? !(d.newExpanded ?? false) : (d.newExpanded ?? false),
     }));
 
-  const skipDiff  = (id: string) => setDiffCards(prev => prev.map(d => d.id === id ? { ...d, status: 'skipped' as const } : d));
-  const removeDiff = (id: string) => setDiffCards(prev => prev.filter(d => d.id !== id));
+  const skipDiff  = (id: string) => setDiffCards(prev => prev.map(d => (d.id) === id ? { ...d, status: 'skipped' as const } : d));
+  const removeDiff = (id: string) => setDiffCards(prev => prev.filter(d => (d.id) !== id));
 
   const validateAll = async () => {
-    const toCheck = diffCards.filter(d => d.status === 'unchecked' || d.status === 'error');
+    const toCheck = diffCards.filter(d => (d.status ?? 'unchecked') === 'unchecked' || (d.status ?? 'unchecked') === 'error');
     if (!toCheck.length) return;
     setValidating(true);
     try {
       const resp = await fetch('/api/business-angel/apply-diffs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dry_run: true, diffs: toCheck.map(d => ({ file: d.file, old: d.old, newText: d.newText })) }),
+        body: JSON.stringify({ dry_run: true, diffs: toCheck.map(d => ({ file: d.file, old: d.old ?? '', newText: d.newText ?? '' })) }),
       });
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
       const okSet = new Set<string>(data.applied as string[]);
       const failMap = new Map<string, string>((data.failed as Array<{ file: string; reason: string }>).map(f => [f.file, f.reason]));
       setDiffCards(prev => prev.map(d => {
-        if (!toCheck.find(v => v.id === d.id)) return d;
+        if (!toCheck.find(v => (v.id) === (d.id))) return d;
         if (okSet.has(d.file)) return { ...d, status: 'ok' as const, reason: undefined };
         if (failMap.has(d.file)) return { ...d, status: 'error' as const, reason: failMap.get(d.file) };
         return d;
@@ -896,38 +906,38 @@ Wichtig:
   };
 
   const applyOne = async (id: string) => {
-    const card = diffCards.find(d => d.id === id);
+    const card = diffCards.find(d => (d.id) === id);
     if (!card) return;
     const resp = await fetch('/api/business-angel/apply-diffs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ diffs: [{ file: card.file, old: card.old, newText: card.newText }] }),
+      body: JSON.stringify({ diffs: [{ file: card.file, old: card.old ?? '', newText: card.newText ?? '' }] }),
     });
     const data = await resp.json();
     if ((data.applied as string[]).includes(card.file)) {
-      setDiffCards(prev => prev.map(d => d.id === id ? { ...d, status: 'applied' as const } : d));
+      setDiffCards(prev => prev.map(d => (d.id) === id ? { ...d, status: 'applied' as const } : d));
     } else {
       const reason = (data.failed as Array<{ file: string; reason: string }>).find(f => f.file === card.file)?.reason ?? 'Unknown';
-      setDiffCards(prev => prev.map(d => d.id === id ? { ...d, status: 'error' as const, reason } : d));
+      setDiffCards(prev => prev.map(d => (d.id) === id ? { ...d, status: 'error' as const, reason } : d));
     }
   };
 
   const applyAll = async () => {
-    const toApply = diffCards.filter(d => d.status === 'ok');
+    const toApply = diffCards.filter(d => (d.status ?? 'unchecked') === 'ok');
     if (!toApply.length) return;
     setApplyingAll(true); setApplyError('');
     try {
       const resp = await fetch('/api/business-angel/apply-diffs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ diffs: toApply.map(d => ({ file: d.file, old: d.old, newText: d.newText })) }),
+        body: JSON.stringify({ diffs: toApply.map(d => ({ file: d.file, old: d.old ?? '', newText: d.newText ?? '' })) }),
       });
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
       const okSet = new Set<string>(data.applied as string[]);
       const failMap = new Map<string, string>((data.failed as Array<{ file: string; reason: string }>).map(f => [f.file, f.reason]));
       setDiffCards(prev => prev.map(d => {
-        if (!toApply.find(v => v.id === d.id)) return d;
+        if (!toApply.find(v => (v.id) === (d.id))) return d;
         if (okSet.has(d.file)) return { ...d, status: 'applied' as const };
         if (failMap.has(d.file)) return { ...d, status: 'error' as const, reason: failMap.get(d.file) };
         return d;
@@ -970,12 +980,12 @@ Wichtig:
     return <div style={{ fontFamily: 'monospace', fontSize: 10, lineHeight: 1.6, color: '#c0caf5', whiteSpace: 'pre-wrap' as const, wordBreak: 'break-word' as const }}>{previewContent}</div>;
   }
 
-  const okCount = diffCards.filter(d => d.status === 'ok').length;
-  const pendingCount = diffCards.filter(d => d.status === 'unchecked').length;
-  const appliedCount = diffCards.filter(d => d.status === 'applied').length;
+  const okCount = diffCards.filter(d => (d.status ?? 'unchecked') === 'ok').length;
+  const pendingCount = diffCards.filter(d => (d.status ?? 'unchecked') === 'unchecked').length;
+  const appliedCount = diffCards.filter(d => (d.status ?? 'unchecked') === 'applied').length;
 
   const statusLabel = (s: DiffCard['status']) =>
-    ({ unchecked: '⬜', ok: '✓ ok', error: '✗', applied: '✓ applied', skipped: '—' })[s] ?? s;
+    ({ unchecked: '⬜', ok: '✓ ok', error: '✗', applied: '✓ applied', skipped: '—' })[s ?? 'unchecked'] ?? s;
 
   if (ctxLoading) return (
     <div style={{ ...S.root, padding: '20px', alignItems: 'center', justifyContent: 'center' }}>
@@ -1094,13 +1104,13 @@ Wichtig:
           <div style={S.secLabel} onClick={() => setKernOpen(v => !v)}>
             <span style={{ fontSize: '9px', width: '10px' }}>{kernOpen ? '▾' : '▸'}</span>
             Kern-Kontext (immer geladen)
-            <span style={S.badge(tokenColor(ctx!.kern_tokens))}>
-              {ctx!.kern_files.filter(f => f.exists).length}/{ctx!.kern_files.length} · {formatTokens(ctx!.kern_tokens)}
+            <span style={S.badge(tokenColor(ctx?.kern_tokens ?? 0))}>
+              {(ctx?.kern_files ?? []).filter(f => f.exists).length}/{(ctx?.kern_files ?? []).length} · {formatTokens(ctx?.kern_tokens ?? 0)}
             </span>
           </div>
           {kernOpen && (
             <div style={{ paddingLeft: '10px' }}>
-              {ctx!.kern_files.map(f => (
+              {(ctx?.kern_files ?? []).map(f => (
                 <div key={f.path} style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '1px 0', background: previewPath === f.path ? 'rgba(122,162,247,0.08)' : undefined, borderRadius: '3px' }}>
                   <span style={{ fontSize: '9px', color: f.exists ? 'var(--tn-green,#9ece6a)' : 'var(--tn-red,#f7768e)' }}>●</span>
                   <span style={{ flex: 1, fontSize: '11px', color: 'var(--tn-text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }} title={f.path}>
@@ -1119,15 +1129,15 @@ Wichtig:
           <div style={S.secLabel} onClick={() => setTempOpen(v => !v)}>
             <span style={{ fontSize: '9px', width: '10px' }}>{tempOpen ? '▾' : '▸'}</span>
             Temp-Ordner
-            <span style={S.badge(ctx!.temp_files.length > 0 ? 'var(--tn-cyan,#7dcfff)' : undefined)}>
-              {ctx!.temp_files.length} Dateien · {formatTokens(ctx!.temp_tokens)}
+            <span style={S.badge((ctx?.temp_files?.length ?? 0) > 0 ? 'var(--tn-cyan,#7dcfff)' : undefined)}>
+              {(ctx?.temp_files ?? []).length} Dateien · {formatTokens(ctx?.temp_tokens ?? 0)}
             </span>
           </div>
           {tempOpen && (
             <div style={{ paddingLeft: '10px' }}>
-              {ctx!.temp_files.length === 0
+              {(ctx?.temp_files ?? []).length === 0
                 ? <div style={{ fontSize: '11px', color: 'var(--tn-text-muted)', padding: '2px 0' }}>Leer</div>
-                : ctx!.temp_files.map(f => {
+                : (ctx?.temp_files ?? []).map(f => {
                   const tempPath = `temp/${f.name}`;
                   const isPrev = previewPath === f.name || previewPath === tempPath;
                   return (
@@ -1267,16 +1277,16 @@ Wichtig:
                       style={{
                         padding: '5px 8px', cursor: loadingSessionId ? 'default' : 'pointer',
                         borderBottom: '1px solid rgba(255,255,255,0.04)',
-                        opacity: loadingSessionId === s.id ? 0.6 : 1,
-                        background: loadingSessionId === s.id ? 'rgba(187,154,247,0.08)' : undefined,
+                        opacity: loadingSessionId === (s.id) ? 0.6 : 1,
+                        background: loadingSessionId === (s.id) ? 'rgba(187,154,247,0.08)' : undefined,
                       }}
                       onClick={() => { if (!loadingSessionId) loadArchivedSession(s.id); }}
                     >
                       <div style={{ fontSize: '11px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }}>
-                        {loadingSessionId === s.id ? 'Lade…' : s.title}
+                        {loadingSessionId === (s.id) ? 'Lade…' : (s.title ?? '')}
                       </div>
                       <div style={{ fontSize: '9px', color: 'var(--tn-text-muted)', marginTop: '1px' }}>
-                        {new Date(s.created_at).toLocaleDateString('de-DE')} · {s.turns} Nachrichten
+                        {new Date(s.created_at).toLocaleDateString('de-DE')} · {s.turns ?? 0} Nachrichten
                       </div>
                     </div>
                   ))}
@@ -1288,8 +1298,8 @@ Wichtig:
               <div style={S.sessionBar}>
                 <div style={{ color: 'var(--tn-green,#9ece6a)' }}>● Session aktiv — {session.files_loaded} Dateien · {formatTokens(session.token_count)}</div>
                 <div style={{ color: 'var(--tn-text-muted)', fontSize: '10px', marginTop: '2px' }}>
-                  {session.session_id.slice(0, 8)}…
-                  {session.temp_files.length > 0 && ` · Temp: ${session.temp_files.join(', ')}`}
+                  {(session.session_id).slice(0, 8)}…
+                  {(session.temp_files?.length ?? 0) > 0 && ` · Temp: ${(session.temp_files ?? []).join(', ')}`}
                 </div>
               </div>
               <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
@@ -1333,16 +1343,16 @@ Wichtig:
                       style={{
                         padding: '5px 8px', cursor: loadingSessionId ? 'default' : 'pointer',
                         borderBottom: '1px solid rgba(255,255,255,0.04)',
-                        opacity: loadingSessionId === s.id ? 0.6 : 1,
-                        background: loadingSessionId === s.id ? 'rgba(187,154,247,0.08)' : undefined,
+                        opacity: loadingSessionId === (s.id) ? 0.6 : 1,
+                        background: loadingSessionId === (s.id) ? 'rgba(187,154,247,0.08)' : undefined,
                       }}
                       onClick={() => { if (!loadingSessionId) loadArchivedSession(s.id); }}
                     >
                       <div style={{ fontSize: '11px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }}>
-                        {loadingSessionId === s.id ? 'Lade…' : s.title}
+                        {loadingSessionId === (s.id) ? 'Lade…' : (s.title ?? '')}
                       </div>
                       <div style={{ fontSize: '9px', color: 'var(--tn-text-muted)', marginTop: '1px' }}>
-                        {new Date(s.created_at).toLocaleDateString('de-DE')} · {s.turns} Nachrichten
+                        {new Date(s.created_at).toLocaleDateString('de-DE')} · {s.turns ?? 0} Nachrichten
                       </div>
                     </div>
                   ))}
@@ -1365,7 +1375,7 @@ Wichtig:
               flexWrap: 'wrap' as const,
             }}>
               <span style={{ fontSize: '11px', color: 'var(--tn-text-muted)', flex: 1 }}>
-                {diffCards.filter(d => d.status === 'ok').length}/{diffCards.length} bereit
+                {diffCards.filter(d => (d.status ?? 'unchecked') === 'ok').length}/{diffCards.length} bereit
                 {appliedCount > 0 && ` · ${appliedCount} applied`}
                 {pendingCount > 0 && ` · ${pendingCount} ausstehend`}
               </span>
@@ -1382,7 +1392,7 @@ Wichtig:
               )}
               {appliedCount > 0 && (
                 <button style={{ ...S.btn, ...S.btnGhost, padding: '4px 8px', fontSize: '11px', opacity: 0.6 }}
-                  onClick={() => setDiffCards(prev => prev.filter(d => d.status !== 'applied' && d.status !== 'skipped'))}>
+                  onClick={() => setDiffCards(prev => prev.filter(d => (d.status ?? 'unchecked') !== 'applied' && (d.status ?? 'unchecked') !== 'skipped'))}>
                   ✕ Erledigte entfernen
                 </button>
               )}
@@ -1417,8 +1427,8 @@ Wichtig:
                   const rawFileContent = fileContents[file];
                   const fullFile = snapshotContent ?? (rawFileContent && rawFileContent.length > 0 ? rawFileContent : undefined);
                   // A file is truly new only if it was created via <<<NEW>>> AND has no snapshot/existing content
-                  const isNewFile = !fullFile && fileCards.every(c => !c.old.trim() && c.rawHunk?.startsWith('<<<NEW'));
-                  const allDone = fileCards.every(c => c.status === 'applied' || c.status === 'skipped');
+                  const isNewFile = !fullFile && fileCards.every(c => !(c.old ?? '').trim() && c.rawHunk?.startsWith('<<<NEW'));
+                  const allDone = fileCards.every(c => (c.status ?? 'unchecked') === 'applied' || (c.status ?? 'unchecked') === 'skipped');
                   // Still loading if no content and not a new file — fetch is in progress
                   const isLoadingContent = !fullFile && !isNewFile;
 
@@ -1426,23 +1436,23 @@ Wichtig:
                   const normalize = (s: string) => s.replace(/\r\n/g, '\n').split('\n').map(l => l.trimEnd()).join('\n');
                   const leftFull = isNewFile ? '' : (fullFile ?? '');
                   const rightFull = isNewFile
-                    ? fileCards.map(c => c.newText).join('\n')
+                    ? fileCards.map(c => c.newText ?? '').join('\n')
                     : (() => {
                         if (!fullFile) {
                           // No baseline available yet — show combined new text
-                          return fileCards.map(c => c.newText).join('\n');
+                          return fileCards.map(c => c.newText ?? '').join('\n');
                         }
                         let result = normalize(fullFile);
                         for (const card of fileCards) {
-                          if (card.old.trim()) {
-                            const nOld = normalize(card.old);
-                            const nNew = normalize(card.newText);
+                          if ((card.old ?? '').trim()) {
+                            const nOld = normalize(card.old ?? '');
+                            const nNew = normalize(card.newText ?? '');
                             if (result.includes(nOld)) {
                               result = result.replace(nOld, nNew);
                             }
                           } else {
                             // Insert-only hunk (empty old_string) — append content
-                            result = result + (result.endsWith('\n') ? '' : '\n') + normalize(card.newText);
+                            result = result + (result.endsWith('\n') ? '' : '\n') + normalize(card.newText ?? '');
                           }
                         }
                         return result;
@@ -1580,10 +1590,10 @@ Wichtig:
                     }}>
                       {/* ── Single file header with aggregated controls ── */}
                       {(() => {
-                        const appliedCount = fileCards.filter(c => c.status === 'applied').length;
-                        const okCount = fileCards.filter(c => c.status === 'ok').length;
-                        const errorCount = fileCards.filter(c => c.status === 'error').length;
-                        const pendingCount = fileCards.filter(c => c.status === 'unchecked').length;
+                        const appliedCount = fileCards.filter(c => (c.status ?? 'unchecked') === 'applied').length;
+                        const okCount = fileCards.filter(c => (c.status ?? 'unchecked') === 'ok').length;
+                        const errorCount = fileCards.filter(c => (c.status ?? 'unchecked') === 'error').length;
+                        const pendingCount = fileCards.filter(c => (c.status ?? 'unchecked') === 'unchecked').length;
                         const headerBorderColor = errorCount > 0 ? 'rgba(247,118,142,0.35)'
                           : okCount > 0 ? 'rgba(158,206,106,0.35)'
                           : allDone ? 'rgba(122,162,247,0.25)'
@@ -1633,7 +1643,7 @@ Wichtig:
                                 onClick={() => {
                                   if (okCount > 0) {
                                     // Apply all OK hunks for this file
-                                    fileCards.filter(c => c.status === 'ok').forEach(c => applyOne(c.id));
+                                    fileCards.filter(c => (c.status ?? 'unchecked') === 'ok').forEach(c => applyOne(c.id));
                                   } else if (pendingCount > 0 || errorCount > 0) {
                                     validateAll();
                                   }
@@ -1643,7 +1653,7 @@ Wichtig:
                               </button>
                               {!allDone && (
                                 <button style={{ ...S.btn, ...S.btnGhost, padding: '3px 7px', fontSize: '11px', opacity: 0.6 }}
-                                  title="Alle überspringen" onClick={() => fileCards.forEach(c => { if (c.status !== 'applied' && c.status !== 'skipped') skipDiff(c.id); })}>—</button>
+                                  title="Alle überspringen" onClick={() => fileCards.forEach(c => { if ((c.status ?? 'unchecked') !== 'applied' && (c.status ?? 'unchecked') !== 'skipped') skipDiff(c.id); })}>—</button>
                               )}
                               <button style={{ ...S.btn, ...S.btnGhost, padding: '3px 7px', fontSize: '11px', color: 'rgba(247,118,142,0.6)' }}
                                 title="Alle entfernen" onClick={() => fileCards.forEach(c => removeDiff(c.id))}>✕</button>
@@ -1657,9 +1667,9 @@ Wichtig:
                         );
                       })()}
                       {/* ── Error details for failed hunks ── */}
-                      {fileCards.some(c => c.status === 'error') && (
+                      {fileCards.some(c => (c.status ?? 'unchecked') === 'error') && (
                         <div style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-                          {fileCards.map((card, hunkIdx) => card.status === 'error' && card.reason && (
+                          {fileCards.map((card, hunkIdx) => (card.status ?? 'unchecked') === 'error' && card.reason && (
                             <div key={card.id} style={{ padding: '4px 12px', fontSize: '10px', color: 'var(--tn-red,#f7768e)' }}>
                               Hunk {hunkIdx + 1}: ⚠ {card.reason}
                             </div>
@@ -1800,10 +1810,10 @@ Wichtig:
                 </div>
               )}
               {chatMessages.map((msg, i) => (
-                <div key={i} style={msg.role === 'user' ? S.msgUser : S.msgAssistant}>
-                  {msg.role === 'assistant' ? (
+                <div key={i} style={(msg.role) === 'user' ? S.msgUser : S.msgAssistant}>
+                  {(msg.role) === 'assistant' ? (
                     <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{msg.content}</ReactMarkdown>
-                  ) : msg.content}
+                  ) : (msg.content)}
                 </div>
               ))}
               {chatSending && (

@@ -1,0 +1,6 @@
+{
+  "id": "partner-server",
+  "name": "Partner Server",
+  "workDir": "/root/orchestrator/workspaces/partner-server",
+  "_auto": true
+}

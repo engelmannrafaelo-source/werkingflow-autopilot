@@ -8,6 +8,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
 
 interface EnvVar {
   key: string;
@@ -20,7 +21,7 @@ interface EnvVar {
 interface EnvData {
   localVars: EnvVar[];
   infisicalProjects: string[];
-  lastCheck: string;
+  lastCheck?: string;
 }
 
 const API = '/api';
@@ -44,7 +45,12 @@ export default function EnvironmentTab() {
         throw new Error(`HTTP ${res.status}: ${res.statusText}`);
       }
 
-      const envData = await res.json();
+      const raw = await res.json();
+      const envData = validateApiResponse<EnvData>(raw, '/api/infisical/environment', {
+        localVars: 'array',
+        infisicalProjects: 'array',
+        lastCheck: { type: 'string', optional: true },
+      });
       setData(envData);
       setError(null);
       setLoading(false);
@@ -89,10 +95,11 @@ export default function EnvironmentTab() {
   if (!data) return null;
 
   // Group vars by category
-  const critical = data.localVars.filter(v => v.category === 'CRITICAL');
-  const devOnly = data.localVars.filter(v => v.category === 'DEV_ONLY');
-  const forbidden = data.localVars.filter(v => v.category === 'FORBIDDEN');
-  const optional = data.localVars.filter(v => v.category === 'OPTIONAL');
+  const localVars = data.localVars;
+  const critical = localVars.filter(v => v.category === 'CRITICAL');
+  const devOnly = localVars.filter(v => v.category === 'DEV_ONLY');
+  const forbidden = localVars.filter(v => v.category === 'FORBIDDEN');
+  const optional = localVars.filter(v => v.category === 'OPTIONAL');
 
   return (
     <div
@@ -130,7 +137,7 @@ export default function EnvironmentTab() {
           color: 'var(--tn-text-muted)',
           marginTop: 2,
         }}>
-          Last checked: {new Date(data.lastCheck).toLocaleString()}
+          Last checked: {new Date(data.lastCheck ?? '').toLocaleString()}
         </div>
       </div>
 

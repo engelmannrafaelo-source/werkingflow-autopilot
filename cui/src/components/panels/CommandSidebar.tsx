@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import BusinessApprovalPanel from './BusinessApprovalPanel';
+import { validateApiResponse } from '../../lib/validateApiResponse';
 
 const API = '/api';
 
@@ -37,9 +38,9 @@ interface InboxMessage {
 interface MemoryEntry {
   timestamp: string;
   trigger: string;
-  actions: number;
-  action_types: string[];
-  response_preview: string;
+  actions?: number;
+  action_types?: string[];
+  response_preview?: string;
 }
 
 // --- Helpers ---
@@ -161,7 +162,15 @@ function AgentDetailSection({ agent }: { agent: AgentStatus }) {
         if (!r.ok) throw new Error(`memory fetch failed: ${r.status}`);
         return r.json();
       })
-      .then(d => setEntries(d.entries ?? []))
+      .then(d => {
+        const entries = (d.entries ?? []).map((item: unknown, i: number) =>
+          validateApiResponse<MemoryEntry>(item, `/api/agents/memory[${i}]`, {
+            timestamp: 'string',
+            trigger: 'string',
+          })
+        );
+        setEntries(entries);
+      })
       .catch(err => console.warn('[CommandSidebar] AgentDetailSection memory:', err));
   }, [agent.persona_id, agent.last_run]);
 
@@ -173,11 +182,11 @@ function AgentDetailSection({ agent }: { agent: AgentStatus }) {
         <div key={i} style={{ fontSize: 10, padding: '4px 6px', borderRadius: 4, background: 'var(--tn-bg)', border: '1px solid var(--tn-border)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
             <span style={{ color: 'var(--tn-text-subtle)' }}>{fmtAgo(e.timestamp)} ago</span>
-            <span style={{ color: e.actions > 0 ? 'var(--tn-green)' : 'var(--tn-text-muted)' }}>{e.actions} Akt.</span>
+            <span style={{ color: (e.actions ?? 0) > 0 ? 'var(--tn-green)' : 'var(--tn-text-muted)' }}>{e.actions ?? 0} Akt.</span>
           </div>
-          {e.response_preview && (
+          {(e.response_preview ?? '') && (
             <div style={{ color: 'var(--tn-text-subtle)', fontFamily: 'monospace', fontSize: 9, overflow: 'hidden', maxHeight: 36, lineHeight: 1.4 }}>
-              {e.response_preview.slice(0, 80)}{e.response_preview.length > 80 ? '…' : ''}
+              {(e.response_preview ?? '').slice(0, 80)}{(e.response_preview ?? '').length > 80 ? '…' : ''}
             </div>
           )}
         </div>
@@ -347,12 +356,12 @@ function ApprovalsSection({ approvals, onApproved }: { approvals: Approval[]; on
 interface ClaudeAgent {
   id: string;
   name: string;
-  schedule: string;
-  task_type: string;
   status: 'idle' | 'working';
-  last_run: string | null;
-  last_outcome: string;
-  inbox_count: number;
+  schedule?: string;
+  task_type?: string;
+  last_run?: string | null;
+  last_outcome?: string;
+  inbox_count?: number;
 }
 
 // --- Live Log Overlay ---
@@ -600,7 +609,14 @@ function ClaudeAgentsPanel() {
       const r = await fetch(`${API}/agents/claude/status`, { signal: AbortSignal.timeout(20000) });
       if (!r.ok) throw new Error(`claude/status failed: ${r.status}`);
       const d = await r.json();
-      setAgents(d.agents ?? []);
+      const validatedAgents = (d.agents ?? []).map((item: unknown, i: number) =>
+        validateApiResponse<ClaudeAgent>(item, `/api/agents/claude/status[${i}]`, {
+          id: 'string',
+          name: 'string',
+          status: 'string',
+        })
+      );
+      setAgents(validatedAgents);
     } catch (err) {
       console.warn('[CommandSidebar] ClaudeAgentsPanel load:', err);
     }
@@ -671,7 +687,7 @@ function ClaudeAgentsPanel() {
           setActiveLog(null);
           // If plan mode just finished, show plan review
           if (activeLog.mode === 'plan' && activeLog.planFile) {
-            const agent = agents.find(a => a.id.replace('-','-') === activeLog.planFile?.split('-')[0]);
+            const agent = agents.find(a => (a.id ?? '').replace('-','-') === activeLog.planFile?.split('-')[0]);
             setPlanReview({
               planFile: activeLog.planFile,
               personaName: activeLog.name,
@@ -684,7 +700,7 @@ function ClaudeAgentsPanel() {
       />}
       {customTask && (
         <div style={{ padding: '6px 0', borderBottom: '1px solid var(--tn-border)' }}>
-          <div style={{ fontSize: 11, color: 'var(--tn-purple-dim)', marginBottom: 4 }}>Custom Task für {agents.find(a => a.id === customTask.id)?.name}:</div>
+          <div style={{ fontSize: 11, color: 'var(--tn-purple-dim)', marginBottom: 4 }}>Custom Task für {agents.find(a => (a.id ?? '') === customTask.id)?.name ?? ''}:</div>
           <textarea
             value={customTask.text}
             onChange={e => setCustomTask({ ...customTask, text: e.target.value })}
@@ -692,37 +708,37 @@ function ClaudeAgentsPanel() {
             placeholder="Beschreibe die Aufgabe..."
           />
           <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
-            <button onClick={() => runAgent(customTask.id, agents.find(a => a.id === customTask.id)?.name ?? customTask.id, customTask.text)} style={{ flex: 1, padding: '3px 0', fontSize: 10, background: 'rgba(124,58,237,0.2)', color: 'var(--tn-purple-dim)', border: '1px solid rgba(124,58,237,0.4)', borderRadius: 3, cursor: 'pointer', fontWeight: 700 }}>▶ Starten</button>
+            <button onClick={() => runAgent(customTask.id, agents.find(a => (a.id ?? '') === customTask.id)?.name ?? customTask.id, customTask.text)} style={{ flex: 1, padding: '3px 0', fontSize: 10, background: 'rgba(124,58,237,0.2)', color: 'var(--tn-purple-dim)', border: '1px solid rgba(124,58,237,0.4)', borderRadius: 3, cursor: 'pointer', fontWeight: 700 }}>▶ Starten</button>
             <button onClick={() => setCustomTask(null)} style={{ padding: '3px 8px', fontSize: 10, background: 'rgba(239,68,68,0.2)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.4)', borderRadius: 3, cursor: 'pointer' }}>✕</button>
           </div>
         </div>
       )}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
         {agents.map(agent => (
-          <div key={agent.id} className={`sidebar-agent-row ${agent.status === 'working' ? 'active' : ''}`}>
-            <span style={{ fontSize: 13 }}>{TASK_ICONS[agent.task_type] ?? '🤖'}</span>
+          <div key={agent.id ?? ''} className={`sidebar-agent-row ${(agent.status ?? 'idle') === 'working' ? 'active' : ''}`}>
+            <span style={{ fontSize: 13 }}>{TASK_ICONS[agent.task_type ?? ''] ?? '🤖'}</span>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--tn-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{agent.name}</div>
+              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--tn-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{agent.name ?? ''}</div>
               <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', display: 'flex', gap: 4 }}>
-                <span>{agent.schedule}</span>
+                <span>{agent.schedule ?? ''}</span>
                 {agent.last_run && <span>· {fmtAgo(agent.last_run)}</span>}
-                {agent.inbox_count > 0 && <span style={{ color: 'var(--tn-cyan)' }}>· 📬{agent.inbox_count}</span>}
+                {(agent.inbox_count ?? 0) > 0 && <span style={{ color: 'var(--tn-cyan)' }}>· 📬{agent.inbox_count ?? 0}</span>}
               </div>
             </div>
             <div style={{ display: 'flex', gap: 2 }}>
               <button
                 className="sidebar-trigger-btn"
                 title="Custom Task eingeben"
-                onClick={() => setCustomTask({ id: agent.id, text: '' })}
-                disabled={agent.status === 'working' || triggering === agent.id}
+                onClick={() => setCustomTask({ id: agent.id ?? '', text: '' })}
+                disabled={(agent.status ?? 'idle') === 'working' || triggering === (agent.id ?? '')}
                 style={{ fontSize: 9, padding: '2px 5px' }}
               >✎</button>
               <button
                 className="sidebar-trigger-btn"
-                title={`${agent.name} starten`}
-                onClick={() => runAgent(agent.id, agent.name)}
-                disabled={agent.status === 'working' || triggering === agent.id}
-              >{agent.status === 'working' || triggering === agent.id ? '⏳' : '▶'}</button>
+                title={`${agent.name ?? ''} starten`}
+                onClick={() => runAgent(agent.id ?? '', agent.name ?? '')}
+                disabled={(agent.status ?? 'idle') === 'working' || triggering === (agent.id ?? '')}
+              >{(agent.status ?? 'idle') === 'working' || triggering === (agent.id ?? '') ? '⏳' : '▶'}</button>
             </div>
           </div>
         ))}
@@ -757,7 +773,15 @@ export default function CommandSidebar({ onPersonaAgentSelect }: CommandSidebarP
           return r.json();
         }),
       ]);
-      setAgents(statusRes.agents ?? []);
+      const validatedAgents = (statusRes.agents ?? []).map((item: unknown, i: number) =>
+        validateApiResponse<AgentStatus>(item, `/api/agents/status[${i}]`, {
+          id: 'string',
+          persona_id: 'string',
+          persona_name: 'string',
+          status: 'string',
+        })
+      );
+      setAgents(validatedAgents);
       setApprovals(approvalsRes.approvals ?? []);
     } catch (err) {
       console.warn('[CommandSidebar] loadStatus:', err);

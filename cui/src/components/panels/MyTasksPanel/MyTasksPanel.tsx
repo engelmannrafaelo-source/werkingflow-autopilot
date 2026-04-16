@@ -8,6 +8,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../../contexts/AuthContext';
+import { validateApiResponse } from '../../../lib/validateApiResponse';
 
 // --- Types ---
 interface TaskComment {
@@ -19,15 +20,19 @@ interface TaskComment {
 interface PartnerTask {
   id: string;
   title: string;
-  description: string;
-  assignedTo: string;
-  assignedBy: string;
   status: 'assigned' | 'in-progress' | 'done' | 'review';
   priority: 'high' | 'medium' | 'low';
+  description?: string;
+  assignedTo?: string;
+  assignedBy?: string;
   dueDate?: string;
-  createdAt: string;
-  updatedAt: string;
-  comments: TaskComment[];
+  createdAt?: string;
+  updatedAt?: string;
+  comments?: TaskComment[];
+}
+
+interface TasksApiResponse {
+  tasks: PartnerTask[];
 }
 
 type TaskStatus = PartnerTask['status'];
@@ -368,12 +373,15 @@ export default function MyTasksPanel() {
       const url = isAdmin ? '/api/partner/tasks' : `/api/partner/tasks${user ? `?userId=${encodeURIComponent(user.id)}` : ''}`;
       const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      setTasks(data.tasks ?? []);
+      const raw = await res.json();
+      const validated = validateApiResponse<TasksApiResponse>(raw, url, {
+        tasks: 'array',
+      });
+      setTasks(validated.tasks);
       setError(null);
-    } catch (err) {
+    } catch (err: any) {
       console.warn('[MyTasksPanel] fetch failed:', err);
-      setError('Tasks konnten nicht geladen werden.');
+      setError(err.message || 'Tasks konnten nicht geladen werden.');
     } finally {
       setLoading(false);
     }
@@ -519,7 +527,7 @@ export default function MyTasksPanel() {
               {statusTasks.length === 0 ? (
                 <div style={s.emptyHint}>Keine Tasks</div>
               ) : (
-                statusTasks.map(task => (
+                statusTasks.map((task, i) => (
                   <div
                     key={task.id}
                     style={{ ...s.card, ...(selectedTask?.id === task.id ? s.cardSelected : {}) }}
@@ -539,12 +547,12 @@ export default function MyTasksPanel() {
                     </div>
                     {(task.assignedTo || task.dueDate) && (
                       <div style={s.meta}>
-                        {isAdmin && <span>{task.assignedTo}</span>}
-                        {isAdmin && task.dueDate && <span> · </span>}
+                        {isAdmin && task.assignedTo && <span>{task.assignedTo}</span>}
+                        {isAdmin && task.assignedTo && task.dueDate && <span> · </span>}
                         {task.dueDate && <span>Fällig: {task.dueDate}</span>}
-                        {task.comments.length > 0 && (
+                        {(task.comments?.length ?? 0) > 0 && (
                           <span style={{ marginLeft: 8, opacity: 0.7 }}>
-                            💬 {task.comments.length}
+                            💬 {(task.comments ?? []).length}
                           </span>
                         )}
                       </div>
@@ -576,12 +584,14 @@ export default function MyTasksPanel() {
               {STATUS_LABELS[task.status]}
             </span>
             <span>Priorität: <strong style={{ color: PRIORITY_COLORS[task.priority] }}>{PRIORITY_LABELS[task.priority]}</strong></span>
-            {isAdmin && <span>Zugewiesen an: <strong>{task.assignedTo}</strong></span>}
-            <span>Von: {task.assignedBy}</span>
+            {isAdmin && task.assignedTo && <span>Zugewiesen an: <strong>{task.assignedTo}</strong></span>}
+            {task.assignedBy && <span>Von: {task.assignedBy}</span>}
             {task.dueDate && <span>Fällig: {task.dueDate}</span>}
-            <span style={{ marginLeft: 'auto', opacity: 0.6 }}>
-              Erstellt: {new Date(task.createdAt).toLocaleDateString('de')}
-            </span>
+            {task.createdAt && (
+              <span style={{ marginLeft: 'auto', opacity: 0.6 }}>
+                Erstellt: {new Date(task.createdAt).toLocaleDateString('de')}
+              </span>
+            )}
           </div>
           {task.description && (
             <div style={s.description}>{task.description}</div>
@@ -598,11 +608,11 @@ export default function MyTasksPanel() {
 
         {/* Comments */}
         <div style={{ marginBottom: 12 }}>
-          <div style={s.commentsHeader}>Kommentare ({task.comments.length})</div>
-          {task.comments.length === 0 && (
+          <div style={s.commentsHeader}>Kommentare ({task.comments?.length ?? 0})</div>
+          {(!task.comments || task.comments.length === 0) && (
             <div style={s.emptyHint}>Noch keine Kommentare</div>
           )}
-          {task.comments.map((c, i) => (
+          {(task.comments ?? []).map((c, i) => (
             <div key={i} style={s.comment}>
               <div style={s.commentMeta}>
                 <strong>{c.from}</strong> · {new Date(c.date).toLocaleString('de')}

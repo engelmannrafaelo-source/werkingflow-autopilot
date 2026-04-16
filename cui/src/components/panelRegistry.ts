@@ -40,7 +40,7 @@ export const PartnerInboxPanel = lazy(() => import('./panels/PartnerInboxPanel')
 export const FeedbackPanel = lazy(() => import('./panels/FeedbackPanel'));
 export const TeamStatusPanel = lazy(() => import('./panels/TeamStatusPanel'));
 export const UploadPanel = lazy(() => import('./panels/UploadPanel'));
-
+export const ToolHub = lazy(() => import('./panels/ToolHub'));
 // --- Panel ID → Display Name ---
 // Aliases (virtual-office, gmail, knowledge-fullscreen, infrastructure) sind enthalten.
 export const PANEL_NAMES: Record<string, string> = {
@@ -73,7 +73,7 @@ export const PANEL_NAMES: Record<string, string> = {
   'input-audit': 'Input Audit',
   architecture: 'Architecture Explorer',
   'report-builder': 'Report Builder',
-  'prompt-explorer': 'Prompt Explorer',
+  'prompt-explorer': 'Workflow Explorer',
   'business-angel': 'Business Angel',
   'sub-sessions': 'Sub-Sessions',
   'business-docs': 'Business Docs',
@@ -83,6 +83,7 @@ export const PANEL_NAMES: Record<string, string> = {
   feedback: 'Feedback',
   'team-status': 'Team Status',
   'uploads': 'Uploads',
+  'tool-hub': 'Tool Hub',
 };
 
 // --- Dropdown-Optionen für den [+] Tab-Picker (grouped) ---
@@ -118,7 +119,7 @@ export const PANEL_MENU_OPTIONS: PanelMenuGroup[] = [
       { value: 'architecture', label: 'Architecture Explorer' },
       { value: 'knowledge', label: 'Knowledge' },
       { value: 'report-builder', label: 'Report Builder' },
-      { value: 'prompt-explorer', label: 'Prompt Explorer' },
+      { value: 'prompt-explorer', label: 'Workflow Explorer' },
     ],
   },
   {

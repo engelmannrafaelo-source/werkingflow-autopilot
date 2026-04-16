@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
+import { validateApiResponse } from '../../lib/validateApiResponse';
 
 const ACCOUNTS = [
   { id: 'engelmann', label: 'Engelmann (Remote)' },
@@ -11,14 +12,15 @@ const ACCOUNTS = [
 interface UploadedImage {
   name: string;
   preview: string; // data URL for thumbnail
-  size: number;
+  size?: number;
 }
 
 interface UploadResult {
-  readCommand: string;
-  count: number;
-  target: string;
-  paths: string[];
+  ok: boolean;
+  readCommand?: string;
+  count?: number;
+  target?: string;
+  paths?: string[];
 }
 
 export default function ImageDrop() {
@@ -37,10 +39,12 @@ export default function ImageDrop() {
   const addFile = useCallback((file: File) => {
     if (!file.type.startsWith('image/')) return;
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = (ev) => {
+      const dataUrl = ev.target?.result;
+      if (typeof dataUrl !== 'string') throw new Error(`FileReader returned ${typeof dataUrl} instead of string for ${file.name}`);
       setImages(prev => [...prev, {
         name: file.name,
-        preview: e.target?.result as string,
+        preview: dataUrl,
         size: file.size,
       }]);
       setResult(null);
@@ -84,12 +88,19 @@ export default function ImageDrop() {
         const errBody = await resp.json();
         throw new Error(errBody.error || `[ImageDrop] upload failed: HTTP ${resp.status}`);
       }
-      const data: UploadResult = await resp.json();
+      const raw = await resp.json();
+      const data = validateApiResponse<UploadResult>(raw, 'POST /api/images', {
+        ok: 'boolean',
+        readCommand: { type: 'string', optional: true },
+        count: { type: 'number', optional: true },
+        target: { type: 'string', optional: true },
+        paths: { type: 'array', optional: true },
+      });
       setResult(data);
       // Auto-copy readCommand to clipboard
-      if (data.readCommand) {
+      if (data.readCommand ?? '') {
         try {
-          await copyToClipboard(data.readCommand);
+          await copyToClipboard(data.readCommand ?? '');
           setCopied(true);
           setTimeout(() => setCopied(false), 3000);
         } catch (clipErr) {
@@ -111,7 +122,7 @@ export default function ImageDrop() {
 
   const copyCommand = async () => {
     if (!result) return;
-    await copyToClipboard(result.readCommand);
+    await copyToClipboard(result.readCommand ?? '');
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -203,7 +214,7 @@ export default function ImageDrop() {
                   style={{ position: 'absolute', top: -4, right: -4, background: 'var(--tn-red)', color: '#fff', border: 'none', borderRadius: '50%', width: 16, height: 16, fontSize: 10, cursor: 'pointer', lineHeight: '16px', padding: 0 }}
                 >x</button>
                 <span style={{ position: 'absolute', bottom: 0, left: 0, right: 0, fontSize: 8, background: 'rgba(0,0,0,0.7)', color: 'var(--tn-text-subtle)', textAlign: 'center', borderRadius: '0 0 4px 4px', overflow: 'hidden', whiteSpace: 'nowrap' }}>
-                  {Math.round(img.size / 1024)}KB
+                  {Math.round((img.size ?? 0) / 1024)}KB
                 </span>
               </div>
             ))}
@@ -237,7 +248,7 @@ export default function ImageDrop() {
       {result && (
         <div style={{ margin: '0 8px 8px', display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={{ padding: 8, background: 'var(--tn-bg-dark)', border: '1px solid var(--tn-border)', borderRadius: 6, fontSize: 11, fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all', color: 'var(--tn-green)', maxHeight: 120, overflow: 'auto' }}>
-            {result.readCommand}
+            {result.readCommand ?? ''}
           </div>
           <div style={{ display: 'flex', gap: 6 }}>
             <button
@@ -249,7 +260,7 @@ export default function ImageDrop() {
             <button onClick={clear} style={{ padding: '6px 10px', background: 'var(--tn-surface)', color: 'var(--tn-text-subtle)', border: '1px solid var(--tn-border)', borderRadius: 6, cursor: 'pointer', fontSize: 12 }}>New</button>
           </div>
           <span style={{ fontSize: 10, color: 'var(--tn-text-muted)', textAlign: 'center' }}>
-            {result.count} image{result.count > 1 ? 's' : ''} → {result.target}
+            {result.count ?? 0} image{(result.count ?? 0) > 1 ? 's' : ''} → {result.target ?? ''}
           </span>
         </div>
       )}

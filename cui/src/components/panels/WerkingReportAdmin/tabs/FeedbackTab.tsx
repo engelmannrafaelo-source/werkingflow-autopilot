@@ -1,15 +1,16 @@
 import { useState, useEffect, useCallback } from 'react';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
 
 interface Feedback {
   id: string;
-  tenantId: string;
-  userId: string;
+  timestamp: string;
+  tenantId?: string;
+  userId?: string;
   userEmail?: string;
   userName?: string;
-  dataAiId: string;
-  feedback: string;
-  route: string;
-  timestamp: string;
+  dataAiId?: string;
+  feedback?: string;
+  route?: string;
 }
 
 export default function FeedbackTab({ envMode }: { envMode?: string }) {
@@ -25,7 +26,16 @@ export default function FeedbackTab({ envMode }: { envMode?: string }) {
       const res = await fetch('/api/admin/wr/feedback', { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      setFeedbacks(data.feedbacks || []);
+      const validated = validateApiResponse<{ feedbacks: Feedback[] }>(data, '/api/admin/wr/feedback', {
+        feedbacks: 'array',
+      });
+      validated.feedbacks.forEach((fb, i) => {
+        validateApiResponse<Feedback>(fb, `/api/admin/wr/feedback[${i}]`, {
+          id: 'string',
+          timestamp: 'string',
+        });
+      });
+      setFeedbacks(validated.feedbacks);
     } catch (err) {
       console.warn('[WRFeedback] fetch failed:', err);
       setError(err instanceof Error ? err.message : 'Failed to load feedback');
@@ -153,7 +163,7 @@ export default function FeedbackTab({ envMode }: { envMode?: string }) {
                 })}
               </div>
               <div style={{ color: 'var(--tn-text-subtle)' }}>
-                <div>{fb.userName || fb.userId}</div>
+                <div>{fb.userName || fb.userId || ''}</div>
                 {fb.userEmail && (
                   <div style={{ fontSize: 9, color: 'var(--tn-text-muted)' }}>{fb.userEmail}</div>
                 )}
@@ -166,7 +176,7 @@ export default function FeedbackTab({ envMode }: { envMode?: string }) {
                   padding: '2px 4px',
                   borderRadius: 2,
                 }}>
-                  {fb.dataAiId}
+                  {fb.dataAiId ?? ''}
                 </code>
               </div>
               <div style={{
@@ -176,10 +186,10 @@ export default function FeedbackTab({ envMode }: { envMode?: string }) {
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
               }}>
-                {fb.route}
+                {fb.route ?? ''}
               </div>
               <div style={{ color: 'var(--tn-text)', lineHeight: 1.4 }}>
-                {fb.feedback}
+                {fb.feedback ?? ''}
               </div>
             </div>
           ))}

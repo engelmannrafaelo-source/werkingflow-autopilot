@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
 import {
   BarChart,
   Bar,
@@ -56,7 +57,7 @@ interface PerformanceData {
   agents: AgentStat[];
   summary: Summary;
   period_hours: number;
-  raw_calls_stored: number;
+  raw_calls_stored?: number;
   _error?: string;
 }
 
@@ -173,9 +174,15 @@ export default function PromptPerformanceTab() {
         signal: AbortSignal.timeout(10000),
       });
       if (!res.ok) throw new Error(await res.text());
-      const result = await res.json();
-      if (result._error) setError(result._error);
-      setData(result);
+      const raw = await res.json();
+      if (raw._error) setError(raw._error);
+      const validated = validateApiResponse<PerformanceData>(raw, '/api/bridge/metrics/prompt-performance', {
+        agents: 'array',
+        summary: 'object',
+        period_hours: 'number',
+        raw_calls_stored: { type: 'number', optional: true },
+      });
+      setData(validated);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -191,7 +198,13 @@ export default function PromptPerformanceTab() {
         { signal: AbortSignal.timeout(10000) }
       );
       if (!res.ok) throw new Error(await res.text());
-      setTimeline(await res.json());
+      const rawTl = await res.json();
+      const validatedTl = validateApiResponse<TimelineData>(rawTl, '/api/bridge/metrics/prompt-performance/timeline', {
+        app_id: { type: 'string', optional: true },
+        agent_id: { type: 'string', optional: true },
+        timeline: 'array',
+      });
+      setTimeline(validatedTl);
     } catch {
       setTimeline(null);
     } finally {
@@ -208,14 +221,14 @@ export default function PromptPerformanceTab() {
   }, [fetchData]);
 
   // Sort agents
-  const sortedAgents = data?.agents ? [...data.agents].sort((a, b) => {
+  const sortedAgents = data ? [...data.agents].sort((a, b) => {
     if (sortBy === 'calls') return b.calls - a.calls;
     if (sortBy === 'duration') return b.duration_ms.avg - a.duration_ms.avg;
     return b.error_rate - a.error_rate;
   }) : [];
 
   // Chart data: top 10 by avg duration
-  const chartData = data?.agents
+  const chartData = data
     ? [...data.agents]
         .sort((a, b) => b.duration_ms.avg - a.duration_ms.avg)
         .slice(0, 10)
@@ -532,7 +545,7 @@ export default function PromptPerformanceTab() {
       {/* Footer */}
       {data && (
         <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', textAlign: 'right', marginTop: 12 }}>
-          {data.raw_calls_stored} calls stored (7d window) | Period: {data.period_hours}h
+          {data.raw_calls_stored ?? 0} calls stored (7d window) | Period: {data.period_hours}h
         </div>
       )}
     </div>

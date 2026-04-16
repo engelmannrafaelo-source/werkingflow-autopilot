@@ -1,28 +1,29 @@
 import { useState, useEffect, useCallback } from 'react';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
 
 interface PlatformStats {
-  totalUsers?: number;
-  totalTenants?: number;
+  totalUsers: number;
+  totalTenants: number;
   totalProjects?: number;
   activeSessions?: number;
   [key: string]: unknown;
 }
 
 interface HealthStatus {
-  status?: string;
+  status: string;
   services?: Record<string, { status: string; latency?: number; error?: string }>;
   [key: string]: unknown;
 }
 
 interface InfraStatus {
-  services?: Array<{ name: string; status: string; url?: string; latency?: number; error?: string }>;
+  services: Array<{ name: string; status: string; url?: string; latency?: number; error?: string }>;
   [key: string]: unknown;
 }
 
 interface BillingSummary {
-  mrr?: number;
+  mrr: number;
+  activeSubscriptions: number;
   totalRevenue?: number;
-  activeSubscriptions?: number;
   planDistribution?: Record<string, number>;
   mrrTrend?: Array<{ month: string; mrr: number }>;
   [key: string]: unknown;
@@ -58,10 +59,33 @@ export default function DashboardTab({ envMode }: { envMode?: string }) {
         safeFetch('/api/admin/wr/infrastructure', 'infrastructure'),
         safeFetch('/api/admin/wr/billing/overview', 'billing'),
       ]);
-      if (statsRes) setStats(await statsRes.json());
-      if (healthRes) setHealth(await healthRes.json());
-      if (infraRes) setInfra(await infraRes.json());
-      if (billingRes) setBilling(await billingRes.json());
+      if (statsRes) {
+        const raw = await statsRes.json();
+        setStats(validateApiResponse<PlatformStats>(raw, '/api/admin/wr/stats', {
+          totalUsers: 'number',
+          totalTenants: 'number',
+        }));
+      }
+      if (healthRes) {
+        const raw = await healthRes.json();
+        setHealth(validateApiResponse<HealthStatus>(raw, '/api/admin/wr/health', {
+          status: 'string',
+          services: { type: 'object', optional: true },
+        }));
+      }
+      if (infraRes) {
+        const raw = await infraRes.json();
+        setInfra(validateApiResponse<InfraStatus>(raw, '/api/admin/wr/infrastructure', {
+          services: 'array',
+        }));
+      }
+      if (billingRes) {
+        const raw = await billingRes.json();
+        setBilling(validateApiResponse<BillingSummary>(raw, '/api/admin/wr/billing/overview', {
+          mrr: 'number',
+          activeSubscriptions: 'number',
+        }));
+      }
     } catch (err) {
       console.warn('[WRDashboard] fetchAll failed:', err);
       setError(err instanceof Error ? err.message : 'Failed to load dashboard');
@@ -124,7 +148,7 @@ export default function DashboardTab({ envMode }: { envMode?: string }) {
           <div data-ai-id="wr-dashboard-kpi-cards" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 16 }}>
             {kpiCard('Total Users', stats?.totalUsers ?? '—', 'var(--tn-blue)')}
             {kpiCard('Tenants', stats?.totalTenants ?? '—', 'var(--tn-green)')}
-            {kpiCard('MRR', billing?.mrr != null ? `€${billing.mrr.toFixed(2)}` : '—', 'var(--tn-green)')}
+            {kpiCard('MRR', billing ? `€${billing.mrr.toFixed(2)}` : '—', 'var(--tn-green)')}
             {kpiCard('Subscriptions', billing?.activeSubscriptions ?? '—', 'var(--tn-orange)')}
           </div>
 
@@ -158,7 +182,7 @@ export default function DashboardTab({ envMode }: { envMode?: string }) {
             padding: 10,
             marginBottom: 16,
           }}>
-            {health?.status && (
+            {health && (
               <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8, paddingBottom: 8, borderBottom: '1px solid var(--tn-border)' }}>
                 {statusDot(health.status)}
                 <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--tn-text)', textTransform: 'uppercase' }}>
@@ -177,7 +201,7 @@ export default function DashboardTab({ envMode }: { envMode?: string }) {
                 }}>{svc.status}</span>
               </div>
             ))}
-            {!health?.services && !health?.status && (
+            {!health && (
               <div style={{ color: 'var(--tn-text-muted)', fontSize: 11, textAlign: 'center', padding: 8 }}>Health data unavailable</div>
             )}
           </div>
@@ -232,7 +256,7 @@ export default function DashboardTab({ envMode }: { envMode?: string }) {
           )}
 
           {/* Raw JSON fallback for unstructured data */}
-          {stats && !stats.totalUsers && !stats.totalTenants && (
+          {stats && stats.totalUsers === 0 && stats.totalTenants === 0 && (
             <div style={{ marginBottom: 16 }}>
               <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase' }}>Platform Stats (Raw)</div>
               <pre style={{

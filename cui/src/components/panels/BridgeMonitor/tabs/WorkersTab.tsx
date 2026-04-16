@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { BRIDGE_URL, bridgeJson, StatusBadge, Toolbar, ErrorBanner, LoadingSpinner, SectionFlat } from '../shared';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
 
 interface WorkerHealth {
   status: string;
@@ -27,8 +28,8 @@ interface RateLimitsData {
 interface LicenseHealth {
   status: string;
   worker_id: string;
-  token_preview: string;
-  test_response: string;
+  token_preview?: string;
+  test_response?: string;
   test_duration_seconds: number;
   message: string;
 }
@@ -62,7 +63,15 @@ export default function WorkersTab() {
       ]);
 
       if (lbRes.status !== 'fulfilled') throw new Error('Load Balancer nicht erreichbar');
-      const lb = lbRes.value;
+      const lb = validateApiResponse<LbStatus>(lbRes.value, '/lb-status', {
+        load_balancer: 'string',
+        workers: 'number',
+        strategy: 'string',
+        failover: 'string',
+        accounts: 'array',
+        paused: 'array',
+        status: 'string',
+      });
       setLbStatus(lb);
 
       const rl = rlRes.status === 'fulfilled' ? rlRes.value : null;
@@ -114,8 +123,14 @@ export default function WorkersTab() {
     setLicenseLoading(true);
     setLicenseHealth(null);
     try {
-      const data = await bridgeJson<LicenseHealth>('/license-health', { timeout: 30000 });
-      setLicenseHealth(data);
+      const raw = await bridgeJson<LicenseHealth>('/license-health', { timeout: 30000 });
+      const validated = validateApiResponse<LicenseHealth>(raw, '/license-health', {
+        status: 'string',
+        worker_id: 'string',
+        test_duration_seconds: 'number',
+        message: 'string',
+      });
+      setLicenseHealth(validated);
     } catch (err: any) {
       setLicenseHealth({ status: 'error', worker_id: '?', token_preview: '', test_response: '', test_duration_seconds: 0, message: err.message });
     } finally {
@@ -190,13 +205,13 @@ export default function WorkersTab() {
                     <div>
                       <div style={{ fontSize: 9, color: 'var(--tn-text-muted)' }}>Health</div>
                       <div style={{ fontSize: 11, color: w.health ? 'var(--tn-green)' : 'var(--tn-red)', fontFamily: 'monospace' }}>
-                        {w.health ? w.health.status : (w.healthError ?? 'unreachable')}
+                        {w.health ? w.health.status : (w.healthError || 'unreachable')}
                       </div>
                     </div>
                     <div>
                       <div style={{ fontSize: 9, color: 'var(--tn-text-muted)' }}>Rate-Limited</div>
                       <div style={{ fontSize: 11, color: w.rateLimited ? 'var(--tn-orange)' : 'var(--tn-green)', fontFamily: 'monospace' }}>
-                        {w.rateLimited ? `Ja (${w.retryAfter}s)` : 'Nein'}
+                        {w.rateLimited ? `Ja (${w.retryAfter ?? 0}s)` : 'Nein'}
                       </div>
                     </div>
                     <div>
@@ -247,7 +262,7 @@ export default function WorkersTab() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                 <StatusBadge status={licenseHealth.status === 'healthy' ? 'ok' : 'error'} />
                 <span style={{ fontSize: 10, color: 'var(--tn-text-muted)', fontFamily: 'monospace' }}>
-                  {(licenseHealth.test_duration_seconds ?? 0).toFixed(2)}s
+                  {licenseHealth.test_duration_seconds.toFixed(2)}s
                 </span>
               </div>
               <div style={{ fontSize: 10, color: 'var(--tn-text-muted)' }}>

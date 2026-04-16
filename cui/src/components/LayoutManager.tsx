@@ -64,7 +64,7 @@ import {
   ConversationQueuePanel, MaintenancePanel, UserInputAuditPanel,
   ArchitectureExplorer, ReportBuilder, PromptExplorer, BusinessAngelPanel, SubSessionPanel,
   MyTasksPanel, ActivityFeedPanel, PartnerInboxPanel,
-  FeedbackPanel, TeamStatusPanel, BusinessDocsPanel, UploadPanel,
+  FeedbackPanel, TeamStatusPanel, BusinessDocsPanel, UploadPanel, ToolHub,
   PANEL_NAMES, PANEL_MENU_OPTIONS,
 } from './panelRegistry';
 // LayoutBuilder ist Desktop-only — bleibt hier
@@ -464,9 +464,14 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           }} />);
       case 'images':
         return wrapPanel('ImageDrop', <ImageDrop />);
-      case 'browser':
-        return wrapPanel('BrowserPanel', <BrowserPanel initialUrl={config.url} panelId={nodeId}
+      case 'browser': {
+        // Auto-fill URL from workspace mapping when layout has no URL set.
+        // Works for initial layout load (addTab() has same fallback for new tabs).
+        const wsId = workDir.split('/').pop() || '';
+        const browserUrl = config.url || WORKSPACE_BROWSER_URLS[wsId] || '';
+        return wrapPanel('BrowserPanel', <BrowserPanel initialUrl={browserUrl} panelId={nodeId}
           onUrlChange={(url) => updateNodeConfig(nodeId, { url })} />);
+      }
       case 'preview':
         return wrapPanel('FilePreview', <FilePreview watchPath={config.watchPath || activeDirRef.current || workDir} stageDir={activeDirRef.current} />);
       case 'notes':
@@ -551,6 +556,8 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         return wrapPanel('Business Docs', withSuspense(<BusinessDocsPanel />));
       case 'uploads':
         return wrapPanel('Uploads', withSuspense(<UploadPanel />));
+      case 'tool-hub':
+        return wrapPanel('ToolHub', withSuspense(<ToolHub projectId={projectId} workDir={workDir} />));
       default:
         return wrapPanel(`Unknown:${component}`,
           <div style={{ padding: 20, color: 'var(--tn-text-muted)' }}>

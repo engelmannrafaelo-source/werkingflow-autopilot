@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { validateApiResponse } from '../../lib/validateApiResponse';
 
 interface ServiceHealth {
   name: string;
@@ -12,8 +13,8 @@ interface ServiceHealth {
 interface HealthData {
   ok: boolean;
   checkedAt: string;
-  errorCount: number;
-  services: ServiceHealth[];
+  errorCount?: number;
+  services?: ServiceHealth[];
 }
 
 interface DeploymentInfo {
@@ -27,7 +28,7 @@ interface DeploymentInfo {
 
 interface DeploymentsData {
   deployments: DeploymentInfo[];
-  checkedAt: string;
+  checkedAt?: string;
 }
 
 const STATUS_COLOR = {
@@ -69,19 +70,33 @@ export default function SystemHealth() {
     if ((window as any).__cuiServerAlive === false) return;
     setError('');
     try {
+      const healthEndpoint = '/api/admin/wr/system-health';
+      const deploymentsEndpoint = '/api/ops/deployments';
       const [hRes, dRes] = await Promise.all([
-        fetch('/api/admin/wr/system-health', { signal: AbortSignal.timeout(20000) }),
-        fetch('/api/ops/deployments', { signal: AbortSignal.timeout(20000) }),
+        fetch(healthEndpoint, { signal: AbortSignal.timeout(20000) }),
+        fetch(deploymentsEndpoint, { signal: AbortSignal.timeout(20000) }),
       ]);
       if (!hRes.ok) {
         setError(`[SystemHealth] Health: HTTP ${hRes.status}`);
       } else {
-        setHealth(await hRes.json());
+        const rawHealth = await hRes.json();
+        const validatedHealth = validateApiResponse<HealthData>(rawHealth, healthEndpoint, {
+          ok: 'boolean',
+          checkedAt: 'string',
+          errorCount: { type: 'number', optional: true },
+          services: { type: 'array', optional: true },
+        });
+        setHealth(validatedHealth);
       }
       if (!dRes.ok) {
         console.warn(`[SystemHealth] deployments failed: HTTP ${dRes.status}`);
       } else {
-        setDeployments(await dRes.json());
+        const rawDeploy = await dRes.json();
+        const validatedDeploy = validateApiResponse<DeploymentsData>(rawDeploy, deploymentsEndpoint, {
+          deployments: 'array',
+          checkedAt: { type: 'string', optional: true },
+        });
+        setDeployments(validatedDeploy);
       }
     } catch (err: any) {
       console.warn('[SystemHealth] fetch error:', err);
@@ -121,7 +136,7 @@ export default function SystemHealth() {
               color: health.ok ? 'var(--tn-green)' : 'var(--tn-red)',
             }}>
               <STATUS_DOT status={health.ok ? 'ok' : 'error'} />
-              {health.ok ? 'ALL SYSTEMS OK' : `${health.errorCount} SERVICE${health.errorCount > 1 ? 'S' : ''} DOWN`}
+              {health.ok ? 'ALL SYSTEMS OK' : `${health.errorCount ?? 0} SERVICE${(health.errorCount ?? 0) > 1 ? 'S' : ''} DOWN`}
             </span>
           )}
         </div>
@@ -149,7 +164,7 @@ export default function SystemHealth() {
       {health && (
         <>
           {sectionHeader('Service Health')}
-          {health.services.map(svc => (
+          {(health.services ?? []).map(svc => (
             <div key={svc.name} style={{
               display: 'flex', alignItems: 'center', gap: 8,
               padding: '6px 8px', borderBottom: '1px solid var(--tn-border)', fontSize: 11,
@@ -177,11 +192,9 @@ export default function SystemHealth() {
               )}
             </div>
           ))}
-          {health.checkedAt && (
-            <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginTop: 6, textAlign: 'right' }}>
-              Last checked: {new Date(health.checkedAt).toLocaleTimeString('de-DE')}
-            </div>
-          )}
+          <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginTop: 6, textAlign: 'right' }}>
+            Last checked: {new Date(health.checkedAt).toLocaleTimeString('de-DE')}
+          </div>
         </>
       )}
 

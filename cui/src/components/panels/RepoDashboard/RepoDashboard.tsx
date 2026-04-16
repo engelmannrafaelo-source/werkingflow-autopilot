@@ -5,11 +5,17 @@ import PipelineTab from './tabs/PipelineTab';
 import DiskUsageTab from './tabs/DiskUsageTab';
 import HierarchyTab from './tabs/HierarchyTab';
 import { BuildInfo } from '../../BuildInfo';
+import { validateApiResponse } from '../../../lib/validateApiResponse';
 
 interface Tab {
   key: string;
   label: string;
   component: React.ReactElement;
+}
+
+interface ReposApiResponse {
+  count: number;
+  repos: Array<{ diskSize: { bytes: number }; status: string }>;
 }
 
 interface QuickStats {
@@ -30,14 +36,21 @@ export default function RepoDashboard() {
   const [quickStats, setQuickStats] = useState<QuickStats | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
+  const [quickError, setQuickError] = useState('');
+
   // Quick stats poll
   useEffect(() => {
     async function fetchQuick() {
       if ((window as any).__cuiServerAlive !== true) return;
+      setQuickError('');
       try {
         const res = await fetch('/api/repo-dashboard/repositories', { signal: AbortSignal.timeout(30000) });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
+        const raw = await res.json();
+        const data = validateApiResponse<ReposApiResponse>(raw, '/api/repo-dashboard/repositories', {
+          count: 'number',
+          repos: 'array',
+        });
 
         const totalSize = data.repos.reduce((sum: number, r: any) => sum + r.diskSize.bytes, 0);
         const sizeGB = (totalSize / 1024 / 1024 / 1024).toFixed(1);
@@ -47,9 +60,8 @@ export default function RepoDashboard() {
           dirtyRepos: data.repos.filter((r: any) => r.status === 'dirty').length,
           totalSize: `${sizeGB}GB`,
         });
-      } catch (err) {
-        // Silent: panel shows fallback zeros
-        setQuickStats({ totalRepos: 0, dirtyRepos: 0, totalSize: '0GB' });
+      } catch (err: any) {
+        setQuickError(err.message);
       }
     }
     fetchQuick();
@@ -66,7 +78,11 @@ export default function RepoDashboard() {
       // Re-trigger stats fetch
       const res = await fetch('/api/repo-dashboard/repositories', { signal: AbortSignal.timeout(30000) });
       if (!res.ok) throw new Error(`Repos HTTP ${res.status}`);
-      const data = await res.json();
+      const raw = await res.json();
+      const data = validateApiResponse<ReposApiResponse>(raw, '/api/repo-dashboard/repositories', {
+        count: 'number',
+        repos: 'array',
+      });
       const totalSize = data.repos.reduce((sum: number, r: any) => sum + r.diskSize.bytes, 0);
       const sizeGB = (totalSize / 1024 / 1024 / 1024).toFixed(1);
       setQuickStats({
@@ -108,7 +124,7 @@ export default function RepoDashboard() {
             data-ai-id="repo-dashboard-status-dot"
             style={{
               width: 8, height: 8, borderRadius: '50%',
-              background: quickStats?.dirtyRepos === 0 ? 'var(--tn-green)' : 'var(--tn-yellow)',
+              background: (quickStats?.dirtyRepos === 0) ? 'var(--tn-green)' : 'var(--tn-yellow)',
               flexShrink: 0,
             }}
           />
@@ -184,6 +200,13 @@ export default function RepoDashboard() {
             /root/projekte
           </span>
         </div>
+
+        {/* Quick Stats Error */}
+        {quickError && (
+          <div style={{ padding: '4px 12px', fontSize: 10, color: 'var(--tn-red)', background: 'rgba(247,118,142,0.1)' }}>
+            {quickError}
+          </div>
+        )}
 
         {/* Sub-Tabs */}
         <div

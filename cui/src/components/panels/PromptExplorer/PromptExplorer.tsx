@@ -6,8 +6,11 @@
  * The flow context is NEVER lost — you always see where you are in the pipeline.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { validateApiResponse } from '../../../lib/validateApiResponse';
+import { resilientFetch } from '../../../utils/resilientFetch';
 import FlowDiagramView from './FlowDiagramView';
 import './PromptExplorer.css';
 
@@ -121,16 +124,38 @@ interface PipelineSummary {
   hasErrors?: boolean;
 }
 
+// ─── File Tree Types ─────────────────────────────────────────────────────────
+
+interface TreeNode {
+  name: string;
+  path: string;
+  isDir: boolean;
+  ext?: string | null;
+  children?: TreeNode[];
+}
+
+interface FileContent {
+  path: string;
+  content: string;
+  mimeType: string;
+  ext?: string;
+}
+
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 export default function PromptExplorer() {
   const [pipelines, setPipelines] = useState<PipelineSummary[]>([]);
   const [activePipeline, setActivePipeline] = useState<PipelineScanResult | null>(null);
-  const [viewMode, setViewMode] = useState<'list' | 'flow'>('flow');
+  const [viewMode, setViewMode] = useState<'list' | 'flow' | 'files'>('flow');
   const [expandedPhase, setExpandedPhase] = useState<string | null>(null);
   const [selectedPromptFile, setSelectedPromptFile] = useState<PromptFile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Files view state (shared between FileTreeNavigation and FilePreviewPanel)
+  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
+  const [fileContent, setFileContent] = useState<FileContent | null>(null);
+  const [fileLoading, setFileLoading] = useState(false);
 
   useEffect(() => {
     fetch('/api/prompt-explorer/pipelines')
@@ -161,6 +186,25 @@ export default function PromptExplorer() {
         setLoading(false);
       })
       .catch(err => { setError(`Failed to scan: ${err.message}`); setLoading(false); });
+  }, []);
+
+  const loadFileContent = useCallback(async (path: string) => {
+    setSelectedFilePath(path);
+    setFileLoading(true);
+    try {
+      const res = await resilientFetch(`/api/file?path=${encodeURIComponent(path)}`);
+      if (!res.ok) { setFileContent(null); setFileLoading(false); return; }
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const data = await res.json();
+        setFileContent(data);
+      } else {
+        const text = await res.text();
+        const ext = path.split('.').pop();
+        setFileContent({ path, content: text, mimeType: contentType, ext: ext ? `.${ext}` : undefined });
+      }
+    } catch { setFileContent(null); }
+    setFileLoading(false);
   }, []);
 
   if (loading && pipelines.length === 0) {
@@ -220,6 +264,11 @@ export default function PromptExplorer() {
               onClick={() => setViewMode('list')}
               title="List View"
             >List</button>
+            <button
+              className={`pe-view-btn ${viewMode === 'files' ? 'active' : ''}`}
+              onClick={() => setViewMode('files')}
+              title="Browse workflow files"
+            >Files</button>
           </div>
           <span className="pe-scanned">{activePipeline.scannedAt ? new Date(activePipeline.scannedAt).toLocaleTimeString() : ''}</span>
         </div>
@@ -229,6 +278,12 @@ export default function PromptExplorer() {
               pipeline={activePipeline}
               selectedPromptFile={selectedPromptFile}
               onSelectPrompt={selectPrompt}
+            />
+          ) : viewMode === 'files' ? (
+            <FileTreeNavigation
+              basePath={activePipeline.basePath}
+              selectedFilePath={selectedFilePath}
+              onSelectFile={loadFileContent}
             />
           ) : (
             <FlowNavigation
@@ -244,12 +299,19 @@ export default function PromptExplorer() {
 
       {/* ─── RIGHT: Detail Panel ────────────────────────────────────── */}
       <div className="pe-right">
-        {selectedPromptFile ? (
+        {viewMode === 'files' ? (
+          <FilePreviewPanel
+            basePath={activePipeline.basePath}
+            selectedFilePath={selectedFilePath}
+            fileContent={fileContent}
+            loading={fileLoading}
+          />
+        ) : selectedPromptFile ? (
           <PromptDetailPanel file={selectedPromptFile} pipeline={activePipeline} />
         ) : (
           <div className="pe-right-empty">
             <div className="pe-right-empty-icon">&#x2190;</div>
-            <div>Klick auf einen Prompt in der Flow-Ansicht</div>
+            <div>Click on a prompt in the flow view</div>
           </div>
         )}
       </div>
@@ -669,6 +731,240 @@ function PromptDetailPanel({ file, pipeline }: { file: PromptFile; pipeline: Pip
               );
             })}
           </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── File Tree Navigation (Left Panel, Files Mode) ──────────────────────────
+
+function FileTreeNavigation({ basePath, selectedFilePath, onSelectFile }: {
+  basePath: string;
+  selectedFilePath: string | null;
+  onSelectFile: (path: string) => void;
+}) {
+  const [tree, setTree] = useState<TreeNode[]>([]);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [treeError, setTreeError] = useState<string | null>(null);
+  const refreshInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const loadTree = useCallback(async () => {
+    try {
+      const res = await resilientFetch(
+        `/api/disk-tree?path=${encodeURIComponent(basePath)}&maxDepth=6&maxPerLevel=50`
+      );
+      if (!res.ok) { setTreeError(`Failed to load: ${res.status}`); return; }
+      const data = await res.json();
+      if (data.nodes && data.nodes.length > 0) {
+        // disk-tree returns a flat array with IDs like "0", "0-1", "0-1-0"
+        // Reconstruct the tree hierarchy from the flat array
+        const nodeMap = new Map<string, TreeNode>();
+        for (const n of data.nodes) {
+          const extMatch = n.name.match(/(\.[^.]+)$/);
+          nodeMap.set(n.id, {
+            name: n.name,
+            path: n.path,
+            isDir: n.isDir,
+            ext: extMatch ? extMatch[1] : null,
+            children: n.isDir ? [] : undefined,
+          });
+        }
+        // Build parent-child relationships from IDs
+        for (const n of data.nodes) {
+          const parts = n.id.split('-');
+          if (parts.length > 1) {
+            const parentId = parts.slice(0, -1).join('-');
+            const parent = nodeMap.get(parentId);
+            const child = nodeMap.get(n.id);
+            if (parent && child && parent.children) {
+              parent.children.push(child);
+            }
+          }
+        }
+        // Root is "0", its children are the top-level items
+        const root = nodeMap.get('0');
+        const topLevel = root?.children || [];
+        setTree(topLevel);
+        // Auto-expand first level dirs
+        const firstLevel = new Set<string>();
+        for (const child of topLevel) {
+          if (child.isDir) firstLevel.add(child.path);
+        }
+        setExpanded(prev => new Set([...prev, ...firstLevel]));
+      } else {
+        setTree([]);
+      }
+      setTreeError(null);
+    } catch (err: any) {
+      setTreeError(err.message || 'Failed to load tree');
+    }
+  }, [basePath]);
+
+  useEffect(() => {
+    loadTree();
+    refreshInterval.current = setInterval(loadTree, 15000);
+    return () => { if (refreshInterval.current) clearInterval(refreshInterval.current); };
+  }, [loadTree]);
+
+  const toggleDir = useCallback((path: string) => {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path); else next.add(path);
+      return next;
+    });
+  }, []);
+
+  const renderNode = (node: TreeNode, depth: number): React.ReactNode => {
+    if (node.name.startsWith('.') || node.name === '__pycache__' || node.name === 'venv' || node.name === '.venv' || node.name === 'node_modules') {
+      return null;
+    }
+    const isExp = expanded.has(node.path);
+    const isSel = selectedFilePath === node.path;
+    const ext = node.ext || '';
+
+    return (
+      <div key={node.path}>
+        <div
+          className={`pe-ft-item ${isSel ? 'selected' : ''} ${node.isDir ? 'dir' : ''}`}
+          style={{ paddingLeft: 12 + depth * 16 }}
+          onClick={() => node.isDir ? toggleDir(node.path) : onSelectFile(node.path)}
+          title={node.path}
+        >
+          <span className="pe-ft-icon">
+            {node.isDir ? (isExp ? '▼' : '▶') : getFileTreeIcon(ext)}
+          </span>
+          <span className="pe-ft-name">{node.name}</span>
+          {node.isDir && node.children && (
+            <span className="pe-ft-count">{node.children.filter(c => !c.name.startsWith('.')).length}</span>
+          )}
+        </div>
+        {node.isDir && isExp && node.children && (
+          <div>
+            {node.children
+              .sort((a, b) => {
+                if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+                return a.name.localeCompare(b.name);
+              })
+              .map(child => renderNode(child, depth + 1))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  if (treeError && !tree.length) {
+    return <div className="pe-right-empty" style={{ fontSize: 11 }}>{treeError}</div>;
+  }
+  if (tree.length === 0) {
+    return <div className="pe-right-empty">No files found</div>;
+  }
+
+  return (
+    <>
+      {tree
+        .sort((a, b) => {
+          if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+          return a.name.localeCompare(b.name);
+        })
+        .map(node => renderNode(node, 0))}
+    </>
+  );
+}
+
+function getFileTreeIcon(ext: string | null | undefined): string {
+  if (!ext) return '📄';
+  switch (ext) {
+    case '.py': return '🐍';
+    case '.yaml': case '.yml': return '📋';
+    case '.md': return '📝';
+    case '.ts': case '.tsx': return '🔷';
+    case '.js': case '.jsx': return '🟨';
+    case '.json': return '{}';
+    case '.sh': return '⚙️';
+    default: return '📄';
+  }
+}
+
+function getLanguageLabel(ext: string | undefined): string {
+  if (!ext) return 'text';
+  switch (ext) {
+    case '.py': return 'python';
+    case '.yaml': case '.yml': return 'yaml';
+    case '.ts': case '.tsx': return 'typescript';
+    case '.js': case '.jsx': return 'javascript';
+    case '.json': return 'json';
+    case '.sh': return 'bash';
+    case '.md': return 'markdown';
+    default: return 'text';
+  }
+}
+
+// ─── File Preview Panel (Right Panel, Files Mode) ───────────────────────────
+
+function FilePreviewPanel({ basePath, selectedFilePath, fileContent, loading: fileLoading }: {
+  basePath: string;
+  selectedFilePath: string | null;
+  fileContent: FileContent | null;
+  loading: boolean;
+}) {
+  if (fileLoading) {
+    return <div className="pe-right-empty">Loading...</div>;
+  }
+  if (!selectedFilePath || !fileContent) {
+    return (
+      <div className="pe-right-empty">
+        <div className="pe-right-empty-icon">📂</div>
+        <div>Select a file from the tree to preview</div>
+        <div style={{ fontSize: 10, opacity: 0.5, marginTop: 4 }}>
+          Server path: {basePath}
+        </div>
+      </div>
+    );
+  }
+
+  const ext = fileContent.ext || '';
+  const isMarkdown = ext === '.md' || ext === '.mdx';
+  const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.svg'].includes(ext);
+  const shortPath = selectedFilePath.startsWith(basePath)
+    ? selectedFilePath.slice(basePath.length).replace(/^\//, '')
+    : selectedFilePath;
+
+  return (
+    <div className="pe-detail">
+      <div className="pe-detail-header">
+        <div className="pe-detail-title">
+          <span className="pe-detail-filename">
+            {getFileTreeIcon(ext)} {shortPath}
+          </span>
+        </div>
+        <div className="pe-detail-meta">
+          <span className="pe-detail-path">{selectedFilePath}</span>
+          <span style={{ fontSize: 10, color: '#565f89' }}>{getLanguageLabel(ext)}</span>
+        </div>
+      </div>
+      <div className="pe-detail-body" style={{ padding: 0 }}>
+        {isImage ? (
+          <div style={{ padding: 16, textAlign: 'center' }}>
+            <img
+              src={`/api/file?path=${encodeURIComponent(fileContent.path)}`}
+              alt={fileContent.path}
+              style={{ maxWidth: '100%', maxHeight: '80vh' }}
+            />
+          </div>
+        ) : isMarkdown ? (
+          <div style={{ padding: '12px 24px', maxWidth: 800 }}>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{fileContent.content}</ReactMarkdown>
+          </div>
+        ) : (
+          <pre className="pe-code" style={{ margin: 0, borderRadius: 0, border: 'none' }}>
+            {fileContent.content.split('\n').map((line, i) => (
+              <div key={i}>
+                <span style={{ display: 'inline-block', width: 40, textAlign: 'right', color: '#3b4261', marginRight: 16, userSelect: 'none' }}>{i + 1}</span>
+                <span>{line}</span>
+              </div>
+            ))}
+          </pre>
         )}
       </div>
     </div>

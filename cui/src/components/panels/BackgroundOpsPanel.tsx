@@ -5,6 +5,7 @@
  * Auto-refreshes every 15s.
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { validateApiResponse } from '../../lib/validateApiResponse';
 
 const REFRESH_MS = 15_000;
 
@@ -18,17 +19,19 @@ interface BgEvent {
 
 interface BgOpsData {
   events: BgEvent[];
-  eventCount: number;
-  maxEvents: number;
-  bridgeKeySet: boolean;
-  serverUptime: number;
+  eventCount?: number;
+  maxEvents?: number;
+  bridgeKeySet?: boolean;
+  serverUptime?: number;
 }
 
 interface PeerData {
-  lastTickAt: string | null;
-  activeSessions: number;
-  recentSessions: number;
-  intervalMs: number;
+  content?: string;
+  filePath?: string;
+  lastTickAt?: string | null;
+  activeSessions?: number;
+  recentSessions?: number;
+  intervalMs?: number;
 }
 
 interface AutoInjectConfig {
@@ -102,9 +105,21 @@ export default function BackgroundOpsPanel() {
         fetch('/api/peer-awareness', { signal: AbortSignal.timeout(5000) }),
         fetch('/api/auto-inject', { signal: AbortSignal.timeout(5000) }),
       ]);
-      if (opsRes.ok) setOpsData(await opsRes.json());
-      if (peerRes.ok) setPeerData(await peerRes.json());
-      if (injectRes.ok) setInjectData(await injectRes.json());
+      if (opsRes.ok) {
+        const opsRaw = await opsRes.json();
+        setOpsData(validateApiResponse<BgOpsData>(opsRaw, '/api/background-ops', { events: 'array' }));
+      }
+      if (peerRes.ok) {
+        const peerRaw = await peerRes.json();
+        setPeerData(validateApiResponse<PeerData>(peerRaw, '/api/peer-awareness', { activeSessions: { type: 'number', optional: true }, recentSessions: { type: 'number', optional: true } }));
+      }
+      if (injectRes.ok) {
+        const injectRaw = await injectRes.json();
+        setInjectData(validateApiResponse<AutoInjectData>(injectRaw, '/api/auto-inject', {
+          configs: 'object',
+          lastInject: 'object',
+        }));
+      }
       setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -130,14 +145,14 @@ export default function BackgroundOpsPanel() {
   const bridgeOk = opsData?.bridgeKeySet ?? false;
   const peerAge = formatAge(peerData?.lastTickAt);
   const nextTickIn = peerData?.lastTickAt
-    ? Math.max(0, (peerData.intervalMs - (Date.now() - new Date(peerData.lastTickAt).getTime())) / 60_000)
+    ? Math.max(0, ((peerData.intervalMs ?? 300_000) - (Date.now() - new Date(peerData.lastTickAt).getTime())) / 60_000)
     : null;
 
   const enabledInjects = injectData
-    ? Object.values(injectData.configs).filter(c => c.enabled).length
+    ? Object.values(injectData.configs ?? {}).filter(c => c.enabled).length
     : 0;
   const totalInjects = injectData
-    ? Object.keys(injectData.configs).length
+    ? Object.keys(injectData.configs ?? {}).length
     : 0;
 
   return (
@@ -160,7 +175,7 @@ export default function BackgroundOpsPanel() {
         </span>
         {opsData && (
           <span style={{ color: 'var(--tn-text-muted)', marginLeft: 'auto' }}>
-            up {formatUptime(opsData.serverUptime)}
+            up {formatUptime(opsData.serverUptime ?? 0)}
           </span>
         )}
       </div>
@@ -200,9 +215,9 @@ export default function BackgroundOpsPanel() {
             <span style={{ fontWeight: 600, color: 'var(--tn-blue)', fontSize: 11 }}>AUTOINJECT</span>
             <span style={{ color: 'var(--tn-text-muted)' }}>{enabledInjects}/{totalInjects} enabled</span>
           </div>
-          {injectData && Object.entries(injectData.configs).length > 0 ? (
+          {injectData && Object.entries(injectData.configs ?? {}).length > 0 ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              {Object.entries(injectData.configs).map(([id, cfg]) => (
+              {Object.entries(injectData.configs ?? {}).map(([id, cfg]) => (
                 <div key={id} style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--tn-text)' }}>
                   <span style={{
                     display: 'inline-block', width: 5, height: 5, borderRadius: '50%',
@@ -213,7 +228,7 @@ export default function BackgroundOpsPanel() {
                     {cfg.enabled ? 'enabled' : 'disabled'}
                   </span>
                   <span style={{ color: 'var(--tn-text-muted)', marginLeft: 'auto' }}>
-                    last: {formatAge(injectData.lastInject[id])}
+                    last: {formatAge((injectData.lastInject ?? {})[id])}
                   </span>
                 </div>
               ))}
@@ -280,7 +295,7 @@ export default function BackgroundOpsPanel() {
       }}>
         <span>Poll: {REFRESH_MS / 1000}s</span>
         <span>Events: {opsData?.eventCount ?? 0}/{opsData?.maxEvents ?? 100}</span>
-        {opsData && <span style={{ marginLeft: 'auto' }}>Uptime: {formatUptime(opsData.serverUptime)}</span>}
+        {opsData && <span style={{ marginLeft: 'auto' }}>Uptime: {formatUptime(opsData.serverUptime ?? 0)}</span>}
       </div>
     </div>
   );

@@ -11,7 +11,9 @@ const isElectron = !!window.electronAPI?.isElectron;
 export default function BrowserPanel({ initialUrl = '', panelId, onUrlChange }: BrowserPanelProps) {
   // Persist URL per panel instance in localStorage
   const storageKey = panelId ? `browser-url-${panelId}` : '';
-  const restoredUrl = storageKey ? (localStorage.getItem(storageKey) || initialUrl) : initialUrl;
+  // initialUrl from layout config takes priority; localStorage only used if no config URL set
+  const storedUrl = storageKey ? localStorage.getItem(storageKey) : null;
+  const restoredUrl = initialUrl || storedUrl || '';
   const [url, setUrl] = useState(restoredUrl);
   const [inputValue, setInputValue] = useState(restoredUrl);
   const [canGoBack, setCanGoBack] = useState(false);

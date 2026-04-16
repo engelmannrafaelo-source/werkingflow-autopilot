@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import { copyToClipboard } from '../../../../utils/clipboard';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
 
 interface DevToken {
   id: string;
-  name?: string;
+  name: string;
   token?: string;
   prefix?: string;
   scopes?: string[];
@@ -45,7 +46,16 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
       const res = await fetch('/api/admin/wr/tenants?limit=1000', { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      setTenants(data.tenants || []);
+      const validated = validateApiResponse<{ tenants: Tenant[] }>(data, '/api/admin/wr/tenants', {
+        tenants: 'array',
+      });
+      validated.tenants.forEach((t, i) => {
+        validateApiResponse<Tenant>(t, `/api/admin/wr/tenants[${i}]`, {
+          id: 'string',
+          name: 'string',
+        });
+      });
+      setTenants(validated.tenants);
     } catch (err: any) {
       console.warn('[WRTokens] fetchTenants:', err);
     }
@@ -58,8 +68,15 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
     try {
       const res = await fetch('/api/admin/wr/developer-tokens', { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
-      setTokens(data.tokens || data || []);
+      const raw = await res.json();
+      const tokensArray = Array.isArray(raw) ? raw : (raw.tokens || []);
+      tokensArray.forEach((t: unknown, i: number) => {
+        validateApiResponse<DevToken>(t, `/api/admin/wr/developer-tokens[${i}]`, {
+          id: 'string',
+          name: 'string',
+        });
+      });
+      setTokens(tokensArray as DevToken[]);
     } catch (err: any) {
       console.warn('[WRTokens] fetchTokens:', err);
       setError(err.message);
@@ -168,7 +185,7 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
         >
           <option value="">All Tenants ({tokens.length})</option>
           {tenants.map(t => {
-            const count = tokens.filter(tok => tok.tenantId === t.id).length;
+            const count = tokens.filter(tok => tok.tenantId === (t.id)).length;
             return (
               <option key={t.id} value={t.id}>
                 {t.name} ({t.id}) — {count} token{count !== 1 ? 's' : ''}
@@ -263,8 +280,8 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
           {filteredTokens.map(t => {
             const expired = isExpired(t);
             const revoked = isRevoked(t);
-            const isProcessing = processingId === t.id;
-            const tenant = tenants.find(tn => tn.id === t.tenantId);
+            const isProcessing = processingId === (t.id);
+            const tenant = tenants.find(tn => tn.id === (t.tenantId ?? ''));
             return (
               <div key={t.id} data-ai-id={`wr-tokens-row-${t.id}`} style={{
                 display: 'grid', gridTemplateColumns: '1fr 90px 80px 90px 80px 70px',
@@ -276,7 +293,7 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
                   {t.lastUsedAt && <div style={{ fontSize: 9, color: 'var(--tn-text-muted)' }}>Last used: {new Date(t.lastUsedAt).toLocaleDateString('de-DE')}</div>}
                 </div>
                 <div style={{ fontSize: 9, color: 'var(--tn-text-muted)' }} title={t.tenantId}>
-                  {tenant ? tenant.name : t.tenantId || '—'}
+                  {tenant ? (tenant.name) : t.tenantId || '—'}
                 </div>
                 <div style={{ fontFamily: 'monospace', fontSize: 10, color: 'var(--tn-text-muted)' }}>{t.prefix || t.token?.slice(0, 12) || '—'}...</div>
                 <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>

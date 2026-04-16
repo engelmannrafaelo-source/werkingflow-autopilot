@@ -181,6 +181,22 @@ const PIPELINE_CONFIGS: PipelineConfig[] = [
     promptPattern: 'prompts/*.py',
     annotationFile: 'pipeline.annotations.yaml',
   },
+  {
+    id: 'engelmann-dokument',
+    name: 'Engelmann: Dokument erstellen',
+    basePath: `${PATHS.projectsRoot}/workflows/partners/engelmann/dokument-erstellen/pipeline`,
+    type: 'phase-step',
+    promptPattern: 'phases/**/prompts/*.py',
+    annotationFile: 'pipeline.annotations.yaml',
+  },
+  {
+    id: 'engelmann-notiz',
+    name: 'Engelmann: Notiz erstellen',
+    basePath: `${PATHS.projectsRoot}/workflows/partners/engelmann/notiz-erstellen/pipeline`,
+    type: 'phase-step',
+    promptPattern: 'phases/**/prompts/*.py',
+    annotationFile: 'pipeline.annotations.yaml',
+  },
 ];
 
 // ─── Python AST-like Parsing (regex-based, no external deps) ─────────────────

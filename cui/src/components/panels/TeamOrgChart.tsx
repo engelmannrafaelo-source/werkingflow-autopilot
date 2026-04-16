@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { validateApiResponse } from '../../lib/validateApiResponse';
 
 const API = '/api';
 
@@ -6,7 +7,7 @@ interface TeamNode {
   id: string;
   name: string;
   role: string;
-  children: TeamNode[];
+  children?: TeamNode[];
 }
 
 interface TeamOrgChartProps {
@@ -27,8 +28,11 @@ export default function TeamOrgChart({ onNodeClick, selectedNode }: TeamOrgChart
     try {
       const res = await fetch(`${API}/agents/team/structure`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`[TeamOrgChart] load team structure failed: HTTP ${res.status}`);
-      const data = await res.json();
-      setOrgChart(data.orgChart || []);
+      const raw = await res.json();
+      const data = validateApiResponse<{ orgChart: TeamNode[] }>(raw, '/api/agents/team/structure', {
+        orgChart: 'array',
+      });
+      setOrgChart(data.orgChart);
     } catch (err) {
       console.warn('[TeamOrgChart] load team structure error:', err);
     } finally {
@@ -87,7 +91,7 @@ interface TreeNodeProps {
 }
 
 function TreeNode({ node, onNodeClick, selectedNode, level }: TreeNodeProps) {
-  const hasChildren = node.children.length > 0;
+  const hasChildren = (node.children ?? []).length > 0;
   const isSelected = selectedNode === node.id;
 
   return (
@@ -166,7 +170,7 @@ function TreeNode({ node, onNodeClick, selectedNode, level }: TreeNodeProps) {
             position: 'relative'
           }}>
             {/* Horizontal Line */}
-            {node.children.length > 1 && (
+            {(node.children ?? []).length > 1 && (
               <div style={{
                 position: 'absolute',
                 top: -10,
@@ -178,7 +182,7 @@ function TreeNode({ node, onNodeClick, selectedNode, level }: TreeNodeProps) {
               }} />
             )}
 
-            {node.children.map(child => (
+            {(node.children ?? []).map(child => (
               <div key={child.id} style={{ position: 'relative' }}>
                 {/* Vertical connector */}
                 <div style={{

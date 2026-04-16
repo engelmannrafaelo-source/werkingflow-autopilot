@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { validateApiResponse } from '../../../lib/validateApiResponse';
 
 interface Notification {
   id: string;
   type: 'new_user' | 'failed_payment' | 'system_error' | 'approval_needed';
-  title: string;
   message: string;
-  timestamp: string;
-  read: boolean;
+  title?: string;
+  timestamp?: string;
+  read?: boolean;
   actionUrl?: string;
   metadata?: Record<string, unknown>;
 }
@@ -45,9 +46,20 @@ export default function NotificationBell({ envMode }: NotificationBellProps) {
     try {
       const res = await fetch('/api/admin/wr/notifications', { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      setNotifications(data.notifications || []);
-      setUnreadCount(data.unreadCount || 0);
+      const raw = await res.json();
+      const validated = validateApiResponse<{ notifications: Notification[]; unreadCount: number }>(raw, '/api/admin/wr/notifications', {
+        notifications: 'array',
+        unreadCount: 'number',
+      });
+      const notifications = validated.notifications.map((item: unknown, i: number) =>
+        validateApiResponse<Notification>(item, `/api/admin/wr/notifications[${i}]`, {
+          id: 'string',
+          type: 'string',
+          message: 'string',
+        })
+      );
+      setNotifications(notifications);
+      setUnreadCount(validated.unreadCount);
     } catch (err) {
       console.warn('[WRNotif] fetchNotifications:', err);
     }
@@ -98,7 +110,7 @@ export default function NotificationBell({ envMode }: NotificationBellProps) {
   };
 
   // Get icon and color for notification type
-  const getNotificationStyle = (type: Notification['type']) => {
+  const getNotificationStyle = (type: Notification['type'] | undefined) => {
     switch (type) {
       case 'new_user':
         return { icon: '👤', color: 'var(--tn-blue)' };
@@ -234,7 +246,7 @@ export default function NotificationBell({ envMode }: NotificationBellProps) {
                 Keine Benachrichtigungen
               </div>
             ) : (
-              notifications.map(notification => {
+              notifications.map((notification, idx) => {
                 const style = getNotificationStyle(notification.type);
                 return (
                   <div
@@ -244,7 +256,7 @@ export default function NotificationBell({ envMode }: NotificationBellProps) {
                       padding: '8px 12px',
                       borderBottom: '1px solid var(--tn-border)',
                       cursor: notification.actionUrl ? 'pointer' : 'default',
-                      background: notification.read ? 'transparent' : 'rgba(122,162,247,0.05)',
+                      background: (notification.read ?? false) ? 'transparent' : 'rgba(122,162,247,0.05)',
                       transition: 'background 0.15s',
                       display: 'flex',
                       gap: 8,
@@ -255,7 +267,7 @@ export default function NotificationBell({ envMode }: NotificationBellProps) {
                       }
                     }}
                     onMouseLeave={(e) => {
-                      e.currentTarget.style.background = notification.read
+                      e.currentTarget.style.background = (notification.read ?? false)
                         ? 'transparent'
                         : 'rgba(122,162,247,0.05)';
                     }}
@@ -276,7 +288,7 @@ export default function NotificationBell({ envMode }: NotificationBellProps) {
                         color: 'var(--tn-text)',
                         marginBottom: 2,
                       }}>
-                        {notification.title}
+                        {notification.title ?? ''}
                       </div>
                       <div style={{
                         fontSize: 9,
@@ -291,12 +303,12 @@ export default function NotificationBell({ envMode }: NotificationBellProps) {
                         color: 'var(--tn-text-muted)',
                         opacity: 0.7,
                       }}>
-                        {formatRelativeTime(notification.timestamp)}
+                        {formatRelativeTime(notification.timestamp ?? '')}
                       </div>
                     </div>
 
                     {/* Unread indicator */}
-                    {!notification.read && (
+                    {!(notification.read ?? false) && (
                       <div style={{
                         width: 6,
                         height: 6,

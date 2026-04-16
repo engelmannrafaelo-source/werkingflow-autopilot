@@ -7,17 +7,18 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { validateApiResponse } from '../../lib/validateApiResponse';
 
 const API = '/api';
 const AUTO_REFRESH_MS = 60_000; // 1 minute frontend refresh
 
 interface PeerData {
-  content: string;
-  filePath: string;
-  lastTickAt: string | null;
-  activeSessions: number;
-  recentSessions: number;
-  intervalMs: number;
+  content?: string;
+  filePath?: string;
+  lastTickAt?: string | null;
+  activeSessions?: number;
+  recentSessions?: number;
+  intervalMs?: number;
 }
 
 export default function PeerAwarenessPanel() {
@@ -32,8 +33,13 @@ export default function PeerAwarenessPanel() {
     try {
       const res = await fetch(`${API}/peer-awareness`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
-      setData(json);
+      const raw = await res.json();
+      const validated = validateApiResponse<PeerData>(raw, '/api/peer-awareness', {
+        content: { type: 'string', optional: true },
+        activeSessions: { type: 'number', optional: true },
+        recentSessions: { type: 'number', optional: true },
+      });
+      setData(validated);
       setError('');
     } catch (err) {
       console.warn('[PeerAwareness] fetch failed:', err);
@@ -60,14 +66,19 @@ export default function PeerAwarenessPanel() {
         signal: AbortSignal.timeout(45000), // Bridge can take up to 30s
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
+      const raw = await res.json();
+      const validated = validateApiResponse<PeerData>(raw, '/api/peer-awareness/refresh', {
+        content: { type: 'string', optional: true },
+        activeSessions: { type: 'number', optional: true },
+        recentSessions: { type: 'number', optional: true },
+      });
       setData({
-        content: json.content,
-        filePath: data?.filePath || '',
-        lastTickAt: json.lastTickAt,
-        activeSessions: json.activeSessions,
-        recentSessions: json.recentSessions,
-        intervalMs: data?.intervalMs || 300000,
+        content: validated.content ?? '',
+        filePath: data?.filePath ?? '',
+        lastTickAt: validated.lastTickAt ?? null,
+        activeSessions: validated.activeSessions ?? 0,
+        recentSessions: validated.recentSessions ?? 0,
+        intervalMs: data?.intervalMs ?? 300000,
       });
       setError('');
     } catch (err) {
@@ -141,7 +152,7 @@ export default function PeerAwarenessPanel() {
         flex: 1, overflow: 'auto', padding: '8px 12px',
         fontSize: 12, lineHeight: 1.5, color: 'var(--tn-text)',
       }}>
-        {data?.content ? (
+        {(data?.content ?? '') ? (
           <div className="peer-awareness-md">
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
@@ -161,7 +172,7 @@ export default function PeerAwarenessPanel() {
                 ol: ({node, ...props}) => <ol style={{ margin: '4px 0', paddingLeft: 20 }} {...props} />,
               }}
             >
-              {data.content}
+              {data?.content ?? ''}
             </ReactMarkdown>
           </div>
         ) : (

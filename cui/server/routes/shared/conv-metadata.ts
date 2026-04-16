@@ -29,9 +29,11 @@ interface ConvMetadata {
   subSessions: Record<string, boolean>;
   /** subSessionId → parentSessionId (tracks which parent spawned this sub-session) */
   parentSessions: Record<string, string>;
+  /** sessionId → userId (for partner isolation) */
+  users: Record<string, string>;
 }
 
-const EMPTY: ConvMetadata = { titles: {}, accounts: {}, workdirs: {}, finished: {}, lastPrompt: {}, models: {}, paused: {}, reviews: {}, subSessions: {}, parentSessions: {} };
+const EMPTY: ConvMetadata = { titles: {}, accounts: {}, workdirs: {}, finished: {}, lastPrompt: {}, models: {}, paused: {}, reviews: {}, subSessions: {}, parentSessions: {}, users: {} };
 
 let _data: ConvMetadata | null = null;
 let _filePath: string = '';
@@ -315,5 +317,24 @@ export function setParentSession(subSessionId: string, parentSessionId: string) 
 export function deleteParentSession(subSessionId: string) {
   const data = _load();
   if (data.parentSessions) delete data.parentSessions[subSessionId];
+  _scheduleSave();
+}
+
+// ---------------------------------------------------------------------------
+// Users (sessionId → userId for partner isolation)
+// ---------------------------------------------------------------------------
+
+export function getUser(sessionId: string): string {
+  return _load().users?.[sessionId] || '';
+}
+
+export function getAllUsers(): Record<string, string> {
+  return { ...(_load().users ?? {}) };
+}
+
+export function saveUser(sessionId: string, userId: string) {
+  const data = _load();
+  if (!data.users) data.users = {};
+  data.users[sessionId] = userId;
   _scheduleSave();
 }

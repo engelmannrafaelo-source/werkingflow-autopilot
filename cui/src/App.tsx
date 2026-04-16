@@ -266,12 +266,12 @@ function AppContent() {
   // Control API message handler (via shared SessionStore WebSocket)
   useEffect(() => {
     return addMessageHandler((msg: any) => {
-      // Control API: switch project (skip on mobile — disruptive auto-navigation)
-      if (msg.type === 'control:project-switch' && msg.projectId && !IS_MOBILE) {
+      // Control API: switch project
+      if (msg.type === 'control:project-switch' && msg.projectId) {
         setActiveId(msg.projectId);
       }
-      // Activation: switch to target project, hide MC, pass plan as prop (skip on mobile)
-      if (msg.type === 'control:activate-conversations' && msg.plan?.length > 0 && !IS_MOBILE) {
+      // Activation: switch to target project, hide MC, pass plan as prop
+      if (msg.type === 'control:activate-conversations' && msg.plan?.length > 0) {
         const firstProjectId = msg.plan[0].projectId;
         if (firstProjectId) {
           setPendingActivation(msg.plan);
@@ -717,7 +717,7 @@ function AppContent() {
       />
       <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
         {/* Mission Control - global view */}
-        {!IS_MOBILE && showMission && (
+        {showMission && (
           <div style={{
             position: 'absolute', inset: 0, zIndex: 2,
             display: 'flex', flexDirection: 'column',
@@ -728,7 +728,7 @@ function AppContent() {
           </div>
         )}
         {/* All Chats - consolidated view of all active conversations */}
-        {!IS_MOBILE && showAllChats && (
+        {showAllChats && (
           <div style={{
             position: 'absolute', inset: 0, zIndex: 2,
             display: 'flex', flexDirection: 'column',

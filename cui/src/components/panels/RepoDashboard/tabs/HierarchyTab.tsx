@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Loader2 } from 'lucide-react';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
 
 interface HierarchyNode {
   id: string;
@@ -23,8 +24,8 @@ interface HierarchyData {
     links: HierarchyLink[];
   };
   totalSize: { bytes: number; human: string };
-  nodeCount: number;
-  scannedAt: string;
+  nodeCount?: number;
+  scannedAt?: string;
 }
 
 /**
@@ -45,7 +46,11 @@ export default function HierarchyTab() {
     try {
       const res = await fetch('/api/repo-dashboard/hierarchy', { signal: AbortSignal.timeout(15000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
+      const raw = await res.json();
+      const json = validateApiResponse<HierarchyData>(raw, '/api/repo-dashboard/hierarchy', {
+        sankey: 'object',
+        totalSize: 'object',
+      });
       setData(json);
     } catch (err) {
       console.warn('[RepoHierarchy] fetch failed:', err);
@@ -88,15 +93,17 @@ export default function HierarchyTab() {
   }
 
   // Group nodes by level
+  const sankeyNodes = data.sankey.nodes;
+  const sankeyLinks = data.sankey.links;
   const nodesByLevel = new Map<number, HierarchyNode[]>();
-  data.sankey.nodes.forEach(node => {
+  sankeyNodes.forEach(node => {
     if (!nodesByLevel.has(node.level)) {
       nodesByLevel.set(node.level, []);
     }
     nodesByLevel.get(node.level)!.push(node);
   });
 
-  const maxLevel = Math.max(...data.sankey.nodes.map(n => n.level));
+  const maxLevel = sankeyNodes.length > 0 ? Math.max(...sankeyNodes.map(n => n.level)) : 0;
 
   // Get human-readable age
   const getAge = (lastModified: string): string => {
@@ -116,8 +123,8 @@ export default function HierarchyTab() {
   // Get links for a node
   const getNodeLinks = (nodeId: string) => {
     return {
-      incoming: data.sankey.links.filter(l => l.target === nodeId),
-      outgoing: data.sankey.links.filter(l => l.source === nodeId),
+      incoming: sankeyLinks.filter(l => l.target === nodeId),
+      outgoing: sankeyLinks.filter(l => l.source === nodeId),
     };
   };
 
@@ -129,7 +136,7 @@ export default function HierarchyTab() {
           Folder Hierarchy - Sankey View
         </h3>
         <p className="text-sm text-gray-400 mt-1">
-          {data.nodeCount} folders • {data.totalSize.human} total • Scanned {new Date(data.scannedAt).toLocaleTimeString()}
+          {data.nodeCount ?? 0} folders • {data.totalSize.human} total • Scanned {new Date(data.scannedAt ?? '').toLocaleTimeString()}
         </p>
       </div>
 
@@ -258,7 +265,7 @@ export default function HierarchyTab() {
           data-ai-id="hierarchy-node-details"
         >
           {(() => {
-            const node = data.sankey.nodes.find(n => n.id === selectedNode);
+            const node = sankeyNodes.find(n => n.id === selectedNode);
             if (!node) return null;
 
             const links = getNodeLinks(node.id);
@@ -309,7 +316,7 @@ export default function HierarchyTab() {
                         <span className="text-sm text-gray-400">Parent Folders:</span>
                         <div className="flex flex-wrap gap-2 mt-2">
                           {links.incoming.map(link => {
-                            const parent = data.sankey.nodes.find(n => n.id === link.source);
+                            const parent = sankeyNodes.find(n => n.id === link.source);
                             return parent ? (
                               <button
                                 key={link.source}
@@ -329,7 +336,7 @@ export default function HierarchyTab() {
                         <span className="text-sm text-gray-400">Child Folders:</span>
                         <div className="flex flex-wrap gap-2 mt-2">
                           {links.outgoing.map(link => {
-                            const child = data.sankey.nodes.find(n => n.id === link.target);
+                            const child = sankeyNodes.find(n => n.id === link.target);
                             return child ? (
                               <button
                                 key={link.target}

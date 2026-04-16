@@ -18,11 +18,14 @@ const router = Router();
 
 export type MessageType = 'announcement' | 'direct' | 'system';
 
+export type MessageStatus = 'draft' | 'sent';
+
 export interface PartnerMessage {
   id: string;
   from: string;          // userId or 'admin'
   to: string;            // userId or 'all' for announcements
   type: MessageType;
+  status: MessageStatus; // draft = needs admin approval, sent = visible to partner
   subject: string;
   body: string;
   createdAt: string;     // ISO timestamp
@@ -102,11 +105,18 @@ router.post('/api/partner/messages', (req: Request, res: Response) => {
     return;
   }
 
+  // Messages from Claude sessions or admin default to draft (review before sending).
+  // Partners replying to admin go straight to sent.
+  const isDraft = (req.body as Record<string, unknown>).status === 'sent' ? false
+    : from === 'admin' || (req.body as Record<string, unknown>).draft === true
+      ? true : false;
+
   const msg: PartnerMessage = {
     id: randomUUID(),
     from,
     to,
     type,
+    status: isDraft ? 'draft' : 'sent',
     subject: subject?.trim() ?? '',
     body: body.trim(),
     createdAt: new Date().toISOString(),
@@ -137,8 +147,11 @@ router.get('/api/partner/messages', (req: Request, res: Response) => {
 
   const all = readAllMessages();
   const messages = userId === 'admin'
-    ? all
-    : all.filter(m => m.to === userId || m.to === 'all' || m.from === userId);
+    ? all  // Admin sees everything including drafts
+    : all.filter(m =>
+        (m.status ?? 'sent') === 'sent' &&  // Partners only see sent messages
+        (m.to === userId || m.to === 'all' || m.from === userId),
+      );
 
   messages.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
@@ -170,6 +183,93 @@ router.post('/api/partner/messages/:id/read', (req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/partner/messages/:id/approve
+ * Approve a draft message — changes status from 'draft' to 'sent'.
+ * Optionally update subject/body before sending.
+ */
+router.post('/api/partner/messages/:id/approve', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { subject: newSubject, body: newBody } = req.body as { subject?: string; body?: string };
+  const file = getMessagesFile();
+  if (!existsSync(file)) { res.status(404).json({ error: 'No messages file' }); return; }
+
+  const lines = readFileSync(file, 'utf8').split('\n');
+  let found = false;
+  let approvedMsg: PartnerMessage | null = null;
+
+  const updated = lines.map(line => {
+    if (!line.trim()) return line;
+    try {
+      const msg = JSON.parse(line) as PartnerMessage;
+      if (msg.id === id && (msg.status ?? 'sent') === 'draft') {
+        found = true;
+        approvedMsg = {
+          ...msg,
+          status: 'sent',
+          subject: newSubject?.trim() ?? msg.subject,
+          body: newBody?.trim() ?? msg.body,
+        };
+        return JSON.stringify(approvedMsg);
+      }
+    } catch { /* skip */ }
+    return line;
+  });
+
+  if (!found) {
+    res.status(404).json({ error: 'Draft not found' });
+    return;
+  }
+
+  writeFileSync(file, updated.join('\n'), 'utf8');
+
+  broadcast({
+    type: 'partner-message-approved',
+    message: approvedMsg,
+  });
+
+  res.json({ ok: true, message: approvedMsg });
+});
+
+/**
+ * DELETE /api/partner/messages/:id
+ * Delete a draft message (reject/discard). Only drafts can be deleted.
+ */
+router.delete('/api/partner/messages/:id', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const file = getMessagesFile();
+  if (!existsSync(file)) { res.status(404).json({ error: 'No messages file' }); return; }
+
+  const lines = readFileSync(file, 'utf8').split('\n');
+  let found = false;
+
+  const updated = lines.filter(line => {
+    if (!line.trim()) return true;
+    try {
+      const msg = JSON.parse(line) as PartnerMessage;
+      if (msg.id === id && (msg.status ?? 'sent') === 'draft') {
+        found = true;
+        return false; // Remove this line
+      }
+    } catch { /* keep malformed */ }
+    return true;
+  });
+
+  if (!found) {
+    res.status(404).json({ error: 'Draft not found or already sent' });
+    return;
+  }
+
+  writeFileSync(file, updated.join('\n'), 'utf8');
+
+  broadcast({
+    type: 'partner-message-deleted',
+    messageId: id,
+  });
+
+  res.json({ ok: true, messageId: id });
+});
+
+/**
  * GET /api/partner/messages/unread-count?userId=X
  * Returns count of unread messages for a user.
  */
@@ -183,8 +283,9 @@ router.get('/api/partner/messages/unread-count', (req: Request, res: Response) =
 
   const all = readAllMessages();
   const unread = userId === 'admin'
-    ? all.filter(m => m.readAt === null && m.from !== 'admin').length
+    ? all.filter(m => m.readAt === null && m.from !== 'admin' && (m.status ?? 'sent') === 'sent').length
     : all.filter(m =>
+        (m.status ?? 'sent') === 'sent' &&
         m.readAt === null &&
         m.from !== userId &&
         (m.to === userId || m.to === 'all'),

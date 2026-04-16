@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react';
+import { validateApiResponse } from '../../lib/validateApiResponse';
 
 const API = '/api';
 
 interface RACIEntry {
   task: string;
   owner: string;
-  responsible: string[];
-  approver: string[];
-  consulted: string[];
+  responsible?: string[];
+  approver?: string[];
+  consulted?: string[];
 }
 
 export default function ResponsibilityMatrix() {
@@ -23,8 +24,11 @@ export default function ResponsibilityMatrix() {
     try {
       const res = await fetch(`${API}/agents/team/structure`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`[ResponsibilityMatrix] load matrix failed: HTTP ${res.status}`);
-      const data = await res.json();
-      setMatrix(data.raciMatrix || []);
+      const raw = await res.json();
+      const data = validateApiResponse<{ raciMatrix: RACIEntry[] }>(raw, '/api/agents/team/structure', {
+        raciMatrix: 'array',
+      });
+      setMatrix(data.raciMatrix);
     } catch (err) {
       console.warn('[ResponsibilityMatrix] load matrix error:', err);
     } finally {
@@ -175,7 +179,7 @@ export default function ResponsibilityMatrix() {
               </div>
 
               {/* Responsible */}
-              {entry.responsible.filter(r => r !== entry.owner).map(person => (
+              {(entry.responsible ?? []).filter(r => r !== entry.owner).map(person => (
                 <div
                   key={person}
                   style={{
@@ -190,7 +194,7 @@ export default function ResponsibilityMatrix() {
               ))}
 
               {/* Approver */}
-              {entry.approver.map(person => (
+              {(entry.approver ?? []).map(person => (
                 <div
                   key={person}
                   style={{
@@ -205,7 +209,7 @@ export default function ResponsibilityMatrix() {
               ))}
 
               {/* Consulted */}
-              {entry.consulted.map(person => (
+              {(entry.consulted ?? []).map(person => (
                 <div
                   key={person}
                   style={{

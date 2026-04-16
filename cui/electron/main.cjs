@@ -117,7 +117,7 @@ function createWindow() {
   const modeLabel = isDevMode ? 'Dev' : isLocalMode ? 'Local' : isPartnerMode ? 'Partner' : 'Remote';
   const targetURL = `${baseURL}?mode=${modeLabel.toLowerCase()}`;
 
-  mainWindow.setTitle(`CUI Workspace [${modeLabel}]`);
+  mainWindow.setTitle(`WerkING Lab [${modeLabel}]`);
   console.log(`[Electron] Mode: ${modeLabel} → ${baseURL}`);
 
   if (isDevMode) {

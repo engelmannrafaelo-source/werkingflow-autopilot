@@ -274,53 +274,71 @@ export default function createControlRouter(deps: ControlDeps): Router {
       config: { initialSessionId: c.sessionId, accountId: c.accountId },
     }));
 
-    const utilityTabs = [
+    // Read pinned panels to avoid duplicating already-pinned components.
+    // If tool-hub is pinned, skip ALL utility tabs (tool-hub contains everything).
+    const pinnedComponents = new Set<string>();
+    let hasToolHub = false;
+    try {
+      const pinnedPath = join(DATA_DIR, 'pinned-panels.json');
+      if (existsSync(pinnedPath)) {
+        const pinned = JSON.parse(readFileSync(pinnedPath, 'utf8'));
+        for (const ts of pinned?.pinnedTabsets || []) {
+          for (const tab of ts.tabs || []) {
+            if (tab.component) pinnedComponents.add(tab.component);
+            if (tab.component === 'tool-hub') hasToolHub = true;
+          }
+        }
+      }
+    } catch { /* no pinned config */ }
+
+    const allUtility = hasToolHub ? [] : [
       { type: 'tab' as const, id: nextId(), name: 'File Preview', component: 'preview', config: {} },
       { type: 'tab' as const, id: nextId(), name: 'Notes', component: 'notes', config: {} },
       { type: 'tab' as const, id: nextId(), name: 'Browser', component: 'browser', config: {} },
       { type: 'tab' as const, id: nextId(), name: 'Images', component: 'images', config: {} },
     ];
     if (subConvs.length > 0) {
-      utilityTabs.push({ type: 'tab' as const, id: nextId(), name: 'Sub-Sessions', component: 'sub-sessions', config: {} });
+      allUtility.push({ type: 'tab' as const, id: nextId(), name: 'Sub-Sessions', component: 'sub-sessions', config: {} });
     }
+    // Filter out components that are already in pinned panels
+    const utilityTabs = allUtility.filter(t => !pinnedComponents.has(t.component));
 
     // Layout strategy: ALL children are tabsets at the SAME level (no nested rows!)
     // flexlayout alternates direction on nesting: row→horizontal, nested row→VERTICAL.
     // Keeping everything flat in one top-level row = all panels side by side horizontally.
+    // When utility tabs are all pinned, generate CUI-only layout (pinned merge adds them later).
     let layoutChildren: any[];
+    const hasUtility = utilityTabs.length > 0;
+
     if (cuiTabs.length <= 1) {
-      // 1 CUI + utility: simple 60/40 split
-      layoutChildren = [
-        { type: 'tabset', id: nextId(), weight: 60, children: cuiTabs.length > 0 ? cuiTabs : [{ type: 'tab', id: nextId(), name: 'CUI', component: 'cui', config: {} }] },
-        { type: 'tabset', id: nextId(), weight: 40, children: utilityTabs },
-      ];
+      const cuiChild = { type: 'tabset', id: nextId(), weight: hasUtility ? 60 : 100, children: cuiTabs.length > 0 ? cuiTabs : [{ type: 'tab', id: nextId(), name: 'CUI', component: 'cui', config: {} }] };
+      layoutChildren = hasUtility
+        ? [cuiChild, { type: 'tabset', id: nextId(), weight: 40, children: utilityTabs }]
+        : [cuiChild];
     } else if (cuiTabs.length === 2) {
-      // 2 CUI panels + utility: flat row with 3 tabsets (all horizontal)
       layoutChildren = [
-        { type: 'tabset', id: nextId(), weight: 35, children: [cuiTabs[0]] },
-        { type: 'tabset', id: nextId(), weight: 35, children: [cuiTabs[1]] },
-        { type: 'tabset', id: nextId(), weight: 30, children: utilityTabs },
+        { type: 'tabset', id: nextId(), weight: hasUtility ? 35 : 50, children: [cuiTabs[0]] },
+        { type: 'tabset', id: nextId(), weight: hasUtility ? 35 : 50, children: [cuiTabs[1]] },
       ];
+      if (hasUtility) layoutChildren.push({ type: 'tabset', id: nextId(), weight: 30, children: utilityTabs });
     } else if (cuiTabs.length === 3) {
-      // 3 CUI panels + utility: flat row with 4 tabsets
+      const w = hasUtility ? 25 : 33;
       layoutChildren = [
-        { type: 'tabset', id: nextId(), weight: 25, children: [cuiTabs[0]] },
-        { type: 'tabset', id: nextId(), weight: 25, children: [cuiTabs[1]] },
-        { type: 'tabset', id: nextId(), weight: 25, children: [cuiTabs[2]] },
-        { type: 'tabset', id: nextId(), weight: 25, children: utilityTabs },
+        { type: 'tabset', id: nextId(), weight: w, children: [cuiTabs[0]] },
+        { type: 'tabset', id: nextId(), weight: w, children: [cuiTabs[1]] },
+        { type: 'tabset', id: nextId(), weight: hasUtility ? 25 : 34, children: [cuiTabs[2]] },
       ];
+      if (hasUtility) layoutChildren.push({ type: 'tabset', id: nextId(), weight: 25, children: utilityTabs });
     } else {
-      // 4+ CUI panels: stack CUI tabs into fewer tabsets to avoid too many columns
-      // Group CUI tabs into pairs, each pair in one tabset (as tabs, not separate panels)
+      // 4+ CUI panels: group into pairs
       const cuiTabsets: any[] = [];
+      const totalCuiWeight = hasUtility ? 70 : 100;
       for (let i = 0; i < cuiTabs.length; i += 2) {
         const tabs = cuiTabs.slice(i, i + 2);
-        cuiTabsets.push({ type: 'tabset', id: nextId(), weight: Math.floor(70 / Math.ceil(cuiTabs.length / 2)), children: tabs });
+        cuiTabsets.push({ type: 'tabset', id: nextId(), weight: Math.floor(totalCuiWeight / Math.ceil(cuiTabs.length / 2)), children: tabs });
       }
-      layoutChildren = [
-        ...cuiTabsets,
-        { type: 'tabset', id: nextId(), weight: 30, children: utilityTabs },
-      ];
+      layoutChildren = [...cuiTabsets];
+      if (hasUtility) layoutChildren.push({ type: 'tabset', id: nextId(), weight: 30, children: utilityTabs });
     }
 
     const newLayout = { global: { splitterSize: 4 }, borders: [], layout: { type: 'row', id: nextId(), weight: 100, children: layoutChildren } };

@@ -9,6 +9,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
+import { validateApiResponse } from '../../lib/validateApiResponse';
 
 const API = '/api';
 
@@ -17,10 +18,15 @@ interface PartnerMessage {
   from: string;
   to: string;
   type: 'announcement' | 'direct' | 'system';
+  status?: 'draft' | 'sent';
   subject: string;
-  body: string;
   createdAt: string;
-  readAt: string | null;
+  body?: string;
+  readAt?: string | null;
+}
+
+interface MessagesApiResponse {
+  messages: PartnerMessage[];
 }
 
 const TYPE_COLORS: Record<string, string> = {
@@ -53,7 +59,7 @@ export default function PartnerInboxPanel({ projectId: _projectId }: PartnerInbo
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'all' | 'announcements' | 'direct'>('all');
+  const [activeTab, setActiveTab] = useState<'all' | 'announcements' | 'direct' | 'drafts'>('all');
 
   // Send form state
   const [sendTo, setSendTo] = useState('all');
@@ -68,18 +74,28 @@ export default function PartnerInboxPanel({ projectId: _projectId }: PartnerInbo
   const [replyBody, setReplyBody] = useState('');
   const [replying, setReplying] = useState(false);
 
+  // Draft editing state
+  const [editingDraft, setEditingDraft] = useState(false);
+  const [draftSubject, setDraftSubject] = useState('');
+  const [draftBody, setDraftBody] = useState('');
+  const [approving, setApproving] = useState(false);
+
   const wsRef = useRef<WebSocket | null>(null);
 
   // --- Load messages ---
   const loadMessages = useCallback(async () => {
     if ((window as any).__cuiServerAlive === false) return;
     try {
-      const res = await fetch(`${API}/partner/messages?userId=${encodeURIComponent(userId)}`, {
+      const endpoint = `${API}/partner/messages?userId=${encodeURIComponent(userId)}`;
+      const res = await fetch(endpoint, {
         signal: AbortSignal.timeout(10000),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      setMessages(data.messages ?? []);
+      const raw = await res.json();
+      const validated = validateApiResponse<MessagesApiResponse>(raw, endpoint, {
+        messages: 'array',
+      });
+      setMessages(validated.messages);
       setError(null);
     } catch (err: any) {
       setError(err.message || 'Fehler beim Laden');
@@ -106,7 +122,7 @@ export default function PartnerInboxPanel({ projectId: _projectId }: PartnerInbo
           setMessages(prev => {
             const m = msg.message as PartnerMessage;
             // Only add if relevant for this user
-            const relevant = isAdmin || m.to === userId || m.to === 'all' || m.from === userId;
+            const relevant = isAdmin || ((m.status ?? 'sent') === 'sent' && (m.to === userId || m.to === 'all' || m.from === userId));
             if (!relevant) return prev;
             // Deduplicate
             if (prev.some(p => p.id === m.id)) return prev;
@@ -116,6 +132,14 @@ export default function PartnerInboxPanel({ projectId: _projectId }: PartnerInbo
           setMessages(prev => prev.map(m =>
             m.id === msg.messageId ? { ...m, readAt: msg.readAt } : m,
           ));
+        } else if (msg.type === 'partner-message-approved') {
+          const approved = msg.message as PartnerMessage;
+          setMessages(prev => prev.map(m =>
+            m.id === approved.id ? { ...m, ...approved } : m,
+          ));
+        } else if (msg.type === 'partner-message-deleted') {
+          setMessages(prev => prev.filter(m => m.id !== msg.messageId));
+          setSelectedId(prev => prev === msg.messageId ? null : prev);
         }
       } catch { /* malformed WS message */ }
     };
@@ -212,14 +236,70 @@ export default function PartnerInboxPanel({ projectId: _projectId }: PartnerInbo
     }
   }, [userId, replyBody]);
 
+  // --- Approve draft ---
+  const handleApproveDraft = useCallback(async (msg: PartnerMessage) => {
+    setApproving(true);
+    try {
+      const res = await fetch(`${API}/partner/messages/${msg.id}/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          subject: editingDraft ? draftSubject : undefined,
+          body: editingDraft ? draftBody : undefined,
+        }),
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      // Update local state
+      setMessages(prev => prev.map(m =>
+        m.id === msg.id ? {
+          ...m,
+          status: 'sent' as const,
+          subject: editingDraft ? draftSubject : m.subject,
+          body: editingDraft ? draftBody : m.body,
+        } : m,
+      ));
+      setEditingDraft(false);
+    } catch (err: any) {
+      console.error('[PartnerInboxPanel] Approve failed:', err);
+    } finally {
+      setApproving(false);
+    }
+  }, [editingDraft, draftSubject, draftBody]);
+
+  // --- Reject/delete draft ---
+  const handleRejectDraft = useCallback(async (msg: PartnerMessage) => {
+    try {
+      const res = await fetch(`${API}/partner/messages/${msg.id}`, {
+        method: 'DELETE',
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setMessages(prev => prev.filter(m => m.id !== msg.id));
+      setSelectedId(null);
+    } catch (err: any) {
+      console.error('[PartnerInboxPanel] Delete failed:', err);
+    }
+  }, []);
+
+  // --- Start editing draft ---
+  const startEditDraft = useCallback((msg: PartnerMessage) => {
+    setEditingDraft(true);
+    setDraftSubject(msg.subject);
+    setDraftBody(msg.body ?? '');
+  }, []);
+
   // --- Filter ---
+  const draftCount = messages.filter(m => (m.status ?? 'sent') === 'draft').length;
+
   const filtered = messages.filter(m => {
-    if (activeTab === 'announcements') return m.type === 'announcement';
-    if (activeTab === 'direct') return m.type === 'direct';
-    return true;
+    if (activeTab === 'drafts') return (m.status ?? 'sent') === 'draft';
+    if (activeTab === 'announcements') return (m.status ?? 'sent') === 'sent' && m.type === 'announcement';
+    if (activeTab === 'direct') return (m.status ?? 'sent') === 'sent' && m.type === 'direct';
+    return true; // 'all' shows everything for admin
   });
 
-  const unreadCount = messages.filter(m => m.readAt === null && m.from !== userId).length;
+  const unreadCount = messages.filter(m => m.readAt === null && m.from !== userId && (m.status ?? 'sent') === 'sent').length;
   const selectedMsg = selectedId ? messages.find(m => m.id === selectedId) : null;
 
   return (
@@ -259,19 +339,23 @@ export default function PartnerInboxPanel({ projectId: _projectId }: PartnerInbo
         display: 'flex', background: 'var(--tn-bg-dark)',
         borderBottom: '1px solid var(--tn-border)', flexShrink: 0,
       }}>
-        {(['all', 'announcements', 'direct'] as const).map(tab => (
+        {(['all', ...(isAdmin && draftCount > 0 ? ['drafts'] : []), 'announcements', 'direct'] as const).map(tab => (
           <button
             key={tab}
-            onClick={() => setActiveTab(tab)}
+            onClick={() => setActiveTab(tab as typeof activeTab)}
             style={{
               flex: 1, background: activeTab === tab ? 'var(--tn-surface)' : 'transparent',
-              color: activeTab === tab ? 'var(--tn-blue)' : 'var(--tn-text-muted)',
+              color: activeTab === tab
+                ? (tab === 'drafts' ? 'var(--tn-orange)' : 'var(--tn-blue)')
+                : 'var(--tn-text-muted)',
               border: 'none',
-              borderBottom: activeTab === tab ? '2px solid var(--tn-blue)' : '2px solid transparent',
+              borderBottom: activeTab === tab
+                ? `2px solid ${tab === 'drafts' ? 'var(--tn-orange)' : 'var(--tn-blue)'}`
+                : '2px solid transparent',
               padding: '4px 6px', fontSize: 10, cursor: 'pointer',
             }}
           >
-            {tab === 'all' ? 'Alle' : tab === 'announcements' ? 'Ankündigungen' : 'Direkt'}
+            {tab === 'all' ? 'Alle' : tab === 'drafts' ? `Entwürfe (${draftCount})` : tab === 'announcements' ? 'Ankündigungen' : 'Direkt'}
           </button>
         ))}
       </div>
@@ -296,8 +380,9 @@ export default function PartnerInboxPanel({ projectId: _projectId }: PartnerInbo
               Keine Nachrichten
             </div>
           )}
-          {filtered.map(msg => {
-            const isUnread = msg.readAt === null && msg.from !== userId;
+          {filtered.map((msg, idx) => {
+            const isDraft = (msg.status ?? 'sent') === 'draft';
+            const isUnread = !isDraft && msg.readAt === null && msg.from !== userId;
             const isSelected = msg.id === selectedId;
             return (
               <div
@@ -306,20 +391,28 @@ export default function PartnerInboxPanel({ projectId: _projectId }: PartnerInbo
                 style={{
                   padding: '8px 10px', cursor: 'pointer',
                   borderBottom: '1px solid var(--tn-border)',
-                  background: isSelected ? 'var(--tn-bg-highlight)' : isUnread ? 'rgba(59,130,246,0.06)' : 'transparent',
-                  borderLeft: isUnread ? '2px solid var(--tn-blue)' : '2px solid transparent',
+                  background: isSelected ? 'var(--tn-bg-highlight)' : isDraft ? 'rgba(255,165,0,0.08)' : isUnread ? 'rgba(59,130,246,0.06)' : 'transparent',
+                  borderLeft: isDraft ? '2px solid var(--tn-orange)' : isUnread ? '2px solid var(--tn-blue)' : '2px solid transparent',
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
+                  {isDraft && (
+                    <span style={{
+                      fontSize: 9, padding: '1px 4px', borderRadius: 3,
+                      background: 'var(--tn-orange)', color: '#000', fontWeight: 700,
+                    }}>
+                      ENTWURF
+                    </span>
+                  )}
                   <span style={{
                     fontSize: 9, padding: '1px 4px', borderRadius: 3,
-                    background: `${TYPE_COLORS[msg.type]}22`,
-                    color: TYPE_COLORS[msg.type], fontWeight: 600,
+                    background: `${TYPE_COLORS[msg.type] ?? 'var(--tn-text-muted)'}22`,
+                    color: TYPE_COLORS[msg.type] ?? 'var(--tn-text-muted)', fontWeight: 600,
                   }}>
-                    {TYPE_LABELS[msg.type]}
+                    {TYPE_LABELS[msg.type] ?? ''}
                   </span>
                   <span style={{ flex: 1, fontSize: 11, fontWeight: isUnread ? 600 : 400, color: 'var(--tn-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {msg.subject || msg.body.slice(0, 40)}
+                    {msg.subject || (msg.body ?? '').slice(0, 40)}
                   </span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -346,10 +439,10 @@ export default function PartnerInboxPanel({ projectId: _projectId }: PartnerInbo
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
                 <span style={{
                   fontSize: 9, padding: '1px 5px', borderRadius: 3,
-                  background: `${TYPE_COLORS[selectedMsg.type]}22`,
-                  color: TYPE_COLORS[selectedMsg.type], fontWeight: 600,
+                  background: `${TYPE_COLORS[selectedMsg.type] ?? 'var(--tn-text-muted)'}22`,
+                  color: TYPE_COLORS[selectedMsg.type] ?? 'var(--tn-text-muted)', fontWeight: 600,
                 }}>
-                  {TYPE_LABELS[selectedMsg.type]}
+                  {TYPE_LABELS[selectedMsg.type] ?? ''}
                 </span>
                 <button
                   onClick={() => setSelectedId(null)}
@@ -382,11 +475,100 @@ export default function PartnerInboxPanel({ projectId: _projectId }: PartnerInbo
               fontSize: 12, color: 'var(--tn-text)', lineHeight: 1.6,
               whiteSpace: 'pre-wrap', wordBreak: 'break-word',
             }}>
-              {selectedMsg.body}
+              {selectedMsg.body ?? ''}
             </div>
 
+            {/* Draft approval area — admin can approve, edit, or reject drafts */}
+            {isAdmin && (selectedMsg.status ?? 'sent') === 'draft' && (
+              <div style={{
+                borderTop: '2px solid var(--tn-orange)', padding: '10px 12px',
+                background: 'rgba(255,165,0,0.06)', flexShrink: 0,
+              }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--tn-orange)', marginBottom: 8 }}>
+                  ENTWURF — Vor dem Senden prüfen
+                </div>
+
+                {editingDraft ? (
+                  <>
+                    <input
+                      value={draftSubject}
+                      onChange={e => setDraftSubject(e.target.value)}
+                      placeholder="Betreff"
+                      style={{
+                        width: '100%', background: 'var(--tn-bg)', color: 'var(--tn-text)',
+                        border: '1px solid var(--tn-border)', borderRadius: 3,
+                        fontSize: 11, padding: '4px 6px', marginBottom: 4,
+                        outline: 'none', boxSizing: 'border-box',
+                      }}
+                    />
+                    <textarea
+                      value={draftBody}
+                      onChange={e => setDraftBody(e.target.value)}
+                      rows={5}
+                      style={{
+                        width: '100%', resize: 'vertical', padding: '6px 8px',
+                        background: 'var(--tn-bg)', color: 'var(--tn-text)',
+                        border: '1px solid var(--tn-border)', borderRadius: 4,
+                        fontSize: 11, fontFamily: 'inherit', boxSizing: 'border-box',
+                        outline: 'none', marginBottom: 4,
+                      }}
+                    />
+                  </>
+                ) : null}
+
+                <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                  <button
+                    onClick={() => handleRejectDraft(selectedMsg)}
+                    style={{
+                      padding: '4px 12px', borderRadius: 4, fontSize: 11, cursor: 'pointer',
+                      background: 'transparent', color: 'var(--tn-red)',
+                      border: '1px solid var(--tn-red)', fontWeight: 600,
+                    }}
+                  >
+                    Verwerfen
+                  </button>
+                  {!editingDraft && (
+                    <button
+                      onClick={() => startEditDraft(selectedMsg)}
+                      style={{
+                        padding: '4px 12px', borderRadius: 4, fontSize: 11, cursor: 'pointer',
+                        background: 'transparent', color: 'var(--tn-text)',
+                        border: '1px solid var(--tn-border)', fontWeight: 600,
+                      }}
+                    >
+                      Bearbeiten
+                    </button>
+                  )}
+                  {editingDraft && (
+                    <button
+                      onClick={() => setEditingDraft(false)}
+                      style={{
+                        padding: '4px 12px', borderRadius: 4, fontSize: 11, cursor: 'pointer',
+                        background: 'transparent', color: 'var(--tn-text-muted)',
+                        border: '1px solid var(--tn-border)', fontWeight: 600,
+                      }}
+                    >
+                      Abbrechen
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleApproveDraft(selectedMsg)}
+                    disabled={approving}
+                    style={{
+                      padding: '4px 14px', borderRadius: 4, fontSize: 11, cursor: 'pointer',
+                      background: approving ? 'var(--tn-border)' : 'var(--tn-green, #22c55e)',
+                      color: approving ? 'var(--tn-text-muted)' : '#fff',
+                      border: 'none', fontWeight: 700,
+                    }}
+                  >
+                    {approving ? 'Sende…' : 'Absenden'}
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Reply area — only for partners replying to admin messages */}
-            {!isAdmin && selectedMsg.from !== userId && (
+            {!isAdmin && selectedMsg.from !== userId && (selectedMsg.status ?? 'sent') === 'sent' && (
               <div style={{
                 borderTop: '1px solid var(--tn-border)', padding: '8px 10px',
                 background: 'var(--tn-bg-dark)', flexShrink: 0,

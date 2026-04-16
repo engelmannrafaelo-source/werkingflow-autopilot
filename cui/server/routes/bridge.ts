@@ -223,11 +223,13 @@ router.get("/api/claude-code/stats-v2", async (_req, res) => {
 // POST /api/claude-code/scrape-now - Trigger on-demand usage scrape
 router.post("/api/claude-code/scrape-now", async (req, res) => {
   const { exec } = await import("child_process");
-  const scriptPath = resolve(import.meta.dirname ?? ".", "..", "scripts", "scrape-claude-usage.ts");
+  // routes/ → server/ → cui/ → scripts/
+  const cuiDir = resolve(import.meta.dirname ?? ".", "..", "..");
+  const scriptPath = resolve(cuiDir, "scripts", "scrape-claude-usage.ts");
 
   console.log("[CC-Usage] Starting on-demand scrape...");
 
-  exec(`cd ${resolve(import.meta.dirname ?? ".", "..")} && npx tsx ${scriptPath}`, (err, stdout, stderr) => {
+  exec(`cd ${cuiDir} && npx tsx ${scriptPath}`, (err, stdout, stderr) => {
     if (err) {
       console.error("[CC-Usage] Scrape failed:", err.message);
       return res.status(500).json({ error: err.message, stderr });
@@ -366,17 +368,21 @@ function bridgeMetricHandler(name: string, path: string | ((req: any) => string)
   };
 }
 
-// Overview: Composite from /stats + /health + /v1/sessions/stats + /rate-limits
+// Overview: Composite from /stats + /health + /v1/sessions/stats + /rate-limits + AI-Guard
 router.get('/api/bridge/metrics/overview', async (_req, res) => {
   try {
-    const [stats, health, sessions, rateLimits] = await Promise.all([
+    const [stats, health, sessions, rateLimits, guardStatus] = await Promise.all([
       bridgeFetch('/stats').catch(() => null),
       bridgeFetch('/health').catch(() => null),
       bridgeFetch('/v1/sessions/stats').catch(() => null),
       bridgeFetch('/rate-limits').catch(() => null),
+      // AI-Guard status (local service, fast)
+      fetch('http://localhost:8050/status', { signal: AbortSignal.timeout(2000) })
+        .then(r => r.json()).catch(() => null),
     ]);
-    console.log('[Bridge] Overview: stats=%s health=%s sessions=%s limits=%s',
-      stats ? 'ok' : 'fail', health ? 'ok' : 'fail', sessions ? 'ok' : 'fail', rateLimits ? 'ok' : 'fail');
+    console.log('[Bridge] Overview: stats=%s health=%s sessions=%s limits=%s guard=%s',
+      stats ? 'ok' : 'fail', health ? 'ok' : 'fail', sessions ? 'ok' : 'fail',
+      rateLimits ? 'ok' : 'fail', guardStatus ? 'ok' : 'fail');
     res.json({
       health: health?.status ?? stats?.status ?? 'unknown',
       worker: rateLimits?.current_worker ?? health?.worker_instance ?? '-',
@@ -391,6 +397,14 @@ router.get('/api/bridge/metrics/overview', async (_req, res) => {
       memory_used_gb: stats?.request_limiting?.memory_used_gb ?? 0,
       can_accept_requests: stats?.can_accept_requests ?? false,
       rate_limited: rateLimits?.current_worker_rate_limited ?? false,
+      // AI-Guard data
+      guard: guardStatus ? {
+        running: true,
+        slots: guardStatus.slots,
+        queue: guardStatus.queue,
+        queueLength: guardStatus.queueLength,
+        metrics: guardStatus.metrics,
+      } : { running: false },
       timestamp: new Date().toISOString(),
     });
   } catch (err: any) {
@@ -398,10 +412,262 @@ router.get('/api/bridge/metrics/overview', async (_req, res) => {
     res.json({ _error: err.message, _note: 'Bridge not reachable' });
   }
 });
-router.get('/api/bridge/metrics/usage', bridgeMetricHandler('Usage', '/v1/sessions/stats', { session_stats: {} }));
-router.get('/api/bridge/metrics/cost', bridgeMetricHandler('Cost', '/v1/metrics', { metrics: {} }));
+// Usage: Composite from /stats + /v1/metrics/request-log to build the shape the frontend expects
+router.get('/api/bridge/metrics/usage', async (_req, res) => {
+  try {
+    const [stats, requestLog] = await Promise.all([
+      bridgeFetch('/stats').catch(() => null),
+      bridgeFetch('/v1/metrics/request-log?hours=24&limit=1000').catch(() => null),
+    ]);
+
+    // Build endpoint breakdown from request log if available
+    const endpointMap: Record<string, { requests: number; totalTime: number }> = {};
+    if (requestLog?.entries && Array.isArray(requestLog.entries)) {
+      for (const entry of requestLog.entries) {
+        const ep = entry.endpoint || entry.path || 'unknown';
+        if (!endpointMap[ep]) endpointMap[ep] = { requests: 0, totalTime: 0 };
+        endpointMap[ep].requests++;
+        endpointMap[ep].totalTime += entry.response_time ?? entry.duration ?? 0;
+      }
+    }
+
+    const endpoints = Object.entries(endpointMap)
+      .map(([endpoint, data]) => ({
+        endpoint,
+        requests: data.requests,
+        avg_response_time: data.requests > 0 ? data.totalTime / data.requests : undefined,
+      }))
+      .sort((a, b) => b.requests - a.requests);
+
+    res.json({
+      total_requests: stats?.request_limiting?.total_requests ?? 0,
+      endpoints,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    console.warn('[Bridge] Usage composite error:', err.message);
+    res.json({
+      total_requests: 0,
+      endpoints: [],
+      timestamp: new Date().toISOString(),
+      _error: err.message,
+    });
+  }
+});
+// Cost: Composite from /stats + /v1/metrics/request-log (Bridge has no native cost tracking)
+router.get('/api/bridge/metrics/cost', async (_req, res) => {
+  try {
+    const [stats, requestLog] = await Promise.all([
+      bridgeFetch('/stats').catch(() => null),
+      bridgeFetch('/v1/metrics/request-log?hours=24&limit=2000').catch(() => null),
+    ]);
+
+    const totalRequests = stats?.request_limiting?.total_requests ?? 0;
+
+    // Count requests by model from the request log (endpoint = /v1/chat/completions)
+    const chatRequests = (requestLog?.entries ?? []).filter(
+      (e: any) => e.endpoint === '/v1/chat/completions' && e.status === 200
+    );
+
+    // Estimate tokens/costs from duration (rough heuristic since Bridge doesn't track tokens)
+    // Average: ~500 tokens/s output, ~2000 tokens input per request
+    const estimatedTokens = chatRequests.length * 3000; // rough estimate
+    const estimatedCost = chatRequests.length * 0.015; // ~$0.015 per sonnet request avg
+
+    // Build model breakdown (we don't have model info in logs, show aggregate)
+    const breakdown: Record<string, { requests: number; tokens: number; cost_usd: number }> = {};
+    if (chatRequests.length > 0) {
+      breakdown['claude-sonnet (estimated)'] = {
+        requests: chatRequests.length,
+        tokens: estimatedTokens,
+        cost_usd: estimatedCost,
+      };
+    }
+
+    res.json({
+      total_requests: totalRequests,
+      estimated_tokens: estimatedTokens,
+      estimated_cost_usd: estimatedCost,
+      breakdown,
+      note: 'Cost estimates based on request count. Bridge does not track per-request token usage.',
+      timestamp: new Date().toISOString(),
+      _contractViolations: [{
+        code: 'BRIDGE_COST_ESTIMATED', severity: 'error',
+        message: 'Kosten sind Schätzwerte — nicht Token-basiert',
+        detail: `${chatRequests.length} Requests x $0.015 Durchschnitt = $${estimatedCost.toFixed(2)}. Echte Token-Daten fehlen.`,
+      }],
+    });
+  } catch (err: any) {
+    console.warn('[Bridge] Cost composite error:', err.message);
+    res.json({
+      total_requests: 0,
+      estimated_tokens: 0,
+      estimated_cost_usd: 0,
+      breakdown: {},
+      note: 'Bridge not reachable',
+      timestamp: new Date().toISOString(),
+      _error: err.message,
+    });
+  }
+});
 router.get('/api/bridge/metrics/limits', bridgeMetricHandler('Limits', '/rate-limits', { current_worker: 'unknown', all_rate_limits: {} }));
-router.get('/api/bridge/metrics/activity', bridgeMetricHandler('Activity', (req) => `/v1/sessions${req.query.limit ? `?limit=${req.query.limit}` : ''}`, { sessions: [], total: 0 }));
+// Activity: Uses prompt-performance/calls for rich per-call data (user, app, model, tokens)
+router.get('/api/bridge/metrics/activity', async (req: any, res: any) => {
+  try {
+    const limit = req.query.limit || '100';
+    const hours = req.query.hours || '24';
+    const app_id = req.query.app_id || '';
+    const user_id = req.query.user_id || '';
+
+    // Try new rich endpoint first, fall back to request-log
+    let url = `/v1/metrics/prompt-performance/calls?hours=${hours}&limit=${limit}`;
+    if (app_id) url += `&app_id=${encodeURIComponent(app_id)}`;
+    if (user_id) url += `&user_id=${encodeURIComponent(user_id)}`;
+
+    const data = await bridgeFetch(url);
+    const calls = data?.calls ?? [];
+
+    // Cost estimation per call (hardcoded pricing — same as Bridge usage_tracker.py)
+    const PRICING: Record<string, { input: number; output: number }> = {
+      'sonnet': { input: 3.0, output: 15.0 },
+      'haiku': { input: 0.80, output: 4.0 },
+      'opus': { input: 15.0, output: 75.0 },
+    };
+    function estimateCost(model: string, inputTokens: number, outputTokens: number): number {
+      const key = model.includes('opus') ? 'opus' : model.includes('haiku') ? 'haiku' : 'sonnet';
+      const p = PRICING[key];
+      return (inputTokens / 1_000_000) * p.input + (outputTokens / 1_000_000) * p.output;
+    }
+
+    const requests = calls.map((c: any, idx: number) => ({
+      id: `call-${Math.round((c.timestamp ?? 0) * 1000)}-${idx}`,
+      timestamp: c.timestamp ? new Date(c.timestamp * 1000).toISOString() : new Date().toISOString(),
+      user: c.user_id || 'anonymous',
+      app: c.app_id || 'unknown',
+      model: c.model || '-',
+      provider: `worker:${c.worker || '?'}`,
+      tokens: (c.input_tokens ?? 0) + (c.output_tokens ?? 0),
+      cost: estimateCost(c.model || '', c.input_tokens ?? 0, c.output_tokens ?? 0),
+      latency: c.duration_ms ?? 0,
+      status: c.status === 'success' ? 'success' : c.status === 'timeout' ? 'timeout' : 'error',
+      // Extra fields for detailed view
+      agent_id: c.agent_id,
+      input_tokens: c.input_tokens,
+      output_tokens: c.output_tokens,
+      session_id: c.session_id,
+    }));
+
+    // --- Layer-0 Contract Checks ---
+    const _contractViolations: Array<{ code: string; severity: string; message: string; detail?: string; count?: number; total?: number }> = [];
+
+    const noUser = requests.filter((r: any) => !r.user || r.user === 'anonymous' || r.user === '-');
+    if (noUser.length > 0) {
+      _contractViolations.push({
+        code: 'BRIDGE_NO_USER', severity: 'error',
+        message: `${noUser.length}/${requests.length} Calls ohne User-Attribution`,
+        detail: 'Bridge sendet kein user_id — Kosten nicht zuordbar',
+        count: noUser.length, total: requests.length,
+      });
+    }
+    const noApp = requests.filter((r: any) => !r.app || r.app === 'unknown' || r.app === 'chat');
+    if (noApp.length > 0) {
+      _contractViolations.push({
+        code: 'BRIDGE_NO_APP', severity: noApp.length === requests.length ? 'error' : 'warning',
+        message: `${noApp.length}/${requests.length} Calls ohne App-Attribution`,
+        detail: 'Bridge sendet kein app_id',
+        count: noApp.length, total: requests.length,
+      });
+    }
+    const successful = requests.filter((r: any) => r.status === 'success');
+    const zeroTokens = successful.filter((r: any) => r.tokens === 0);
+    if (zeroTokens.length > 0 && successful.length > 0) {
+      _contractViolations.push({
+        code: 'BRIDGE_NO_TOKENS', severity: zeroTokens.length > successful.length / 2 ? 'error' : 'warning',
+        message: `Token-Tracking: ${zeroTokens.length}/${successful.length} Calls ohne Tokens`,
+        detail: 'Kosten können nicht berechnet werden',
+        count: zeroTokens.length, total: successful.length,
+      });
+    }
+
+    if (_contractViolations.length > 0) {
+      console.warn(`[Bridge] Contract violations on /activity: ${_contractViolations.map(v => v.code).join(', ')}`);
+    }
+
+    res.json({
+      requests,
+      total: data?.total ?? requests.length,
+      _contractViolations,
+    });
+  } catch (err: any) {
+    console.warn('[Bridge] Activity error:', err.message);
+    // Fallback: try request-log (older Bridge without /calls endpoint)
+    try {
+      const limit = req.query.limit || '100';
+      const chatLog = await bridgeFetch(`/v1/metrics/request-log?hours=24&limit=${limit}&endpoint=chat/completions`).catch(() => null);
+      const entries = chatLog?.entries ?? [];
+      const requests = entries.map((entry: any, idx: number) => ({
+        id: `req-${Math.round((entry.ts ?? 0) * 1000)}-${idx}`,
+        timestamp: entry.ts ? new Date(entry.ts * 1000).toISOString() : new Date().toISOString(),
+        user: entry.client || '-',
+        app: 'chat',
+        model: 'claude-sonnet',
+        provider: `worker:${entry.worker || '?'}`,
+        tokens: 0,
+        cost: 0,
+        latency: Math.round((entry.duration_s ?? 0) * 1000),
+        status: (entry.status ?? 0) < 400 ? 'success' : 'error',
+      }));
+      res.json({
+        requests, total: chatLog?.summary?.total_requests ?? requests.length,
+        _contractViolations: [{
+          code: 'BRIDGE_FALLBACK', severity: 'error',
+          message: 'Fallback auf request-log — keine Token/User/App-Daten verfügbar',
+          detail: 'Bridge /v1/metrics/prompt-performance/calls Endpoint nicht erreichbar',
+        }],
+      });
+    } catch {
+      res.json({ requests: [], total: 0, _error: err.message });
+    }
+  }
+});
+
+// Usage Breakdown: Per-app, per-user, per-model aggregation with Sankey data
+router.get('/api/bridge/metrics/usage-breakdown', async (req: any, res: any) => {
+  const hours = req.query.hours || '24';
+  try {
+    const data = await bridgeFetch(`/v1/metrics/usage-breakdown?hours=${hours}`);
+    // --- Layer-0 Contract Checks ---
+    const violations: Array<{ code: string; severity: string; message: string; detail?: string; count?: number; total?: number }> = [];
+    const summary = data?.summary || {};
+    const users = data?.users || [];
+    const anonUsers = users.filter((u: any) => !u.user_id || u.user_id === 'anonymous');
+    if (anonUsers.length > 0) {
+      const anonCalls = anonUsers.reduce((s: number, u: any) => s + (u.calls || 0), 0);
+      violations.push({
+        code: 'BRIDGE_NO_USER', severity: 'error',
+        message: `${anonCalls} Calls von "anonymous" Users — nicht zuordbar`,
+        detail: `${anonUsers.length} User-Einträge ohne echte User-ID`,
+        count: anonCalls, total: summary.total_calls || 0,
+      });
+    }
+    if (summary.total_tokens === 0 && summary.total_calls > 0) {
+      violations.push({
+        code: 'BRIDGE_NO_TOKENS', severity: 'error',
+        message: `${summary.total_calls} Calls, aber 0 Tokens erfasst`,
+        detail: 'Token-Tracking ist ausgefallen — Kosten-Berechnung unmöglich',
+      });
+    }
+    res.json({ ...data, _contractViolations: violations.length > 0 ? violations : undefined });
+  } catch (err: any) {
+    console.warn(`[Bridge] UsageBreakdown: ${err.message}`);
+    res.json({
+      summary: { total_calls: 0, total_input_tokens: 0, total_output_tokens: 0, total_tokens: 0, total_errors: 0 },
+      apps: [], users: [], models: [], sankey_links: [],
+      period_hours: parseInt(hours as string) || 24,
+      _error: err.message,
+    });
+  }
+});
 
 // Persistent metrics from PostgreSQL (survives worker restarts)
 router.get("/api/bridge/metrics/persistent", bridgeMetricHandler("Persistent", "/v1/metrics/persistent", { source: "postgresql", realtime: {}, daily: [], endpoints: [], models: [], apps: [] }));
@@ -477,6 +743,19 @@ router.post("/api/bridge/metrics/cc-usage-snapshot", async (req: any, res: any) 
   } catch (err: any) {
     console.warn(`[Bridge] CCUsageSnapshot save: ${err.message}`);
     res.json({ status: "error", _error: err.message });
+  }
+});
+
+// ── AI-Guard Status ────────────────────────────────────────────────────────
+// Local AI-Guard dispatcher — priority queue + concurrency control
+router.get('/api/bridge/guard/status', async (_req, res) => {
+  try {
+    const response = await fetch('http://localhost:8050/status', { signal: AbortSignal.timeout(3000) });
+    if (!response.ok) throw new Error(`Guard returned ${response.status}`);
+    const data = await response.json();
+    res.json({ ...data, running: true });
+  } catch (err: any) {
+    res.json({ running: false, _error: err.message });
   }
 });
 

@@ -1,4 +1,7 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
+import ContractBanner from '../../../ContractBanner';
+import { extractViolations, BridgeContracts } from '../../../../lib/dataContracts';
 
 interface Request {
   id: string;
@@ -26,6 +29,7 @@ const STATUS_COLORS: Record<string, string> = {
 
 export default function ActivityFeedTab() {
   const [data, setData] = useState<ActivityData | null>(null);
+  const [rawResponse, setRawResponse] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -38,14 +42,18 @@ export default function ActivityFeedTab() {
     try {
       const res = await fetch('/api/bridge/metrics/activity?limit=100', { signal: AbortSignal.timeout(10000) });
       if (!res.ok) throw new Error(await res.text());
-      const result = await res.json();
+      const raw = await res.json();
+      setRawResponse(raw);
       // API returns {sessions: [...]} but component expects {requests: [...]}
-      if (result.sessions && !result.requests) {
-        result.requests = result.sessions;
+      if (raw.sessions && !raw.requests) {
+        raw.requests = raw.sessions;
       }
-      setData(result);
+      const validated = validateApiResponse<ActivityData>(raw, '/api/bridge/metrics/activity', {
+        requests: 'array',
+        total: 'number',
+      });
+      setData(validated);
     } catch (err: any) {
-      // Error state shown in UI via setError
       setError(err.message);
     } finally {
       setLoading(false);
@@ -59,7 +67,7 @@ export default function ActivityFeedTab() {
     return () => clearInterval(interval);
   }, [fetchData, autoRefresh]);
 
-  const filteredRequests = (data?.requests ?? []).filter((req) => {
+  const filteredRequests = (data?.requests || []).filter((req) => {
     if (filter.user && !req.user.toLowerCase().includes(filter.user.toLowerCase())) return false;
     if (filter.app && !req.app.toLowerCase().includes(filter.app.toLowerCase())) return false;
     if (filter.model && !req.model.toLowerCase().includes(filter.model.toLowerCase())) return false;
@@ -68,13 +76,31 @@ export default function ActivityFeedTab() {
   });
 
   const formatLatency = (ms: number) => {
-    const safeMs = ms ?? 0;
-    if (safeMs >= 1000) return `${(safeMs / 1000).toFixed(1)}s`;
-    return `${safeMs}ms`;
+    if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
+    return `${ms}ms`;
   };
 
+  // Contract violations: server-side + client-side checks
+  const violations = useMemo(() => {
+    const serverV = extractViolations(rawResponse);
+    const clientV = data ? BridgeContracts.dataQuality(data.requests) : { violations: [], score: 100 };
+    const seen = new Set<string>();
+    return [...serverV, ...clientV.violations].filter(v => {
+      if (seen.has(v.code)) return false;
+      seen.add(v.code);
+      return true;
+    });
+  }, [rawResponse, data]);
+
+  const dataQuality = useMemo(() => {
+    if (!data) return 100;
+    return BridgeContracts.dataQuality(data.requests).score;
+  }, [data]);
+
   return (
-    <div data-ai-id="bridge-activity-tab" style={{ padding: 12, height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <div data-ai-id="bridge-activity-tab" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <ContractBanner violations={violations} dataQuality={dataQuality} />
+      <div style={{ padding: 12, flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {/* Header */}
       <div data-ai-id="bridge-activity-filters" style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
         <input
@@ -266,10 +292,10 @@ export default function ActivityFeedTab() {
                   </div>
                   <div style={{ color: 'var(--tn-text-muted)' }}>{req.provider}</div>
                   <div style={{ color: 'var(--tn-purple, #bb9af7)', textAlign: 'right' }}>
-                    {(req.tokens ?? 0).toLocaleString()}
+                    {req.tokens.toLocaleString()}
                   </div>
                   <div style={{ color: 'var(--tn-green)', textAlign: 'right' }}>
-                    €{(req.cost ?? 0).toFixed(3)}
+                    €{req.cost.toFixed(3)}
                   </div>
                   <div
                     style={{
@@ -309,7 +335,7 @@ export default function ActivityFeedTab() {
             <div data-ai-id="bridge-activity-stats-showing">
               <span style={{ color: 'var(--tn-text-muted)' }}>Showing:</span>{' '}
               <span style={{ fontWeight: 600, color: 'var(--tn-text)' }}>
-                {filteredRequests?.length || 0}
+                {filteredRequests.length}
               </span>
             </div>
             <div data-ai-id="bridge-activity-stats-total">
@@ -319,6 +345,7 @@ export default function ActivityFeedTab() {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }

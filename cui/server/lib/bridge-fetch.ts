@@ -9,12 +9,21 @@
 const BRIDGE_URL = process.env.AI_BRIDGE_URL;
 const BRIDGE_API_KEY = process.env.AI_BRIDGE_API_KEY;
 
+export interface BridgeAttribution {
+  userId?: string;
+  appId?: string;
+  agentId?: string;
+  workflowId?: string;
+  jobId?: string;
+}
+
 export interface BridgeChatOptions {
   model?: string;
   max_tokens?: number;
   messages: Array<{ role: string; content: string }>;
   privacy?: 'none' | 'standard' | 'strict';  // default: 'none'
   timeout?: number;  // ms, default: 300000 (5min)
+  attribution?: BridgeAttribution;
 }
 
 export interface BridgeChatResponse {
@@ -34,6 +43,16 @@ export async function bridgeChat(opts: BridgeChatOptions): Promise<string> {
 
   const privacy = opts.privacy ?? 'none';
   const timeout = opts.timeout ?? 300000;
+  const attr = opts.attribution ?? {};
+
+  // Attribution headers — EVERY Bridge call MUST be identifiable
+  const attributionHeaders: Record<string, string> = {
+    'X-App-ID': attr.appId || 'cui',
+    'X-User-ID': attr.userId || 'system',
+  };
+  if (attr.agentId) attributionHeaders['X-Agent-ID'] = attr.agentId;
+  if (attr.workflowId) attributionHeaders['X-Workflow-ID'] = attr.workflowId;
+  if (attr.jobId) attributionHeaders['X-Job-ID'] = attr.jobId;
 
   const body = JSON.stringify({
     model: opts.model ?? 'claude-sonnet-4-5-20250929',
@@ -58,6 +77,7 @@ export async function bridgeChat(opts: BridgeChatOptions): Promise<string> {
           'Authorization': `Bearer ${BRIDGE_API_KEY}`,
           'Content-Type': 'application/json',
           'X-Privacy-Mode': privacy,
+          ...attributionHeaders,
         },
         body,
         signal: AbortSignal.timeout(timeout),

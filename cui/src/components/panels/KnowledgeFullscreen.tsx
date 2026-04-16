@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import ScanDocumentsButton from './ScanDocumentsButton';
 import KnowledgeGraphView from './KnowledgeGraphView';
 import PersonaDocumentList from './PersonaDocumentList';
+import { validateApiResponse } from '../../lib/validateApiResponse';
 
 const API = '/api';
 
@@ -9,10 +10,10 @@ interface Persona {
   id: string;
   name: string;
   role: string;
-  status: 'idle' | 'working' | 'error';
-  mbti: string;
-  worklistPath: string;
-  lastUpdated: string;
+  status?: 'idle' | 'working' | 'error';
+  mbti?: string;
+  worklistPath?: string;
+  lastUpdated?: string;
 }
 
 interface KnowledgeFullscreenProps {
@@ -35,17 +36,25 @@ export default function KnowledgeFullscreen({ projectId, workDir }: KnowledgeFul
     try {
       const res = await fetch(`${API}/agents/claude/status`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error('Failed to load personas');
-      const data = await res.json();
+      const raw = await res.json();
+      const data = validateApiResponse<{ agents: any[] }>(raw, '/api/agents/claude/status', {
+        agents: 'array',
+      });
 
-      const agentPersonas: Persona[] = (data.agents || []).map((agent: any) => ({
-        id: agent.persona_id,
-        name: agent.persona_name,
-        role: agent.schedule,
-        status: agent.status,
-        mbti: '',
-        worklistPath: '',
-        lastUpdated: agent.last_run || ''
-      }));
+      const agentPersonas: Persona[] = data.agents.map((agent: any) => {
+        if (!agent.persona_id || !agent.persona_name) {
+          throw new Error(`API /api/agents/claude/status: agent missing persona_id or persona_name`);
+        }
+        return {
+          id: agent.persona_id,
+          name: agent.persona_name,
+          role: agent.schedule ?? 'unknown',
+          status: agent.status,
+          mbti: '',
+          worklistPath: '',
+          lastUpdated: agent.last_run || '',
+        };
+      });
 
       setPersonas(agentPersonas);
     } catch (err) {
@@ -250,12 +259,12 @@ export default function KnowledgeFullscreen({ projectId, workDir }: KnowledgeFul
           {viewMode === 'graph' ? (
             <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
               <KnowledgeGraphView
-                personas={personas}
+                personas={personas as any}
                 onPersonaClick={(personaId) => {
                   const persona = personas.find(p => p.id === personaId);
                   if (persona) setSelectedPersona(persona);
                 }}
-                selected={selectedPersona}
+                selected={selectedPersona as any}
               />
             </div>
           ) : (

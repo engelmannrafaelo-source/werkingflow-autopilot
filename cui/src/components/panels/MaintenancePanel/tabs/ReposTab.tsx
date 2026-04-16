@@ -1,13 +1,18 @@
 import React, { useState, useEffect } from 'react';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
 
 interface RepoStatus {
   name: string;
   path: string;
-  status: {
-    branch: string;
-    dirty: number;
-    unpushed: number;
+  status?: {
+    branch?: string;
+    dirty?: number;
+    unpushed?: number;
   };
+}
+
+interface ReposApiResponse {
+  repos: RepoStatus[];
 }
 
 export default function ReposTab() {
@@ -24,8 +29,11 @@ export default function ReposTab() {
     try {
       const res = await fetch('/api/maintenance/status', { signal: AbortSignal.timeout(15000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      setRepos(data.repos ?? []);
+      const raw = await res.json();
+      const data = validateApiResponse<ReposApiResponse>(raw, '/api/maintenance/status', {
+        repos: 'array',
+      });
+      setRepos(data.repos);
     } catch (err) {
       console.warn('[ReposTab] fetch failed:', err);
     } finally {
@@ -52,8 +60,8 @@ export default function ReposTab() {
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {repos.map(repo => {
-          const isClean = repo.status.dirty === 0 && repo.status.unpushed === 0;
-          const isMissing = repo.status.dirty === -1;
+          const isClean = (repo.status?.dirty ?? 0) === 0 && (repo.status?.unpushed ?? 0) === 0;
+          const isMissing = (repo.status?.dirty ?? 0) === -1;
 
           return (
             <div
@@ -105,7 +113,7 @@ export default function ReposTab() {
                   marginLeft: 'auto',
                   border: '1px solid rgba(122,162,247,0.4)',
                 }}>
-                  {repo.status.branch}
+                  {repo.status?.branch ?? ''}
                 </span>
               </div>
 
@@ -130,7 +138,7 @@ export default function ReposTab() {
                   </span>
                 ) : (
                   <>
-                    {repo.status.dirty > 0 && (
+                    {(repo.status?.dirty ?? 0) > 0 && (
                       <span style={{
                         fontSize: 10,
                         fontWeight: 700,
@@ -141,10 +149,10 @@ export default function ReposTab() {
                         fontFamily: 'monospace',
                         border: '1px solid rgba(224,175,104,0.4)',
                       }}>
-                        {repo.status.dirty} uncommitted
+                        {repo.status?.dirty ?? 0} uncommitted
                       </span>
                     )}
-                    {repo.status.unpushed > 0 && (
+                    {(repo.status?.unpushed ?? 0) > 0 && (
                       <span style={{
                         fontSize: 10,
                         fontWeight: 700,
@@ -155,7 +163,7 @@ export default function ReposTab() {
                         fontFamily: 'monospace',
                         border: '1px solid rgba(255,158,100,0.4)',
                       }}>
-                        {repo.status.unpushed} unpushed
+                        {repo.status?.unpushed ?? 0} unpushed
                       </span>
                     )}
                     {isClean && (

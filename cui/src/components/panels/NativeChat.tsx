@@ -1,12 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Paperclip, X, Image as ImageIcon } from 'lucide-react';
+import { validateApiResponse } from '../../lib/validateApiResponse';
 
 interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   images?: string[]; // Base64 encoded images
-  timestamp: number;
+  timestamp?: number;
 }
 
 interface NativeChatProps {
@@ -135,11 +136,20 @@ export default function NativeChat({ accountId, proxyPort }: NativeChatProps) {
 
       if (!response.ok) throw new Error(`[NativeChat] send failed: HTTP ${response.status}`);
 
-      const data = await response.json();
+      const raw = await response.json();
+      const data = validateApiResponse<{ choices: Array<{ message: { content: string } }> }>(
+        raw,
+        `/api/chat/completions`,
+        { choices: 'array' },
+      );
+      const firstChoice = data.choices[0];
+      if (!firstChoice?.message?.content) {
+        throw new Error(`API /api/chat/completions: choices[0].message.content is missing`);
+      }
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: data.choices?.[0]?.message?.content || 'No response',
+        content: firstChoice.message.content,
         timestamp: Date.now()
       };
 
@@ -184,7 +194,7 @@ export default function NativeChat({ accountId, proxyPort }: NativeChatProps) {
           </div>
         )}
 
-        {messages.map(msg => (
+        {messages.map((msg, idx) => (
           <div
             key={msg.id}
             className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
@@ -212,7 +222,7 @@ export default function NativeChat({ accountId, proxyPort }: NativeChatProps) {
               <p className={`text-xs mt-1 ${
                 msg.role === 'user' ? 'text-blue-100' : 'text-gray-400'
               }`}>
-                {new Date(msg.timestamp).toLocaleTimeString()}
+                {new Date(msg.timestamp ?? 0).toLocaleTimeString()}
               </p>
             </div>
           </div>

@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { BRIDGE_URL, authHeaders, StatusBadge, ActionButton, Section, Toolbar, ErrorBanner } from '../shared';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
 
 interface PingResult {
   ok: boolean;
@@ -125,7 +126,7 @@ export default function TestTab() {
       setPingResult({
         ok: res.ok && priv?.enabled,
         latency,
-        status: priv ? `Presidio ${priv.enabled ? 'aktiv' : 'inaktiv'} (${priv.language}) · ${priv.supported_entities?.length ?? 0} Entities` : JSON.stringify(data).slice(0, 120),
+        status: priv ? `Presidio ${priv.enabled ? 'aktiv' : 'inaktiv'} (${priv.language}) · ${priv.supported_entities?.length || 0} Entities` : JSON.stringify(data).slice(0, 120),
       });
     } catch (err: any) {
       console.warn('[BridgeTest] privacy check failed:', err);
@@ -147,7 +148,7 @@ export default function TestTab() {
       setPingResult({
         ok: res.ok && data.status === 'healthy',
         latency,
-        status: `${data.workers} Workers · ${data.strategy} · Failover: ${data.failover} · Paused: ${data.paused?.length ?? 0}`,
+        status: `${data.workers} Workers · ${data.strategy} · Failover: ${data.failover} · Paused: ${data.paused?.length || 0}`,
       });
     } catch (err: any) {
       console.warn('[BridgeTest] lb-status check failed:', err);

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
 
 interface Deployment {
   name: string;
@@ -11,7 +12,7 @@ interface Deployment {
 }
 
 interface AiBridgeHealth {
-  status?: string;
+  status: string;
   version?: string;
   uptime?: number;
   presidio?: boolean;
@@ -41,10 +42,20 @@ export default function DeploymentsTab({ envMode }: { envMode?: string }) {
         const wrDeployments = (data.deployments || []).filter((d: any) =>
           d.project === 'werking-report' || d.name?.toLowerCase().includes('werking-report')
         );
-        setDeployments(wrDeployments);
+        wrDeployments.forEach((d: unknown, i: number) => {
+          validateApiResponse<Deployment>(d, `/api/ops/deployments[${i}]`, {
+            name: 'string',
+            state: 'string',
+          });
+        });
+        setDeployments(wrDeployments as Deployment[]);
       }
       if (bridgeRes?.ok) {
-        setBridgeHealth(await bridgeRes.json());
+        const bridgeRaw = await bridgeRes.json();
+        const validatedBridge = validateApiResponse<AiBridgeHealth>(bridgeRaw, '/api/admin/wr/health', {
+          status: 'string',
+        });
+        setBridgeHealth(validatedBridge);
       }
     } catch (err: any) {
       console.warn('[WRDeploy] fetchAll:', err);
@@ -175,15 +186,15 @@ export default function DeploymentsTab({ envMode }: { envMode?: string }) {
                   {/* Deploy Button */}
                   <button
                     onClick={() => handleDeploy(dep.name)}
-                    disabled={deploying === dep.name}
+                    disabled={deploying === (dep.name)}
                     style={{
                       padding: '4px 10px', borderRadius: 3, fontSize: 9, fontWeight: 600,
-                      cursor: deploying === dep.name ? 'not-allowed' : 'pointer',
+                      cursor: deploying === (dep.name) ? 'not-allowed' : 'pointer',
                       background: 'rgba(122,162,247,0.15)', border: '1px solid rgba(122,162,247,0.3)',
-                      color: 'var(--tn-blue)', opacity: deploying === dep.name ? 0.5 : 1,
+                      color: 'var(--tn-blue)', opacity: deploying === (dep.name) ? 0.5 : 1,
                     }}
                   >
-                    {deploying === dep.name ? 'Deploying...' : 'Deploy'}
+                    {deploying === (dep.name) ? 'Deploying...' : 'Deploy'}
                   </button>
                 </div>
               ))

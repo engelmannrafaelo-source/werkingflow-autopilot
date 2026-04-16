@@ -38,6 +38,7 @@ interface User {
   environments?: { local?: string; staged?: string; production?: string };
   scenarios?: string[];
   notes?: string;
+  primary?: boolean;
 }
 
 interface AppData {
@@ -71,6 +72,7 @@ function addUser(appId: string, appName: string, user: User, prodUrl?: string) {
     if (user.scenarios) {
       existing.scenarios = [...new Set([...(existing.scenarios || []), ...user.scenarios])];
     }
+    if (user.primary) existing.primary = true;
   } else {
     credentials[appId].users.push(user);
   }
@@ -94,7 +96,71 @@ credentials['_global'].extras = [
 ];
 
 // ═══════════════════════════════════════
-// 2. SCAN CLAUDE.MD FILES
+// 1b. PER-APP test-credentials.json (PRIMARY SOURCE — SSoT)
+// ═══════════════════════════════════════
+console.log('1b. Scanning per-app test-credentials.json (SSoT)...');
+
+const MONOREPO = join(GH, 'werkingflow-production/apps');
+
+interface PerAppCredentials {
+  default_user?: string;
+  app?: { name?: string; id?: string; stagedUrl?: string };
+  users: Record<string, { email: string; password: string; name?: string; role?: string; tenantId?: string }>;
+}
+
+const perAppMap: Record<string, { appId: string; name: string; prodUrl: string }> = {
+  'werking-energy': { appId: 'werking-energy', name: 'WerkING Energy', prodUrl: 'https://werking-energy.vercel.app' },
+  'werking-report': { appId: 'werking-report', name: 'WerkING Report', prodUrl: 'https://werking-report.vercel.app' },
+  'engelmann': { appId: 'engelmann-ai-hub', name: 'Engelmann AI Hub', prodUrl: 'https://engelmann-ai-hub.vercel.app' },
+  'werking-safety': { appId: 'werking-safety', name: 'WerkING Safety', prodUrl: 'https://werking-safety.vercel.app' },
+  'werking-noise': { appId: 'werking-noise', name: 'WerkING Noise', prodUrl: '' },
+};
+
+// Track which apps already have SSoT data (skip CLAUDE.md scanning for those)
+const appsWithSsot = new Set<string>();
+
+for (const [dirName, meta] of Object.entries(perAppMap)) {
+  const credPath = join(MONOREPO, dirName, 'config/test-credentials.json');
+  if (!existsSync(credPath)) {
+    console.log(`  [SKIP] ${dirName}: no test-credentials.json`);
+    continue;
+  }
+
+  try {
+    const raw = JSON.parse(readFileSync(credPath, 'utf8')) as PerAppCredentials;
+    if (!raw.users || Object.keys(raw.users).length === 0) {
+      console.log(`  [SKIP] ${dirName}: no users`);
+      continue;
+    }
+
+    const appId = meta.appId; // perAppMap is authoritative for credential keys
+    const appName = raw.app?.name || meta.name;
+    const prodUrl = raw.app?.stagedUrl || meta.prodUrl;
+    const defaultUserKey = raw.default_user;
+
+    let count = 0;
+    for (const [role, user] of Object.entries(raw.users)) {
+      if (!user.email || !user.password) continue;
+      const isPrimary = role === defaultUserKey;
+      addUser(appId, appName, {
+        email: user.email,
+        password: user.password,
+        name: user.name,
+        role: user.role || role,
+        tenant: user.tenantId,
+        primary: isPrimary || undefined,
+      }, prodUrl);
+      count++;
+    }
+    appsWithSsot.add(appId);
+    console.log(`  [OK] ${appName}: ${count} users from test-credentials.json`);
+  } catch (e) {
+    console.error(`  [ERR] ${dirName}: ${e instanceof Error ? e.message : e}`);
+  }
+}
+
+// ═══════════════════════════════════════
+// 2. SCAN CLAUDE.MD FILES (fallback for apps without test-credentials.json)
 // ═══════════════════════════════════════
 console.log('2. Scanning CLAUDE.md files...');
 
@@ -173,6 +239,12 @@ function extractCredsFromClaude(text: string): User[] {
 }
 
 for (const src of sources) {
+  // Skip apps already populated from test-credentials.json (SSoT)
+  if (appsWithSsot.has(src.appId)) {
+    console.log(`  [SKIP] ${src.appId}: already loaded from test-credentials.json`);
+    continue;
+  }
+
   if (!existsSync(src.claudeMd)) {
     console.log(`  [SKIP] ${src.appId}: not found`);
     // Still register the app with global user reference
@@ -301,7 +373,35 @@ if (existsSync(scenariosDir)) {
 }
 
 // ═══════════════════════════════════════
-// 5. WRITE OUTPUT
+// 5. MERGE partnerCuiLogin + extras FROM EXISTING credentials.json
+// ═══════════════════════════════════════
+console.log('5. Merging partnerCuiLogin from existing credentials.json...');
+if (existsSync(OUTPUT)) {
+  try {
+    const existing = JSON.parse(readFileSync(OUTPUT, 'utf8'));
+    for (const [appId, appData] of Object.entries(existing) as [string, any][]) {
+      if (appId.startsWith('_')) continue;
+      if (!credentials[appId]) continue;
+      // Preserve partnerCuiLogin (manually maintained)
+      if (appData.partnerCuiLogin) {
+        (credentials[appId] as any).partnerCuiLogin = appData.partnerCuiLogin;
+      }
+      // Preserve extras if not already set
+      if (appData.extras?.length && (!credentials[appId].extras || credentials[appId].extras!.length === 0)) {
+        credentials[appId].extras = appData.extras;
+      }
+    }
+    // Preserve _archive section
+    if (existing._archive) {
+      (credentials as any)._archive = existing._archive;
+    }
+  } catch (e) {
+    console.warn(`  ⚠️  Could not merge existing credentials.json: ${e}`);
+  }
+}
+
+// ═══════════════════════════════════════
+// 6. WRITE OUTPUT
 // ═══════════════════════════════════════
 // Sort: _global first, then alphabetical
 const sorted: CredentialsData = {};
@@ -312,12 +412,14 @@ const keys = Object.keys(credentials).sort((a, b) => {
 });
 for (const k of keys) {
   sorted[k] = credentials[k];
-  sorted[k].users.sort((a, b) => a.email.localeCompare(b.email));
+  if (sorted[k]?.users) {
+    sorted[k].users.sort((a, b) => a.email.localeCompare(b.email));
+  }
 }
 
 mkdirSync(dirname(OUTPUT), { recursive: true });
 writeFileSync(OUTPUT, JSON.stringify(sorted, null, 2));
 
-const totalUsers = Object.values(sorted).reduce((s, a) => s + a.users.length, 0);
+const totalUsers = Object.values(sorted).reduce((s, a) => s + (a.users?.length || 0), 0);
 console.log(`\nDone: ${OUTPUT}`);
 console.log(`  Apps: ${keys.length}, Users: ${totalUsers}`);

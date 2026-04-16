@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Treemap, ResponsiveContainer, Tooltip } from 'recharts';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
 
 interface FolderItem {
   name: string;
@@ -9,7 +10,11 @@ interface FolderItem {
     bytes: number;
     human: string;
   };
-  lastModified: string;
+  lastModified?: string;
+}
+
+interface StructureApiResponse {
+  structure: FolderItem[];
 }
 
 interface TreemapNode {
@@ -25,6 +30,7 @@ interface TreemapNode {
 export default function DiskUsageTab() {
   const [structure, setStructure] = useState<FolderItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [viewMode, setViewMode] = useState<'treemap' | 'bars'>('treemap');
 
   useEffect(() => {
@@ -54,13 +60,17 @@ export default function DiskUsageTab() {
   const fetchStructure = async () => {
     if ((window as any).__cuiServerAlive === false) return;
     setLoading(true);
+    setError('');
     try {
       const res = await fetch('/api/repo-dashboard/structure', { signal: AbortSignal.timeout(15000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      const raw = await res.json();
+      const data = validateApiResponse<StructureApiResponse>(raw, '/api/repo-dashboard/structure', {
+        structure: 'array',
+      });
       setStructure(data.structure);
-    } catch (err) {
-      console.warn('[DiskUsageTab] fetch structure failed:', err);
+    } catch (err: any) {
+      setError(err.message);
     } finally {
       setLoading(false);
     }
@@ -74,6 +84,14 @@ export default function DiskUsageTab() {
     );
   }
 
+  if (error) {
+    return (
+      <div style={{ padding: 20, color: 'var(--tn-red)' }}>
+        {error}
+      </div>
+    );
+  }
+
   const totalBytes = structure.reduce((sum, item) => sum + item.diskSize.bytes, 0);
   const totalGB = (totalBytes / 1024 / 1024 / 1024).toFixed(2);
 
@@ -83,8 +101,8 @@ export default function DiskUsageTab() {
     size: item.diskSize.bytes,
     path: item.path,
     isGit: item.isGit,
-    ageColor: getAgeColor(item.lastModified),
-    ageLabel: getAgeLabel(item.lastModified),
+    ageColor: getAgeColor(item.lastModified ?? ''),
+    ageLabel: getAgeLabel(item.lastModified ?? ''),
     sizeHuman: item.diskSize.human,
   }));
 
@@ -391,7 +409,7 @@ export default function DiskUsageTab() {
                 marginTop: 4,
                 fontFamily: 'monospace',
               }}>
-                {item.path} • Modified: {new Date(item.lastModified).toLocaleString()}
+                {item.path} • Modified: {new Date(item.lastModified ?? '').toLocaleString()}
               </div>
             </div>
           );

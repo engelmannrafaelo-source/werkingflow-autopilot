@@ -478,6 +478,25 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
             <option key={p.id} value={p.id}>{p.name}</option>
           ))}
         </select>
+        {onMissionClick && (
+          <button
+            onClick={onMissionClick}
+            style={{
+              background: missionActive ? 'rgba(122,162,247,0.15)' : 'var(--tn-surface)',
+              color: missionActive ? 'var(--tn-blue)' : 'var(--tn-text-muted)',
+              border: `1px solid ${missionActive ? 'var(--tn-blue)' : 'var(--tn-border)'}`,
+              borderRadius: 6,
+              padding: '5px 10px',
+              fontSize: 12,
+              fontWeight: missionActive ? 700 : 500,
+              cursor: 'pointer',
+              minHeight: 32,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {missionActive ? 'X' : 'MC'}
+          </button>
+        )}
         {onAllChatsClick && (
           <button
             onClick={onAllChatsClick}

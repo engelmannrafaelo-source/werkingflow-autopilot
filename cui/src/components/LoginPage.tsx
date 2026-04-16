@@ -26,127 +26,238 @@ export default function LoginPage() {
 
   return (
     <div style={{
+      minHeight: '100vh',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      height: '100vh',
-      background: '#1a1b26',
+      background: '#0a0a0f',
       fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+      position: 'relative',
+      overflow: 'hidden',
+      padding: '1rem',
     }}>
-      <form
-        onSubmit={handleSubmit}
-        style={{
-          background: '#24283b',
-          border: '1px solid #3b4261',
-          borderRadius: 12,
-          padding: '2.5rem',
-          width: '100%',
-          maxWidth: 380,
-          boxShadow: '0 20px 60px rgba(0,0,0,0.4)',
-        }}
-      >
-        <div style={{ textAlign: 'center', marginBottom: 12 }}>
-          <img src="/werking-logo.png" alt="WerkING" style={{ width: 56, height: 56, borderRadius: 12 }} />
-        </div>
-        <h1 style={{
-          fontSize: 20,
-          fontWeight: 700,
-          color: '#c0caf5',
-          marginBottom: 8,
-          textAlign: 'center',
-        }}>
-          WerkING Lab
-        </h1>
-        <p style={{
-          fontSize: 12,
-          color: '#565f89',
-          marginBottom: 24,
-          textAlign: 'center',
-        }}>
-          Partner Workspace
-        </p>
+      {/* Background Orbs */}
+      <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none' }}>
+        <div style={{
+          position: 'absolute', top: '25%', left: '25%',
+          width: 384, height: 384,
+          background: 'rgba(222,193,94,0.08)',
+          borderRadius: '50%', filter: 'blur(80px)',
+        }} />
+        <div style={{
+          position: 'absolute', bottom: '25%', right: '25%',
+          width: 384, height: 384,
+          background: 'rgba(59,130,246,0.06)',
+          borderRadius: '50%', filter: 'blur(80px)',
+        }} />
+        <div style={{
+          position: 'absolute', top: '50%', left: '50%',
+          transform: 'translate(-50%, -50%)',
+          width: 600, height: 600,
+          background: 'radial-gradient(circle, rgba(222,193,94,0.04) 0%, transparent 70%)',
+          borderRadius: '50%',
+        }} />
+      </div>
 
-        {error && (
+      <div style={{ maxWidth: 440, width: '100%', position: 'relative', zIndex: 10 }}>
+        {/* Logo & Title */}
+        <div style={{ textAlign: 'center', marginBottom: 32 }}>
           <div style={{
-            background: 'rgba(247,118,142,0.1)',
-            border: '1px solid rgba(247,118,142,0.3)',
-            borderRadius: 6,
-            padding: '8px 12px',
-            marginBottom: 16,
-            fontSize: 12,
-            color: '#f7768e',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 80, height: 80,
+            borderRadius: 16,
+            marginBottom: 24,
+            boxShadow: '0 8px 32px rgba(222,193,94,0.2)',
+            overflow: 'hidden',
           }}>
-            {error}
+            <img
+              src="/werking-logo.png"
+              alt="WerkING"
+              style={{ width: 80, height: 80, display: 'block' }}
+            />
           </div>
-        )}
-
-        <div style={{ marginBottom: 16 }}>
-          <label style={{ display: 'block', fontSize: 11, color: '#7982a9', marginBottom: 6, fontWeight: 600 }}>
-            User
-          </label>
-          <input
-            type="text"
-            value={user}
-            onChange={e => setUser(e.target.value)}
-            required
-            autoFocus
-            style={{
-              width: '100%',
-              padding: '10px 12px',
-              background: '#1a1b26',
-              border: '1px solid #3b4261',
-              borderRadius: 6,
-              color: '#c0caf5',
-              fontSize: 13,
-              outline: 'none',
-              boxSizing: 'border-box',
-            }}
-            placeholder="user-id"
-          />
+          <h1 style={{
+            fontSize: 30,
+            fontWeight: 800,
+            color: '#ffffff',
+            marginBottom: 8,
+            letterSpacing: '-0.02em',
+          }}>
+            Werk<span style={{ color: '#dec15e' }}>ING</span> Partner
+          </h1>
+          <p style={{
+            fontSize: 14,
+            color: 'rgba(255,255,255,0.4)',
+          }}>
+            Partner Plattform
+          </p>
         </div>
 
-        <div style={{ marginBottom: 24 }}>
-          <label style={{ display: 'block', fontSize: 11, color: '#7982a9', marginBottom: 6, fontWeight: 600 }}>
-            Password
-          </label>
-          <input
-            type="password"
-            value={password}
-            onChange={e => setPassword(e.target.value)}
-            required
-            style={{
-              width: '100%',
-              padding: '10px 12px',
-              background: '#1a1b26',
-              border: '1px solid #3b4261',
-              borderRadius: 6,
-              color: '#c0caf5',
-              fontSize: 13,
-              outline: 'none',
-              boxSizing: 'border-box',
-            }}
-          />
-        </div>
-
-        <button
-          type="submit"
-          disabled={loading}
+        {/* Login Card */}
+        <form
+          onSubmit={handleSubmit}
           style={{
-            width: '100%',
-            padding: '10px',
-            background: loading ? '#3b4261' : '#7aa2f7',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 6,
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: loading ? 'not-allowed' : 'pointer',
-            transition: 'background 0.2s',
+            background: 'rgba(255,255,255,0.03)',
+            backdropFilter: 'blur(20px)',
+            WebkitBackdropFilter: 'blur(20px)',
+            border: '1px solid rgba(255,255,255,0.1)',
+            borderRadius: 16,
+            padding: 32,
+            boxShadow: '0 25px 60px rgba(0,0,0,0.4)',
           }}
         >
-          {loading ? 'Signing in...' : 'Sign in'}
-        </button>
-      </form>
+          {error && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+              padding: 16,
+              background: 'rgba(239,68,68,0.1)',
+              border: '1px solid rgba(239,68,68,0.2)',
+              borderRadius: 12,
+              marginBottom: 24,
+              fontSize: 13,
+              color: '#fca5a5',
+            }}>
+              {error}
+            </div>
+          )}
+
+          {/* User Field */}
+          <div style={{ marginBottom: 20 }}>
+            <label style={{
+              display: 'block',
+              fontSize: 13,
+              fontWeight: 500,
+              color: 'rgba(255,255,255,0.6)',
+              marginBottom: 8,
+            }}>
+              Benutzer
+            </label>
+            <input
+              type="text"
+              value={user}
+              onChange={e => setUser(e.target.value)}
+              required
+              autoFocus
+              placeholder="user-id"
+              style={{
+                width: '100%',
+                padding: '14px 16px',
+                background: 'rgba(255,255,255,0.03)',
+                border: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: 12,
+                color: '#ffffff',
+                fontSize: 15,
+                outline: 'none',
+                boxSizing: 'border-box',
+                transition: 'all 0.2s',
+              }}
+              onFocus={e => {
+                e.target.style.borderColor = 'rgba(222,193,94,0.5)';
+                e.target.style.boxShadow = '0 0 0 3px rgba(222,193,94,0.15)';
+                e.target.style.background = 'rgba(255,255,255,0.06)';
+              }}
+              onBlur={e => {
+                e.target.style.borderColor = 'rgba(255,255,255,0.1)';
+                e.target.style.boxShadow = 'none';
+                e.target.style.background = 'rgba(255,255,255,0.03)';
+              }}
+            />
+          </div>
+
+          {/* Password Field */}
+          <div style={{ marginBottom: 28 }}>
+            <label style={{
+              display: 'block',
+              fontSize: 13,
+              fontWeight: 500,
+              color: 'rgba(255,255,255,0.6)',
+              marginBottom: 8,
+            }}>
+              Passwort
+            </label>
+            <input
+              type="password"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              required
+              style={{
+                width: '100%',
+                padding: '14px 16px',
+                background: 'rgba(255,255,255,0.03)',
+                border: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: 12,
+                color: '#ffffff',
+                fontSize: 15,
+                outline: 'none',
+                boxSizing: 'border-box',
+                transition: 'all 0.2s',
+              }}
+              onFocus={e => {
+                e.target.style.borderColor = 'rgba(222,193,94,0.5)';
+                e.target.style.boxShadow = '0 0 0 3px rgba(222,193,94,0.15)';
+                e.target.style.background = 'rgba(255,255,255,0.06)';
+              }}
+              onBlur={e => {
+                e.target.style.borderColor = 'rgba(255,255,255,0.1)';
+                e.target.style.boxShadow = 'none';
+                e.target.style.background = 'rgba(255,255,255,0.03)';
+              }}
+            />
+          </div>
+
+          {/* Submit Button */}
+          <button
+            type="submit"
+            disabled={loading}
+            style={{
+              width: '100%',
+              padding: '14px',
+              background: loading
+                ? 'rgba(255,255,255,0.1)'
+                : 'linear-gradient(135deg, #dec15e 0%, #c9a83e 100%)',
+              color: loading ? 'rgba(255,255,255,0.4)' : '#0a0a0f',
+              border: 'none',
+              borderRadius: 12,
+              fontSize: 15,
+              fontWeight: 700,
+              cursor: loading ? 'not-allowed' : 'pointer',
+              transition: 'all 0.2s',
+              boxShadow: loading ? 'none' : '0 4px 24px rgba(222,193,94,0.25)',
+              letterSpacing: '0.02em',
+            }}
+            onMouseEnter={e => {
+              if (!loading) {
+                e.currentTarget.style.background = 'linear-gradient(135deg, #e8cc6a 0%, #d4b348 100%)';
+                e.currentTarget.style.boxShadow = '0 6px 32px rgba(222,193,94,0.35)';
+                e.currentTarget.style.transform = 'translateY(-1px)';
+              }
+            }}
+            onMouseLeave={e => {
+              if (!loading) {
+                e.currentTarget.style.background = 'linear-gradient(135deg, #dec15e 0%, #c9a83e 100%)';
+                e.currentTarget.style.boxShadow = '0 4px 24px rgba(222,193,94,0.25)';
+                e.currentTarget.style.transform = 'translateY(0)';
+              }
+            }}
+          >
+            {loading ? 'Anmeldung...' : 'Anmelden'}
+          </button>
+        </form>
+
+        {/* Footer */}
+        <p style={{
+          fontSize: 12,
+          color: 'rgba(255,255,255,0.2)',
+          textAlign: 'center',
+          marginTop: 24,
+        }}>
+          Powered by <span style={{ color: 'rgba(255,255,255,0.4)', fontWeight: 500 }}>Werkingflow</span>
+        </p>
+      </div>
     </div>
   );
 }

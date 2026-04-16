@@ -13,6 +13,7 @@ import { useState, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useAuth } from '../../contexts/AuthContext';
+import { validateApiResponse } from '../../lib/validateApiResponse';
 
 const API = '/api';
 
@@ -21,7 +22,7 @@ interface DocMeta {
   id: string;
   title: string;
   category: string;
-  published: boolean;
+  published?: boolean;
   publishedAt?: string;
 }
 
@@ -33,8 +34,9 @@ interface DocContent {
 // --- Helpers ---
 function groupByCategory(docs: DocMeta[]): Record<string, DocMeta[]> {
   return docs.reduce<Record<string, DocMeta[]>>((acc, doc) => {
-    if (!acc[doc.category]) acc[doc.category] = [];
-    acc[doc.category].push(doc);
+    const cat = doc.category;
+    if (!acc[cat]) acc[cat] = [];
+    acc[cat].push(doc);
     return acc;
   }, {});
 }
@@ -113,8 +115,9 @@ export default function BusinessDocsPanel() {
     try {
       const res = await fetch(`${API}/partner/docs`, { signal: AbortSignal.timeout(10000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      setDocs(data.docs ?? []);
+      const raw = await res.json();
+      const data = validateApiResponse<{ docs: DocMeta[] }>(raw, '/api/partner/docs', { docs: 'array' });
+      setDocs(data.docs);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -133,10 +136,14 @@ export default function BusinessDocsPanel() {
     try {
       const res = await fetch(`${API}/partner/docs/${encodeURIComponent(docId)}`, { signal: AbortSignal.timeout(10000) });
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error ?? `HTTP ${res.status}`);
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error ?? `HTTP ${res.status}`);
       }
-      const data = await res.json();
+      const raw = await res.json();
+      const data = validateApiResponse<DocContent>(raw, `/api/partner/docs/${docId}`, {
+        doc: 'object',
+        content: 'string',
+      });
       setDocContent(data);
     } catch (err: unknown) {
       setDocError(err instanceof Error ? err.message : String(err));
@@ -242,9 +249,9 @@ export default function BusinessDocsPanel() {
                 <DocItem
                   key={doc.id}
                   doc={doc}
-                  selected={selectedId === doc.id}
+                  selected={selectedId === (doc.id)}
                   isAdmin={isAdmin}
-                  publishing={publishing === doc.id}
+                  publishing={publishing === (doc.id)}
                   onClick={() => loadDoc(doc.id)}
                   onPublish={() => publish(doc.id)}
                   onUnpublish={() => unpublish(doc.id)}
@@ -278,17 +285,17 @@ export default function BusinessDocsPanel() {
                 fontSize: 11,
                 padding: '2px 8px',
                 borderRadius: 10,
-                background: docContent.doc.published ? 'rgba(56,161,105,0.15)' : 'var(--tn-bg-secondary)',
-                color: docContent.doc.published ? '#38A169' : 'var(--tn-text-muted)',
-                border: `1px solid ${docContent.doc.published ? '#38A16940' : 'var(--tn-border)'}`,
+                background: (docContent.doc.published ?? false) ? 'rgba(56,161,105,0.15)' : 'var(--tn-bg-secondary)',
+                color: (docContent.doc.published ?? false) ? '#38A169' : 'var(--tn-text-muted)',
+                border: `1px solid ${(docContent.doc.published ?? false) ? '#38A16940' : 'var(--tn-border)'}`,
               }}>
-                {docContent.doc.published ? 'Freigegeben' : 'Entwurf'}
+                {(docContent.doc.published ?? false) ? 'Freigegeben' : 'Entwurf'}
               </span>
               {isAdmin && (
-                docContent.doc.published ? (
+                (docContent.doc.published ?? false) ? (
                   <button
                     onClick={() => unpublish(docContent.doc.id)}
-                    disabled={publishing === docContent.doc.id}
+                    disabled={publishing === (docContent.doc.id)}
                     style={{
                       fontSize: 11,
                       padding: '3px 10px',
@@ -304,7 +311,7 @@ export default function BusinessDocsPanel() {
                 ) : (
                   <button
                     onClick={() => publish(docContent.doc.id)}
-                    disabled={publishing === docContent.doc.id}
+                    disabled={publishing === (docContent.doc.id)}
                     style={{
                       fontSize: 11,
                       padding: '3px 10px',
@@ -373,7 +380,7 @@ function DocItem({ doc, selected, isAdmin, publishing, onClick, onPublish, onUnp
           width: 6,
           height: 6,
           borderRadius: '50%',
-          background: doc.published ? '#38A169' : 'var(--tn-border)',
+          background: (doc.published ?? false) ? '#38A169' : 'var(--tn-border)',
           flexShrink: 0,
         }} />
       )}
@@ -394,22 +401,22 @@ function DocItem({ doc, selected, isAdmin, publishing, onClick, onPublish, onUnp
         <button
           onClick={e => {
             e.stopPropagation();
-            doc.published ? onUnpublish() : onPublish();
+            (doc.published ?? false) ? onUnpublish() : onPublish();
           }}
           disabled={publishing}
-          title={doc.published ? 'Zurückziehen' : 'Freigeben'}
+          title={(doc.published ?? false) ? 'Zurückziehen' : 'Freigeben'}
           style={{
             fontSize: 10,
             padding: '1px 6px',
             borderRadius: 3,
-            border: `1px solid ${doc.published ? 'var(--tn-border)' : '#38A169'}`,
-            background: doc.published ? 'var(--tn-bg-secondary)' : 'rgba(56,161,105,0.12)',
-            color: doc.published ? 'var(--tn-text-muted)' : '#38A169',
+            border: `1px solid ${(doc.published ?? false) ? 'var(--tn-border)' : '#38A169'}`,
+            background: (doc.published ?? false) ? 'var(--tn-bg-secondary)' : 'rgba(56,161,105,0.12)',
+            color: (doc.published ?? false) ? 'var(--tn-text-muted)' : '#38A169',
             cursor: 'pointer',
             flexShrink: 0,
           }}
         >
-          {doc.published ? '✕' : '✓'}
+          {(doc.published ?? false) ? '✕' : '✓'}
         </button>
       )}
     </div>

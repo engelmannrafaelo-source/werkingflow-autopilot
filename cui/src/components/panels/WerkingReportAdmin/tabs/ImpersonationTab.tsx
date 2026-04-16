@@ -1,16 +1,17 @@
 import { useState, useEffect, useCallback } from 'react';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
 
 interface ImpersonationSession {
   id: string;
   adminId: string;
   adminEmail: string;
-  targetUserId: string;
+  targetUserId?: string;
   targetEmail: string;
-  tenantId: string;
-  startedAt: string;
-  expiresAt: string;
-  ipAddress: string;
-  userAgent: string;
+  tenantId?: string;
+  startedAt?: string;
+  expiresAt?: string;
+  ipAddress?: string;
+  userAgent?: string;
 }
 
 export default function ImpersonationTab({ envMode }: { envMode?: string }) {
@@ -27,7 +28,18 @@ export default function ImpersonationTab({ envMode }: { envMode?: string }) {
       const res = await fetch('/api/admin/wr/impersonation', { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
-      setSessions(data.sessions || []);
+      const validated = validateApiResponse<{ sessions: ImpersonationSession[] }>(data, '/api/admin/wr/impersonation', {
+        sessions: 'array',
+      });
+      validated.sessions.forEach((s, i) => {
+        validateApiResponse<ImpersonationSession>(s, `/api/admin/wr/impersonation[${i}]`, {
+          id: 'string',
+          adminId: 'string',
+          adminEmail: 'string',
+          targetEmail: 'string',
+        });
+      });
+      setSessions(validated.sessions);
     } catch (err: any) {
       console.warn('[WRImpersonation] fetchSessions:', err);
       setError(err.message);
@@ -142,7 +154,7 @@ export default function ImpersonationTab({ envMode }: { envMode?: string }) {
                   <span style={{ color: 'var(--tn-text)' }}>{session.targetEmail}</span>
                 </div>
                 <div style={{ color: 'var(--tn-text-muted)', fontSize: 10 }}>
-                  {new Date(session.startedAt).toLocaleString('de-DE', {
+                  {new Date(session.startedAt ?? '').toLocaleString('de-DE', {
                     dateStyle: 'short',
                     timeStyle: 'medium'
                   })}

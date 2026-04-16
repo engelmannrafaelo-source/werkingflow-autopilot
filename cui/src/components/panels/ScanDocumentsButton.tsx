@@ -2,13 +2,14 @@
 // Created: 2026-02-19
 
 import { useState } from 'react';
+import { validateApiResponse } from '../../lib/validateApiResponse';
 
 interface ScanResult {
   scanned_count: number;
   classified_count: number;
-  auto_assigned_count: number;
-  pending_review_count: number;
-  duration_ms: number;
+  auto_assigned_count?: number;
+  pending_review_count?: number;
+  duration_ms?: number;
   errors?: Array<{ file: string; error: string }>;
 }
 
@@ -39,7 +40,14 @@ export default function ScanDocumentsButton() {
         throw new Error(errorData.error || `[ScanDocs] scan failed: HTTP ${response.status}`);
       }
 
-      const data = await response.json();
+      const raw = await response.json();
+      const data = validateApiResponse<ScanResult>(raw, '/api/team/knowledge/scan', {
+        scanned_count: 'number',
+        classified_count: 'number',
+        auto_assigned_count: { type: 'number', optional: true },
+        pending_review_count: { type: 'number', optional: true },
+        duration_ms: { type: 'number', optional: true },
+      });
       setResult(data);
 
       // Refresh knowledge data after scan
@@ -115,11 +123,11 @@ export default function ScanDocumentsButton() {
             <br />
             Classified: <strong>{result.classified_count}</strong>
             <br />
-            Auto-assigned: <strong>{result.auto_assigned_count}</strong>
+            Auto-assigned: <strong>{result.auto_assigned_count ?? 0}</strong>
             <br />
-            Pending review: <strong>{result.pending_review_count}</strong>
+            Pending review: <strong>{result.pending_review_count ?? 0}</strong>
             <br />
-            Duration: <strong>{(result.duration_ms / 1000).toFixed(1)}s</strong>
+            Duration: <strong>{((result.duration_ms ?? 0) / 1000).toFixed(1)}s</strong>
           </div>
 
           {result.errors && result.errors.length > 0 && (

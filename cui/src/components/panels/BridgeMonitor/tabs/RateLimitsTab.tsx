@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Toolbar, ErrorBanner, LoadingSpinner } from '../shared';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
 
 // ── Types matching Bridge API /rate-limits response ─────────────────────────
 // Source of truth: werkingflow-bridge/src/main.py → get_rate_limits()
@@ -12,28 +13,12 @@ interface WorkerRateLimit {
 interface BridgeRateLimitsResponse {
   current_worker: string;
   current_worker_rate_limited: boolean;
-  current_worker_retry_after: number | null;
+  current_worker_retry_after?: number | null;
   all_rate_limits: Record<string, WorkerRateLimit>;
   total_workers_limited: number;
   _error?: string;
 }
 
-function validateResponse(data: unknown): BridgeRateLimitsResponse {
-  if (data === null || typeof data !== 'object') {
-    throw new Error('Bridge /rate-limits returned non-object response');
-  }
-  const d = data as Record<string, unknown>;
-  if (typeof d.current_worker !== 'string') {
-    throw new Error(`Bridge /rate-limits missing 'current_worker' (got ${typeof d.current_worker})`);
-  }
-  if (typeof d.current_worker_rate_limited !== 'boolean') {
-    throw new Error(`Bridge /rate-limits missing 'current_worker_rate_limited' (got ${typeof d.current_worker_rate_limited})`);
-  }
-  if (d.all_rate_limits === null || typeof d.all_rate_limits !== 'object' || Array.isArray(d.all_rate_limits)) {
-    throw new Error(`Bridge /rate-limits 'all_rate_limits' must be object (got ${typeof d.all_rate_limits})`);
-  }
-  return data as BridgeRateLimitsResponse;
-}
 
 function formatRetryAfter(seconds: number): string {
   if (seconds <= 0) return 'Expiring';
@@ -60,7 +45,12 @@ export default function RateLimitsTab() {
       if (!res.ok) throw new Error(`Bridge API HTTP ${res.status}`);
       const raw = await res.json();
       if (raw._error) throw new Error(`Bridge unavailable: ${raw._error}`);
-      const validated = validateResponse(raw);
+      const validated = validateApiResponse<BridgeRateLimitsResponse>(raw, '/api/bridge/metrics/limits', {
+        current_worker: 'string',
+        current_worker_rate_limited: 'boolean',
+        all_rate_limits: 'object',
+        total_workers_limited: 'number',
+      });
       setData(validated);
       setLastRefresh(new Date());
     } catch (err: any) {

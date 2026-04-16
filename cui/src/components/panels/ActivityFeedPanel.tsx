@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { validateApiResponse } from '../../lib/validateApiResponse';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -9,7 +10,7 @@ interface ActivityEntry {
   message: string;
   author: string;
   date: string;
-  hash: string;
+  hash?: string;
 }
 
 interface GroupedActivity {
@@ -123,8 +124,9 @@ export default function ActivityFeedPanel({ app }: ActivityFeedPanelProps) {
         const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
         throw new Error(body.error ?? `HTTP ${res.status}`);
       }
-      const data = await res.json();
-      setEntries(data.activity ?? []);
+      const raw = await res.json();
+      const data = validateApiResponse<{ activity: ActivityEntry[] }>(raw, '/api/partner/activity', { activity: 'array' });
+      setEntries(data.activity);
       setLastRefresh(new Date());
       setError(null);
     } catch (err) {
@@ -252,7 +254,7 @@ export default function ActivityFeedPanel({ app }: ActivityFeedPanelProps) {
 
               return (
                 <div
-                  key={`${entry.hash}-${idx}`}
+                  key={`${entry.hash ?? ''}-${idx}`}
                   style={{
                     display: 'flex',
                     alignItems: 'flex-start',
@@ -307,7 +309,7 @@ export default function ActivityFeedPanel({ app }: ActivityFeedPanelProps) {
                       color: 'var(--tn-text-muted)',
                     }}>
                       <span>{entry.author}</span>
-                      <span style={{ fontFamily: 'monospace', opacity: 0.7 }}>{entry.hash}</span>
+                      <span style={{ fontFamily: 'monospace', opacity: 0.7 }}>{entry.hash ?? ''}</span>
                       <span>{formatTime(entry.date)}</span>
                     </div>
                   </div>

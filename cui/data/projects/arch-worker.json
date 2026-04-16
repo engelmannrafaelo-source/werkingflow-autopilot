@@ -1,0 +1,6 @@
+{
+  "id": "arch-worker",
+  "name": "Arch Worker",
+  "workDir": "/root/orchestrator/workspaces/arch-worker",
+  "_auto": true
+}

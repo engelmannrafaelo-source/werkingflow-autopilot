@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
 
 interface ConfigEntry {
   key: string;
@@ -28,17 +29,24 @@ export default function ConfigTab({ envMode }: { envMode?: string }) {
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       // Normalize: could be { configs: [...] } or { key: value, ... } or [...]
+      let entries: ConfigEntry[];
       if (Array.isArray(data)) {
-        setConfigs(data);
+        entries = data;
       } else if (data.configs && Array.isArray(data.configs)) {
-        setConfigs(data.configs);
+        entries = data.configs;
       } else {
         // Object form -> convert to array
-        setConfigs(Object.entries(data).filter(([k]) => k !== 'error').map(([key, value]) => ({
+        entries = Object.entries(data).filter(([k]) => k !== 'error').map(([key, value]) => ({
           key,
           value,
-        })));
+        }));
       }
+      entries.forEach((entry: unknown, i: number) => {
+        validateApiResponse<ConfigEntry>(entry, `/api/admin/wr/config[${i}]`, {
+          key: 'string',
+        });
+      });
+      setConfigs(entries);
     } catch (err: any) {
       console.warn('[WRConfig] fetchConfig:', err);
       setError(err.message);
@@ -149,7 +157,7 @@ export default function ConfigTab({ envMode }: { envMode?: string }) {
       {!loading && configs.length > 0 && (
         <div data-ai-id="wr-config-list">
           {configs.map(cfg => {
-            const isEditing = editingKey === cfg.key;
+            const isEditing = editingKey === (cfg.key);
             return (
               <div key={cfg.key} data-ai-id={`wr-config-entry-${cfg.key}`} style={{
                 padding: '10px 12px', borderBottom: '1px solid var(--tn-border)',

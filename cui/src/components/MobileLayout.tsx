@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, useEffect, useMemo, lazy, Suspense } from 'react';
+import { useCallback, useRef, useState, useEffect, useMemo, Suspense } from 'react';
 import { Layout, Model, TabNode, TabSetNode, BorderNode, IJsonModel, ITabSetRenderValues, Actions, DockLocation } from 'flexlayout-react';
 import CuiLitePanel from './panels/CuiLitePanel';
 import FilePreview from './panels/FilePreview';
@@ -7,23 +7,18 @@ import BrowserPanel from './panels/BrowserPanel';
 import ImageDrop from './panels/ImageDrop';
 import ErrorBoundary from './ErrorBoundary';
 
-// Lazy-loaded heavy panels (same as LayoutManager)
-const MissionControl = lazy(() => import('./panels/MissionControl'));
-const OfficePanel = lazy(() => import('./panels/OfficePanel'));
-const KnowledgeFullscreen = lazy(() => import('./panels/KnowledgeFullscreen'));
-const WerkingReportAdmin = lazy(() => import('./panels/WerkingReportAdmin/WerkingReportAdmin'));
-const LinkedInPanel = lazy(() => import('./panels/LinkedInPanel'));
-const BridgeMonitor = lazy(() => import('./panels/BridgeMonitor/BridgeMonitor'));
-const InfisicalMonitor = lazy(() => import('./panels/InfisicalMonitor/InfisicalMonitor'));
-const QADashboard = lazy(() => import('./panels/QADashboard/QADashboard'));
-const RepoDashboard = lazy(() => import('./panels/RepoDashboard/RepoDashboard'));
-const SystemHealth = lazy(() => import('./panels/SystemHealth'));
-const WatchdogPanel = lazy(() => import('./panels/WatchdogPanel'));
-const PeerAwarenessPanel = lazy(() => import('./panels/PeerAwarenessPanel'));
-const BackgroundOpsPanel = lazy(() => import('./panels/BackgroundOpsPanel'));
-const ConversationQueuePanel = lazy(() => import('./panels/ConversationQueuePanel'));
-const MaintenancePanel = lazy(() => import('./panels/MaintenancePanel/MaintenancePanel'));
-const UserInputAuditPanel = lazy(() => import('./panels/UserInputAuditPanel/UserInputAuditPanel'));
+// --- Heavy panels from Panel Registry (Single Source of Truth) ---
+// Neues Panel? panelRegistry.ts editieren, NICHT diese Datei.
+import {
+  MissionControl, OfficePanel, KnowledgeFullscreen, WerkingReportAdmin,
+  LinkedInPanel, BridgeMonitor, InfisicalMonitor, QADashboard, RepoDashboard,
+  SystemHealth, WatchdogPanel, PeerAwarenessPanel, BackgroundOpsPanel,
+  ConversationQueuePanel, MaintenancePanel, UserInputAuditPanel,
+  ArchitectureExplorer, ReportBuilder, PromptExplorer, BusinessAngelPanel, SubSessionPanel,
+  MyTasksPanel, ActivityFeedPanel, PartnerInboxPanel,
+  FeedbackPanel, TeamStatusPanel, BusinessDocsPanel, UploadPanel,
+  PANEL_NAMES, PANEL_MENU_OPTIONS,
+} from './panelRegistry';
 
 const PanelLoader = () => (
   <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--tn-text-muted)', fontSize: 11 }}>
@@ -37,14 +32,14 @@ interface MobileLayoutProps {
 }
 
 // Mobile: exactly 2 panes (top/bottom), no further splitting allowed
-const MOBILE_LAYOUT_VERSION = 3;
+const MOBILE_LAYOUT_VERSION = 5;
 
 function defaultMobileLayout(workDir: string): IJsonModel {
   return {
     global: {
       tabEnableClose: true,
       tabEnablePopout: false,
-      tabSetEnableMaximize: false,
+      tabSetEnableMaximize: true,
       tabSetEnableDrop: true,
       tabSetEnableDrag: true,
       tabSetEnableDivide: false,
@@ -66,7 +61,7 @@ function defaultMobileLayout(workDir: string): IJsonModel {
               type: 'tabset',
               weight: 60,
               children: [
-                { type: 'tab', name: 'CUI', component: 'cui', config: {} },
+                { type: 'tab', name: 'Chat', component: 'cui', config: {} },
               ],
             },
             {
@@ -111,7 +106,7 @@ export default function MobileLayout({ projectId, workDir }: MobileLayoutProps) 
     try { setModel(Model.fromJson(defaultMobileLayout(workDir))); } catch { /* ignore */ }
   }, [projectId, workDir]);
 
-  // Factory — identical to LayoutManager
+  // Factory — identical to LayoutManager (uses panelRegistry components)
   const factory = useCallback((node: TabNode) => {
     const component = node.getComponent();
     const config = node.getConfig() ?? {};
@@ -126,7 +121,7 @@ export default function MobileLayout({ projectId, workDir }: MobileLayoutProps) 
 
     switch (component) {
       case 'cui': case 'cui-lite':
-        return wrapPanel('CUI', <CuiLitePanel accountId={config.accountId} projectId={projectId} workDir={workDir} panelId={nodeId} isTabVisible={node.isVisible()} />);
+        return wrapPanel('Chat', <CuiLitePanel accountId={config.accountId} projectId={projectId} workDir={workDir} panelId={nodeId} isTabVisible={node.isVisible()} />);
       case 'preview':
         return wrapPanel('FilePreview', <FilePreview watchPath={config.watchPath || activeDirRef.current || workDir} stageDir={activeDirRef.current} />);
       case 'notes':
@@ -139,7 +134,7 @@ export default function MobileLayout({ projectId, workDir }: MobileLayoutProps) 
         return wrapPanel('MissionControl', S(<MissionControl projectId={projectId} workDir={workDir} />));
       case 'mission-chat':
         return wrapPanel('MissionChat', <CuiLitePanel accountId={config.accountId || 'rafael'} projectId="mission-chat" workDir="/root/orchestrator/workspaces/mission-chat" panelId={nodeId} isTabVisible={node.isVisible()} />);
-      case 'office': case 'virtual-office':
+      case 'office': case 'virtual-office': case 'gmail':
         return wrapPanel('OfficePanel', S(<OfficePanel projectId={projectId} workDir={workDir} />));
       case 'knowledge': case 'knowledge-fullscreen':
         return wrapPanel('KnowledgeFullscreen', S(<KnowledgeFullscreen projectId={projectId} workDir={workDir} />));
@@ -169,6 +164,30 @@ export default function MobileLayout({ projectId, workDir }: MobileLayoutProps) 
         return wrapPanel('MaintenancePanel', S(<MaintenancePanel />));
       case 'input-audit':
         return wrapPanel('UserInputAuditPanel', S(<UserInputAuditPanel />));
+      case 'architecture':
+        return wrapPanel('ArchitectureExplorer', S(<ArchitectureExplorer />));
+      case 'report-builder':
+        return wrapPanel('ReportBuilder', S(<ReportBuilder />));
+      case 'business-angel':
+        return wrapPanel('Business Angel', S(<BusinessAngelPanel />));
+      case 'prompt-explorer':
+        return wrapPanel('PromptExplorer', S(<PromptExplorer />));
+      case 'sub-sessions':
+        return wrapPanel('Sub-Sessions', S(<SubSessionPanel workDir={workDir} isVisible={node.isVisible()} />));
+      case 'my-tasks':
+        return wrapPanel('MyTasks', S(<MyTasksPanel />));
+      case 'activity-feed':
+        return wrapPanel('Activity Feed', S(<ActivityFeedPanel />));
+      case 'partner-inbox':
+        return wrapPanel('Partner Inbox', S(<PartnerInboxPanel projectId={projectId} />));
+      case 'feedback':
+        return wrapPanel('Feedback', S(<FeedbackPanel />));
+      case 'team-status':
+        return wrapPanel('Team Status', S(<TeamStatusPanel />));
+      case 'business-docs':
+        return wrapPanel('Business Docs', S(<BusinessDocsPanel />));
+      case 'uploads':
+        return wrapPanel('Uploads', S(<UploadPanel />));
       default:
         return wrapPanel(`Unknown:${component}`, <div style={{ padding: 20, color: 'var(--tn-text-muted)' }}>Unknown: {component}</div>);
     }
@@ -188,34 +207,22 @@ export default function MobileLayout({ projectId, workDir }: MobileLayoutProps) 
     saveTimer.current = setTimeout(() => saveLayout(m), 1500);
   }, [saveLayout]);
 
-  // Add tab — same [+] dropdown as desktop
+  // Add tab — uses PANEL_NAMES from registry for display names
   const addTab = useCallback((type: string, config: Record<string, string>, targetId: string) => {
     const m = modelRef.current;
     if (!m) return;
-    const names: Record<string, string> = {
-      cui: 'CUI', 'cui-lite': 'CUI', chat: 'Native Chat', browser: 'Browser', preview: 'Files',
-      notes: 'Notes', images: 'Images', mission: 'Mission Control',
-      'mission-chat': 'Mission Chat',
-      office: 'Virtual Office', 'admin-wr': 'WR Admin', linkedin: 'LinkedIn',
-      'system-health': 'System Health', 'bridge-monitor': 'Bridge Monitor',
-      'repo-dashboard': 'Git & Pipeline', watchdog: 'Watchdog',
-      'background-ops': 'Background Ops', 'conversation-queue': 'Conv Queue',
-      maintenance: 'Maintenance', 'input-audit': 'Input Audit',
-      'qa-dashboard': 'QA Dashboard', 'peer-awareness': 'Peer Awareness',
-      'infisical-monitor': 'Infisical', knowledge: 'Knowledge',
-    };
     if (type === 'preview' && !config.watchPath) {
       config.watchPath = activeDirRef.current || workDir;
     }
     try {
       m.doAction(Actions.addNode(
-        { type: 'tab', name: names[type] || type, component: type, config },
+        { type: 'tab', name: PANEL_NAMES[type] || type, component: type, config },
         targetId, DockLocation.CENTER, -1
       ));
     } catch { /* ignore */ }
   }, [workDir]);
 
-  // [+] dropdown on each tabset — identical to LayoutManager
+  // [+] dropdown on each tabset — uses PANEL_MENU_OPTIONS from registry (grouped, same order as desktop)
   const onRenderTabSet = useCallback((node: TabSetNode | BorderNode, renderValues: ITabSetRenderValues) => {
     renderValues.stickyButtons.push(
       <select
@@ -235,29 +242,15 @@ export default function MobileLayout({ projectId, workDir }: MobileLayoutProps) 
         }}
       >
         <option value="">+</option>
-        <option value="cui">CUI</option>
-        <option value="chat">Native Chat</option>
-        <option value="browser">Browser</option>
-        <option value="preview">Files</option>
-        <option value="notes">Notes</option>
-        <option value="images">Images</option>
-        <option value="mission">Mission Control</option>
-        <option value="mission-chat">Mission Chat</option>
-        <option value="office">Virtual Office</option>
-        <option value="knowledge">Knowledge</option>
-        <option value="qa-dashboard">QA Dashboard</option>
-        <option value="admin-wr">WR Admin</option>
-        <option value="system-health">System Health</option>
-        <option value="watchdog">Watchdog</option>
-        <option value="linkedin">LinkedIn</option>
-        <option value="peer-awareness">Peer Awareness</option>
-        <option value="background-ops">Background Ops</option>
-        <option value="conversation-queue">Conv Queue</option>
-        <option value="bridge-monitor">Bridge Monitor</option>
-        <option value="repo-dashboard">Git & Pipeline</option>
-        <option value="infisical-monitor">Infisical</option>
-        <option value="maintenance">Maintenance</option>
-        <option value="input-audit">Input Audit</option>
+        {PANEL_MENU_OPTIONS.map(({ category, items }) =>
+          items.length === 0 ? null : (
+            <optgroup key={category} label={category}>
+              {items.map(({ value, label }) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </optgroup>
+          )
+        )}
       </select>
     );
   }, [addTab]);

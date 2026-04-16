@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import mermaid from 'mermaid';
 import { resilientFetch } from '../../utils/resilientFetch';
 import { getPathConfig, buildQuickDirs, loadPathConfig } from '../../utils/paths';
+import { validateApiResponse } from '../../lib/validateApiResponse';
 
 // Initialize mermaid once with dark theme
 mermaid.initialize({
@@ -125,14 +126,14 @@ interface FileEntry {
   name: string;
   path: string;
   isDir: boolean;
-  ext: string | null;
+  ext?: string | null;
 }
 
 interface FileContent {
   path: string;
   content: string;
   mimeType: string;
-  ext: string;
+  ext?: string;
 }
 
 interface ClaudeMapRef {
@@ -202,7 +203,11 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
     try {
       const res = await resilientFetch(`${API}/files?path=${encodeURIComponent(dirPath)}`);
       if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
+      const raw = await res.json();
+      const data = validateApiResponse<{ entries: FileEntry[]; path: string }>(raw, '/api/files', {
+        entries: 'array',
+        path: 'string',
+      });
       setEntries(data.entries);
       setCurrentDir(data.path);
       setError('');
@@ -244,7 +249,13 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
     try {
       const res = await resilientFetch(`${API}/file?path=${encodeURIComponent(filePath)}`);
       if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
+      const raw = await res.json();
+      const data = validateApiResponse<FileContent>(raw, '/api/file', {
+        path: 'string',
+        content: 'string',
+        mimeType: 'string',
+        ext: { type: 'string', optional: true },
+      });
       setSelectedFile(data);
     } catch (err: any) {
       console.warn('[FilePreview] loadFile:', err);
@@ -258,7 +269,11 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
     try {
       const res = await resilientFetch(`${API}/claude-map`);
       if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
+      const raw = await res.json();
+      const data = validateApiResponse<{ groups: ClaudeMapGroup[]; total: number }>(raw, '/api/claude-map', {
+        groups: 'array',
+        total: 'number',
+      });
       setClaudeMap(data.groups);
       setClaudeTotal(data.total);
       // Expand first group by default
@@ -461,7 +476,9 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
       );
     }
 
-    const { content, mimeType, ext } = selectedFile;
+    const content = selectedFile.content;
+    const mimeType = selectedFile.mimeType;
+    const ext = selectedFile.ext ?? '';
 
     if (mimeType === 'image') {
       return (
@@ -585,7 +602,7 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
                       } else if (href.startsWith('refs/')) {
                         resolved = `${getPathConfig().claudeUserHome}/.claude/${href}`;
                       } else {
-                        const dir = selectedFile.path.replace(/\/[^/]+$/, '');
+                        const dir = (selectedFile.path).replace(/\/[^/]+$/, '');
                         resolved = `${dir}/${href}`;
                       }
                       return (
@@ -617,7 +634,7 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
     if (ext === '.html' || ext === '.htm') {
       // Resolve relative src/href paths in HTML to API-served absolute URLs
       // so that images, stylesheets, and other assets load correctly in srcDoc iframes
-      const htmlDir = selectedFile.path.replace(/\/[^/]+$/, '');
+      const htmlDir = (selectedFile.path).replace(/\/[^/]+$/, '');
       const processedContent = content.replace(
         /(src|href)\s*=\s*"(?!https?:\/\/|data:|\/api\/|#|mailto:)([^"]+)"/g,
         (_match: string, attr: string, relPath: string) => {
@@ -765,12 +782,12 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
                   style={{
                     display: 'flex', alignItems: 'center', gap: 6, width: '100%',
                     padding: '3px 8px',
-                    background: selectedFile?.path === e.path ? 'var(--tn-bg-highlight)' : 'transparent',
+                    background: selectedFile?.path === (e.path) ? 'var(--tn-bg-highlight)' : 'transparent',
                     border: 'none', color: e.isDir ? 'var(--tn-blue)' : 'var(--tn-text)',
                     fontSize: 11, textAlign: 'left', cursor: 'pointer',
                   }}
                 >
-                  <span style={{ fontSize: 10, opacity: 0.6 }}>{e.isDir ? '/' : getFileIcon(e.ext)}</span>
+                  <span style={{ fontSize: 10, opacity: 0.6 }}>{e.isDir ? '/' : getFileIcon(e.ext ?? null)}</span>
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.name}</span>
                 </button>
               ))}

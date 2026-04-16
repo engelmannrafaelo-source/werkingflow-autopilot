@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import ExportButton from '@/components/shared/ExportButton';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
 
 interface TopUpModalProps {
   tenant: TenantBilling | null;
@@ -26,16 +27,16 @@ interface ApiBalance {
 interface TenantBilling {
   tenantId: string;
   tenantName: string;
-  subscription: Subscription | null;
-  apiBalance: ApiBalance | null;
+  subscription?: Subscription | null;
+  apiBalance?: ApiBalance | null;
 }
 
 interface BillingOverview {
   tenants: TenantBilling[];
   summary: {
-    totalMRR: number;
-    totalCredits: number;
-    totalSubscriptions: number;
+    totalMRR?: number;
+    totalCredits?: number;
+    totalSubscriptions?: number;
   };
 }
 
@@ -70,29 +71,29 @@ interface TenantActivity {
 interface Invoice {
   id: string;
   invoiceNumber: string;
-  tenantId: string;
-  netAmount: number;
-  taxAmount: number;
+  tenantId?: string;
+  netAmount?: number;
+  taxAmount?: number;
   grossAmount: number;
-  currency: string;
+  currency?: string;
   status: 'draft' | 'sent' | 'paid';
-  issueDate: string;
+  issueDate?: string;
   pdfUrl?: string;
   sentAt?: string;
-  recipientName: string;
-  recipientEmail: string;
+  recipientName?: string;
+  recipientEmail?: string;
 }
 
 interface BillingEvent {
   id: string;
-  tenantId: string;
+  tenantId?: string;
   type: 'top_up' | 'charge' | 'refund';
   amountEur: number;
-  method: string;
+  method?: string;
   note?: string;
-  balanceBefore: number;
-  balanceAfter: number;
-  createdAt: string;
+  balanceBefore?: number;
+  balanceAfter?: number;
+  createdAt?: string;
 }
 
 export default function BillingTab({ envMode }: { envMode?: string }) {
@@ -120,7 +121,17 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
       const res = await fetch('/api/admin/wr/billing/overview', { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(await res.text());
       const result = await res.json();
-      setData(result);
+      const validated = validateApiResponse<BillingOverview>(result, '/api/admin/wr/billing/overview', {
+        tenants: 'array',
+        summary: 'object',
+      });
+      validated.tenants.forEach((t, i) => {
+        validateApiResponse<TenantBilling>(t, `/api/admin/wr/billing/overview.tenants[${i}]`, {
+          tenantId: 'string',
+          tenantName: 'string',
+        });
+      });
+      setData(validated);
     } catch (err: any) {
       console.warn('[WRBilling] fetchBilling:', err);
       setError(err.message);
@@ -136,7 +147,18 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
       const res = await fetch('/api/admin/wr/billing/invoices', { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(await res.text());
       const result = await res.json();
-      setInvoices(result.invoices || []);
+      const validated = validateApiResponse<{ invoices: Invoice[] }>(result, '/api/admin/wr/billing/invoices', {
+        invoices: 'array',
+      });
+      validated.invoices.forEach((inv, i) => {
+        validateApiResponse<Invoice>(inv, `/api/admin/wr/billing/invoices[${i}]`, {
+          id: 'string',
+          invoiceNumber: 'string',
+          grossAmount: 'number',
+          status: 'string',
+        });
+      });
+      setInvoices(validated.invoices);
     } catch (err: any) {
       console.warn('[WRBilling] fetchInvoices:', err);
     } finally {
@@ -175,7 +197,17 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
       const res = await fetch(`/api/admin/wr/billing/events/${tenantId}`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(await res.text());
       const result = await res.json();
-      setEvents(result.events || []);
+      const validated = validateApiResponse<{ events: BillingEvent[] }>(result, `/api/admin/wr/billing/events/${tenantId}`, {
+        events: 'array',
+      });
+      validated.events.forEach((ev, i) => {
+        validateApiResponse<BillingEvent>(ev, `/api/admin/wr/billing/events[${i}]`, {
+          id: 'string',
+          type: 'string',
+          amountEur: 'number',
+        });
+      });
+      setEvents(validated.events);
     } catch (err: any) {
       console.warn('[WRBilling] fetchEvents:', err);
       alert(`Failed to fetch events: ${err.message}`);
@@ -188,7 +220,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
     if ((window as any).__cuiServerAlive === false) return;
     setDownloadingInvoice(invoice.id);
     try {
-      const res = await fetch(`/api/admin/wr/billing/invoices/${invoice.id}/pdf?tenantId=${invoice.tenantId}`, { signal: AbortSignal.timeout(15000) });
+      const res = await fetch(`/api/admin/wr/billing/invoices/${invoice.id}/pdf?tenantId=${invoice.tenantId ?? ''}`, { signal: AbortSignal.timeout(15000) });
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({ error: 'Failed to generate PDF' }));
         throw new Error(errorData.error || 'Failed to generate PDF');
@@ -351,7 +383,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                   }}>
                     <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 4 }}>Total Tokens</div>
                     <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--tn-blue)' }}>
-                      {(usageStats.totals.tokens / 1000000).toFixed(2)}M
+                      {((usageStats.totals?.tokens ?? 0) / 1000000).toFixed(2)}M
                     </div>
                   </div>
 
@@ -363,7 +395,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                   }}>
                     <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 4 }}>Total Cost</div>
                     <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--tn-orange)' }}>
-                      €{usageStats.totals.cost.toFixed(2)}
+                      €{(usageStats.totals?.cost ?? 0).toFixed(2)}
                     </div>
                   </div>
 
@@ -375,7 +407,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                   }}>
                     <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 4 }}>API Requests</div>
                     <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--tn-green)' }}>
-                      {usageStats.totals.requests.toLocaleString()}
+                      {(usageStats.totals?.requests ?? 0).toLocaleString()}
                     </div>
                   </div>
 
@@ -387,14 +419,14 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                   }}>
                     <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 4 }}>Reports Created</div>
                     <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--tn-purple)' }}>
-                      {usageStats.totals.gutachten}
+                      {usageStats.totals?.gutachten ?? 0}
                     </div>
                   </div>
                 </div>
               )}
 
               {/* Activity Table */}
-              {activityData && activityData.tenants.length > 0 && (
+              {activityData && (activityData.tenants ?? []).length > 0 && (
                 <div style={{ marginBottom: 20 }}>
                   <div style={{
                     fontSize: 11,
@@ -402,7 +434,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                     color: 'var(--tn-text)',
                     marginBottom: 8,
                   }}>
-                    Active Tenants ({activityData.tenants.filter(t => t.requestsThisMonth > 0).length})
+                    Active Tenants ({(activityData.tenants ?? []).filter(t => (t.requestsThisMonth ?? 0) > 0).length})
                   </div>
 
                   {/* Table Header */}
@@ -427,12 +459,12 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                   </div>
 
                   {/* Table Rows - Only show active tenants */}
-                  {activityData.tenants
-                    .filter(t => t.requestsThisMonth > 0 || t.requestsLastMonth > 0)
-                    .sort((a, b) => b.requestsThisMonth - a.requestsThisMonth)
+                  {(activityData.tenants ?? [])
+                    .filter(t => (t.requestsThisMonth ?? 0) > 0 || (t.requestsLastMonth ?? 0) > 0)
+                    .sort((a, b) => (b.requestsThisMonth ?? 0) - (a.requestsThisMonth ?? 0))
                     .map(tenant => {
-                      const trend = tenant.requestsLastMonth > 0
-                        ? ((tenant.requestsThisMonth - tenant.requestsLastMonth) / tenant.requestsLastMonth * 100)
+                      const trend = (tenant.requestsLastMonth ?? 0) > 0
+                        ? (((tenant.requestsThisMonth ?? 0) - (tenant.requestsLastMonth ?? 0)) / (tenant.requestsLastMonth ?? 1) * 100)
                         : 0;
 
                       return (
@@ -457,19 +489,19 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                             {tenant.tenantName || tenant.tenantId}
                           </div>
                           <div style={{
-                            color: tenant.quotaPercentUsed > 80 ? 'var(--tn-red)' : 'var(--tn-text-subtle)',
-                            fontWeight: tenant.quotaPercentUsed > 80 ? 600 : 400,
+                            color: (tenant.quotaPercentUsed ?? 0) > 80 ? 'var(--tn-red)' : 'var(--tn-text-subtle)',
+                            fontWeight: (tenant.quotaPercentUsed ?? 0) > 80 ? 600 : 400,
                           }}>
-                            {tenant.quotaUsed}/{tenant.quotaIncluded}
+                            {tenant.quotaUsed ?? 0}/{tenant.quotaIncluded ?? 0}
                           </div>
                           <div style={{ color: 'var(--tn-text-subtle)', fontFamily: 'monospace', fontSize: 10 }}>
-                            {tenant.requestsThisMonth.toLocaleString()}
+                            {(tenant.requestsThisMonth ?? 0).toLocaleString()}
                           </div>
                           <div style={{ color: 'var(--tn-text-muted)', fontFamily: 'monospace', fontSize: 10 }}>
-                            {tenant.requestsLastMonth.toLocaleString()}
+                            {(tenant.requestsLastMonth ?? 0).toLocaleString()}
                           </div>
                           <div style={{ color: 'var(--tn-text-muted)', fontFamily: 'monospace', fontSize: 10 }}>
-                            {tenant.uploadCount}
+                            {tenant.uploadCount ?? 0}
                           </div>
                           <div>
                             {trend > 0 ? (
@@ -491,7 +523,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
               )}
 
               {/* Top Usage Table */}
-              {usageStats && usageStats.tenants.length > 0 && (
+              {usageStats && (usageStats.tenants ?? []).length > 0 && (
                 <div>
                   <div style={{
                     fontSize: 11,
@@ -523,9 +555,9 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                   </div>
 
                   {/* Table Rows - Top 10 by tokens */}
-                  {usageStats.tenants
-                    .filter(t => t.tokens > 0)
-                    .sort((a, b) => b.tokens - a.tokens)
+                  {(usageStats.tenants ?? [])
+                    .filter(t => (t.tokens ?? 0) > 0)
+                    .sort((a, b) => (b.tokens ?? 0) - (a.tokens ?? 0))
                     .slice(0, 10)
                     .map(tenant => (
                       <div
@@ -549,16 +581,16 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                           {tenant.tenantName || tenant.tenantId}
                         </div>
                         <div style={{ color: 'var(--tn-text-subtle)', fontFamily: 'monospace', fontSize: 10 }}>
-                          {(tenant.tokens / 1000).toFixed(1)}K
+                          {((tenant.tokens ?? 0) / 1000).toFixed(1)}K
                         </div>
                         <div style={{ color: 'var(--tn-orange)', fontWeight: 600 }}>
-                          €{tenant.cost.toFixed(2)}
+                          €{(tenant.cost ?? 0).toFixed(2)}
                         </div>
                         <div style={{ color: 'var(--tn-text-muted)', fontFamily: 'monospace', fontSize: 10 }}>
-                          {tenant.requests}
+                          {tenant.requests ?? 0}
                         </div>
                         <div style={{ color: 'var(--tn-text-muted)', fontFamily: 'monospace', fontSize: 10 }}>
-                          {tenant.gutachtenCount}
+                          {tenant.gutachtenCount ?? 0}
                         </div>
                       </div>
                     ))}
@@ -597,13 +629,13 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                 <ExportButton
                   data={invoices.map(inv => ({
                     invoiceNumber: inv.invoiceNumber,
-                    tenant: inv.recipientName,
-                    netAmount: inv.netAmount,
-                    taxAmount: inv.taxAmount,
+                    tenant: inv.recipientName ?? '',
+                    netAmount: inv.netAmount ?? 0,
+                    taxAmount: inv.taxAmount ?? 0,
                     grossAmount: inv.grossAmount,
-                    currency: inv.currency,
+                    currency: inv.currency ?? '',
                     status: inv.status,
-                    issueDate: inv.issueDate,
+                    issueDate: inv.issueDate ?? '',
                     sentAt: inv.sentAt || '',
                   }))}
                   filename="invoices"
@@ -659,13 +691,13 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap',
                   }}>
-                    {invoice.recipientName}
+                    {invoice.recipientName ?? ''}
                   </div>
                   <div style={{ color: 'var(--tn-text-subtle)', fontWeight: 600 }}>
-                    €{invoice.grossAmount.toFixed(2)}
+                    €{(invoice.grossAmount).toFixed(2)}
                   </div>
                   <div style={{ color: 'var(--tn-text-muted)', fontSize: 10 }}>
-                    {new Date(invoice.issueDate).toLocaleDateString('de-DE')}
+                    {new Date(invoice.issueDate ?? '').toLocaleDateString('de-DE')}
                   </div>
                   <div>
                     <span style={{
@@ -675,14 +707,14 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                       fontSize: 9,
                       fontWeight: 600,
                       textTransform: 'uppercase',
-                      background: invoice.status === 'paid'
+                      background: (invoice.status) === 'paid'
                         ? 'rgba(158,206,106,0.2)'
-                        : invoice.status === 'sent'
+                        : (invoice.status) === 'sent'
                         ? 'rgba(115,203,255,0.2)'
                         : 'rgba(224,175,104,0.2)',
-                      color: invoice.status === 'paid'
+                      color: (invoice.status) === 'paid'
                         ? 'var(--tn-green)'
-                        : invoice.status === 'sent'
+                        : (invoice.status) === 'sent'
                         ? 'var(--tn-blue)'
                         : 'var(--tn-orange)',
                     }}>
@@ -692,23 +724,23 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                   <div style={{ display: 'flex', gap: 4 }}>
                     <button
                       onClick={() => downloadInvoicePDF(invoice)}
-                      disabled={downloadingInvoice === invoice.id}
+                      disabled={downloadingInvoice === (invoice.id)}
                       style={{
                         padding: '3px 8px',
                         borderRadius: 3,
                         fontSize: 9,
                         fontWeight: 600,
-                        background: downloadingInvoice === invoice.id ? 'var(--tn-bg)' : 'var(--tn-blue)',
+                        background: downloadingInvoice === (invoice.id) ? 'var(--tn-bg)' : 'var(--tn-blue)',
                         border: '1px solid var(--tn-border)',
-                        color: downloadingInvoice === invoice.id ? 'var(--tn-text-muted)' : '#fff',
-                        cursor: downloadingInvoice === invoice.id ? 'not-allowed' : 'pointer',
+                        color: downloadingInvoice === (invoice.id) ? 'var(--tn-text-muted)' : '#fff',
+                        cursor: downloadingInvoice === (invoice.id) ? 'not-allowed' : 'pointer',
                         display: 'flex',
                         alignItems: 'center',
                         gap: 4,
                       }}
                     >
-                      {downloadingInvoice === invoice.id ? '⏳' : '📄'}
-                      {downloadingInvoice === invoice.id ? 'Downloading...' : 'Download PDF'}
+                      {downloadingInvoice === (invoice.id) ? '⏳' : '📄'}
+                      {downloadingInvoice === (invoice.id) ? 'Downloading...' : 'Download PDF'}
                     </button>
                     {invoice.pdfUrl && (
                       <a
@@ -757,7 +789,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
             }}>
               <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 4 }}>Total MRR</div>
               <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--tn-green)' }}>
-                €{data.summary.totalMRR.toFixed(2)}
+                €{(data.summary.totalMRR ?? 0).toFixed(2)}
               </div>
             </div>
 
@@ -769,7 +801,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
             }}>
               <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 4 }}>Active Subscriptions</div>
               <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--tn-blue)' }}>
-                {data.summary.totalSubscriptions}
+                {data.summary.totalSubscriptions ?? 0}
               </div>
             </div>
 
@@ -781,13 +813,13 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
             }}>
               <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 4 }}>Total Credits</div>
               <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--tn-orange)' }}>
-                €{data.summary.totalCredits.toFixed(2)}
+                €{(data.summary.totalCredits ?? 0).toFixed(2)}
               </div>
             </div>
           </div>
 
           {/* Tenant List */}
-          {data.tenants.length === 0 ? (
+          {(data.tenants).length === 0 ? (
             <div style={{
               padding: 20,
               textAlign: 'center',
@@ -820,7 +852,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
               </div>
 
               {/* Table Rows */}
-              {data.tenants.map(tenant => (
+              {(data.tenants).map(tenant => (
                 <div
                   key={tenant.tenantId}
                   style={{
@@ -949,7 +981,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
               API Balance Top-Up
             </div>
             <div style={{ fontSize: 11, color: 'var(--tn-text-muted)', marginBottom: 16 }}>
-              Tenant: <span style={{ color: 'var(--tn-text)', fontWeight: 600 }}>{topUpTenant.tenantName}</span>
+              Tenant: <span style={{ color: 'var(--tn-text)', fontWeight: 600 }}>{topUpTenant.tenantName ?? ''}</span>
               <br />
               Current Balance: <span style={{ color: 'var(--tn-blue)', fontWeight: 600 }}>
                 {topUpTenant.apiBalance ? `€${(topUpTenant.apiBalance.balanceEur ?? topUpTenant.apiBalance.balance ?? 0).toFixed(2)}` : '€0.00'}
@@ -968,7 +1000,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                          tenantId: topUpTenant.tenantId,
+                          tenantId: topUpTenant.tenantId ?? '',
                           amount: amt,
                           method: 'manual',
                           note: `Manual top-up €${amt}`,
@@ -1051,7 +1083,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
               Billing Events History
             </div>
             <div style={{ fontSize: 11, color: 'var(--tn-text-muted)', marginBottom: 16 }}>
-              Tenant: <span style={{ color: 'var(--tn-text)', fontWeight: 600 }}>{eventsTenant.tenantName}</span>
+              Tenant: <span style={{ color: 'var(--tn-text)', fontWeight: 600 }}>{eventsTenant.tenantName ?? ''}</span>
             </div>
 
             {/* Events Timeline */}
@@ -1084,7 +1116,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                   {events.map(event => {
-                    const eventDate = new Date(event.createdAt);
+                    const eventDate = new Date(event.createdAt ?? '');
                     const formattedDate = eventDate.toLocaleString('en-US', {
                       month: 'short',
                       day: 'numeric',
@@ -1117,7 +1149,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                           return {
                             bg: 'rgba(115,203,255,0.2)',
                             color: 'var(--tn-blue)',
-                            label: (event.type as string).toUpperCase(),
+                            label: ((event.type) as string).toUpperCase(),
                           };
                       }
                     };
@@ -1168,7 +1200,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                               Amount
                             </div>
                             <div style={{ color: 'var(--tn-text)', fontWeight: 600 }}>
-                              €{event.amountEur.toFixed(2)}
+                              €{(event.amountEur).toFixed(2)}
                             </div>
                           </div>
                           <div>
@@ -1176,7 +1208,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                               Method
                             </div>
                             <div style={{ color: 'var(--tn-text-subtle)' }}>
-                              {event.method}
+                              {event.method ?? ''}
                             </div>
                           </div>
                         </div>
@@ -1191,13 +1223,13 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                         }}>
                           <span>
                             Before: <span style={{ fontWeight: 600, color: 'var(--tn-text-subtle)' }}>
-                              €{event.balanceBefore.toFixed(2)}
+                              €{(event.balanceBefore ?? 0).toFixed(2)}
                             </span>
                           </span>
                           <span>→</span>
                           <span>
                             After: <span style={{ fontWeight: 600, color: 'var(--tn-text-subtle)' }}>
-                              €{event.balanceAfter.toFixed(2)}
+                              €{(event.balanceAfter ?? 0).toFixed(2)}
                             </span>
                           </span>
                         </div>

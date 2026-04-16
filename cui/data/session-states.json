@@ -1,85 +1,70 @@
 {
-  "c8dd8dbb-1d5d-44cf-ad43-d1e0d9c8a117": {
-    "state": "idle",
-    "since": 1775471209656,
-    "accountId": "gmail",
-    "sessionId": "c8dd8dbb-1d5d-44cf-ad43-d1e0d9c8a117",
-    "reason": "done"
-  },
-  "a6c9636f-9cb4-4ff4-a15e-ef5371d4d2ee": {
+  "0901f202-2453-44a4-8b1d-714d7c772e3d": {
     "state": "idle",
     "reason": "done",
-    "since": 1775471320997,
-    "accountId": "gmail",
-    "sessionId": "a6c9636f-9cb4-4ff4-a15e-ef5371d4d2ee"
-  },
-  "9f4b2082-a467-44b0-a6ca-8a7a9c702923": {
-    "state": "idle",
-    "reason": "done",
-    "since": 1775468621401,
+    "since": 1776322583461,
     "accountId": "engelmann",
-    "sessionId": "9f4b2082-a467-44b0-a6ca-8a7a9c702923"
+    "sessionId": "0901f202-2453-44a4-8b1d-714d7c772e3d"
   },
-  "67648966-5472-4cb8-a6f3-c69d50337d66": {
+  "25c362bd-2b05-494d-a41b-040550171690": {
+    "state": "idle",
+    "reason": "done",
+    "since": 1776324776725,
+    "accountId": "werking",
+    "sessionId": "25c362bd-2b05-494d-a41b-040550171690"
+  },
+  "80977e04-7ddb-4bd8-9411-bb647f87da63": {
+    "state": "idle",
+    "reason": "done",
+    "since": 1776327185213,
+    "accountId": "werking",
+    "sessionId": "80977e04-7ddb-4bd8-9411-bb647f87da63"
+  },
+  "8a28b4c3-0514-4887-8136-c8186f4fb03c": {
+    "state": "idle",
+    "reason": "done",
+    "since": 1776324234900,
+    "accountId": "office",
+    "sessionId": "8a28b4c3-0514-4887-8136-c8186f4fb03c"
+  },
+  "abee53c7-9950-4058-8e4e-ad93cb3d7906": {
+    "state": "idle",
+    "reason": "done",
+    "since": 1776327051318,
+    "accountId": "werking",
+    "sessionId": "abee53c7-9950-4058-8e4e-ad93cb3d7906"
+  },
+  "f4e87252-b803-413b-a6cf-640f6411cb2d": {
     "state": "working",
-    "since": 1775471209958,
-    "accountId": "gmail",
-    "sessionId": "67648966-5472-4cb8-a6f3-c69d50337d66"
+    "since": 1776326981213,
+    "accountId": "werking",
+    "sessionId": "f4e87252-b803-413b-a6cf-640f6411cb2d"
   },
-  "427103ad-2dec-449a-8dfe-3b2e42b29fba": {
+  "88348d54-8cff-4abe-9712-aae8985f0acb": {
     "state": "idle",
     "reason": "done",
-    "since": 1775468617884,
-    "accountId": "gmail",
-    "sessionId": "427103ad-2dec-449a-8dfe-3b2e42b29fba"
+    "since": 1776322591390,
+    "accountId": "werking",
+    "sessionId": "88348d54-8cff-4abe-9712-aae8985f0acb"
   },
-  "1702596f-438c-469a-979d-cb6809225ce0": {
+  "e95a0de0-cd1f-4a5f-b183-a1654dd247ab": {
     "state": "idle",
     "reason": "done",
-    "since": 1775470150023,
-    "accountId": "engelmann",
-    "sessionId": "1702596f-438c-469a-979d-cb6809225ce0"
+    "since": 1776322561011,
+    "accountId": "werking",
+    "sessionId": "e95a0de0-cd1f-4a5f-b183-a1654dd247ab"
   },
-  "05cb8fde-375f-403f-8e33-b54a204f1871": {
+  "73b5e4dd-4b5a-4791-962e-c26c9c20e5b3": {
+    "state": "working",
+    "since": 1776327021982,
+    "accountId": "werking",
+    "sessionId": "73b5e4dd-4b5a-4791-962e-c26c9c20e5b3"
+  },
+  "8dfc81fa-a609-4cbc-bf26-792c898873df": {
     "state": "idle",
     "reason": "done",
-    "since": 1775471209774,
-    "accountId": "gmail",
-    "sessionId": "05cb8fde-375f-403f-8e33-b54a204f1871"
-  },
-  "18828d51-02a6-4256-b1c2-23c11154f7b6": {
-    "state": "idle",
-    "reason": "done",
-    "since": 1775471209941,
-    "accountId": "gmail",
-    "sessionId": "18828d51-02a6-4256-b1c2-23c11154f7b6"
-  },
-  "3b421e57-d012-4992-b6a9-5a6e16dc773e": {
-    "state": "idle",
-    "reason": "done",
-    "since": 1775471209947,
-    "accountId": "office",
-    "sessionId": "3b421e57-d012-4992-b6a9-5a6e16dc773e"
-  },
-  "73f46126-19cb-42fb-8b93-c13743293d40": {
-    "state": "idle",
-    "reason": "done",
-    "since": 1775471209962,
-    "accountId": "gmail",
-    "sessionId": "73f46126-19cb-42fb-8b93-c13743293d40"
-  },
-  "7c6cac5f-1ebf-4586-b176-db6cce23aa86": {
-    "state": "idle",
-    "reason": "done",
-    "since": 1775471209967,
-    "accountId": "engelmann",
-    "sessionId": "7c6cac5f-1ebf-4586-b176-db6cce23aa86"
-  },
-  "afec331f-00bc-4a81-a095-52895912810e": {
-    "state": "idle",
-    "reason": "done",
-    "since": 1775471209981,
-    "accountId": "office",
-    "sessionId": "afec331f-00bc-4a81-a095-52895912810e"
+    "since": 1776324280406,
+    "accountId": "werking",
+    "sessionId": "8dfc81fa-a609-4cbc-bf26-792c898873df"
   }
 }

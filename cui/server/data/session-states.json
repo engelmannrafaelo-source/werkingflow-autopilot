@@ -1,76 +1,50 @@
 {
-  "03ea656f-47ff-410a-8a72-cf81b73d5058": {
-    "state": "idle",
-    "since": 1774864252216,
-    "accountId": "gmail",
-    "sessionId": "03ea656f-47ff-410a-8a72-cf81b73d5058",
-    "reason": "done"
-  },
-  "0537afa6-7c2b-4b82-b055-67819705c16d": {
-    "state": "idle",
-    "since": 1774863851562,
-    "accountId": "gmail",
-    "sessionId": "0537afa6-7c2b-4b82-b055-67819705c16d",
-    "reason": "done"
-  },
-  "11bcd314-0291-4892-870d-6b7a49f8d513": {
+  "80977e04-7ddb-4bd8-9411-bb647f87da63": {
     "state": "working",
-    "since": 1774865395027,
-    "accountId": "gmail",
-    "sessionId": "11bcd314-0291-4892-870d-6b7a49f8d513"
+    "since": 1776266494497,
+    "accountId": "werking",
+    "sessionId": "80977e04-7ddb-4bd8-9411-bb647f87da63"
   },
-  "1b1d8673-b2e6-4bdb-b65c-f71950f83df3": {
+  "2ccb591b-4053-4729-826f-871a3d03f089": {
     "state": "idle",
-    "reason": "done",
-    "since": 1774861846739,
-    "accountId": "gmail",
-    "sessionId": "1b1d8673-b2e6-4bdb-b65c-f71950f83df3"
-  },
-  "674f210f-6f4c-4455-8e6b-65b43114ee75": {
-    "state": "working",
-    "since": 1774865395034,
-    "accountId": "engelmann",
-    "sessionId": "674f210f-6f4c-4455-8e6b-65b43114ee75"
-  },
-  "6e777096-c43a-41a2-882e-e5a0ecc527f8": {
-    "state": "idle",
-    "reason": "done",
-    "since": 1774865405084,
-    "accountId": "gmail",
-    "sessionId": "6e777096-c43a-41a2-882e-e5a0ecc527f8"
-  },
-  "c0112d15-a8b0-4cd0-9f09-7e45bdd5d7f1": {
-    "state": "idle",
-    "since": 1774863851562,
-    "accountId": "gmail",
-    "sessionId": "c0112d15-a8b0-4cd0-9f09-7e45bdd5d7f1",
+    "since": 1776265911829,
+    "accountId": "werking",
+    "sessionId": "2ccb591b-4053-4729-826f-871a3d03f089",
     "reason": "done"
   },
-  "c41510e8-e7b4-45c1-abd2-7fca9f6d2988": {
+  "0901f202-2453-44a4-8b1d-714d7c772e3d": {
     "state": "idle",
     "reason": "done",
-    "since": 1774861846752,
+    "since": 1776265911931,
     "accountId": "engelmann",
-    "sessionId": "c41510e8-e7b4-45c1-abd2-7fca9f6d2988"
+    "sessionId": "0901f202-2453-44a4-8b1d-714d7c772e3d"
   },
-  "ce456b98-72b1-449a-a8ac-f9d2bbbe3aff": {
+  "8a28b4c3-0514-4887-8136-c8186f4fb03c": {
     "state": "idle",
-    "since": 1774864252216,
-    "accountId": "engelmann",
-    "sessionId": "ce456b98-72b1-449a-a8ac-f9d2bbbe3aff",
+    "reason": "done",
+    "since": 1776265912141,
+    "accountId": "office",
+    "sessionId": "8a28b4c3-0514-4887-8136-c8186f4fb03c"
+  },
+  "abee53c7-9950-4058-8e4e-ad93cb3d7906": {
+    "state": "idle",
+    "reason": "done",
+    "since": 1776265912145,
+    "accountId": "werking",
+    "sessionId": "abee53c7-9950-4058-8e4e-ad93cb3d7906"
+  },
+  "b55e0791-9610-484f-9ccf-5af4b7708aaa": {
+    "state": "idle",
+    "since": 1776266494131,
+    "accountId": "werking",
+    "sessionId": "b55e0791-9610-484f-9ccf-5af4b7708aaa",
     "reason": "done"
   },
-  "e497c125-4a5b-4fd6-becd-45bffe48ed8f": {
-    "state": "working",
-    "since": 1774865395057,
-    "accountId": "gmail",
-    "sessionId": "e497c125-4a5b-4fd6-becd-45bffe48ed8f"
-  },
-  "fc9ac79a-e4b7-4e9d-857f-2b05c8cf873c": {
+  "178f276d-d44a-46a4-af51-299532e2573f": {
     "state": "idle",
     "reason": "done",
-    "since": 1774865404063,
-    "accountId": "gmail",
-    "sessionId": "fc9ac79a-e4b7-4e9d-857f-2b05c8cf873c"
+    "since": 1776266494464,
+    "accountId": "werking",
+    "sessionId": "178f276d-d44a-46a4-af51-299532e2573f"
   }
 }

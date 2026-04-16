@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { validateApiResponse } from '../../lib/validateApiResponse';
 
 const API = '/api';
 
@@ -6,37 +7,37 @@ const API = '/api';
 interface AgentStatus {
   id: string;
   persona_id: string;
-  persona_name: string;
-  schedule: string;
+  persona_name?: string;
+  schedule?: string;
   status: 'idle' | 'working' | 'error';
-  last_run: string | null;
-  last_actions: number;
-  last_action_types: string[];
-  last_trigger: string | null;
-  next_run: string;
-  has_pending_approvals: boolean;
-  approvals_count: number;
-  inbox_count: number;
+  last_run?: string | null;
+  last_actions?: number;
+  last_action_types?: string[];
+  last_trigger?: string | null;
+  next_run?: string;
+  has_pending_approvals?: boolean;
+  approvals_count?: number;
+  inbox_count?: number;
 }
 
 interface MemoryEntry {
   timestamp: string;
   trigger: string;
-  actions: number;
-  action_types: string[];
-  response_preview: string;
+  actions?: number;
+  action_types?: string[];
+  response_preview?: string;
 }
 
 interface InboxMessage {
   from: string;
-  date: string;
+  date?: string;
   body: string;
 }
 
 interface Approval {
   index: number;
-  timestamp: string;
-  persona: string;
+  timestamp?: string;
+  persona?: string;
   type: 'bash' | 'write';
   payload: string;
 }
@@ -86,7 +87,11 @@ function MemoryLog({ personaId }: { personaId: string }) {
         if (!r.ok) throw new Error(`memory fetch failed: ${r.status} ${r.statusText}`);
         return r.json();
       })
-      .then(d => { setEntries(d.entries ?? []); setLoading(false); })
+      .then(d => {
+        const validated = validateApiResponse<{ entries: MemoryEntry[] }>(d, `/api/agents/memory/${personaId}`, { entries: 'array' });
+        setEntries(validated.entries);
+        setLoading(false);
+      })
       .catch((err) => { console.warn('[AgentDashboard] memory load:', err); setLoading(false); });
   }, [personaId]);
 
@@ -96,22 +101,22 @@ function MemoryLog({ personaId }: { personaId: string }) {
   return (
     <div className="agent-memory-log">
       {entries.map((e, i) => (
-        <div key={i} className={`agent-memory-entry ${e.response_preview.startsWith('ERROR') ? 'entry-error' : ''}`}>
+        <div key={i} className={`agent-memory-entry ${(e.response_preview ?? '').startsWith('ERROR') ? 'entry-error' : ''}`}>
           <div className="memory-entry-header">
             <span className="memory-entry-time">{fmtDate(e.timestamp)}</span>
             <span className="memory-entry-trigger">{e.trigger.replace('_', ' ')}</span>
             <span className="memory-entry-actions">
-              {e.actions} Aktionen
-              {e.action_types.length > 0 && (
+              {e.actions ?? 0} Aktionen
+              {(e.action_types?.length ?? 0) > 0 && (
                 <span className="memory-entry-types">
-                  {' '}({e.action_types.join(', ')})
+                  {' '}({(e.action_types ?? []).join(', ')})
                 </span>
               )}
             </span>
           </div>
           {e.response_preview && (
             <div className="memory-entry-preview">
-              {e.response_preview.slice(0, 120)}{e.response_preview.length > 120 ? '…' : ''}
+              {(e.response_preview ?? '').slice(0, 120)}{(e.response_preview?.length ?? 0) > 120 ? '…' : ''}
             </div>
           )}
         </div>
@@ -131,7 +136,11 @@ function InboxView({ personaId }: { personaId: string }) {
         if (!r.ok) throw new Error(`inbox fetch failed: ${r.status} ${r.statusText}`);
         return r.json();
       })
-      .then(d => { setMessages(d.messages ?? []); setLoading(false); })
+      .then(d => {
+        const validated = validateApiResponse<{ messages: InboxMessage[] }>(d, `/api/agents/inbox/${personaId}`, { messages: 'array' });
+        setMessages(validated.messages);
+        setLoading(false);
+      })
       .catch((err) => { console.warn('[AgentDashboard] inbox load:', err); setLoading(false); });
   }, [personaId]);
 
@@ -144,7 +153,7 @@ function InboxView({ personaId }: { personaId: string }) {
         <div key={i} className="agent-inbox-message">
           <div className="inbox-msg-header">
             <span className="inbox-msg-from">Von: {msg.from}</span>
-            <span className="inbox-msg-date">{msg.date}</span>
+            <span className="inbox-msg-date">{msg.date ?? ''}</span>
           </div>
           <div className="inbox-msg-body">{msg.body.slice(0, 300)}{msg.body.length > 300 ? '…' : ''}</div>
         </div>
@@ -165,7 +174,11 @@ function ApprovalsView({ onApproved }: { onApproved: () => void }) {
         if (!r.ok) throw new Error(`approvals fetch failed: ${r.status} ${r.statusText}`);
         return r.json();
       })
-      .then(d => { setApprovals(d.approvals ?? []); setLoading(false); })
+      .then(d => {
+        const validated = validateApiResponse<{ approvals: Approval[] }>(d, '/api/agents/approvals', { approvals: 'array' });
+        setApprovals(validated.approvals);
+        setLoading(false);
+      })
       .catch((err) => { console.warn('[AgentDashboard] approvals load:', err); setLoading(false); });
   }, []);
 
@@ -199,9 +212,9 @@ function ApprovalsView({ onApproved }: { onApproved: () => void }) {
       {approvals.map((a) => (
         <div key={a.index} className="agent-approval-item">
           <div className="approval-header">
-            <span className="approval-persona">{a.persona}</span>
+            <span className="approval-persona">{a.persona ?? ''}</span>
             <span className={`approval-type approval-type-${a.type}`}>{a.type.toUpperCase()}</span>
-            <span className="approval-time">{fmtDate(a.timestamp)}</span>
+            <span className="approval-time">{fmtDate(a.timestamp ?? null)}</span>
           </div>
           <pre className="approval-payload">{a.payload.slice(0, 300)}{a.payload.length > 300 ? '\n…' : ''}</pre>
           <div className="approval-actions">
@@ -240,7 +253,8 @@ function BriefView({ personaId }: { personaId: string }) {
         return r.json();
       })
       .then(d => {
-        const list = d.briefs ?? [];
+        const validated = validateApiResponse<{ briefs: Array<{ name: string }> }>(d, '/api/agents/briefs', { briefs: 'array' });
+        const list = validated.briefs;
         setBriefs(list);
         if (list.length > 0) loadBrief(list[0].name);
         else setLoading(false);
@@ -330,7 +344,7 @@ function AgentCard({
         <div className="agent-card-name-block">
           <div className="agent-card-name">
             {statusDot(agent.status)}
-            {agent.persona_name}
+            {agent.persona_name ?? ''}
           </div>
           <div className="agent-card-role">
             {/* Will show role from future data; for now just schedule */}
@@ -345,24 +359,24 @@ function AgentCard({
         <div className="agent-meta-row">
           <span className="agent-meta-label">Letzter Lauf</span>
           <span className="agent-meta-value">
-            {fmtDate(agent.last_run)}
-            {agent.last_actions > 0 && (
-              <span className="agent-meta-actions"> — {agent.last_actions} Aktionen ({agent.last_action_types.join(', ')})</span>
+            {fmtDate(agent.last_run ?? null)}
+            {(agent.last_actions ?? 0) > 0 && (
+              <span className="agent-meta-actions"> — {agent.last_actions ?? 0} Aktionen ({(agent.last_action_types ?? []).join(', ')})</span>
             )}
           </span>
         </div>
         <div className="agent-meta-row">
           <span className="agent-meta-label">Nächster Lauf</span>
-          <span className="agent-meta-value">{agent.schedule} ({fmtDate(agent.next_run)})</span>
+          <span className="agent-meta-value">{agent.schedule ?? ''} ({fmtDate(agent.next_run ?? null)})</span>
         </div>
       </div>
 
       <div className="agent-card-badges">
-        {agent.inbox_count > 0 && (
-          <span className="agent-badge badge-inbox">📬 {agent.inbox_count} Nachricht{agent.inbox_count !== 1 ? 'en' : ''}</span>
+        {(agent.inbox_count ?? 0) > 0 && (
+          <span className="agent-badge badge-inbox">📬 {agent.inbox_count ?? 0} Nachricht{(agent.inbox_count ?? 0) !== 1 ? 'en' : ''}</span>
         )}
-        {agent.has_pending_approvals && (
-          <span className="agent-badge badge-approval">⚠️ {agent.approvals_count} Approval{agent.approvals_count !== 1 ? 's' : ''}</span>
+        {(agent.has_pending_approvals ?? false) && (
+          <span className="agent-badge badge-approval">⚠️ {agent.approvals_count ?? 0} Approval{(agent.approvals_count ?? 0) !== 1 ? 's' : ''}</span>
         )}
       </div>
 
@@ -386,15 +400,15 @@ function AgentDetail({ agent, onApproved }: { agent: AgentStatus; onApproved: ()
 
   const tabs: { key: typeof detailTab; label: string; badge?: number }[] = [
     { key: 'memory', label: '📜 Memory Log' },
-    { key: 'inbox', label: '📬 Inbox', badge: agent.inbox_count || undefined },
-    { key: 'approvals', label: '⚠️ Approvals', badge: agent.approvals_count || undefined },
+    { key: 'inbox', label: '📬 Inbox', badge: (agent.inbox_count ?? 0) || undefined },
+    { key: 'approvals', label: '⚠️ Approvals', badge: (agent.approvals_count ?? 0) || undefined },
     { key: 'brief', label: '📄 Weekly Brief' },
   ];
 
   return (
     <div className="agent-detail">
       <div className="agent-detail-header">
-        <span className="agent-detail-title">{agent.persona_name}</span>
+        <span className="agent-detail-title">{agent.persona_name ?? ''}</span>
       </div>
 
       <div className="agent-detail-tabs">
@@ -432,12 +446,13 @@ export default function AgentDashboard() {
     try {
       const res = await fetch(`${API}/agents/status`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`status fetch failed: ${res.status} ${res.statusText}`);
-      const data = await res.json();
-      setAgents(data.agents ?? []);
+      const raw = await res.json();
+      const data = validateApiResponse<{ agents: AgentStatus[] }>(raw, '/api/agents/status', { agents: 'array' });
+      setAgents(data.agents);
       setLastRefresh(new Date());
       // Update selected if it changed
       if (selected) {
-        const updated = (data.agents ?? []).find((a: AgentStatus) => a.id === selected.id);
+        const updated = data.agents.find((a: AgentStatus) => a.id === selected.id);
         if (updated) setSelected(updated);
       }
     } catch (err) {

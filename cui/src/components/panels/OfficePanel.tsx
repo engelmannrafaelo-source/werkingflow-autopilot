@@ -9,6 +9,7 @@ import PersonaDocumentList from './PersonaDocumentList';
 import AgentDashboard from './AgentDashboard';
 import CommandSidebar from './CommandSidebar';
 import VirtualOffice from './VirtualOffice';
+import { validateApiResponse } from '../../lib/validateApiResponse';
 
 const API = '/api';
 
@@ -17,10 +18,10 @@ interface PersonaCard {
   id: string;
   name: string;
   role: string;
-  mbti: string;
   status: 'idle' | 'working' | 'blocked' | 'review';
-  worklistPath: string;
-  lastUpdated: string;
+  mbti?: string;
+  worklistPath?: string;
+  lastUpdated?: string;
   team?: string;
   department?: string;
   table?: string;
@@ -54,9 +55,15 @@ export default function OfficePanel({ projectId, workDir }: OfficePanelProps) {
     try {
       setLoading(true);
       setError(null);
-      const res = await fetch(`${API}/team/personas`, { signal: AbortSignal.timeout(20000) });
+      const endpoint = `${API}/team/personas`;
+      const res = await fetch(endpoint, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`[OfficePanel] load personas failed: HTTP ${res.status}`);
-      setPersonas(await res.json());
+      const raw = await res.json();
+      // API returns array directly — validate wrapper
+      if (!Array.isArray(raw)) {
+        throw new Error(`API ${endpoint}: expected array, got ${typeof raw}`);
+      }
+      setPersonas(raw as PersonaCard[]);
     } catch (err: any) {
       console.warn('[OfficePanel] load personas error:', err);
       setError(err.message);

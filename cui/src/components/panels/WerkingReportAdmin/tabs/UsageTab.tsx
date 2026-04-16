@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line, CartesianGrid } from 'recharts';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
 
 interface TenantUsage {
   tenantId: string;
@@ -13,11 +14,11 @@ interface TenantUsage {
 interface UsageStats {
   tenants: TenantUsage[];
   totals: { tokens: number; cost: number; requests: number; gutachten: number };
-  period: string;
+  period?: string;
 }
 
 interface MonthSummary { month: string; tokens: number; cost: number; requests: number; }
-interface TrendData { months: MonthSummary[]; totalTokens: number; totalCost: number; totalRequests: number; }
+interface TrendData { labels: string[]; values: number[]; months?: MonthSummary[]; totalTokens?: number; totalCost?: number; totalRequests?: number; }
 
 interface TenantActivity {
   tenantId: string;
@@ -30,10 +31,10 @@ interface TenantActivity {
   uploadCount: number;
 }
 interface ActivityData {
-  tenants: TenantActivity[];
-  activeTenants: number;
-  totalTenants: number;
-  month: string;
+  tenants?: TenantActivity[];
+  activeTenants?: number;
+  totalTenants?: number;
+  month?: string;
 }
 
 type ViewMode = 'current' | 'trend' | 'activity';
@@ -57,14 +58,18 @@ export default function UsageTab({ envMode }: { envMode?: string }) {
         fetch('/api/admin/wr/usage/activity', { signal: AbortSignal.timeout(20000) }),
       ]);
       if (!statsRes.ok) throw new Error(await statsRes.text());
-      const [statsData, trendData, activityData] = await Promise.all([
+      const [statsRaw, trendRaw, activityRaw] = await Promise.all([
         statsRes.json(),
         trendRes.ok ? trendRes.json() : null,
         activityRes.ok ? activityRes.json() : null,
       ]);
-      setData(statsData);
-      if (trendData) setTrend(trendData);
-      if (activityData) setActivity(activityData);
+      const validatedStats = validateApiResponse<UsageStats>(statsRaw, '/api/admin/wr/usage/stats', {
+        tenants: 'array',
+        totals: 'object',
+      });
+      setData(validatedStats);
+      if (trendRaw) setTrend(trendRaw);
+      if (activityRaw) setActivity(activityRaw);
     } catch (err: any) {
       console.warn('[WRUsageTab] fetchAll:', err);
       setError(err.message);
@@ -75,20 +80,20 @@ export default function UsageTab({ envMode }: { envMode?: string }) {
 
   useEffect(() => { fetchAll(); }, [fetchAll, envMode]);
 
-  const chartData = data?.tenants
+  const chartData = (data?.tenants ?? [])
     .filter(t => t.cost > 0)
     .sort((a, b) => b.cost - a.cost)
     .slice(0, 10)
     .map(t => ({
       name: t.tenantName || (t.tenantId.length > 12 ? t.tenantId.slice(0, 12) + '\u2026' : t.tenantId),
       cost: Math.round(t.cost * 100) / 100,
-    })) || [];
+    }));
 
-  const trendChartData = trend?.months.map(m => ({
+  const trendChartData = (trend?.months ?? []).map(m => ({
     month: m.month.slice(5),
     cost: Math.round(m.cost * 100) / 100,
     requests: m.requests,
-  })) || [];
+  }));
 
   const statCard = (label: string, value: string, color: string) => (
     <div style={{ padding: 10, background: 'var(--tn-bg-dark)', border: '1px solid var(--tn-border)', borderRadius: 6 }}>
@@ -124,10 +129,10 @@ export default function UsageTab({ envMode }: { envMode?: string }) {
       {!loading && view === 'current' && data && (
         <>
           <div data-ai-id="wr-usage-current-stats" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 16 }}>
-            {statCard('Cost (EUR)', '\u20ac' + data.totals.cost.toFixed(2), 'var(--tn-green)')}
-            {statCard('Tokens', (data.totals.tokens / 1000).toFixed(1) + 'K', 'var(--tn-blue)')}
-            {statCard('Requests', '' + data.totals.requests, 'var(--tn-orange)')}
-            {statCard('Gutachten', '' + data.totals.gutachten, 'var(--tn-purple, #bb9af7)')}
+            {statCard('Cost (EUR)', '\u20ac' + (data.totals.cost).toFixed(2), 'var(--tn-green)')}
+            {statCard('Tokens', ((data.totals.tokens) / 1000).toFixed(1) + 'K', 'var(--tn-blue)')}
+            {statCard('Requests', '' + (data.totals.requests), 'var(--tn-orange)')}
+            {statCard('Gutachten', '' + (data.totals.gutachten), 'var(--tn-purple, #bb9af7)')}
           </div>
 
           {chartData.length > 0 && (
@@ -148,7 +153,7 @@ export default function UsageTab({ envMode }: { envMode?: string }) {
           <div data-ai-id="wr-usage-current-tenants-header" style={{ display: 'grid', gridTemplateColumns: '1fr 70px 70px 60px 50px', gap: 6, padding: '5px 8px', background: 'var(--tn-bg-dark)', borderRadius: 4, fontSize: 9, fontWeight: 600, color: 'var(--tn-text-muted)', marginBottom: 4 }}>
             <div>Tenant</div><div>Cost</div><div>Tokens</div><div>Req</div><div>Docs</div>
           </div>
-          {data.tenants.filter(t => t.tokens > 0 || t.requests > 0).sort((a, b) => b.cost - a.cost).map(t => (
+          {(data.tenants).filter(t => t.tokens > 0 || t.requests > 0).sort((a, b) => b.cost - a.cost).map(t => (
             <div key={t.tenantId} data-ai-id={`wr-usage-current-tenant-${t.tenantId}`} style={{ display: 'grid', gridTemplateColumns: '1fr 70px 70px 60px 50px', gap: 6, padding: '6px 8px', borderBottom: '1px solid var(--tn-border)', fontSize: 10, alignItems: 'center' }}>
               <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 <span style={{ color: 'var(--tn-text)' }}>{t.tenantName || '--'}</span>
@@ -160,7 +165,7 @@ export default function UsageTab({ envMode }: { envMode?: string }) {
               <div style={{ color: 'var(--tn-text-muted)' }}>{t.gutachtenCount}</div>
             </div>
           ))}
-          {data.tenants.filter(t => t.tokens > 0 || t.requests > 0).length === 0 && (
+          {(data.tenants).filter(t => t.tokens > 0 || t.requests > 0).length === 0 && (
             <div style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 11 }}>No usage this month</div>
           )}
         </>
@@ -169,9 +174,9 @@ export default function UsageTab({ envMode }: { envMode?: string }) {
       {!loading && view === 'trend' && trend && (
         <>
           <div data-ai-id="wr-usage-trend-stats" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 16 }}>
-            {statCard('Total Cost (6M)', '\u20ac' + trend.totalCost.toFixed(2), 'var(--tn-green)')}
-            {statCard('Total Tokens (6M)', (trend.totalTokens / 1000).toFixed(1) + 'K', 'var(--tn-blue)')}
-            {statCard('Total Requests (6M)', '' + trend.totalRequests, 'var(--tn-orange)')}
+            {statCard('Total Cost (6M)', '\u20ac' + (trend.totalCost ?? 0).toFixed(2), 'var(--tn-green)')}
+            {statCard('Total Tokens (6M)', ((trend.totalTokens ?? 0) / 1000).toFixed(1) + 'K', 'var(--tn-blue)')}
+            {statCard('Total Requests (6M)', '' + (trend.totalRequests ?? 0), 'var(--tn-orange)')}
           </div>
           <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6, fontWeight: 600 }}>COST TREND (EUR/MONTH)</div>
           <ResponsiveContainer width="100%" height={140}>
@@ -198,8 +203,8 @@ export default function UsageTab({ envMode }: { envMode?: string }) {
       {!loading && view === 'activity' && activity && (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8, marginBottom: 16 }}>
-            {statCard('Active Tenants', activity.activeTenants + '/' + activity.totalTenants, 'var(--tn-blue)')}
-            {statCard('Month', activity.month, 'var(--tn-text-muted)')}
+            {statCard('Active Tenants', (activity.activeTenants ?? 0) + '/' + (activity.totalTenants ?? 0), 'var(--tn-blue)')}
+            {statCard('Month', activity.month ?? '', 'var(--tn-text-muted)')}
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 140px 70px 70px 60px 80px', gap: 6, padding: '5px 8px', background: 'var(--tn-bg-dark)', borderRadius: 4, fontSize: 9, fontWeight: 600, color: 'var(--tn-text-muted)', marginBottom: 4 }}>
@@ -211,7 +216,7 @@ export default function UsageTab({ envMode }: { envMode?: string }) {
             <div>Users</div>
           </div>
 
-          {activity.tenants
+          {(activity.tenants ?? [])
             .sort((a, b) => (b.quotaUsed + b.requestsThisMonth) - (a.quotaUsed + a.requestsThisMonth))
             .map(t => {
               const pct = Math.min(100, t.quotaPercentUsed);
@@ -271,7 +276,7 @@ export default function UsageTab({ envMode }: { envMode?: string }) {
                 </div>
               );
             })}
-          {activity.tenants.length === 0 && (
+          {(activity.tenants ?? []).length === 0 && (
             <div style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)', fontSize: 11 }}>No activity data</div>
           )}
         </>

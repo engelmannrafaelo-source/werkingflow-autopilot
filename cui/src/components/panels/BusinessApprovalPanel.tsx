@@ -1,16 +1,17 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { getPathConfig } from '../../utils/paths';
+import { validateApiResponse } from '../../lib/validateApiResponse';
 
 const API = '/api';
 
 interface PendingEntry {
   index: number;
   timestamp: string;
-  persona: string;
+  persona?: string;
   file: string;
-  summary: string;
-  stage?: 'draft' | 'review' | 'approval';
-  ageDays?: number;
+  summary?: string;
+  stage: 'draft' | 'review' | 'approval';
+  ageDays: number;
 }
 
 interface DiffData {
@@ -30,7 +31,10 @@ export default function BusinessApprovalPanel() {
       const resp = await fetch(`${API}/agents/business/pending`, { signal: AbortSignal.timeout(20000) });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const d = await resp.json();
-      const entries = (d.pending ?? []).map((entry: any) => {
+      const validated = validateApiResponse<{ pending: Array<{ index: number; timestamp: string; file: string; persona?: string; summary?: string }> }>(
+        d, '/api/agents/business/pending', { pending: 'array' }
+      );
+      const entries = validated.pending.map((entry) => {
         const ageMs = Date.now() - new Date(entry.timestamp).getTime();
         const ageDays = Math.floor(ageMs / 86400000);
 
@@ -59,7 +63,12 @@ export default function BusinessApprovalPanel() {
       const filePath = entry.file.replace(getPathConfig().businessDir + '/', '');
       const resp = await fetch(`${API}/agents/business/diff/${filePath}`, { signal: AbortSignal.timeout(20000) });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      setDiff(await resp.json());
+      const raw = await resp.json();
+      const validated = validateApiResponse<DiffData>(raw, `/api/agents/business/diff/${filePath}`, {
+        pending: 'string',
+        final: 'string',
+      });
+      setDiff(validated);
     } catch (err) {
       console.warn('[BusinessApproval] load diff:', err);
       setDiff({ pending: 'Fehler beim Laden', final: '' });
@@ -192,7 +201,7 @@ export default function BusinessApprovalPanel() {
               <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--tn-text)', flex: 1 }}>
                 {entry.file.replace(getPathConfig().businessDir + '/', '')}
               </div>
-              {entry.ageDays !== undefined && entry.ageDays > 0 && (
+              {entry.ageDays > 0 && (
                 <div style={{
                   fontSize: 9,
                   padding: '2px 6px',
@@ -205,7 +214,7 @@ export default function BusinessApprovalPanel() {
                 </div>
               )}
             </div>
-            <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 4 }}>{entry.summary}</div>
+            <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 4 }}>{entry.summary ?? ''}</div>
             <div style={{ display: 'flex', gap: 6, fontSize: 9, alignItems: 'center' }}>
               <span style={{
                 padding: '2px 6px',
@@ -217,7 +226,7 @@ export default function BusinessApprovalPanel() {
               }}>
                 {getStageName(entry.stage)}
               </span>
-              <span style={{ color: 'var(--tn-cyan)' }}>{entry.persona}</span>
+              <span style={{ color: 'var(--tn-cyan)' }}>{entry.persona ?? ''}</span>
               <span style={{ color: 'var(--tn-text-muted)' }}>· {new Date(entry.timestamp).toLocaleString('de-AT', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
             </div>
           </div>
@@ -233,12 +242,12 @@ export default function BusinessApprovalPanel() {
               <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--tn-text)' }}>
                 {selected.file.replace(getPathConfig().businessDir + '/', '')}
               </div>
-              <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginTop: 2 }}>{selected.summary}</div>
+              <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginTop: 2 }}>{selected.summary ?? ''}</div>
             </div>
             <div style={{ display: 'flex', gap: 6 }}>
               <button
                 onClick={() => reject(selected.index)}
-                disabled={processing === selected.index}
+                disabled={processing === (selected.index)}
                 style={{
                   padding: '5px 12px',
                   fontSize: 11,
@@ -247,13 +256,13 @@ export default function BusinessApprovalPanel() {
                   color: '#fca5a5',
                   border: '1px solid rgba(239,68,68,0.4)',
                   borderRadius: 4,
-                  cursor: processing === selected.index ? 'not-allowed' : 'pointer',
-                  opacity: processing === selected.index ? 0.5 : 1,
+                  cursor: processing === (selected.index) ? 'not-allowed' : 'pointer',
+                  opacity: processing === (selected.index) ? 0.5 : 1,
                 }}
               >✗ Ablehnen</button>
               <button
                 onClick={() => approve(selected.index)}
-                disabled={processing === selected.index}
+                disabled={processing === (selected.index)}
                 style={{
                   padding: '5px 12px',
                   fontSize: 11,
@@ -262,8 +271,8 @@ export default function BusinessApprovalPanel() {
                   color: '#e9d5ff',
                   border: '1px solid rgba(124,58,237,0.5)',
                   borderRadius: 4,
-                  cursor: processing === selected.index ? 'not-allowed' : 'pointer',
-                  opacity: processing === selected.index ? 0.5 : 1,
+                  cursor: processing === (selected.index) ? 'not-allowed' : 'pointer',
+                  opacity: processing === (selected.index) ? 0.5 : 1,
                 }}
               >✓ Freigeben</button>
             </div>

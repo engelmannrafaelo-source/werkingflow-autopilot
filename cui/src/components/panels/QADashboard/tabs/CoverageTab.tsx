@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
 
 const APP_IDS = ['werking-report', 'engelmann', 'werking-energy', 'werking-safety', 'werking-noise', 'platform', 'acro-community'];
 const APP_NAMES: Record<string, string> = {
@@ -45,7 +46,7 @@ interface CoverageData {
   app: string;
   api: DimensionData;
   ui: DimensionData;
-  timestamp: string;
+  timestamp?: string;
 }
 
 function CoverageBar({ pct, width = 120 }: { pct: number; width?: number }) {
@@ -94,7 +95,15 @@ export default function CoverageTab() {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
       })
-      .then(d => { setData(d); setLoading(false); })
+      .then(raw => {
+        const d = validateApiResponse<CoverageData>(raw, `/api/qa/coverage-gaps/${selectedApp}`, {
+          app: 'string',
+          api: 'object',
+          ui: 'object',
+        });
+        setData(d);
+        setLoading(false);
+      })
       .catch(err => {
         setData(null);
         setError(err.message === 'no_data' ? null : err.message);
@@ -151,8 +160,8 @@ export default function CoverageTab() {
                 border: '1px solid var(--tn-border)',
               }}>
                 <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: 1 }}>Last Analysis</div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--tn-text)', marginTop: 4 }}>{relativeTime(data.timestamp)}</div>
-                <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginTop: 4, fontFamily: 'monospace' }}>{data.timestamp.split('T')[0]}</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--tn-text)', marginTop: 4 }}>{relativeTime(data.timestamp ?? '')}</div>
+                <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginTop: 4, fontFamily: 'monospace' }}>{(data.timestamp ?? '').split('T')[0]}</div>
               </div>
             </div>
 

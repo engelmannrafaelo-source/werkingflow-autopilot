@@ -2,17 +2,18 @@ import React, { useState, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { resilientFetch } from '../../../utils/resilientFetch';
+import { validateApiResponse } from '../../../lib/validateApiResponse';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 interface FilePreviewData {
   type: 'text' | 'image' | 'pdf' | 'unsupported';
-  ext: string;
+  ext?: string;
   fileName: string;
-  content?: string;
+  content: string;
   base64?: string;
   mimeType?: string;
-  size: number;
-  modified: string;
+  size?: number;
+  modified?: string;
   message?: string;
 }
 
@@ -38,7 +39,19 @@ export default function FilePreviewSidebar({ filePath, onClose }: FilePreviewSid
         const errData = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
         throw new Error(errData.error || `HTTP ${res.status}`);
       }
-      setData(await res.json());
+      const raw = await res.json();
+      const validated = validateApiResponse<FilePreviewData>(raw, '/api/qa/file-preview', {
+        type: 'string',
+        fileName: 'string',
+        content: 'string',
+        ext: { type: 'string', optional: true },
+        base64: { type: 'string', optional: true },
+        mimeType: { type: 'string', optional: true },
+        size: { type: 'number', optional: true },
+        modified: { type: 'string', optional: true },
+        message: { type: 'string', optional: true },
+      });
+      setData(validated);
     } catch (err: any) {
       setError(err.message || 'Failed to load preview');
     } finally {
@@ -109,7 +122,7 @@ export default function FilePreviewSidebar({ filePath, onClose }: FilePreviewSid
             color: 'var(--tn-text-muted)',
             fontFamily: 'monospace',
           }}>
-            {fmtBytes(data.size)}
+            {fmtBytes(data.size ?? 0)}
           </span>
         )}
         <button
@@ -200,7 +213,7 @@ function PreviewContent({ data }: { data: FilePreviewData }) {
               a: ({node, ...props}) => <a style={{ color: 'var(--tn-blue)', textDecoration: 'none' }} {...props} />,
             }}
           >
-            {data.content!}
+            {data.content}
           </ReactMarkdown>
         </div>
       );
@@ -219,8 +232,8 @@ function PreviewContent({ data }: { data: FilePreviewData }) {
 
     // JSON — pretty-printed
     if (data.ext === '.json') {
-      let formatted = data.content!;
-      try { formatted = JSON.stringify(JSON.parse(data.content!), null, 2); } catch {}
+      let formatted = data.content;
+      try { formatted = JSON.stringify(JSON.parse(data.content), null, 2); } catch {}
       return (
         <pre style={{
           padding: 12,
@@ -238,7 +251,7 @@ function PreviewContent({ data }: { data: FilePreviewData }) {
 
     // CSV — simple table view
     if (data.ext === '.csv') {
-      return <CsvPreview content={data.content!} />;
+      return <CsvPreview content={data.content} />;
     }
 
     // Other text files — plain code view
@@ -267,7 +280,7 @@ function PreviewContent({ data }: { data: FilePreviewData }) {
         alignItems: 'flex-start',
       }}>
         <img
-          src={`data:${data.mimeType};base64,${data.base64}`}
+          src={`data:${data.mimeType ?? ''};base64,${data.base64 ?? ''}`}
           alt={data.fileName}
           style={{
             maxWidth: '100%',
@@ -285,7 +298,7 @@ function PreviewContent({ data }: { data: FilePreviewData }) {
   if (data.type === 'pdf') {
     return (
       <iframe
-        src={`data:application/pdf;base64,${data.base64}`}
+        src={`data:application/pdf;base64,${data.base64 ?? ''}`}
         style={{ width: '100%', height: '100%', border: 'none' }}
         title={data.fileName}
       />
@@ -302,8 +315,8 @@ function PreviewContent({ data }: { data: FilePreviewData }) {
     }}>
       <div style={{ fontSize: 28, marginBottom: 8, opacity: 0.4 }}>?</div>
       <div style={{ fontWeight: 600 }}>{data.fileName}</div>
-      <div style={{ marginTop: 4 }}>{data.message || `No preview for ${data.ext} files`}</div>
-      <div style={{ marginTop: 8, fontSize: 9 }}>{fmtBytes(data.size)}</div>
+      <div style={{ marginTop: 4 }}>{data.message || `No preview for ${data.ext ?? ''} files`}</div>
+      <div style={{ marginTop: 8, fontSize: 9 }}>{fmtBytes(data.size ?? 0)}</div>
     </div>
   );
 }

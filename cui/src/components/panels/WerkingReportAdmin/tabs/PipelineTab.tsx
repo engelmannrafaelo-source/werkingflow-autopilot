@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
 
 interface EnvironmentHealth {
   name: string;
@@ -30,7 +31,17 @@ export default function PipelineTab({ envMode }: { envMode?: string }) {
         throw new Error(`Health check failed: HTTP ${res.status}`);
       }
       const data = await res.json();
-      setEnvironments(data.environments || []);
+      const validated = validateApiResponse<{ environments: EnvironmentHealth[] }>(data, '/api/admin/wr/pipeline-health', {
+        environments: 'array',
+      });
+      validated.environments.forEach((env, i) => {
+        validateApiResponse<EnvironmentHealth>(env, `/api/admin/wr/pipeline-health[${i}]`, {
+          name: 'string',
+          url: 'string',
+          status: 'string',
+        });
+      });
+      setEnvironments(validated.environments);
     } catch (err: any) {
       console.warn('[WRPipeline] fetchAll:', err);
       setError(err.message);
@@ -48,17 +59,20 @@ export default function PipelineTab({ envMode }: { envMode?: string }) {
     checking: 'var(--tn-text-muted)',
   };
 
-  const statusDot = (status: EnvironmentHealth['status']) => (
-    <span style={{
-      display: 'inline-block',
-      width: 10,
-      height: 10,
-      borderRadius: '50%',
-      background: statusColors[status],
-      marginRight: 8,
-      boxShadow: `0 0 6px ${statusColors[status]}`,
-    }} />
-  );
+  const statusDot = (status: EnvironmentHealth['status']) => {
+    const s = status ?? 'checking';
+    return (
+      <span style={{
+        display: 'inline-block',
+        width: 10,
+        height: 10,
+        borderRadius: '50%',
+        background: statusColors[s],
+        marginRight: 8,
+        boxShadow: `0 0 6px ${statusColors[s]}`,
+      }} />
+    );
+  };
 
   return (
     <div data-ai-id="wr-pipeline-tab" style={{ padding: 12 }}>
@@ -78,9 +92,9 @@ export default function PipelineTab({ envMode }: { envMode?: string }) {
       {!loading && (
         <div data-ai-id="wr-pipeline-envs" style={{ display: 'flex', gap: 16, alignItems: 'center', justifyContent: 'center', marginTop: 40 }}>
           {environments.map((env, idx) => (
-            <React.Fragment key={env.name}>
+            <React.Fragment key={env.name ?? idx}>
               {/* Environment Card */}
-              <div data-ai-id={`wr-pipeline-env-${env.name.toLowerCase()}`} data-status={env.status} style={{
+              <div data-ai-id={`wr-pipeline-env-${(env.name).toLowerCase()}`} data-status={env.status} style={{
                 background: 'var(--tn-bg-dark)',
                 border: `2px solid ${statusColors[env.status]}`,
                 borderRadius: 8,
@@ -105,9 +119,9 @@ export default function PipelineTab({ envMode }: { envMode?: string }) {
                   fontSize: 9,
                   fontWeight: 600,
                   textTransform: 'uppercase',
-                  background: env.status === 'healthy'
+                  background: (env.status) === 'healthy'
                     ? 'rgba(158,206,106,0.2)'
-                    : env.status === 'down'
+                    : (env.status) === 'down'
                     ? 'rgba(247,118,142,0.2)'
                     : 'rgba(224,175,104,0.2)',
                   color: statusColors[env.status],

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import PaginationControls from '@/components/shared/PaginationControls';
 import TableSearch, { FilterConfig } from '@/components/shared/TableSearch';
 import ExportButton from '@/components/shared/ExportButton';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
 
 interface AdminUser {
   id: string;
@@ -10,9 +11,9 @@ interface AdminUser {
   role: 'admin' | 'user';
   tenantId?: string;
   tenantName?: string | null;
-  approved: boolean;
-  emailVerified: boolean;
-  createdAt: string;
+  approved?: boolean;
+  emailVerified?: boolean;
+  createdAt?: string;
   lastLogin?: string;
 }
 
@@ -53,8 +54,20 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
       const res = await fetch(`/api/admin/wr/users?${params}`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
-      setUsers(data.users || []);
-      setTotal(data.total || 0);
+      const validated = validateApiResponse<{ users: AdminUser[]; total: number }>(data, '/api/admin/wr/users', {
+        users: 'array',
+        total: 'number',
+      });
+      validated.users.forEach((u, i) => {
+        validateApiResponse<AdminUser>(u, `/api/admin/wr/users[${i}]`, {
+          id: 'string',
+          email: 'string',
+          name: 'string',
+          role: 'string',
+        });
+      });
+      setUsers(validated.users);
+      setTotal(validated.total);
     } catch (err: any) {
       console.warn('[WRUsers] fetchUsers:', err);
       setError(err.message);
@@ -179,21 +192,21 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
   // Apply client-side filtering (after pagination from server)
   const filteredUsers = users
     .filter(u => {
-      if (filter === 'pending') return !u.approved;
-      if (filter === 'unverified') return !u.emailVerified && u.approved;
+      if (filter === 'pending') return !(u.approved ?? false);
+      if (filter === 'unverified') return !(u.emailVerified ?? false) && (u.approved ?? false);
       return true;
     })
     .filter(u => {
       if (!search) return true;
       const s = search.toLowerCase();
-      return u.email.toLowerCase().includes(s) || u.name?.toLowerCase().includes(s) || u.tenantName?.toLowerCase().includes(s);
+      return u.email.toLowerCase().includes(s) || u.name.toLowerCase().includes(s) || u.tenantName?.toLowerCase().includes(s);
     })
     .filter(u => {
       if (roleFilter && u.role !== roleFilter) return false;
-      if (statusFilter === 'verified' && !u.emailVerified) return false;
-      if (statusFilter === 'unverified' && u.emailVerified) return false;
-      if (statusFilter === 'approved' && !u.approved) return false;
-      if (statusFilter === 'pending' && u.approved) return false;
+      if (statusFilter === 'verified' && !(u.emailVerified ?? false)) return false;
+      if (statusFilter === 'unverified' && (u.emailVerified ?? false)) return false;
+      if (statusFilter === 'approved' && !(u.approved ?? false)) return false;
+      if (statusFilter === 'pending' && (u.approved ?? false)) return false;
       return true;
     });
 
@@ -270,12 +283,12 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
         <ExportButton
           data={filteredUsers.map(u => ({
             email: u.email,
-            name: u.name || '',
+            name: u.name,
             role: u.role,
-            approved: u.approved ? 'Yes' : 'No',
-            emailVerified: u.emailVerified ? 'Yes' : 'No',
+            approved: (u.approved ?? false) ? 'Yes' : 'No',
+            emailVerified: (u.emailVerified ?? false) ? 'Yes' : 'No',
             tenant: u.tenantName || u.tenantId || '',
-            createdAt: u.createdAt,
+            createdAt: u.createdAt ?? '',
             lastLogin: u.lastLogin || '',
           }))}
           filename="users"
@@ -404,32 +417,32 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
                 <div>
                   <span style={{
                     padding: '2px 5px', borderRadius: 3, fontSize: 9, fontWeight: 600, textTransform: 'uppercase',
-                    background: user.role === 'admin' ? 'rgba(122,162,247,0.2)' : 'rgba(158,206,106,0.1)',
-                    color: user.role === 'admin' ? 'var(--tn-blue)' : 'var(--tn-text-muted)',
+                    background: (user.role) === 'admin' ? 'rgba(122,162,247,0.2)' : 'rgba(158,206,106,0.1)',
+                    color: (user.role) === 'admin' ? 'var(--tn-blue)' : 'var(--tn-text-muted)',
                   }}>{user.role}</span>
                 </div>
                 <div>
                   <span style={{
                     display: 'inline-block', padding: '2px 6px', borderRadius: 3, fontSize: 9, fontWeight: 600, textTransform: 'uppercase',
-                    background: user.approved ? 'rgba(158,206,106,0.2)' : 'rgba(224,175,104,0.2)',
-                    color: user.approved ? 'var(--tn-green)' : 'var(--tn-orange)',
-                  }}>{user.approved ? 'Yes' : 'No'}</span>
+                    background: (user.approved ?? false) ? 'rgba(158,206,106,0.2)' : 'rgba(224,175,104,0.2)',
+                    color: (user.approved ?? false) ? 'var(--tn-green)' : 'var(--tn-orange)',
+                  }}>{(user.approved ?? false) ? 'Yes' : 'No'}</span>
                 </div>
                 <div>
                   <span style={{
                     display: 'inline-block', padding: '2px 6px', borderRadius: 3, fontSize: 9, fontWeight: 600, textTransform: 'uppercase',
-                    background: user.emailVerified ? 'rgba(158,206,106,0.2)' : 'rgba(247,118,142,0.2)',
-                    color: user.emailVerified ? 'var(--tn-green)' : 'var(--tn-red)',
-                  }}>{user.emailVerified ? 'Yes' : 'No'}</span>
+                    background: (user.emailVerified ?? false) ? 'rgba(158,206,106,0.2)' : 'rgba(247,118,142,0.2)',
+                    color: (user.emailVerified ?? false) ? 'var(--tn-green)' : 'var(--tn-red)',
+                  }}>{(user.emailVerified ?? false) ? 'Yes' : 'No'}</span>
                 </div>
                 <div data-ai-id={`wr-users-actions-${user.id}`} style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
-                  {!user.approved && (
+                  {!(user.approved ?? false) && (
                     <button data-ai-id={`wr-users-approve-${user.id}`} onClick={() => handleApprove(user.id)} disabled={isProcessing} style={{
                       padding: '3px 6px', borderRadius: 3, fontSize: 9, cursor: isProcessing ? 'not-allowed' : 'pointer',
                       background: 'var(--tn-green)', border: 'none', color: '#fff', fontWeight: 600,
                     }}>{isProcessing ? '...' : 'Approve'}</button>
                   )}
-                  {user.approved && !user.emailVerified && (
+                  {(user.approved ?? false) && !(user.emailVerified ?? false) && (
                     <button data-ai-id={`wr-users-verify-${user.id}`} onClick={() => handleVerify(user.id)} disabled={isProcessing} style={{
                       padding: '3px 6px', borderRadius: 3, fontSize: 9, cursor: isProcessing ? 'not-allowed' : 'pointer',
                       background: 'var(--tn-blue)', border: 'none', color: '#fff', fontWeight: 600,

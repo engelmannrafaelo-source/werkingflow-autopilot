@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
 
 interface DocEntry {
   name: string;
@@ -9,6 +10,14 @@ interface DocEntry {
 interface ClaudeMdStatus {
   ageDays: number;
   level: 'fresh' | 'warning' | 'stale';
+}
+
+interface DocsApiResponse {
+  docs: {
+    refs: DocEntry[];
+    businessDocs: DocEntry[];
+    claudeMd: ClaudeMdStatus | null;
+  };
 }
 
 const LEVEL_STYLE: Record<string, { bg: string; color: string; border: string }> = {
@@ -34,10 +43,13 @@ export default function DocsTab() {
     try {
       const res = await fetch('/api/maintenance/status', { signal: AbortSignal.timeout(15000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      setRefs(data.docs?.refs ?? []);
-      setBusinessDocs(data.docs?.businessDocs ?? []);
-      setClaudeMd(data.docs?.claudeMd ?? null);
+      const raw = await res.json();
+      const data = validateApiResponse<DocsApiResponse>(raw, '/api/maintenance/status', {
+        docs: 'object',
+      });
+      setRefs(data.docs.refs ?? []);
+      setBusinessDocs(data.docs.businessDocs ?? []);
+      setClaudeMd(data.docs.claudeMd ?? null);
     } catch (err) {
       console.warn('[DocsTab] fetch failed:', err);
     } finally {

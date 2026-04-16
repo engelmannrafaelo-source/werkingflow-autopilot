@@ -24,10 +24,23 @@ interface Tab {
   component: React.ReactElement;
 }
 
+interface GuardSlot {
+  active: number;
+  max: number;
+  available: number;
+}
+
+interface GuardStatus {
+  running: boolean;
+  slots?: Record<string, GuardSlot>;
+  queueLength?: number;
+}
+
 interface QuickStatus {
   healthy: boolean;
   workers: number;
   activeWorkers: number;
+  guard: GuardStatus;
   cliRunning: number;
 }
 
@@ -58,24 +71,31 @@ export default function BridgeMonitor() {
   useEffect(() => {
     async function fetchQuick() {
       try {
-        const [healthRes, lbRes, cliRes] = await Promise.allSettled([
+        const [healthRes, lbRes, cliRes, guardRes] = await Promise.allSettled([
           bridgeJson<{ status: string }>('/health', { timeout: 5000 }),
           bridgeJson<{ workers: number; paused: string[] }>('/lb-status', { timeout: 5000 }),
           bridgeJson<{ cli_session_stats: { running: number } }>('/v1/cli-sessions/stats', { timeout: 5000 }),
+          fetch('/api/bridge/guard/status', { signal: AbortSignal.timeout(3000) }).then(r => r.json()),
         ]);
 
         const healthy = healthRes.status === 'fulfilled' && healthRes.value.status === 'healthy';
         const lb = lbRes.status === 'fulfilled' ? lbRes.value : null;
         const cli = cliRes.status === 'fulfilled' ? cliRes.value.cli_session_stats : null;
+        const guard = guardRes.status === 'fulfilled' ? guardRes.value : { running: false };
+
+        // Workers: lb-status may return empty/invalid — fallback to health check result
+        const workers = lb?.workers ?? (healthy ? 4 : 0); // Bridge has 4 workers by default
+        const paused = lb?.paused?.length ?? 0;
 
         setQuickStatus({
           healthy,
-          workers: lb?.workers ?? 0,
-          activeWorkers: lb ? lb.workers - (lb.paused?.length ?? 0) : 0,
+          workers,
+          activeWorkers: workers - paused,
           cliRunning: cli?.running ?? 0,
+          guard,
         });
       } catch {
-        setQuickStatus({ healthy: false, workers: 0, activeWorkers: 0, cliRunning: 0 });
+        setQuickStatus({ healthy: false, workers: 0, activeWorkers: 0, cliRunning: 0, guard: { running: false } });
       }
     }
     fetchQuick();
@@ -136,6 +156,27 @@ export default function BridgeMonitor() {
               }}>
                 {quickStatus.activeWorkers}/{quickStatus.workers} workers
               </span>
+              {/* AI-Guard status badge */}
+              {quickStatus.guard?.running ? (
+                <span style={{
+                  fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 3,
+                  background: quickStatus.guard.queueLength && quickStatus.guard.queueLength > 0
+                    ? 'rgba(224,175,104,0.15)' : 'rgba(158,206,106,0.15)',
+                  color: quickStatus.guard.queueLength && quickStatus.guard.queueLength > 0
+                    ? 'var(--tn-orange)' : 'var(--tn-green)',
+                  fontFamily: 'monospace',
+                }}>
+                  Guard {quickStatus.guard.queueLength ? `Q:${quickStatus.guard.queueLength}` : 'OK'}
+                </span>
+              ) : (
+                <span style={{
+                  fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 3,
+                  background: 'rgba(247,118,142,0.15)', color: 'var(--tn-red)',
+                  fontFamily: 'monospace',
+                }}>
+                  Guard OFF
+                </span>
+              )}
             </div>
           )}
 

@@ -3,6 +3,7 @@ import ErrorBoundary from '../../ErrorBoundary';
 import TeamTab from './tabs/TeamTab';
 import DocsTab from './tabs/DocsTab';
 import ReposTab from './tabs/ReposTab';
+import { validateApiResponse } from '../../../lib/validateApiResponse';
 
 interface Tab {
   key: string;
@@ -13,6 +14,11 @@ interface Tab {
 interface OverallStatus {
   level: 'green' | 'yellow' | 'red';
   issues: number;
+}
+
+interface MaintenanceStatusResponse {
+  overall: OverallStatus;
+  checkedAt?: string;
 }
 
 const LEVEL_COLOR: Record<string, string> = {
@@ -32,11 +38,21 @@ export default function MaintenancePanel() {
     async function fetchOverall() {
       if ((window as any).__cuiServerAlive === false) return;
       try {
-        const res = await fetch('/api/maintenance/status', { signal: AbortSignal.timeout(15000) });
+        const endpoint = '/api/maintenance/status';
+        const res = await fetch(endpoint, { signal: AbortSignal.timeout(15000) });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        setOverall(data.overall);
-        setLastChecked(data.checkedAt);
+        const raw = await res.json();
+        const validated = validateApiResponse<MaintenanceStatusResponse>(raw, endpoint, {
+          overall: 'object',
+          checkedAt: { type: 'string', optional: true },
+        });
+        // Validate the nested overall object
+        validateApiResponse<OverallStatus>(validated.overall, `${endpoint} .overall`, {
+          level: 'string',
+          issues: 'number',
+        });
+        setOverall(validated.overall);
+        setLastChecked(validated.checkedAt ?? null);
       } catch (err) {
         console.warn('[MaintenancePanel] fetch failed:', err);
       }
@@ -51,11 +67,20 @@ export default function MaintenancePanel() {
     setRefreshing(true);
     try {
       await fetch('/api/maintenance/refresh', { method: 'POST', signal: AbortSignal.timeout(5000) });
-      const res = await fetch('/api/maintenance/status', { signal: AbortSignal.timeout(15000) });
+      const endpoint = '/api/maintenance/status';
+      const res = await fetch(endpoint, { signal: AbortSignal.timeout(15000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      setOverall(data.overall);
-      setLastChecked(data.checkedAt);
+      const raw = await res.json();
+      const validated = validateApiResponse<MaintenanceStatusResponse>(raw, endpoint, {
+        overall: 'object',
+        checkedAt: { type: 'string', optional: true },
+      });
+      validateApiResponse<OverallStatus>(validated.overall, `${endpoint} .overall`, {
+        level: 'string',
+        issues: 'number',
+      });
+      setOverall(validated.overall);
+      setLastChecked(validated.checkedAt ?? null);
     } catch (err) {
       console.warn('[MaintenancePanel] refresh failed:', err);
     } finally {

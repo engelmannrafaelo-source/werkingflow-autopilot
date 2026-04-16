@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { validateApiResponse } from '../../../lib/validateApiResponse';
 
 // =============================================================================
 // Report Builder — Creative Document Generation Panel
@@ -20,34 +21,35 @@ interface Claim {
   templateId?: string; templateReason?: string;
 }
 
-interface ClaimGroup { id: string; groupName: string; category: string; claims: Claim[]; }
-interface DraftSection { title: string; description: string; claimIds: string[]; }
-interface TreeNode { name: string; path: string; type: 'file' | 'directory'; size?: number; tokenEstimate?: number; children?: TreeNode[]; }
-interface SessionSummary { id: string; name?: string; createdAt: string; updatedAt: string; step: string; sourceCount: number; claimCount: number; outputFormat: string; }
+interface ClaimGroup { id: string; category: string; groupName?: string; claims: Claim[]; }
+interface DraftSection { title: string; content?: string; description?: string; claimIds?: string[]; }
+interface TreeNode { name: string; path: string; type?: 'file' | 'directory'; size?: number; tokenEstimate?: number; children?: TreeNode[]; }
+interface SessionSummary { id: string; date?: string; name?: string; createdAt?: string; updatedAt?: string; step?: string; sourceCount?: number; claimCount?: number; outputFormat?: string; }
 
 interface TemplateSectionInfo {
   id: string; fileRelPath: string; fileName: string; sectionIndex: number;
   title: string; preview: string; type: string;
 }
-interface TemplateFileInfo { relPath: string; fileName: string; documentType: 'presentation' | 'document' | 'unknown'; sectionCount: number; sections: TemplateSectionInfo[]; }
+interface TemplateFileInfo { relPath: string; fileName: string; documentType?: 'presentation' | 'document' | 'unknown'; sectionCount?: number; sections?: TemplateSectionInfo[]; }
 interface TemplateFavoritesData { favorites: string[]; categories: Record<string, string>; }
 
 interface Revision {
-  id: string; html: string; changePrompt: string;
-  addedSources: string[]; designHints: string[]; timestamp: string;
+  id: string; timestamp: string; html?: string; changePrompt?: string;
+  addedSources?: string[]; designHints?: string[];
 }
 
 type Step = 'source-select' | 'claim-curation' | 'generation' | 'review' | 'update-plan';
 type SessionMode = 'generate' | 'update';
 
 interface UpdateProposal {
-  docPath: string; docName: string; claimIds: string[];
-  reasoning: string; isNew: boolean;
+  id: string; target: string; docPath?: string; docName?: string; claimIds?: string[];
+  reasoning?: string; isNew?: boolean;
 }
 interface UpdateDiff {
-  docPath: string; docName: string; originalContent: string;
-  proposedContent: string; changeSummary: string;
-  status: 'pending' | 'ready' | 'applied' | 'skipped'; isNew: boolean;
+  field: string; before: string; after: string;
+  docPath?: string; docName?: string; originalContent?: string;
+  proposedContent?: string; changeSummary?: string;
+  status?: 'pending' | 'ready' | 'applied' | 'skipped'; isNew?: boolean;
 }
 
 // --- Category Colors ---
@@ -72,7 +74,11 @@ function SessionPicker({ onSelect, onCreate }: { onSelect: (id: string) => void;
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`${API}/sessions`).then(r => r.json()).then(d => { setSessions(d.sessions || []); setLoading(false); }).catch(() => setLoading(false));
+    fetch(`${API}/sessions`).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(raw => {
+        const d = validateApiResponse<{ sessions: SessionSummary[] }>(raw, '/api/report-builder/sessions', { sessions: 'array' });
+        setSessions(d.sessions); setLoading(false);
+      }).catch(() => setLoading(false));
   }, []);
 
   const stepLabels: Record<string, string> = { 'source-select': 'Quellen', 'claim-curation': 'Claims', generation: 'Config', review: 'Output', 'update-plan': 'Update' };
@@ -99,13 +105,13 @@ function SessionPicker({ onSelect, onCreate }: { onSelect: (id: string) => void;
         onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--tn-border)'; e.currentTarget.style.background = 'var(--tn-bg-dark)'; }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontWeight: 600, fontSize: 12 }}>{sess.name || `Session ${sess.id.slice(0, 8)}`}</span>
-            <StatusBadge color={sess.step === 'review' ? 'var(--tn-green)' : 'var(--tn-blue)'}>{stepLabels[sess.step] || sess.step}</StatusBadge>
+            <StatusBadge color={(sess.step ?? '') === 'review' ? 'var(--tn-green)' : 'var(--tn-blue)'}>{stepLabels[sess.step ?? ''] || sess.step || ''}</StatusBadge>
           </div>
           <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginTop: 4, display: 'flex', gap: 12 }}>
-            <span>{sess.sourceCount} Quellen</span>
-            <span>{sess.claimCount} Claims</span>
-            <span style={{ fontFamily: 'monospace' }}>{sess.outputFormat}</span>
-            <span>{new Date(sess.updatedAt).toLocaleDateString('de-DE')} {new Date(sess.updatedAt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}</span>
+            <span>{sess.sourceCount ?? 0} Quellen</span>
+            <span>{sess.claimCount ?? 0} Claims</span>
+            <span style={{ fontFamily: 'monospace' }}>{sess.outputFormat ?? ''}</span>
+            <span>{sess.updatedAt ? new Date(sess.updatedAt).toLocaleDateString('de-DE') : ''} {sess.updatedAt ? new Date(sess.updatedAt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : ''}</span>
           </div>
         </div>
       ))}
@@ -129,7 +135,11 @@ function SourceSelector({ selected, onToggle, onExtract, brief, setBrief, extrac
   const [previewMeta, setPreviewMeta] = useState<{ totalLines: number; truncated: boolean; size: number } | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
 
-  useEffect(() => { fetch(`${API}/business-tree`).then(r => r.json()).then(d => setTree(d.tree || [])).catch(() => {}); }, []);
+  useEffect(() => {
+    fetch(`${API}/business-tree`).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(raw => { const d = validateApiResponse<{ tree: TreeNode[] }>(raw, '/api/report-builder/business-tree', { tree: 'array' }); setTree(d.tree); })
+      .catch(() => {});
+  }, []);
 
   function toggleExpand(path: string) {
     setExpanded(prev => { const n = new Set(prev); n.has(path) ? n.delete(path) : n.add(path); return n; });
@@ -158,7 +168,7 @@ function SourceSelector({ selected, onToggle, onExtract, brief, setBrief, extrac
     const files: TreeNode[] = [];
     for (const node of nodes) {
       if (node.type === 'file') files.push(node);
-      if (node.type === 'directory' && node.children) files.push(...collectFiles(node.children));
+      if (node.type === 'directory' && (node.children ?? []).length > 0) files.push(...collectFiles(node.children ?? []));
     }
     return files;
   }
@@ -238,9 +248,9 @@ function SourceSelector({ selected, onToggle, onExtract, brief, setBrief, extrac
   // Render a file row (used in both selected section and tree)
   function renderFileRow(node: TreeNode, depth: number, isSelectedSection: boolean): React.ReactNode {
     const isSel = selected.has(node.path);
-    const isPreviewing = previewPath === node.path;
+    const isPreviewing = previewPath === (node.path);
     // In the selected section, extract parent directory from path for context
-    const parentDir = isSelectedSection ? node.path.split('/').slice(0, -1).join('/') : null;
+    const parentDir = isSelectedSection ? (node.path).split('/').slice(0, -1).join('/') : null;
     return (
       <div key={`${isSelectedSection ? 'sel-' : ''}${node.path}`}>
         <div style={{
@@ -279,10 +289,10 @@ function SourceSelector({ selected, onToggle, onExtract, brief, setBrief, extrac
 
   // Render tree node, but skip selected files (they appear in the top section)
   function renderNode(node: TreeNode, depth = 0, skipSelected = false): React.ReactNode {
-    if (filter && node.type === 'file' && !node.name.toLowerCase().includes(filter.toLowerCase())) return null;
+    if (filter && node.type === 'file' && !(node.name).toLowerCase().includes(filter.toLowerCase())) return null;
     if (node.type === 'directory') {
       const isOpen = expanded.has(node.path);
-      const kids = node.children?.map(c => renderNode(c, depth + 1, skipSelected)).filter(Boolean);
+      const kids = (node.children ?? []).map(c => renderNode(c, depth + 1, skipSelected)).filter(Boolean);
       if (filter && (!kids || kids.length === 0)) return null;
       // If skipSelected is on and all remaining children are selected files, hide the empty directory
       if (skipSelected && (!kids || kids.length === 0) && !filter) return null;
@@ -303,10 +313,10 @@ function SourceSelector({ selected, onToggle, onExtract, brief, setBrief, extrac
 
   // Get selected file nodes for the top section
   const allFiles = collectFiles(tree);
-  const selectedFiles = allFiles.filter(f => selected.has(f.path) && (!filter || f.name.toLowerCase().includes(filter.toLowerCase())));
+  const selectedFiles = allFiles.filter(f => selected.has(f.path ?? '') && (!filter || (f.name ?? '').toLowerCase().includes(filter.toLowerCase())));
 
   // Token totals for selected files
-  const totalTokens = allFiles.filter(f => selected.has(f.path)).reduce((sum, f) => sum + (f.tokenEstimate || 0), 0);
+  const totalTokens = allFiles.filter(f => selected.has(f.path ?? '')).reduce((sum, f) => sum + (f.tokenEstimate || 0), 0);
   const tokenPct = Math.min(100, (totalTokens / CONTEXT_LIMIT) * 100);
   const tokenColor = tokenPct > 80 ? 'var(--tn-red, #f7768e)' : tokenPct > 50 ? 'var(--tn-yellow, #e0af68)' : 'var(--tn-green, #9ece6a)';
 
@@ -322,7 +332,7 @@ function SourceSelector({ selected, onToggle, onExtract, brief, setBrief, extrac
         onChange={e => setBrief(e.target.value)}
       />
 
-      <SectionLabel style={{ marginTop: 14 }}>Quell-Dokumente ({allFiles.filter(f => selected.has(f.path)).length} ausgewahlt)</SectionLabel>
+      <SectionLabel style={{ marginTop: 14 }}>Quell-Dokumente ({allFiles.filter(f => selected.has(f.path ?? '')).length} ausgewahlt)</SectionLabel>
       <input type="text" placeholder="Filtern..." value={filter} onChange={e => setFilter(e.target.value)} style={inputStyle} />
 
       {/* Flex layout: File tree left, Preview right */}
@@ -524,10 +534,11 @@ function ClaimCard({ claim, onChange, templateCandidates, onSelectTemplate }: {
 // =============================================================================
 // Claim Curation (Step 2)
 // =============================================================================
-function ClaimCuration({ groups, draftOutline, onChange, onToggleGroup, generalNotes, setGeneralNotes, onBack, onNext, claimTemplateMatches, onSelectTemplate, nextLabel }: {
+function ClaimCuration({ groups, draftOutline, onChange, onToggleGroup, onReorderGroups, generalNotes, setGeneralNotes, onBack, onNext, claimTemplateMatches, onSelectTemplate, nextLabel }: {
   groups: ClaimGroup[]; draftOutline: DraftSection[];
   onChange: (groupId: string, claimId: string, update: Partial<Claim>) => void;
   onToggleGroup: (groupId: string, selected: boolean) => void;
+  onReorderGroups: (newGroups: ClaimGroup[]) => void;
   generalNotes: string; setGeneralNotes: (v: string) => void;
   onBack: () => void; onNext: () => void; nextLabel?: string;
   claimTemplateMatches?: Array<{ claimId: string; templateId: string; reason: string; rank: number; selected: boolean; templateTitle: string; templateType: string; templateFile: string; hasSvg: boolean }>;
@@ -535,21 +546,58 @@ function ClaimCuration({ groups, draftOutline, onChange, onToggleGroup, generalN
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [showDraft, setShowDraft] = useState(draftOutline.length > 0);
+  const [outlineMode, setOutlineMode] = useState(true);
+  const [expandedOutline, setExpandedOutline] = useState<Set<string>>(new Set());
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
+
   const total = groups.reduce((a, g) => a + g.claims.length, 0);
   const selected = groups.reduce((a, g) => a + g.claims.filter(c => c.selected).length, 0);
 
+  function handleDragStart(e: React.DragEvent, idx: number) {
+    setDragIdx(idx);
+    e.dataTransfer.effectAllowed = 'move';
+  }
+  function handleDragOver(e: React.DragEvent, idx: number) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDragOverIdx(idx);
+  }
+  function handleDrop(e: React.DragEvent, dropIdx: number) {
+    e.preventDefault();
+    if (dragIdx === null || dragIdx === dropIdx) { setDragIdx(null); setDragOverIdx(null); return; }
+    const next = [...groups];
+    const [moved] = next.splice(dragIdx, 1);
+    next.splice(dropIdx, 0, moved);
+    onReorderGroups(next);
+    setDragIdx(null);
+    setDragOverIdx(null);
+  }
+  function handleDragEnd() { setDragIdx(null); setDragOverIdx(null); }
+
   return (
     <div>
-      {/* Stats + toggle */}
+      {/* Header: stats + view toggle */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
         <span style={{ fontSize: 11, color: 'var(--tn-text-muted)' }}>
           <b style={{ color: 'var(--tn-text)' }}>{selected}</b>/{total} Claims
         </span>
-        {draftOutline.length > 0 && (
-          <button onClick={() => setShowDraft(!showDraft)} style={{ ...btnSecondary, fontSize: 10 }}>
-            {showDraft ? 'Claims anzeigen' : 'KI-Entwurf'}
-          </button>
-        )}
+        <div style={{ display: 'flex', gap: 4 }}>
+          {(['Gliederung', 'Detail'] as const).map((label, i) => {
+            const active = i === 0 ? outlineMode : !outlineMode;
+            return (
+              <button key={label} onClick={() => setOutlineMode(i === 0)}
+                style={{ ...btnSecondary, fontSize: 10, ...(active ? { background: 'rgba(122,162,247,0.15)', color: 'var(--tn-blue)', borderColor: 'var(--tn-blue)' } : {}) }}>
+                {label}
+              </button>
+            );
+          })}
+          {draftOutline.length > 0 && (
+            <button onClick={() => setShowDraft(!showDraft)} style={{ ...btnSecondary, fontSize: 10 }}>
+              {showDraft ? 'Claims' : 'KI-Entwurf'}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Draft Outline */}
@@ -559,9 +607,9 @@ function ClaimCuration({ groups, draftOutline, onChange, onToggleGroup, generalN
           {draftOutline.map((section, si) => (
             <div key={si} style={{ marginBottom: 10 }}>
               <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--tn-blue, #7aa2f7)', marginBottom: 2 }}>{si + 1}. {section.title}</div>
-              <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 4 }}>{section.description}</div>
+              <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 4 }}>{section.description ?? ''}</div>
               <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                {section.claimIds.map(cid => {
+                {(section.claimIds ?? []).map(cid => {
                   const claim = groups.flatMap(g => g.claims).find(c => c.id === cid);
                   if (!claim) return null;
                   return (
@@ -579,8 +627,93 @@ function ClaimCuration({ groups, draftOutline, onChange, onToggleGroup, generalN
         </div>
       )}
 
-      {/* Claim Groups */}
-      {!showDraft && groups.map(group => {
+      {/* OUTLINE MODE — groups as draggable cards, compact claim rows inside */}
+      {!showDraft && outlineMode && (
+        <div>
+          {groups.map((group, idx) => {
+            const gs = group.claims.filter(c => c.selected).length;
+            const catColor = CAT_COLORS[group.category] || '#565f89';
+            const isExpanded = expandedOutline.has(group.id);
+            const isDragOver = dragOverIdx === idx;
+            const isDragging = dragIdx === idx;
+            const rankOneMatches = new Map(
+              (claimTemplateMatches ?? []).filter(m => m.rank === 1).map(m => [m.claimId, m])
+            );
+            return (
+              <div key={group.id}
+                draggable
+                onDragStart={e => handleDragStart(e, idx)}
+                onDragOver={e => handleDragOver(e, idx)}
+                onDrop={e => handleDrop(e, idx)}
+                onDragEnd={handleDragEnd}
+                style={{
+                  marginBottom: 4, borderRadius: 6, overflow: 'hidden',
+                  border: `1px solid ${isDragOver ? 'var(--tn-blue)' : 'var(--tn-border)'}`,
+                  background: isDragOver ? 'rgba(122,162,247,0.05)' : 'var(--tn-surface, var(--tn-bg-dark))',
+                  opacity: isDragging ? 0.45 : 1,
+                  transition: 'border-color 0.1s, opacity 0.1s',
+                }}>
+                {/* Group header */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '7px 10px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, cursor: 'pointer' }}
+                    onClick={() => setExpandedOutline(prev => { const n = new Set(prev); n.has(group.id) ? n.delete(group.id) : n.add(group.id); return n; })}>
+                    <span style={{ color: 'var(--tn-text-muted)', fontSize: 12, cursor: 'grab', userSelect: 'none' }}>⠿</span>
+                    <span style={{ color: 'var(--tn-text-muted)', fontSize: 10, minWidth: 18 }}>{idx + 1}.</span>
+                    <StatusBadge color={catColor}>{group.category}</StatusBadge>
+                    <span style={{ fontWeight: 600, fontSize: 12 }}>{group.groupName ?? ''}</span>
+                    <span style={{ fontSize: 10, color: 'var(--tn-text-muted)' }}>({gs}/{group.claims.length})</span>
+                    <span style={{ color: 'var(--tn-text-muted)', fontSize: 9 }}>{isExpanded ? '▾' : '▸'}</span>
+                  </div>
+                  <button style={{ ...btnSecondary, fontSize: 9, padding: '2px 6px' }}
+                    onClick={e => { e.stopPropagation(); onToggleGroup(group.id, gs < group.claims.length); }}>
+                    {gs === group.claims.length ? 'Keine' : 'Alle'}
+                  </button>
+                </div>
+
+                {/* Expanded: compact claim rows with note + single template thumbnail */}
+                {isExpanded && (
+                  <div style={{ borderTop: '1px solid var(--tn-border)', padding: '4px 8px 8px 8px' }}>
+                    {group.claims.map(claim => {
+                      const topMatch = rankOneMatches.get(claim.id);
+                      return (
+                        <div key={claim.id} style={{
+                          display: 'flex', alignItems: 'center', gap: 6,
+                          padding: '5px 4px', borderBottom: '1px solid rgba(255,255,255,0.04)',
+                          opacity: claim.selected ? 1 : 0.35,
+                        }}>
+                          <input type="checkbox" checked={claim.selected}
+                            onChange={() => onChange(group.id, claim.id, { selected: !claim.selected })}
+                            style={{ cursor: 'pointer', accentColor: 'var(--tn-blue)', flexShrink: 0 }} />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 11, lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }}
+                              title={claim.text}>{claim.text}</div>
+                            <input type="text" value={claim.note} placeholder="Anmerkung..."
+                              onChange={e => onChange(group.id, claim.id, { note: e.target.value })}
+                              style={{ ...inputStyle, padding: '1px 5px', fontSize: 10, width: '100%', marginTop: 2, background: 'var(--tn-bg)' }} />
+                          </div>
+                          {topMatch && claim.selected && (
+                            <div title={topMatch.templateTitle} onClick={() => onSelectTemplate?.(claim.id, topMatch.templateId)}
+                              style={{ flexShrink: 0, width: 80, height: 50, borderRadius: 4, overflow: 'hidden', cursor: 'pointer',
+                                border: '1px solid var(--tn-border)', background: '#0a0f1e' }}>
+                              <iframe
+                                src={`/api/report-builder/template-section/${topMatch.templateId}/html`}
+                                style={{ width: 260, height: 167, border: 'none', transform: 'scale(0.307)', transformOrigin: 'top left', pointerEvents: 'none' }}
+                                sandbox="allow-same-origin" loading="lazy" title={topMatch.templateTitle} />
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* DETAIL MODE — original full ClaimCard view */}
+      {!showDraft && !outlineMode && groups.map(group => {
         const isCollapsed = collapsed.has(group.id);
         const gs = group.claims.filter(c => c.selected).length;
         const catColor = CAT_COLORS[group.category] || '#565f89';
@@ -597,7 +730,7 @@ function ClaimCuration({ groups, draftOutline, onChange, onToggleGroup, generalN
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <span style={{ color: 'var(--tn-text-muted)', fontSize: 10 }}>{isCollapsed ? '\u25B8' : '\u25BE'}</span>
                 <StatusBadge color={catColor}>{group.category}</StatusBadge>
-                <span style={{ fontWeight: 600, fontSize: 12 }}>{group.groupName}</span>
+                <span style={{ fontWeight: 600, fontSize: 12 }}>{group.groupName ?? ''}</span>
                 <span style={{ fontSize: 10, color: 'var(--tn-text-muted)' }}>({gs}/{group.claims.length})</span>
               </div>
               <button style={{ ...btnSecondary, fontSize: 9, padding: '2px 6px' }}
@@ -662,17 +795,22 @@ function TemplateBrowser({ selectedIds, onToggle, onSetCategory, autoMatchResult
   const [catEdit, setCatEdit] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch(`${API}/templates`).then(r => r.json()).then(d => {
-      setFiles(d.files || []);
-      setFavorites(d.favorites || { favorites: [], categories: {} });
-      setLoading(false);
-    }).catch(() => setLoading(false));
+    fetch(`${API}/templates`).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(raw => {
+        const d = validateApiResponse<{ files: TemplateFileInfo[]; favorites: TemplateFavoritesData }>(raw, '/api/report-builder/templates', {
+          files: 'array',
+          favorites: 'object',
+        });
+        setFiles(d.files);
+        setFavorites(d.favorites);
+        setLoading(false);
+      }).catch(() => setLoading(false));
   }, []);
 
   // Build file→documentType lookup
   const fileDocType = useMemo(() => {
     const m = new Map<string, string>();
-    for (const f of files) m.set(f.relPath, f.documentType || 'unknown');
+    for (const f of files) m.set(f.relPath, f.documentType ?? 'unknown');
     return m;
   }, [files]);
 
@@ -723,12 +861,12 @@ function TemplateBrowser({ selectedIds, onToggle, onSetCategory, autoMatchResult
   // Collect all sections, with favorite/category/docType info
   const allSections: (TemplateSectionInfo & { isFavorite: boolean; category: string; docType: string })[] = [];
   for (const f of files) {
-    for (const s of f.sections) {
+    for (const s of (f.sections ?? [])) {
       allSections.push({
         ...s,
         isFavorite: favorites.favorites.includes(s.id),
         category: favorites.categories[s.id] || '',
-        docType: f.documentType || 'unknown',
+        docType: f.documentType ?? 'unknown',
       });
     }
   }
@@ -1052,7 +1190,7 @@ function GenerationStep({ outputFormat, setOutputFormat, customInstructions, set
                     borderBottom: i < claimTemplateMatches.length - 1 ? '1px solid var(--tn-border)' : 'none',
                   }}>
                     {(() => {
-                      const claim = groups?.flatMap(g => g.claims).find(c => c.id === m.claimId);
+                      const claim = groups?.flatMap(g => (g.claims)).find(c => c.id === m.claimId);
                       const claimText = claim?.text?.slice(0, 40) || m.claimId;
                       return <>
                         <span style={{ flex: '0 1 auto', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, color: 'var(--tn-text)', maxWidth: '40%' }} title={claim?.text || m.claimId}>{claimText}</span>
@@ -1149,7 +1287,7 @@ function GenerationStep({ outputFormat, setOutputFormat, customInstructions, set
                   color: i === activeRevisionIndex ? '#fff' : 'var(--tn-text-muted)',
                   transition: 'all 0.15s',
                 }}
-                title={rev.changePrompt || 'Erstgenerierung'}>
+                title={rev.changePrompt ?? 'Erstgenerierung'}>
                 {rev.id}
               </span>
             ))}
@@ -1237,14 +1375,16 @@ function UpdatePlanStep({ sessionId, groups, updateProposals, setUpdateProposals
   const [showDiff, setShowDiff] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch(`${API}/business-tree`).then(r => r.json()).then(d => setTree(d.tree || [])).catch(() => {});
+    fetch(`${API}/business-tree`).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(raw => { const d = validateApiResponse<{ tree: TreeNode[] }>(raw, '/api/report-builder/business-tree', { tree: 'array' }); setTree(d.tree); })
+      .catch(() => {});
   }, []);
 
   // Filter tree to only .md files
   function filterMd(nodes: TreeNode[]): TreeNode[] {
     return nodes.flatMap(n => {
-      if (n.type === 'file') return n.name.endsWith('.md') ? [n] : [];
-      const kids = filterMd(n.children || []);
+      if (n.type === 'file') return (n.name ?? '').endsWith('.md') ? [n] : [];
+      const kids = filterMd(n.children ?? []);
       return kids.length > 0 ? [{ ...n, children: kids }] : [];
     });
   }
@@ -1266,20 +1406,20 @@ function UpdatePlanStep({ sessionId, groups, updateProposals, setUpdateProposals
   }
 
   // Get all claims for display
-  const allClaims = groups.flatMap(g => g.claims.filter(c => c.selected));
+  const allClaims = groups.flatMap(g => (g.claims).filter(c => c.selected));
 
   // Remove a claim from a proposal
   function removeClaimFromProposal(docPath: string, claimId: string) {
     setUpdateProposals(prev => prev.map(p =>
-      p.docPath === docPath ? { ...p, claimIds: p.claimIds.filter(id => id !== claimId) } : p
+      (p.docPath ?? '') === docPath ? { ...p, claimIds: (p.claimIds ?? []).filter(id => id !== claimId) } : p
     ));
   }
 
   // Move a claim to a different proposal
   function moveClaimToProposal(claimId: string, fromDocPath: string, toDocPath: string) {
     setUpdateProposals(prev => prev.map(p => {
-      if (p.docPath === fromDocPath) return { ...p, claimIds: p.claimIds.filter(id => id !== claimId) };
-      if (p.docPath === toDocPath) return { ...p, claimIds: [...p.claimIds, claimId] };
+      if ((p.docPath ?? '') === fromDocPath) return { ...p, claimIds: (p.claimIds ?? []).filter(id => id !== claimId) };
+      if ((p.docPath ?? '') === toDocPath) return { ...p, claimIds: [...(p.claimIds ?? []), claimId] };
       return p;
     }));
   }
@@ -1298,7 +1438,7 @@ function UpdatePlanStep({ sessionId, groups, updateProposals, setUpdateProposals
               <span style={{ fontSize: 8 }}>{isExp ? '▼' : '▶'}</span>
               <span>{node.name}/</span>
             </div>
-            {isExp && <div>{renderTree(node.children || [], depth + 1)}</div>}
+            {isExp && <div>{renderTree(node.children ?? [], depth + 1)}</div>}
           </div>
         );
       }
@@ -1390,12 +1530,12 @@ function UpdatePlanStep({ sessionId, groups, updateProposals, setUpdateProposals
                 </div>
               ))}
               {hasProposals && updateProposals.map(proposal => {
-                const proposalClaims = proposal.claimIds.map(id => allClaims.find(c => c.id === id)).filter(Boolean) as typeof allClaims;
+                const proposalClaims = (proposal.claimIds ?? []).map(id => allClaims.find(c => c.id === id)).filter(Boolean) as typeof allClaims;
                 return (
-                  <div key={proposal.docPath} style={{ marginBottom: 10, border: '1px solid var(--tn-border)', borderRadius: 6, overflow: 'hidden' }}>
-                    <div style={{ padding: '5px 8px', background: proposal.isNew ? 'rgba(158,206,106,0.1)' : 'var(--tn-bg-dark)', display: 'flex', gap: 6, alignItems: 'center' }}>
-                      {proposal.isNew && <span style={{ fontSize: 9, color: 'var(--tn-green)', fontWeight: 700 }}>NEU</span>}
-                      <span style={{ fontSize: 10, fontWeight: 600, flex: 1 }}>{proposal.docName}</span>
+                  <div key={proposal.docPath ?? ''} style={{ marginBottom: 10, border: '1px solid var(--tn-border)', borderRadius: 6, overflow: 'hidden' }}>
+                    <div style={{ padding: '5px 8px', background: (proposal.isNew ?? false) ? 'rgba(158,206,106,0.1)' : 'var(--tn-bg-dark)', display: 'flex', gap: 6, alignItems: 'center' }}>
+                      {(proposal.isNew ?? false) && <span style={{ fontSize: 9, color: 'var(--tn-green)', fontWeight: 700 }}>NEU</span>}
+                      <span style={{ fontSize: 10, fontWeight: 600, flex: 1 }}>{proposal.docName ?? ''}</span>
                       <span style={{ fontSize: 9, color: 'var(--tn-text-muted)' }}>{proposalClaims.length} Claims</span>
                     </div>
                     <div style={{ padding: '4px 6px' }}>
@@ -1403,13 +1543,13 @@ function UpdatePlanStep({ sessionId, groups, updateProposals, setUpdateProposals
                         <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '2px 0', fontSize: 10 }}>
                           <span style={{ color: CAT_COLORS[c.category] || '#565f89', flexShrink: 0 }}>•</span>
                           <span style={{ flex: 1 }}>{c.text.slice(0, 60)}{c.text.length > 60 ? '…' : ''}</span>
-                          <span onClick={() => removeClaimFromProposal(proposal.docPath, c.id)} style={{ cursor: 'pointer', color: 'var(--tn-red)', fontSize: 9, flexShrink: 0 }}>✕</span>
+                          <span onClick={() => removeClaimFromProposal(proposal.docPath ?? '', c.id)} style={{ cursor: 'pointer', color: 'var(--tn-red)', fontSize: 9, flexShrink: 0 }}>✕</span>
                         </div>
                       ))}
                       {proposalClaims.length === 0 && <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', padding: 4 }}>Keine Claims</div>}
                     </div>
                     <div style={{ padding: '4px 8px', borderTop: '1px solid var(--tn-border)', fontSize: 9, color: 'var(--tn-text-muted)', fontStyle: 'italic' }}>
-                      {proposal.reasoning.slice(0, 100)}{proposal.reasoning.length > 100 ? '…' : ''}
+                      {(proposal.reasoning ?? '').slice(0, 100)}{(proposal.reasoning ?? '').length > 100 ? '…' : ''}
                     </div>
                   </div>
                 );
@@ -1436,7 +1576,7 @@ function UpdatePlanStep({ sessionId, groups, updateProposals, setUpdateProposals
               <button onClick={() => { setUpdateProposals([]); }} style={btnSecondary}>Neue Zuordnung</button>
               <button
                 onClick={() => onExecute(updateProposals)}
-                disabled={loading || isExecuting || updateProposals.every(p => p.claimIds.length === 0)}
+                disabled={loading || isExecuting || updateProposals.every(p => (p.claimIds ?? []).length === 0)}
                 style={{ ...btnPrimary, background: 'var(--tn-green)', opacity: loading ? 0.5 : 1 }}
               >
                 {isExecuting ? '⟳ Generiere...' : 'Updates generieren'}
@@ -1452,30 +1592,30 @@ function UpdatePlanStep({ sessionId, groups, updateProposals, setUpdateProposals
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
             <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--tn-green)' }}>{updateDiffs.length} Dokument(e) bereit</span>
             <button
-              onClick={() => onApply(updateDiffs.filter(d => d.status !== 'applied' && d.status !== 'skipped').map(d => d.docPath))}
-              disabled={loading || updateDiffs.every(d => d.status === 'applied' || d.status === 'skipped')}
+              onClick={() => onApply(updateDiffs.filter(d => (d.status ?? '') !== 'applied' && (d.status ?? '') !== 'skipped').map(d => d.docPath ?? ''))}
+              disabled={loading || updateDiffs.every(d => (d.status ?? '') === 'applied' || (d.status ?? '') === 'skipped')}
               style={{ ...btnPrimary, background: 'var(--tn-green)', fontSize: 10 }}
             >
               Alle anwenden
             </button>
           </div>
           {updateDiffs.map(diff => (
-            <div key={diff.docPath} style={{ marginBottom: 10, border: '1px solid var(--tn-border)', borderRadius: 6, overflow: 'hidden' }}>
+            <div key={diff.docPath ?? ''} style={{ marginBottom: 10, border: '1px solid var(--tn-border)', borderRadius: 6, overflow: 'hidden' }}>
               <div style={{ padding: '6px 10px', background: 'var(--tn-bg-dark)', display: 'flex', gap: 8, alignItems: 'center' }}>
-                {diff.isNew && <span style={{ fontSize: 9, color: 'var(--tn-green)', fontWeight: 700, flexShrink: 0 }}>NEU</span>}
-                <span style={{ fontSize: 11, fontWeight: 600, flex: 1 }}>{diff.docName}</span>
-                <span style={{ fontSize: 9, color: diff.status === 'applied' ? 'var(--tn-green)' : 'var(--tn-text-muted)', flexShrink: 0 }}>
-                  {diff.status === 'applied' ? '✓ Angewendet' : diff.status === 'skipped' ? '— Übersprungen' : diff.changeSummary}
+                {(diff.isNew ?? false) && <span style={{ fontSize: 9, color: 'var(--tn-green)', fontWeight: 700, flexShrink: 0 }}>NEU</span>}
+                <span style={{ fontSize: 11, fontWeight: 600, flex: 1 }}>{diff.docName ?? ''}</span>
+                <span style={{ fontSize: 9, color: (diff.status ?? '') === 'applied' ? 'var(--tn-green)' : 'var(--tn-text-muted)', flexShrink: 0 }}>
+                  {(diff.status ?? '') === 'applied' ? '✓ Angewendet' : (diff.status ?? '') === 'skipped' ? '— Übersprungen' : (diff.changeSummary ?? '')}
                 </span>
                 <button
-                  onClick={() => setShowDiff(showDiff === diff.docPath ? null : diff.docPath)}
+                  onClick={() => setShowDiff(showDiff === (diff.docPath ?? '') ? null : (diff.docPath ?? ''))}
                   style={{ ...btnSecondary, fontSize: 9, padding: '2px 8px', flexShrink: 0 }}
                 >
-                  {showDiff === diff.docPath ? 'Einklappen' : 'Vorschau'}
+                  {showDiff === (diff.docPath ?? '') ? 'Einklappen' : 'Vorschau'}
                 </button>
-                {diff.status !== 'applied' && diff.status !== 'skipped' && (
+                {(diff.status ?? '') !== 'applied' && (diff.status ?? '') !== 'skipped' && (
                   <button
-                    onClick={() => onApply([diff.docPath])}
+                    onClick={() => onApply([diff.docPath ?? ''])}
                     disabled={loading}
                     style={{ ...btnPrimary, background: 'var(--tn-green)', fontSize: 9, padding: '2px 8px', flexShrink: 0 }}
                   >
@@ -1483,23 +1623,23 @@ function UpdatePlanStep({ sessionId, groups, updateProposals, setUpdateProposals
                   </button>
                 )}
               </div>
-              {showDiff === diff.docPath && (
+              {showDiff === (diff.docPath ?? '') && (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0 }}>
                   <div style={{ borderRight: '1px solid var(--tn-border)' }}>
                     <div style={{ padding: '4px 8px', fontSize: 9, fontWeight: 700, color: 'var(--tn-text-muted)', background: 'rgba(247,118,142,0.05)', borderBottom: '1px solid var(--tn-border)' }}>
-                      {diff.isNew ? '(Nicht vorhanden)' : 'VORHER'}
+                      {(diff.isNew ?? false) ? '(Nicht vorhanden)' : 'VORHER'}
                     </div>
                     <textarea
-                      readOnly value={diff.originalContent}
+                      readOnly value={diff.originalContent ?? ''}
                       style={{ width: '100%', height: 200, padding: 8, fontSize: 10, fontFamily: 'monospace', background: 'var(--tn-bg)', color: 'var(--tn-text-muted)', border: 'none', resize: 'none', outline: 'none', boxSizing: 'border-box' }}
                     />
                   </div>
                   <div>
                     <div style={{ padding: '4px 8px', fontSize: 9, fontWeight: 700, color: 'var(--tn-text-muted)', background: 'rgba(158,206,106,0.05)', borderBottom: '1px solid var(--tn-border)' }}>
-                      NACHHER {diff.isNew ? '(Neu erstellt)' : '(Aktualisiert)'}
+                      NACHHER {(diff.isNew ?? false) ? '(Neu erstellt)' : '(Aktualisiert)'}
                     </div>
                     <textarea
-                      readOnly value={diff.proposedContent}
+                      readOnly value={diff.proposedContent ?? ''}
                       style={{ width: '100%', height: 200, padding: 8, fontSize: 10, fontFamily: 'monospace', background: 'var(--tn-bg)', color: 'var(--tn-text)', border: 'none', resize: 'none', outline: 'none', boxSizing: 'border-box' }}
                     />
                   </div>
@@ -1653,7 +1793,7 @@ export default function ReportBuilder() {
       // Update local groups with templateId assignments (rank 1 only)
       setGroups(prev => prev.map(g => ({
         ...g,
-        claims: g.claims.map(c => {
+        claims: (g.claims).map(c => {
           const match = selectedMatches.find((m: any) => m.claimId === c.id);
           return match ? { ...c, templateId: match.templateId, templateReason: match.reason } : c;
         }),
@@ -1679,7 +1819,7 @@ export default function ReportBuilder() {
     }
     setStep('generation');
     // Auto-match if no assignments exist yet
-    const hasAssignments = groups.some(g => g.claims.some(c => (c as any).templateId));
+    const hasAssignments = groups.some(g => (g.claims).some(c => (c as any).templateId));
     if (!hasAssignments) {
       runClaimTemplateMatch();
     }
@@ -1927,11 +2067,15 @@ export default function ReportBuilder() {
   }
 
   function updateClaim(groupId: string, claimId: string, update: Partial<Claim>) {
-    setGroups(prev => prev.map(g => g.id === groupId ? { ...g, claims: g.claims.map(c => c.id === claimId ? { ...c, ...update } : c) } : g));
+    setGroups(prev => prev.map(g => (g.id ?? '') === groupId ? { ...g, claims: (g.claims).map(c => c.id === claimId ? { ...c, ...update } : c) } : g));
+  }
+
+  function reorderGroups(newGroups: ClaimGroup[]) {
+    setGroups(newGroups);
   }
 
   function toggleGroup(groupId: string, selected: boolean) {
-    setGroups(prev => prev.map(g => g.id === groupId ? { ...g, claims: g.claims.map(c => ({ ...c, selected })) } : g));
+    setGroups(prev => prev.map(g => (g.id ?? '') === groupId ? { ...g, claims: (g.claims).map(c => ({ ...c, selected })) } : g));
   }
 
   async function handleGenerate() {
@@ -1958,7 +2102,7 @@ export default function ReportBuilder() {
   async function switchRevision(index: number) {
     if (index < 0 || index >= revisions.length) return;
     setActiveRevisionIndex(index);
-    setGeneratedContent(revisions[index].html);
+    setGeneratedContent(revisions[index].html ?? '');
     if (sessionId) {
       fetch(`${API}/sessions/${sessionId}/active-revision`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
@@ -2056,7 +2200,7 @@ export default function ReportBuilder() {
             <SourceSelector selected={selectedSources} onToggle={toggleSource} onExtract={handleExtract} brief={brief} setBrief={setBrief} extractionPrompt={extractionPrompt} setExtractionPrompt={setExtractionPrompt} loading={loading} />
           </>
         )}
-        {step === 'claim-curation' && <ClaimCuration groups={groups} draftOutline={draftOutline} onChange={updateClaim} onToggleGroup={toggleGroup} generalNotes={generalNotes} setGeneralNotes={setGeneralNotes} onBack={() => setStep('source-select')} onNext={handleClaimsToConfig} claimTemplateMatches={claimTemplateMatches} onSelectTemplate={handleSelectTemplate} nextLabel={sessionMode === 'update' ? 'Weiter zu Targets' : undefined} />}
+        {step === 'claim-curation' && <ClaimCuration groups={groups} draftOutline={draftOutline} onChange={updateClaim} onToggleGroup={toggleGroup} onReorderGroups={reorderGroups} generalNotes={generalNotes} setGeneralNotes={setGeneralNotes} onBack={() => setStep('source-select')} onNext={handleClaimsToConfig} claimTemplateMatches={claimTemplateMatches} onSelectTemplate={handleSelectTemplate} nextLabel={sessionMode === 'update' ? 'Weiter zu Targets' : undefined} />}
         {(step === 'generation' || step === 'review') && <GenerationStep outputFormat={outputFormat} setOutputFormat={setOutputFormat} customInstructions={customInstructions} setCustomInstructions={setCustomInstructions} templateSectionIds={templateSectionIds} onToggleTemplate={(id) => setTemplateSectionIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; })} onSetTemplateCategory={() => {}} onBack={() => setStep('claim-curation')} onGenerate={handleGenerate} generatedContent={generatedContent} loading={loading} feedback={feedback} setFeedback={setFeedback} onSave={handleSave} savedPath={savedPath} revisions={revisions} activeRevisionIndex={activeRevisionIndex} onSwitchRevision={switchRevision} autoMatchResults={autoMatchResults} autoMatchLoading={autoMatchLoading} autoMatchApplied={autoMatchApplied} onRerunAutoMatch={runClaimTemplateMatch} onClearAutoMatch={() => { setTemplateSectionIds(new Set()); setAutoMatchApplied(false); setClaimTemplateMatches([]); }} claimTemplateMatches={claimTemplateMatches} groups={groups} />}
         {step === 'update-plan' && sessionId && <UpdatePlanStep sessionId={sessionId} groups={groups} updateProposals={updateProposals} setUpdateProposals={setUpdateProposals} updateDiffs={updateDiffs} setUpdateDiffs={setUpdateDiffs} updateStatus={updateStatus} loading={loading} onBack={() => setStep('claim-curation')} onPropose={handleProposeUpdates} onExecute={handleExecuteUpdates} onApply={handleApplyUpdates} />}
       </div>

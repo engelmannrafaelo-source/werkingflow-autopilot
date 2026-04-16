@@ -1,7 +1,25 @@
 import { useState, useEffect, useCallback } from 'react';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
+
+// Validated shape — health and timestamp guaranteed, rest has API-version alternatives
+interface GuardSlotInfo {
+  label: string;
+  active: number;
+  max: number;
+  available: number;
+  requests: Array<{ caller: string; appId: string; duration: number }>;
+}
+
+interface GuardData {
+  running: boolean;
+  slots?: Record<string, GuardSlotInfo>;
+  queue?: Array<{ type: string; priority: number; caller: string; waitSeconds: number }>;
+  queueLength?: number;
+  metrics?: { totalRequests: number; totalCompleted: number; totalPreempted: number };
+}
 
 interface OverviewData {
-  health?: string;
+  health: string;
   worker?: string;
   uptime_hours?: number;
   total_requests?: number;
@@ -11,13 +29,14 @@ interface OverviewData {
   success_rate?: number;
   successRate?: number;
   active_sessions?: number;
-  timestamp?: string;
+  guard?: GuardData;
+  timestamp: string;
   _error?: string;
   _note?: string;
 }
 
 interface AppInfo {
-  app_id: string;
+  app_id?: string;
   requests?: number;
   total_requests?: number;
   tokens?: number;
@@ -51,8 +70,15 @@ export default function OverviewTab() {
       ]);
 
       if (overviewRes.status === 'fulfilled') {
-        if (overviewRes.value._error) setError(overviewRes.value._error);
-        else setData(overviewRes.value);
+        if (overviewRes.value._error) {
+          setError(overviewRes.value._error);
+        } else {
+          const validated = validateApiResponse<OverviewData>(overviewRes.value, '/api/bridge/metrics/overview', {
+            health: 'string',
+            timestamp: 'string',
+          });
+          setData(validated);
+        }
       } else {
         setError('Bridge nicht erreichbar');
       }
@@ -93,7 +119,8 @@ export default function OverviewTab() {
     </div>
   );
 
-  const formatNumber = (num: number) => {
+  const formatNumber = (num: number | undefined | null) => {
+    if (num == null) return '0';
     if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
     if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
     return num.toString();
@@ -145,7 +172,7 @@ export default function OverviewTab() {
       {/* Quick Stats */}
       <div data-ai-id="bridge-overview-stats-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 16 }}>
         {data ? (() => {
-          const health = data.health ?? 'unknown';
+          const health = data.health;
           const worker = data.worker ?? '-';
           const uptime = data.uptime_hours ?? 0;
           const totalReqs = data.total_requests ?? data.totalRequests ?? 0;
@@ -176,7 +203,7 @@ export default function OverviewTab() {
               const latency = app.avg_latency_ms ?? app.avg_response_time_ms ?? 0;
               const color = app.last_seen ? activityColor(app.last_seen) : 'var(--tn-text-muted)';
               return (
-                <div key={app.app_id} style={{
+                <div key={app.app_id ?? ''} style={{
                   padding: '8px 12px', background: 'var(--tn-bg-dark)',
                   border: '1px solid var(--tn-border)', borderRadius: 6,
                   borderLeft: `3px solid ${color}`, minWidth: 130,
@@ -184,7 +211,7 @@ export default function OverviewTab() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
                     <div style={{ width: 6, height: 6, borderRadius: '50%', background: color }} />
                     <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--tn-text)', fontFamily: 'monospace' }}>
-                      {app.app_id}
+                      {app.app_id ?? 'unknown'}
                     </span>
                   </div>
                   <div style={{ display: 'flex', gap: 12, fontSize: 9, color: 'var(--tn-text-muted)' }}>
@@ -196,6 +223,93 @@ export default function OverviewTab() {
               );
             })}
           </div>
+        </div>
+      )}
+
+      {/* AI-Guard Status */}
+      {data?.guard && (
+        <div data-ai-id="bridge-guard-section" style={{ marginBottom: 16 }}>
+          <h4 style={{ fontSize: 11, fontWeight: 600, margin: '0 0 8px', color: 'var(--tn-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            AI-Guard {data.guard.running ? '(Active)' : '(Offline)'}
+          </h4>
+          {data.guard.running && data.guard.slots ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {/* Slot bars */}
+              {Object.entries(data.guard.slots).map(([type, slot]) => (
+                <div key={type} style={{
+                  padding: '8px 12px', background: 'var(--tn-bg-dark)',
+                  border: '1px solid var(--tn-border)', borderRadius: 6,
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                    <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--tn-text)', fontFamily: 'monospace' }}>
+                      {type}
+                    </span>
+                    <span style={{
+                      fontSize: 9, fontWeight: 700, color: slot.active > 0 ? 'var(--tn-orange)' : 'var(--tn-text-muted)',
+                    }}>
+                      {slot.active}/{slot.max}
+                    </span>
+                  </div>
+                  {/* Visual bar */}
+                  <div style={{ display: 'flex', gap: 2, height: 6 }}>
+                    {Array.from({ length: slot.max }, (_, i) => (
+                      <div key={i} style={{
+                        flex: 1, borderRadius: 2,
+                        background: i < slot.active ? 'var(--tn-orange)' : 'rgba(158,206,106,0.2)',
+                      }} />
+                    ))}
+                  </div>
+                  {/* Active callers */}
+                  {slot.requests.length > 0 && (
+                    <div style={{ marginTop: 4, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {slot.requests.map((r, i) => (
+                        <span key={i} style={{
+                          fontSize: 8, padding: '1px 4px', borderRadius: 2,
+                          background: 'rgba(122,162,247,0.15)', color: 'var(--tn-blue)',
+                          fontFamily: 'monospace',
+                        }}>
+                          {r.caller} ({r.duration}s)
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+              {/* Queue */}
+              {(data.guard.queueLength ?? 0) > 0 && data.guard.queue && (
+                <div style={{
+                  padding: '6px 12px', background: 'rgba(224,175,104,0.1)',
+                  border: '1px solid rgba(224,175,104,0.3)', borderRadius: 6,
+                  fontSize: 9, color: 'var(--tn-orange)',
+                }}>
+                  <strong>Queue ({data.guard.queueLength}):</strong>{' '}
+                  {data.guard.queue.map((q, i) => (
+                    <span key={i} style={{ marginLeft: 4, fontFamily: 'monospace' }}>
+                      {q.caller}({q.type}, {q.waitSeconds}s)
+                    </span>
+                  ))}
+                </div>
+              )}
+              {/* Guard metrics */}
+              {data.guard.metrics && (
+                <div style={{ display: 'flex', gap: 12, fontSize: 9, color: 'var(--tn-text-muted)', paddingTop: 4 }}>
+                  <span>Total: {data.guard.metrics.totalRequests}</span>
+                  <span>Completed: {data.guard.metrics.totalCompleted}</span>
+                  {data.guard.metrics.totalPreempted > 0 && (
+                    <span style={{ color: 'var(--tn-orange)' }}>Preempted: {data.guard.metrics.totalPreempted}</span>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div style={{
+              padding: '8px 12px', background: 'rgba(247,118,142,0.1)',
+              border: '1px solid rgba(247,118,142,0.2)', borderRadius: 6,
+              fontSize: 10, color: 'var(--tn-red)',
+            }}>
+              AI-Guard is offline — Bridge calls go directly to Hetzner without concurrency control
+            </div>
+          )}
         </div>
       )}
 
@@ -212,7 +326,7 @@ export default function OverviewTab() {
               'bridge-overview-success-rate-stat')}
           </div>
           <div data-ai-id="bridge-overview-timestamp" style={{ fontSize: 9, color: 'var(--tn-text-muted)', textAlign: 'right' }}>
-            Last updated: {data.timestamp ? new Date(data.timestamp).toLocaleString() : 'N/A'}
+            Last updated: {new Date(data.timestamp).toLocaleString()}
           </div>
         </>);
       })()}

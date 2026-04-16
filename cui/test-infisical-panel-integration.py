@@ -38,10 +38,10 @@ def test_open_infisical_panel():
             time.sleep(8)  # Wait for React to mount
 
             title = page.title()
-            if title != "CUI Workspace":
+            if title != "WerkING Lab":
                 print(f"  {Colors.FAIL}❌ FAIL: Wrong page title: {title}{Colors.ENDC}")
                 return False
-            print(f"  {Colors.OKGREEN}✅ CUI loaded (title: {title}){Colors.ENDC}")
+            print(f"  {Colors.OKGREEN}✅ WerkING Lab loaded (title: {title}){Colors.ENDC}")
 
             # Step 2: Find and click the "+" button to add panel
             print("\n  ➜ Step 2: Looking for '+' button to add panel...")

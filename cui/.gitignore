@@ -12,3 +12,11 @@ data/credentials.json
 
 # OS files
 .DS_Store
+
+# Build output
+.next/
+
+
+# User input logs (contain speech transcripts + potentially secrets)
+data/workspaces/
+data/input-log.jsonl

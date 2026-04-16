@@ -1,17 +1,18 @@
 import { useState, useEffect, useCallback } from 'react';
+import { validateApiResponse } from '../../lib/validateApiResponse';
 
 const API = '/api';
 
 interface Task {
   id: string;
   title: string;
-  description: string;
-  assignee: string;
   status: 'backlog' | 'in_progress' | 'review' | 'done';
-  priority: 'low' | 'medium' | 'high';
+  description?: string;
+  assignee?: string;
+  priority?: 'low' | 'medium' | 'high';
   documentRef?: string;
-  createdAt: string;
-  updatedAt: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 // Map demo task status to expected format
@@ -52,9 +53,10 @@ export default function TaskBoard({ personaId }: TaskBoardProps) {
       if (!response.ok) throw new Error(`[TaskBoard] load tasks failed: HTTP ${response.status}`);
 
       const rawTasks = await response.json();
+      if (!Array.isArray(rawTasks)) throw new Error(`[TaskBoard] API /api/team/task-board: expected array, got ${typeof rawTasks}`);
 
       // Map demo tasks to expected format
-      const allTasks = (Array.isArray(rawTasks) ? rawTasks : []).map((t: any) => ({
+      const allTasks = rawTasks.map((t: any) => ({
         id: t.id,
         title: t.title,
         description: t.description,
@@ -243,7 +245,7 @@ export default function TaskBoard({ personaId }: TaskBoardProps) {
                     </div>
                   )}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.5rem' }}>
-                    <span style={{ fontSize: 10, color: 'var(--tn-text-muted)' }}>{task.assignee}</span>
+                    <span style={{ fontSize: 10, color: 'var(--tn-text-muted)' }}>{task.assignee ?? ''}</span>
                     <div style={{ display: 'flex', gap: '0.25rem' }}>
                       {status !== 'backlog' && (
                         <button onClick={() => updateTaskStatus(task.id, 'backlog')} style={{ padding: '2px 6px', fontSize: 10, background: 'var(--tn-bg)', border: '1px solid var(--tn-border)', borderRadius: 3, cursor: 'pointer' }}>←</button>

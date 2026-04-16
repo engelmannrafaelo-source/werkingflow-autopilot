@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo, useLayoutEffect } from 'react';
 import { resilientFetch } from '../../../../utils/resilientFetch';
 import FilePreviewSidebar from '../FilePreviewSidebar';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 interface DepNode {
@@ -25,17 +26,17 @@ interface DepFile { name: string; path: string; size: number | null; scenarios: 
 
 interface DepGraphData {
   app: string;
-  generated_at: string;
+  generated_at?: string;
   nodes: DepNode[];
   edges: DepEdge[];
-  users: DepUser[];
-  files: DepFile[];
-  summary: { total: number; with_deps: number; with_files: number; skip_setup: number; unique_users: number; unique_files: number; };
+  users?: DepUser[];
+  files?: DepFile[];
+  summary?: { total?: number; with_deps?: number; with_files?: number; skip_setup?: number; unique_users?: number; unique_files?: number; };
 }
 
 interface Brick { node: DepNode; layer: number; wave: number; }
 interface LayerStack { layer: number; waves: Brick[][]; totalBricks: number; }
-interface ConnLine { x1: number; y1: number; x2: number; y2: number; color: string; dashed: boolean; }
+interface ConnLine { x1: number; y1: number; x2: number; y2: number; color?: string; dashed?: boolean; }
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 const LAYER_NAMES: Record<number, string> = {
@@ -83,7 +84,13 @@ export default function DependenciesTab() {
       setError(null); setLoading(true);
       const res = await resilientFetch(`/api/qa/dependency-graph/${selectedApp}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setData(await res.json());
+      const raw = await res.json();
+      const validated = validateApiResponse<DepGraphData>(raw, `/api/qa/dependency-graph/${selectedApp}`, {
+        app: 'string',
+        nodes: 'array',
+        edges: 'array',
+      });
+      setData(validated);
       if (retryTimer.current) { clearTimeout(retryTimer.current); retryTimer.current = null; }
     } catch (err) {
       console.warn('[QADeps] fetch graph failed:', err);
@@ -177,7 +184,7 @@ export default function DependenciesTab() {
   // Scenarios connected to the hovered file
   const hoveredFileScenarios = useMemo(() => {
     if (!hoveredFile || !data) return null;
-    const file = data.files.find(f => f.path === hoveredFile);
+    const file = (data.files ?? []).find(f => f.path === hoveredFile);
     if (!file) return null;
     return new Set(file.scenarios);
   }, [hoveredFile, data]);
@@ -186,7 +193,7 @@ export default function DependenciesTab() {
   const nodeFileMap = useMemo(() => {
     if (!data) return new Map<string, Set<string>>();
     const m = new Map<string, Set<string>>();
-    for (const file of data.files) {
+    for (const file of (data.files ?? [])) {
       for (const sId of file.scenarios) {
         if (!m.has(sId)) m.set(sId, new Set());
         m.get(sId)!.add(file.path);
@@ -199,7 +206,7 @@ export default function DependenciesTab() {
   const fileGroups = useMemo(() => {
     if (!data) return [];
     const groups: Record<string, DepFile[]> = {};
-    for (const f of data.files) {
+    for (const f of (data.files ?? [])) {
       const ext = f.name.includes('.') ? f.name.split('.').pop()!.toLowerCase() : 'other';
       const cat = ['pdf'].includes(ext) ? 'PDF' :
                   ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext) ? 'Images' :
@@ -270,7 +277,7 @@ export default function DependenciesTab() {
 
     // File hover: draw lines from hovered file to all consuming scenarios
     if (hoveredFile && !selectedId) {
-      const file = data.files.find(f => f.path === hoveredFile);
+      const file = (data.files ?? []).find(f => f.path === hoveredFile);
       if (file) {
         const fileEl = fileRefs.current.get(file.path);
         if (fileEl) {
@@ -304,7 +311,7 @@ export default function DependenciesTab() {
 
   const totalParallel = data.nodes.filter(n => n.requires_scenarios.length === 0).length;
   const totalSequential = data.nodes.filter(n => n.requires_scenarios.length > 0).length;
-  const totalFiles = data.files.reduce((s, f) => s + (f.size || 0), 0);
+  const totalFiles = (data.files ?? []).reduce((s, f) => s + (f.size || 0), 0);
 
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
@@ -328,10 +335,10 @@ export default function DependenciesTab() {
           {apps.map(a => <option key={a} value={a}>{a}</option>)}
         </select>
 
-        <Pill label="Tests" val={data.summary.total} c="#7aa2f7" />
+        <Pill label="Tests" val={data.summary?.total ?? 0} c="#7aa2f7" />
         <Pill label="Indep" val={totalParallel} c="#9ece6a" />
         <Pill label="Seq" val={totalSequential} c="#bb9af7" />
-        <Pill label="Files" val={data.summary.unique_files} c="#7dcfff" />
+        <Pill label="Files" val={data.summary?.unique_files ?? 0} c="#7dcfff" />
         <Pill label="Size" val={0} c="#7dcfff" text={fmtBytes(totalFiles)} />
 
         <div style={{ flex: 1 }} />
@@ -364,18 +371,19 @@ export default function DependenciesTab() {
               </marker>
             </defs>
             {connLines.map((l, i) => {
-              const dx = l.x2 - l.x1;
-              const dy = l.y2 - l.y1;
+              const lx1 = l.x1, ly1 = l.y1, lx2 = l.x2, ly2 = l.y2;
+              const dx = lx2 - lx1;
+              const dy = ly2 - ly1;
               const dist = Math.sqrt(dx * dx + dy * dy);
               const bend = Math.min(dist * 0.25, 40);
-              const mid = `${(l.x1 + l.x2) / 2} ${(l.y1 + l.y2) / 2 - bend}`;
+              const mid = `${(lx1 + lx2) / 2} ${(ly1 + ly2) / 2 - bend}`;
               return (
                 <path key={i}
-                  d={`M ${l.x1} ${l.y1} Q ${mid}, ${l.x2} ${l.y2}`}
-                  fill="none" stroke={l.color}
-                  strokeWidth={1.5} strokeDasharray={l.dashed ? '4,3' : undefined}
+                  d={`M ${lx1} ${ly1} Q ${mid}, ${lx2} ${ly2}`}
+                  fill="none" stroke={l.color ?? '#565f89'}
+                  strokeWidth={1.5} strokeDasharray={(l.dashed ?? false) ? '4,3' : undefined}
                   opacity={0.7}
-                  markerEnd={l.dashed ? 'url(#arr-file)' : l.color === '#bb9af7' ? 'url(#arr-up)' : 'url(#arr-down)'}
+                  markerEnd={(l.dashed ?? false) ? 'url(#arr-file)' : (l.color ?? '') === '#bb9af7' ? 'url(#arr-up)' : 'url(#arr-down)'}
                 />
               );
             })}
@@ -485,7 +493,7 @@ export default function DependenciesTab() {
           </div>
 
           {/* ── File Foundation ── */}
-          {data.files.length > 0 && (
+          {(data.files ?? []).length > 0 && (
             <div style={{
               marginTop: 6, borderTop: '2px solid rgba(125,207,255,0.3)',
               padding: '6px 0',
@@ -497,7 +505,7 @@ export default function DependenciesTab() {
                   Input Files
                 </span>
                 <span style={{ fontSize: 8, color: 'var(--tn-text-muted)', fontFamily: 'monospace' }}>
-                  {data.files.length} files | {fmtBytes(totalFiles)}
+                  {(data.files ?? []).length} files | {fmtBytes(totalFiles)}
                 </span>
               </div>
 
@@ -566,7 +574,7 @@ export default function DependenciesTab() {
             <span style={{ fontSize: 8, fontWeight: 700, color: 'var(--tn-text-muted)', textTransform: 'uppercase', letterSpacing: 1 }}>
               Execution:
             </span>
-            {data.files.length > 0 && (
+            {(data.files ?? []).length > 0 && (
               <>
                 <span style={{ fontSize: 8, fontWeight: 700, color: '#7dcfff', fontFamily: 'monospace', padding: '1px 4px', background: 'rgba(125,207,255,0.08)', borderRadius: 2 }}>
                   Files

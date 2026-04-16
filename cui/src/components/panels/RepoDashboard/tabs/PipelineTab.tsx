@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 
 interface PipelineStatus {
-  status: string;
+  status?: string;
   branch?: string;
   unpushed?: number;
   uncommitted?: number;
@@ -164,14 +164,14 @@ export default function PipelineTab() {
                 </td>
                 <td style={{ padding: '8px 12px' }}>
                   <span style={{
-                    background: `${getStatusColor(status.status)}22`,
-                    color: getStatusColor(status.status),
+                    background: `${getStatusColor(status.status ?? '')}22`,
+                    color: getStatusColor(status.status ?? ''),
                     padding: '2px 8px',
                     borderRadius: 3,
                     fontSize: 10,
                     fontWeight: 600,
                   }}>
-                    {status.status}
+                    {status.status ?? ''}
                   </span>
                 </td>
                 <td style={{ padding: '8px 12px' }}>

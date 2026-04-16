@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { validateApiResponse } from '../../lib/validateApiResponse';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -11,9 +12,9 @@ interface TeamSection {
 }
 
 interface TeamStatusResponse {
-  app: string | null;
+  app?: string | null;
   sections: TeamSection[];
-  fetchedAt: string;
+  fetchedAt?: string;
 }
 
 const API = '/api/partner';
@@ -37,7 +38,12 @@ export default function TeamStatusPanel() {
       if (appFilter) params.set('app', appFilter);
       const res = await fetch(`${API}/team-status?${params}`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json: TeamStatusResponse = await res.json();
+      const raw = await res.json();
+      const json = validateApiResponse<TeamStatusResponse>(raw, '/api/partner/team-status', {
+        sections: 'array',
+        app: { type: 'string', optional: true },
+        fetchedAt: { type: 'string', optional: true },
+      });
       setData(json);
       setError('');
     } catch (err) {
@@ -67,14 +73,15 @@ export default function TeamStatusPanel() {
     setLoading(true);
   }, []);
 
-  const formatAge = (isoDate: string): string => {
+  const formatAge = (isoDate: string | undefined): string => {
+    if (!isoDate) return '';
     const age = Date.now() - new Date(isoDate).getTime();
     if (age < 60_000) return 'gerade eben';
     if (age < 3_600_000) return `vor ${Math.round(age / 60_000)} Min`;
     return `vor ${Math.round(age / 3_600_000)} Std`;
   };
 
-  const activeContent = data?.sections.find(s => s.key === activeSection)?.content ?? '';
+  const activeContent = (data?.sections || []).find(s => s.key === activeSection)?.content ?? '';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--tn-bg)' }}>

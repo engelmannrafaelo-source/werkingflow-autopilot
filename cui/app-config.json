@@ -1,6 +1,6 @@
 {
   "app_id": "cui",
-  "app_name": "CUI Workspace",
+  "app_name": "WerkING Lab",
   "ports": {
     "user": 4005,
     "test": null,

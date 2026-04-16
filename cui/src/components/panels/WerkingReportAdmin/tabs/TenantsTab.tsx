@@ -3,6 +3,7 @@ import PaginationControls from '@/components/shared/PaginationControls';
 import ExportButton from '@/components/shared/ExportButton';
 import PlanChangeModal from '../modals/PlanChangeModal';
 import TableSearch, { FilterConfig } from '@/components/shared/TableSearch';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
 
 interface Tenant {
   id: string;
@@ -51,9 +52,16 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
       params.set('limit', limit.toString());
       const res = await fetch(`/api/admin/wr/tenants?${params}`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
-      setTenants(data.tenants || data || []);
-      setTotal(data.total || 0);
+      const raw = await res.json();
+      const tenantsArray = Array.isArray(raw) ? raw : (raw.tenants || []);
+      tenantsArray.forEach((t: unknown, i: number) => {
+        validateApiResponse<Tenant>(t, `/api/admin/wr/tenants[${i}]`, {
+          id: 'string',
+          name: 'string',
+        });
+      });
+      setTenants(tenantsArray as Tenant[]);
+      setTotal(raw.total ?? tenantsArray.length);
     } catch (err: any) {
       console.warn('[WRTenants] fetchTenants:', err);
       setError(err.message);
@@ -256,7 +264,7 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
           </div>
 
           {tenants.map(t => {
-            const isProcessing = processingId === t.id;
+            const isProcessing = processingId === (t.id);
             return (
               <div key={t.id} data-ai-id={`wr-tenants-row-${t.id}`} style={{
                 display: 'grid', gridTemplateColumns: '1fr 100px 80px 80px 70px 100px',
@@ -265,7 +273,7 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
               }}>
                 <div style={{ color: 'var(--tn-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {t.name}
-                  <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', fontFamily: 'monospace' }}>{t.id.slice(0, 8)}</div>
+                  <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', fontFamily: 'monospace' }}>{(t.id).slice(0, 8)}</div>
                 </div>
                 <div style={{ color: 'var(--tn-text-muted)', fontSize: 10 }}>{t.slug || '—'}</div>
                 <div>

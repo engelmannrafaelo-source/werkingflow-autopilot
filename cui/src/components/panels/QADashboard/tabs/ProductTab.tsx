@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { resilientFetch } from '../../../../utils/resilientFetch';
+import { validateApiResponse } from '../../../../lib/validateApiResponse';
 
 const APP_IDS = ['werking-report', 'engelmann', 'werking-energy', 'werking-safety', 'acro-community'];
 const APP_NAMES: Record<string, string> = {
@@ -12,18 +13,22 @@ const APP_NAMES: Record<string, string> = {
 
 interface ProductData {
   appId: string;
-  displayName: string;
-  content: string;
-  modified: string;
-  wordCount: number;
+  displayName?: string;
+  content?: string;
+  modified?: string;
+  wordCount?: number;
 }
 
 interface AppInfo {
   appId: string;
-  displayName: string;
-  exists: boolean;
-  modified: string | null;
-  wordCount: number;
+  displayName?: string;
+  exists?: boolean;
+  modified?: string | null;
+  wordCount?: number;
+}
+
+interface AppListResponse {
+  apps: AppInfo[];
 }
 
 function renderMarkdown(md: string): string {
@@ -97,8 +102,11 @@ export default function ProductTab() {
       try {
         const res = await resilientFetch('/api/qa/product-docs');
         if (!res.ok) return;
-        const json = await res.json();
-        setApps(json.apps || []);
+        const raw = await res.json();
+        const json = validateApiResponse<AppListResponse>(raw, '/api/qa/product-docs', {
+          apps: 'array',
+        });
+        setApps(json.apps);
       } catch {}
     })();
   }, []);
@@ -117,7 +125,11 @@ export default function ProductTab() {
           setError(json.hint || `PRODUCT.md nicht gefunden fuer ${selectedApp}`);
           return;
         }
-        setData(await res.json());
+        const raw = await res.json();
+        const validated = validateApiResponse<ProductData>(raw, `/api/qa/product-docs/${selectedApp}`, {
+          appId: 'string',
+        });
+        setData(validated);
       } catch (err: any) {
         setError(err.message);
       } finally {
@@ -133,8 +145,11 @@ export default function ProductTab() {
       try {
         const res = await resilientFetch('/api/qa/product-docs');
         if (!res.ok) return;
-        const json = await res.json();
-        setApps(json.apps || []);
+        const raw = await res.json();
+        const json = validateApiResponse<AppListResponse>(raw, '/api/qa/product-docs', {
+          apps: 'array',
+        });
+        setApps(json.apps);
       } catch {}
     })();
   }, [reloadKey]);
@@ -174,15 +189,15 @@ export default function ProductTab() {
               padding: '2px 8px',
               borderRadius: 3,
               cursor: 'pointer',
-              background: a.exists
-                ? a.appId === selectedApp ? 'rgba(158,206,106,0.25)' : 'rgba(158,206,106,0.1)'
+              background: (a.exists ?? false)
+                ? (a.appId) === selectedApp ? 'rgba(158,206,106,0.25)' : 'rgba(158,206,106,0.1)'
                 : 'rgba(247,118,142,0.1)',
-              color: a.exists ? 'var(--tn-green)' : 'var(--tn-red)',
-              border: a.appId === selectedApp ? '1px solid var(--tn-green)' : '1px solid transparent',
+              color: (a.exists ?? false) ? 'var(--tn-green)' : 'var(--tn-red)',
+              border: (a.appId) === selectedApp ? '1px solid var(--tn-green)' : '1px solid transparent',
             }}
           >
-            {a.displayName?.split(' ').pop() || a.appId}
-            {a.exists && ` (${a.wordCount}w)`}
+            {a.displayName?.split(' ').pop() || (a.appId)}
+            {(a.exists ?? false) && ` (${a.wordCount ?? 0}w)`}
           </span>
         ))}
 
@@ -219,8 +234,8 @@ export default function ProductTab() {
       {/* Meta info */}
       {data && (
         <div style={{ display: 'flex', gap: 16, fontSize: 11, color: 'var(--tn-text-muted)', flexShrink: 0 }}>
-          <span><strong style={{ color: 'var(--tn-blue)' }}>{data.wordCount}</strong> Woerter</span>
-          <span>Aktualisiert: {new Date(data.modified).toLocaleString('de-AT')}</span>
+          <span><strong style={{ color: 'var(--tn-blue)' }}>{data.wordCount ?? 0}</strong> Woerter</span>
+          <span>Aktualisiert: {new Date(data.modified ?? '').toLocaleString('de-AT')}</span>
         </div>
       )}
 
@@ -257,7 +272,7 @@ export default function ProductTab() {
           <div
             data-ai-id="qa-product-content"
             style={{ padding: '20px 24px', lineHeight: 1.7, fontSize: 13 }}
-            dangerouslySetInnerHTML={{ __html: renderMarkdown(data.content) }}
+            dangerouslySetInnerHTML={{ __html: renderMarkdown(data.content ?? '') }}
           />
         )}
       </div>

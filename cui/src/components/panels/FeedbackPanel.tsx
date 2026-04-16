@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
+import { validateApiResponse } from '../../lib/validateApiResponse';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -11,7 +12,7 @@ interface FeedbackEntry {
   from: string;
   type: FeedbackType;
   title: string;
-  description: string;
+  description?: string;
   screenshot?: string;
   appContext?: string;
   status: FeedbackStatus;
@@ -97,7 +98,22 @@ export default function FeedbackPanel() {
       if (!isAdmin && user?.id) params.set('userId', user.id);
       const res = await fetch(`${API}/feedback?${params}`, { signal: AbortSignal.timeout(15000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: FeedbackEntry[] = await res.json();
+      const raw = await res.json();
+      if (!Array.isArray(raw)) throw new Error(`API /api/partner/feedback: expected array, got ${typeof raw}`);
+      const data = raw.map((item: unknown) =>
+        validateApiResponse<FeedbackEntry>(item, '/api/partner/feedback[item]', {
+          id: 'string',
+          from: 'string',
+          type: 'string',
+          title: 'string',
+          description: { type: 'string', optional: true },
+          screenshot: { type: 'string', optional: true },
+          appContext: { type: 'string', optional: true },
+          status: 'string',
+          createdAt: 'string',
+          response: { type: 'string', optional: true },
+        })
+      );
       setEntries(data);
       setError('');
     } catch (err) {
@@ -133,7 +149,15 @@ export default function FeedbackPanel() {
         const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
         throw new Error(err.error || `HTTP ${res.status}`);
       }
-      const created: FeedbackEntry = await res.json();
+      const rawCreated = await res.json();
+      const created = validateApiResponse<FeedbackEntry>(rawCreated, 'POST /api/partner/feedback', {
+        id: 'string',
+        from: 'string',
+        type: 'string',
+        title: 'string',
+        status: 'string',
+        createdAt: 'string',
+      });
       setEntries(prev => [created, ...prev]);
       setForm({ type: 'bug', title: '', description: '', appContext: '' });
       setView('list');
@@ -155,7 +179,15 @@ export default function FeedbackPanel() {
         signal: AbortSignal.timeout(15000),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const updated: FeedbackEntry = await res.json();
+      const rawUpdated = await res.json();
+      const updated = validateApiResponse<FeedbackEntry>(rawUpdated, 'PATCH /api/partner/feedback/status', {
+        id: 'string',
+        from: 'string',
+        type: 'string',
+        title: 'string',
+        status: 'string',
+        createdAt: 'string',
+      });
       setEntries(prev => prev.map(e => e.id === updated.id ? updated : e));
       setSelected(updated);
     } catch (err) {
@@ -208,7 +240,7 @@ export default function FeedbackPanel() {
             fontSize: 12, color: 'var(--tn-text)', lineHeight: 1.6,
             whiteSpace: 'pre-wrap',
           }}>
-            {selected.description}
+            {selected.description ?? 'Keine Beschreibung'}
           </div>
 
           {/* Screenshot */}
