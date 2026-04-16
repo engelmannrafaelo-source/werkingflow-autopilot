@@ -39,11 +39,19 @@ const _subSessionsAwaitingFinish = new Set<string>();
 // Tracks sub-sessions whose injectSubSessionResult() is currently in-flight.
 // Prevents duplicate injection runs from the reminder loop during retry windows.
 const _subSessionsInjectInProgress = new Set<string>();
+// Tracks when the last reminder was sent to each parent session.
+// Used to dedupe: only fire a new reminder AFTER the parent has completed at least
+// one turn since the previous reminder (prevents stacking reminders in FIFO queue).
+const _lastReminderSentAt = new Map<string, number>();
 
 function cleanupSubSession(sessionId: string) {
   _subSessionsAwaitingFinish.delete(sessionId);
   convMeta.setFinished(sessionId, true);
+  const parentSessionId = convMeta.getParentSessionId(sessionId);
   convMeta.deleteParentSession(sessionId);
+  // Clear pending-reminder state so if parent has other active sub-sessions,
+  // reminders can fire again without waiting for a stale dedup entry.
+  if (parentSessionId) _lastReminderSentAt.delete(parentSessionId);
   claudeCli.stopConversation(sessionId);
   // Build panelsToClose from visibilityRegistry (same as normal finish)
   const panelsToClose: Array<{ panelId: string; projectId: string }> = [];
@@ -491,6 +499,17 @@ export function initMissionRouter(deps: MissionDeps) {
       const parentState = states[parentSessionId];
       if (!parentState || parentState.state !== 'idle') continue;
 
+      // Dedupe: only fire a new reminder if the parent has COMPLETED a turn
+      // (entered idle state) AFTER our previous reminder. Without this, reminders
+      // would stack up in the FIFO queue — Claude Code would drain many stale reminders
+      // even after the sub-session was already finished.
+      const lastSent = _lastReminderSentAt.get(parentSessionId) || 0;
+      if (lastSent > 0 && parentState.since <= lastSent) {
+        // Parent hasn't had a new idle-transition since we last reminded.
+        // Either still processing our last reminder, or hasn't received it yet.
+        continue;
+      }
+
       try {
         const lines: string[] = [];
         const finishCmds: string[] = [];
@@ -498,26 +517,35 @@ export function initMissionRouter(deps: MissionDeps) {
           const title = convMeta.getTitle(sessionId) || sessionId.slice(0, 8);
           if (isCompleted) {
             lines.push(`- "${title}" — ist FERTIG. Bitte Ergebnis pruefen und finishen.`);
-            finishCmds.push(`curl -s -X POST http://localhost:4005/api/mission/conversation/${sessionId}/finish -H 'Content-Type: application/json' -d '{"finished":true}'`);
           } else {
-            lines.push(`- "${title}" — arbeitet noch.`);
+            lines.push(`- "${title}" — arbeitet noch. Wenn fertig: finishen, sonst bleibt die Session offen.`);
           }
+          finishCmds.push(`curl -s -X POST http://localhost:4005/api/mission/conversation/${sessionId}/finish -H 'Content-Type: application/json' -d '{"finished":true,"confirm":true}'`);
         }
 
-        const finishBlock = finishCmds.length > 0 ? `\n\nZum Finishen:\n${finishCmds.join('\n')}` : '';
+        const finishBlock = finishCmds.length > 0 ? `\n\nZum Finishen (nachdem du das Ergebnis geprueft hast):\n${finishCmds.join('\n')}` : '';
         const reminderMsg = `[Sub-Session Reminder]\nDu hast aktive Sub-Sessions:\n${lines.join('\n')}${finishBlock}`;
 
         const parentAccountId = convMeta.getAssignment(parentSessionId) || claudeCli.ACCOUNT_CONFIG[0]?.id || 'werking';
         const parentWorkDir = convMeta.getWorkDir(parentSessionId) || '';
         const parentModel = convMeta.getModel(parentSessionId) || '';
 
+        // Record send-timestamp BEFORE async call to prevent races between ticks.
+        _lastReminderSentAt.set(parentSessionId, Date.now());
+
         claudeCli.startConversation(parentAccountId, reminderMsg, parentWorkDir, parentSessionId, parentModel).then(res => {
           if (res.ok) {
             console.log(`[SubSession] Reminder sent to parent ${parentSessionId.slice(0, 8)} for ${subs.length} sub-session(s)`);
+          } else {
+            // Send failed — roll back dedupe timestamp so we'll try again next tick.
+            _lastReminderSentAt.delete(parentSessionId);
           }
+        }).catch(() => {
+          _lastReminderSentAt.delete(parentSessionId);
         });
       } catch {
         // Reminder is best-effort, don't crash
+        _lastReminderSentAt.delete(parentSessionId);
       }
     }
   }, SUB_REMINDER_INTERVAL_MS);
