@@ -1,5 +1,6 @@
 {
   "id": "sub-sessions",
   "name": "Sub-Sessions",
-  "workDir": "/root/orchestrator/workspaces/sub-sessions"
+  "workDir": "/root/orchestrator/workspaces/sub-sessions",
+  "category": "sessions"
 }

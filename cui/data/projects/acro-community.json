@@ -2,5 +2,5 @@
   "id": "acro-community",
   "name": "Acro Community",
   "workDir": "/root/orchestrator/workspaces/acro-community",
-  "_auto": true
+  "category": "apps"
 }

@@ -163,6 +163,22 @@ export default function createLayoutsRouter(deps: LayoutsDeps): Router {
   runSyncedTabMigration(DATA_DIR, LAYOUTS_DIR);
 
   // ============================================================================
+  // Workspace Categories API
+  // ============================================================================
+  router.get('/workspace-categories', (_req: Request, res: Response) => {
+    const categoriesPath = join(DATA_DIR, 'workspace-categories.json');
+    if (!existsSync(categoriesPath)) {
+      res.json({ categories: [] });
+      return;
+    }
+    try {
+      res.json(JSON.parse(readFileSync(categoriesPath, 'utf8')));
+    } catch {
+      res.status(500).json({ error: 'Failed to read workspace-categories.json' });
+    }
+  });
+
+  // ============================================================================
   // Projects API
   // ============================================================================
   router.get('/projects', (_req: Request, res: Response) => {

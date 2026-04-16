@@ -2,5 +2,5 @@
   "id": "unknownproject",
   "name": "Unknownproject",
   "workDir": "/root/orchestrator/workspaces/unknownproject",
-  "_auto": true
+  "category": "stage"
 }

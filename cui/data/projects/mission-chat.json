@@ -1,5 +1,6 @@
 {
   "id": "mission-chat",
   "name": "Mission Chat",
-  "workDir": "/root/orchestrator/workspaces/mission-chat"
+  "workDir": "/root/orchestrator/workspaces/mission-chat",
+  "category": "sessions"
 }

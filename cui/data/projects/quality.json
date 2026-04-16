@@ -1,0 +1,6 @@
+{
+  "id": "quality",
+  "name": "Quality",
+  "workDir": "/root/orchestrator/workspaces/quality",
+  "category": "devops"
+}

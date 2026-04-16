@@ -1,0 +1,6 @@
+{
+  "id": "finance",
+  "name": "Finance",
+  "workDir": "/root/orchestrator/workspaces/finance",
+  "category": "business"
+}

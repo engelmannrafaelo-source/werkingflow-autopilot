@@ -2,5 +2,5 @@
   "id": "privat",
   "name": "Privat",
   "workDir": "/root/orchestrator/workspaces/privat",
-  "_auto": true
+  "category": "stage"
 }
