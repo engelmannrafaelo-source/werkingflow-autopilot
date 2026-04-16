@@ -87,6 +87,7 @@ const CUI_APP_HOST = (typeof window !== 'undefined' && (window as any).__CUI_APP
 const WORKSPACE_BROWSER_PORTS: Record<string, number> = {
   "engelmann-ai-hub": 3009,
   "engelmann-dashboards": 3010,
+  "engelmann-developer": 3009,
   "werking-energy": 3007,
   "werking-report": 3008,
   "werkingsafety": 3006,
@@ -95,7 +96,7 @@ const WORKSPACE_BROWSER_URLS: Record<string, string> = Object.fromEntries(
   Object.entries(WORKSPACE_BROWSER_PORTS).map(([ws, port]) => [ws, `${CUI_APP_HOST}:${port}`])
 );
 
-function defaultLayout(workDir: string): IJsonModel {
+function defaultLayout(_workDir: string): IJsonModel {
   return {
     global: {
       tabEnableClose: true,
@@ -109,73 +110,32 @@ function defaultLayout(workDir: string): IJsonModel {
       tabSetMinHeight: 150,
     },
     borders: [],
+    // Variante A: Chat 70% (workspace-specific) | Tool Hub 30% (tools + pin control)
     layout: {
       type: 'row',
       weight: 100,
       children: [
         {
-          type: 'row',
-          weight: 50,
+          type: 'tabset',
+          weight: 70,
           children: [
             {
-              type: 'tabset',
-              weight: 50,
-              children: [
-                {
-                  type: 'tab',
-                  name: 'Chat',
-                  component: 'cui-lite',
-                  config: {},
-                },
-              ],
-            },
-            {
-              type: 'tabset',
-              weight: 50,
-              children: [
-                {
-                  type: 'tab',
-                  name: 'File Preview',
-                  component: 'preview',
-                  config: { watchPath: workDir },
-                },
-                {
-                  type: 'tab',
-                  name: 'Notes',
-                  component: 'notes',
-                  config: {},
-                },
-              ],
+              type: 'tab',
+              name: 'Chat',
+              component: 'cui',
+              config: {},
             },
           ],
         },
         {
-          type: 'row',
-          weight: 50,
+          type: 'tabset',
+          weight: 30,
           children: [
             {
-              type: 'tabset',
-              weight: 50,
-              children: [
-                {
-                  type: 'tab',
-                  name: 'Chat',
-                  component: 'cui-lite',
-                  config: {},
-                },
-              ],
-            },
-            {
-              type: 'tabset',
-              weight: 50,
-              children: [
-                {
-                  type: 'tab',
-                  name: 'Browser',
-                  component: 'browser',
-                  config: { url: '' },
-                },
-              ],
+              type: 'tab',
+              name: 'Tool Hub',
+              component: 'tool-hub',
+              config: {},
             },
           ],
         },
@@ -204,40 +164,62 @@ interface LayoutManagerProps {
 export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAttentionChange, onCuiStateReset, pendingActivation, onActivationProcessed, isActive, onMissingSessions }: LayoutManagerProps) {
   const { canAccessPanel } = useAuth();
 
-  // Toggle sync for a tab: synced tabs appear in all workspace layouts
-  const toggleSyncTab = useCallback((nodeId: string) => {
+  // Toggle sync for a tool identified by component name (driven by Tool Hub pin button).
+  // If the component already exists as a tab in this layout: unsync + remove from here + delete everywhere.
+  // If the component does NOT exist: add it as a synced tab in this layout + push to all others.
+  const toggleSyncTool = useCallback((component: string, displayName: string) => {
     const m = modelRef.current;
     if (!m) return;
 
-    const node = m.getNodeById(nodeId) as TabNode | null;
-    if (!node) return;
+    // Find an existing tab with this component
+    let existingTab: TabNode | null = null;
+    m.visitNodes((n) => {
+      if (existingTab) return;
+      if (n.getType() === 'tab') {
+        const t = n as TabNode;
+        if (t.getComponent() === component) existingTab = t;
+      }
+    });
 
-    const config = node.getConfig() ?? {};
-    const isSynced = !!config._synced;
-
-    if (isSynced) {
-      // Turn off sync: update local config, remove from other layouts
-      m.doAction(Actions.updateNodeAttributes(nodeId, { config: { ...config, _synced: false } }));
-      fetch(`${API}/layouts/unsync-tab`, {
+    if (existingTab) {
+      // Already mounted → user is un-pinning: remove from this layout AND from all others
+      const existingTabId = (existingTab as TabNode).getId();
+      try { m.doAction(Actions.deleteTab(existingTabId)); } catch { /* ignore */ }
+      fetch(`${API}/layouts/delete-synced-tab`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tabId: nodeId, keepInProjectId: projectId }),
+        body: JSON.stringify({ tabId: existingTabId }),
         signal: AbortSignal.timeout(5000),
-      }).catch(err => console.warn('[LayoutManager] unsync-tab failed:', err));
-    } else {
-      // Turn on sync: update local config, add to all other layouts
-      const newConfig = { ...config, _synced: true };
-      m.doAction(Actions.updateNodeAttributes(nodeId, { config: newConfig }));
-      fetch(`${API}/layouts/sync-tab`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sourceProjectId: projectId,
-          tabConfig: { id: nodeId, name: node.getName(), component: node.getComponent(), config: newConfig },
-        }),
-        signal: AbortSignal.timeout(5000),
-      }).catch(err => console.warn('[LayoutManager] sync-tab failed:', err));
+      }).catch(err => console.warn('[LayoutManager] delete-synced-tab failed:', err));
+      return;
     }
+
+    // Not mounted → add synced tab to this layout + propagate to all others
+    // Stable ID so all layouts reference the same tab (idempotent across sessions)
+    const tabId = `#synced-${component}`;
+    let targetTabsetId = '';
+    m.visitNodes((n) => {
+      if (!targetTabsetId && n.getType() === 'tabset') targetTabsetId = n.getId();
+    });
+    if (!targetTabsetId) return;
+
+    const newConfig = { _synced: true };
+    try {
+      m.doAction(Actions.addNode(
+        { type: 'tab', id: tabId, name: displayName, component, config: newConfig },
+        targetTabsetId, DockLocation.CENTER, -1
+      ));
+    } catch (err) { console.warn('[LayoutManager] toggleSyncTool addNode failed:', err); return; }
+
+    fetch(`${API}/layouts/sync-tab`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sourceProjectId: projectId,
+        tabConfig: { id: tabId, name: displayName, component, config: newConfig },
+      }),
+      signal: AbortSignal.timeout(5000),
+    }).catch(err => console.warn('[LayoutManager] sync-tab failed:', err));
   }, [projectId]);
 
   // Stale-while-revalidate: use cached layout instantly, refresh in background
@@ -781,34 +763,9 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       >{shortId}</span>
     );
 
-    // Sync toggle: show for all non-CUI, non-mission-chat tabs
+    // Sync state is controlled from Tool Hub (not tab header)
     const tabComp = node.getComponent();
     if (tabComp !== 'cui' && tabComp !== 'cui-lite' && tabComp !== 'mission-chat') {
-      const tabConf = node.getConfig() ?? {};
-      const isSynced = !!tabConf._synced;
-      const tabNodeId = node.getId();
-      renderValues.buttons.push(
-        <span
-          key="sync-toggle"
-          title={isSynced ? 'In allen Workspaces — klicken zum Deaktivieren' : 'Nur hier — klicken zum Sync aktivieren'}
-          onClick={(e) => {
-            e.stopPropagation();
-            toggleSyncTab(tabNodeId);
-          }}
-          style={{
-            fontSize: 10,
-            color: isSynced ? 'var(--tn-blue, #7aa2f7)' : 'var(--tn-text-muted)',
-            opacity: isSynced ? 1 : 0.35,
-            marginLeft: 4,
-            cursor: 'pointer',
-            padding: '1px 3px',
-            borderRadius: 3,
-            background: isSynced ? 'rgba(122,162,247,0.12)' : 'none',
-            transition: 'opacity 0.2s, color 0.2s',
-            userSelect: 'none',
-          }}
-        >⇄</span>
-      );
       return;
     }
 
@@ -842,7 +799,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       renderValues.leading = <span key="dot" className="cui-tab-dot cui-tab-dot--idle" />;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tabRenderTick, toggleSyncTab]);
+  }, [tabRenderTick]);
 
   // Stable refs for Layout callbacks — prevent Layout element recreation on state changes.
   // Without these, every tabRenderTick bump recreates the <Layout> element via useMemo,
@@ -963,6 +920,10 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
             console.log(`[LayoutManager] Nuked ${keys.length} layout cache entries, reloading...`);
           } catch (e) { console.warn('[LayoutManager] nuke-layout-cache error:', e); }
           setTimeout(() => window.location.reload(), 500);
+        }
+        // Notify in-process listeners (Tool Hub, etc.) that layout/sync state changed
+        if (msg.type === 'synced-tab-added' || msg.type === 'synced-tab-removed' || msg.type === 'control:apply-layout') {
+          try { window.dispatchEvent(new CustomEvent('cui-layout-changed', { detail: { projectId: msg.projectId || projectId } })); } catch { /* ignore */ }
         }
         // Synced tab added in another workspace → add to our layout if we're affected
         if (msg.type === 'synced-tab-added' && msg.tabConfig && Array.isArray(msg.affectedProjectIds) && msg.affectedProjectIds.includes(projectId)) {
@@ -1648,6 +1609,21 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       clearInterval(interval);
     };
   }, [modelInitialized, workDir, projectId]);
+
+  // Tool Hub pin event: toggle sync for a tool by component name
+  // Only the active workspace reacts (projectId filter in detail)
+  useEffect(() => {
+    if (!modelInitialized) return;
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (!detail?.component) return;
+      // Only active workspace handles — prevents multiple mounted LayoutManagers from reacting
+      if (detail.projectId && detail.projectId !== projectId) return;
+      toggleSyncTool(detail.component, detail.name || detail.component);
+    };
+    window.addEventListener('cui-toggle-sync-tool', handler);
+    return () => window.removeEventListener('cui-toggle-sync-tool', handler);
+  }, [modelInitialized, projectId, toggleSyncTool]);
 
   // Manual auto-layout trigger: 'cui-auto-layout' event (dispatched by Layout button in toolbar)
   useEffect(() => {

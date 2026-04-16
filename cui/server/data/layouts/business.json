@@ -36,14 +36,12 @@
             "id": "#pinned-toolhub-tab-0",
             "name": "Tool Hub",
             "component": "tool-hub",
-            "config": {
-              "_pinned": true
-            }
+            "config": {}
           }
         ]
       }
     ]
   },
   "popouts": {},
-  "_v": 2
+  "_v": 3
 }

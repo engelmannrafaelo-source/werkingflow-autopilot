@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, Suspense, useRef } from 'react';
 import { PANEL_MENU_OPTIONS, PANEL_NAMES } from '../panelRegistry';
 import ErrorBoundary from '../ErrorBoundary';
+import { useAuth } from '../../contexts/AuthContext';
 
 // --- Lazy panel imports (same as LayoutManager) ---
 import ImageDrop from './ImageDrop';
@@ -64,7 +65,9 @@ interface ToolHubProps {
 
 export default function ToolHub({ projectId, workDir }: ToolHubProps) {
   const [activeTool, setActiveTool] = useState<string | null>(null);
+  const [syncedComponents, setSyncedComponents] = useState<Set<string>>(new Set());
   const loadedRef = useRef(false);
+  const { canAccessPanel } = useAuth();
 
   // Load persisted selection on mount
   useEffect(() => {
@@ -76,6 +79,41 @@ export default function ToolHub({ projectId, workDir }: ToolHubProps) {
       .catch(() => {});
   }, []);
 
+  // Collect components from layout tree that are synced (have _synced: true config)
+  const collectSyncedComponents = (node: any, acc: Set<string>) => {
+    if (!node) return;
+    if (node.type === 'tab' && node.component && node.config?._synced) {
+      acc.add(node.component);
+    }
+    for (const child of node.children ?? []) collectSyncedComponents(child, acc);
+  };
+
+  // Poll the active layout to reflect which tools are currently synced.
+  // Also listen for WS layout updates via window events dispatched by parent.
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () => {
+      fetch(`${API}/layouts/${projectId}`)
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (cancelled || !data?.layout) return;
+          const synced = new Set<string>();
+          collectSyncedComponents(data.layout, synced);
+          setSyncedComponents(synced);
+        })
+        .catch(() => {});
+    };
+    refresh();
+    const onLayoutChanged = () => refresh();
+    window.addEventListener('cui-layout-changed', onLayoutChanged);
+    const interval = setInterval(refresh, 5000);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('cui-layout-changed', onLayoutChanged);
+      clearInterval(interval);
+    };
+  }, [projectId]);
+
   // 1-click tool switch + persist
   const selectTool = useCallback((tool: string) => {
     setActiveTool(tool);
@@ -85,6 +123,20 @@ export default function ToolHub({ projectId, workDir }: ToolHubProps) {
       body: JSON.stringify({ activeTool: tool }),
     }).catch(() => {});
   }, []);
+
+  // Toggle sync for a tool: dispatches event to parent LayoutManager (projectId-filtered)
+  const toggleSync = useCallback((component: string, displayName: string) => {
+    window.dispatchEvent(new CustomEvent('cui-toggle-sync-tool', {
+      detail: { component, name: displayName, projectId }
+    }));
+    // Optimistic update — real state follows after refetch via WS/poll
+    setSyncedComponents(prev => {
+      const next = new Set(prev);
+      if (next.has(component)) next.delete(component);
+      else next.add(component);
+      return next;
+    });
+  }, [projectId]);
 
   // Render the active tool
   const renderTool = () => {
@@ -133,10 +185,10 @@ export default function ToolHub({ projectId, workDir }: ToolHubProps) {
     }
   };
 
-  // Flatten all tools from all categories into a single list
+  // Flatten all tools from all categories into a single list, filtered by permissions
   const allTools = PANEL_MENU_OPTIONS
     .flatMap(g => g.items)
-    .filter(i => !EXCLUDED_TOOLS.has(i.value));
+    .filter(i => !EXCLUDED_TOOLS.has(i.value) && canAccessPanel(i.value));
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--tn-surface)', overflow: 'hidden' }}>
@@ -148,38 +200,71 @@ export default function ToolHub({ projectId, workDir }: ToolHubProps) {
       }}>
         {allTools.map(item => {
           const isActive = activeTool === item.value;
+          const isSynced = syncedComponents.has(item.value);
+          const displayName = PANEL_NAMES[item.value] || item.label;
           return (
-            <button
+            <div
               key={item.value}
-              onClick={() => selectTool(item.value)}
-              title={PANEL_NAMES[item.value] || item.label}
               style={{
-                display: 'flex', flexDirection: 'column', alignItems: 'center',
-                justifyContent: 'center', gap: 0,
-                width: 44, height: 34, borderRadius: 4, cursor: 'pointer',
-                border: 'none',
+                width: 44, height: 34, borderRadius: 4,
                 background: isActive ? 'rgba(122, 162, 247, 0.25)' : 'transparent',
-                color: isActive ? 'var(--tn-blue)' : 'var(--tn-text-muted)',
-                transition: 'background 0.1s, color 0.1s',
                 position: 'relative',
+                transition: 'background 0.1s',
               }}
             >
-              <span style={{ fontSize: 15, lineHeight: 1 }}>{TOOL_ICONS[item.value] || '•'}</span>
-              <span style={{
-                fontSize: 7, lineHeight: 1, marginTop: 1,
-                fontWeight: isActive ? 700 : 400,
-                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                maxWidth: 42,
-              }}>
-                {SHORT_LABELS[item.value] || item.label}
+              <button
+                onClick={() => selectTool(item.value)}
+                title={displayName}
+                style={{
+                  display: 'flex', flexDirection: 'column', alignItems: 'center',
+                  justifyContent: 'center', gap: 0,
+                  width: '100%', height: '100%', border: 'none', background: 'transparent',
+                  cursor: 'pointer',
+                  color: isActive ? 'var(--tn-blue)' : 'var(--tn-text-muted)',
+                  transition: 'color 0.1s',
+                  padding: 0,
+                }}
+              >
+                <span style={{ fontSize: 15, lineHeight: 1 }}>{TOOL_ICONS[item.value] || '•'}</span>
+                <span style={{
+                  fontSize: 7, lineHeight: 1, marginTop: 1,
+                  fontWeight: isActive ? 700 : 400,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  maxWidth: 42,
+                }}>
+                  {SHORT_LABELS[item.value] || item.label}
+                </span>
+              </button>
+              {/* Pin/sync toggle — top-right corner of each tool button */}
+              <span
+                onClick={(e) => { e.stopPropagation(); toggleSync(item.value, displayName); }}
+                title={isSynced
+                  ? 'In allen Workspaces — klicken zum Entfernen'
+                  : 'Nur hier — klicken zum Synchronisieren'}
+                style={{
+                  position: 'absolute', top: 1, right: 1,
+                  width: 12, height: 12, borderRadius: 6,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 9, lineHeight: 1, cursor: 'pointer',
+                  color: isSynced ? '#fff' : 'var(--tn-text-muted)',
+                  background: isSynced ? 'var(--tn-blue, #7aa2f7)' : 'rgba(0,0,0,0.25)',
+                  opacity: isSynced ? 1 : 0.55,
+                  userSelect: 'none',
+                  transition: 'opacity 0.15s, background 0.15s, color 0.15s',
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.opacity = isSynced ? '1' : '0.55'; }}
+              >
+                📌
               </span>
               {isActive && (
                 <div style={{
                   position: 'absolute', bottom: 0, left: '20%', right: '20%',
                   height: 2, borderRadius: 1, background: 'var(--tn-blue)',
+                  pointerEvents: 'none',
                 }} />
               )}
-            </button>
+            </div>
           );
         })}
       </div>

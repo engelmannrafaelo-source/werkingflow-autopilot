@@ -54,8 +54,41 @@ function tabExistsById(node: any, tabId: string): boolean {
   return false;
 }
 
+/** Strip legacy `_pinned` flags from tab configs (no longer meaningful after sync-toggle rollout) */
+function stripLegacyPinnedFlags(node: any): boolean {
+  let changed = false;
+  if (!node) return false;
+  if (node.type === 'tab' && node.config && '_pinned' in node.config) {
+    delete node.config._pinned;
+    changed = true;
+  }
+  for (const child of node.children ?? []) {
+    if (stripLegacyPinnedFlags(child)) changed = true;
+  }
+  return changed;
+}
+
 /** One-time migration: convert pinned-panels.json → synced tabs in all layouts */
 function runSyncedTabMigration(dataDir: string, layoutsDir: string): void {
+  // Pass 1: strip dead `_pinned` flags from all existing layouts (idempotent, runs every boot)
+  const layoutFilesForCleanup = existsSync(layoutsDir)
+    ? readdirSync(layoutsDir).filter(f => f.endsWith('.json') && !f.endsWith('_template.json'))
+    : [];
+  let cleanedLayouts = 0;
+  for (const file of layoutFilesForCleanup) {
+    const layoutPath = join(layoutsDir, file);
+    let layout: any;
+    try { layout = JSON.parse(readFileSync(layoutPath, 'utf8')); }
+    catch { continue; }
+    if (!layout?.layout) continue;
+    if (stripLegacyPinnedFlags(layout.layout)) {
+      layout._v = (typeof layout._v === 'number' ? layout._v : 0) + 1;
+      try { writeFileSync(layoutPath, JSON.stringify(layout, null, 2)); cleanedLayouts++; }
+      catch (err) { console.warn(`[SyncedTab Cleanup] Failed to write ${file}:`, err); }
+    }
+  }
+  if (cleanedLayouts > 0) console.log(`[SyncedTab Cleanup] Stripped _pinned flags from ${cleanedLayouts} layouts`);
+
   const pinnedPath = join(dataDir, 'pinned-panels.json');
   if (!existsSync(pinnedPath)) return;
 
