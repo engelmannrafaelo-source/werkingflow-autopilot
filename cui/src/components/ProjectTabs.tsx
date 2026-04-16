@@ -448,6 +448,22 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
     persistLastWorkspace(projCategory, activeId);
   }, [activeId, setActiveCategory, persistLastWorkspace]);
 
+  // Filter projects by allowedWorkspaces, then sort: needs_attention first, working, idle, no status
+  // MUST be declared before any hook that depends on it (categoryCount, categorizedProjects, …)
+  // to avoid TDZ errors at render time.
+  const sortedProjects = useMemo(() => {
+    const scoreFn = (p: Project) => {
+      const state = attention?.[p.id];
+      if (state === 'needs_attention') return 0;
+      if (state === 'working') return 1;
+      if (state === 'idle') return 2;
+      return 3;
+    };
+    return [...projects]
+      .filter(p => canAccessWorkspace(p.id))
+      .sort((a, b) => scoreFn(a) - scoreFn(b));
+  }, [projects, attention, canAccessWorkspace]);
+
   // Count workspaces per category (from sortedProjects — already access-filtered)
   const categoryCount = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -522,20 +538,6 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
   };
 
   const hasPending = pendingCount > 0 && syncState === 'idle';
-
-  // Filter projects by allowedWorkspaces, then sort: needs_attention first, working, idle, no status
-  const sortedProjects = useMemo(() => {
-    const scoreFn = (p: Project) => {
-      const state = attention?.[p.id];
-      if (state === 'needs_attention') return 0;
-      if (state === 'working') return 1;
-      if (state === 'idle') return 2;
-      return 3;
-    };
-    return [...projects]
-      .filter(p => canAccessWorkspace(p.id))
-      .sort((a, b) => scoreFn(a) - scoreFn(b));
-  }, [projects, attention, canAccessWorkspace]);
 
   // --- Mobile: compact header with project dropdown ---
   if (isMobile) {
