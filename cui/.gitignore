@@ -20,3 +20,9 @@ data/credentials.json
 # User input logs (contain speech transcripts + potentially secrets)
 data/workspaces/
 data/input-log.jsonl
+
+# Runtime state (constantly updated by running server)
+data/conv-metadata.json
+data/session-states.json
+server/data/conv-metadata.json
+server/data/session-states.json
