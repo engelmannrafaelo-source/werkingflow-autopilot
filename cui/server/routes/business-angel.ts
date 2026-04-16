@@ -28,6 +28,7 @@ const SNAPSHOT_DIR = '/root/projekte/local-storage/cui/snapshots';
 
 // Approx tokens per character (rough estimate for German/English mixed text)
 const CHARS_PER_TOKEN = 4;
+const SYSTEM_PROMPT_TOKEN_LIMIT = 180000;
 
 // --- Session Store ---
 interface ChatMessage {
@@ -95,6 +96,133 @@ function writePersistedSession(session: ChatSession): void {
     conversation,
   };
   writeFileSync(ACTIVE_SESSION_PATH, JSON.stringify(data, null, 2), 'utf-8');
+}
+
+/**
+ * Auto-restore: if session is not in memory but exists on disk, rebuild it.
+ * This handles CUI server restarts / hot-reloads without losing the active session.
+ */
+function getOrRestoreSession(session_id: string): ChatSession | null {
+  const existing = SESSION_STORE.get(session_id);
+  if (existing) return existing;
+
+  // Try to restore from disk
+  const persisted = readPersistedSession();
+  if (!persisted || persisted.session_id !== session_id) return null;
+
+  try {
+    // Rebuild system prompt from current YAML + files (same logic as /load)
+    const yaml = loadContextYaml();
+    const tempDir = yaml.temp_ordner || TEMP_DIR;
+
+    const TEMPLATE_OVERHEAD = 300;
+    let budget = SYSTEM_PROMPT_TOKEN_LIMIT - TEMPLATE_OVERHEAD;
+    let filesLoaded = 0;
+    let totalTokens = 0;
+
+    const kernSections: string[] = [];
+    for (const relPath of yaml.kern_files) {
+      const content = readFileContent(relPath);
+      if (!content) continue;
+      const tokens = estimateTokens(content);
+      if (tokens > budget) continue;
+      kernSections.push(`### ${relPath}\n\n${content}`);
+      filesLoaded++;
+      totalTokens += tokens;
+      budget -= tokens;
+    }
+
+    const tempFiles = readTempFiles(tempDir);
+    const tempSections: string[] = [];
+    for (const f of tempFiles) {
+      const tokens = estimateTokens(f.content);
+      if (tokens > budget) continue;
+      tempSections.push(`### ${f.name}\n\n${f.content}`);
+      filesLoaded++;
+      totalTokens += tokens;
+      budget -= tokens;
+    }
+
+    const systemPrompt = `Du bist ein strategischer Berater für WerkING Tools / Engelmann Data Energyneering.
+
+Deine erste Nachricht enthält Kontext-Dokumente in <documents> Tags.
+Lies diese Dokumente und verwende sie als einzige Wissensquelle.
+Antworte NUR auf Rafaels Fragen — gib den Inhalt der Dokumente NICHT wieder.
+
+REGELN:
+- Verwende AUSSCHLIESSLICH was in den <documents> steht
+- Erfinde keine Zahlen, Konditionen, Personen oder Deals
+- Wenn du etwas nicht weißt: sag es direkt
+- Wenn Rafael sagt "bau die Diffs" oder "Generiere Diffs": schreibe strukturierte Diff-Blöcke
+  BEVORZUGTES Format für Änderungen an bestehenden Dateien:
+    <<<DIFF pfad/zur/datei.md
+    old_string: |
+      ...exakter Text aus dem Original-Dokument...
+    new_string: |
+      ...neuer Text...
+    >>>
+  Format für NEUE Dateien:
+    <<<NEW pfad/zur/neuen-datei.md
+    content: |
+      ...vollständiger Inhalt...
+    >>>
+  ALTERNATIVES Format (auch akzeptiert):
+    FILE: <relativer Pfad ab business/>
+    OLD:
+    <Text aus dem Original>
+    NEW:
+    <Neuer Text>
+- KRITISCH für old_string/OLD: Beziehe dich IMMER auf den ORIGINAL-Inhalt der Dateien (wie sie zu Beginn der Session geladen wurden), NICHT auf zwischenzeitliche Änderungen
+- KRITISCH: Genug Kontext-Zeilen für eindeutigen Match
+- Mehrere Diff-Blöcke pro Datei sind erlaubt
+- Bei neuen Dateien: <<<NEW verwenden mit vollständigem Inhalt
+- Nur die betroffenen Abschnitte liefern, nicht das gesamte Dokument
+- PFADE: Der <dateibaum> Block enthält die aktuelle Ordnerstruktur. Verwende IMMER existierende Pfade und Namenskonventionen daraus. Für neue Dateien: orientiere dich am Namensschema der Nachbar-Dateien im gleichen Ordner.`;
+
+    const fileTreeText = renderFileTreeText(BUSINESS_DIR, '');
+
+    const contextMessage = `<documents>
+
+<dateibaum description="Aktuelle Ordnerstruktur von /root/projekte/werkingflow-business/ — verwende diese Pfade wenn du neue Dateien erstellst oder bestehende referenzierst">
+${fileTreeText}
+</dateibaum>
+
+<kern_business_docs>
+${kernSections.join('\n\n---\n\n')}
+</kern_business_docs>
+
+${tempSections.length > 0 ? `<temp_ordner>
+${tempSections.join('\n\n---\n\n')}
+</temp_ordner>` : ''}
+
+</documents>
+
+Dokumente geladen (${filesLoaded} Dateien). Bitte stelle mir deine Fragen.`;
+
+    const initialHistory: ChatMessage[] = [
+      { role: 'user', content: contextMessage },
+      { role: 'assistant', content: 'Verstanden. Dokumente geladen und bereit.' },
+      ...persisted.conversation,
+    ];
+
+    const restored: ChatSession = {
+      session_id: persisted.session_id,
+      system_prompt: systemPrompt,
+      history: initialHistory,
+      created_at: persisted.created_at,
+      token_count: totalTokens,
+      files_loaded: filesLoaded,
+      temp_files: tempFiles.map(f => f.name),
+      zusatz_loaded: persisted.zusatz_loaded ?? [],
+    };
+
+    SESSION_STORE.set(session_id, restored);
+    console.log(`[BusinessAngel] Auto-restored session ${session_id.slice(0, 8)} from disk (${persisted.conversation.length} turns, ${filesLoaded} files)`);
+    return restored;
+  } catch (err: any) {
+    console.error(`[BusinessAngel] Auto-restore failed: ${err.message}`);
+    return null;
+  }
 }
 
 function archiveSession(session: PersistedSession): void {
@@ -367,7 +495,7 @@ router.get('/files', (_req, res) => {
 // Context documents go in the first USER MESSAGE, not the system prompt.
 // This bypasses the Bridge's ~32k char system-prompt limit — user messages are unlimited.
 // Token budget is generous; only warn if approaching model context window (200k).
-const SYSTEM_PROMPT_TOKEN_LIMIT = 180000;
+// (SYSTEM_PROMPT_TOKEN_LIMIT defined at top of file)
 
 // --- POST /load ---
 // --- GET /session/active — check for persisted session ---
@@ -812,6 +940,24 @@ Dokumente geladen (${filesLoaded} Dateien). Bitte stelle mir deine Fragen.`;
     const persisted = restore ? readPersistedSession() : null;
     const restoredConversation: ChatMessage[] = persisted?.conversation ?? [];
 
+    // KRITISCH: Wenn restore=false und eine andere aktive Session mit Inhalt existiert,
+    // MUSS diese zuerst archiviert werden — sonst geht die Konversation verloren!
+    if (!restore) {
+      const currentActive = readPersistedSession();
+      if (currentActive
+          && currentActive.session_id
+          && currentActive.conversation
+          && currentActive.conversation.length > 0) {
+        if (!currentActive.title) {
+          currentActive.title = deriveSessionTitle(currentActive.conversation);
+        }
+        SESSION_STORE.delete(currentActive.session_id);
+        deleteSnapshot(currentActive.session_id);
+        archiveSession(currentActive);
+        console.log(`[BusinessAngel] /load: Auto-archived stale active session ${currentActive.session_id.slice(0, 8)} (${currentActive.conversation.length} turns) before starting fresh`);
+      }
+    }
+
     const initialHistory: ChatMessage[] = [
       { role: 'user', content: contextMessage },
       { role: 'assistant', content: 'Verstanden. Dokumente geladen und bereit.' },
@@ -894,9 +1040,9 @@ router.post('/chat', async (req, res) => {
       return;
     }
 
-    const session = SESSION_STORE.get(session_id);
+    const session = getOrRestoreSession(session_id);
     if (!session) {
-      res.status(404).json({ error: `Session not found: ${session_id}` });
+      res.status(404).json({ error: `Session not found: ${session_id}. Bitte Session neu laden.` });
       return;
     }
 
