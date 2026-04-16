@@ -275,6 +275,28 @@ function SyncthingToggle() {
   );
 }
 
+// --- Workspace Category Navigation ---
+interface WorkspaceCategory {
+  id: string;
+  label: string;
+  icon: string;
+  order: number;
+}
+
+const FALLBACK_CATEGORIES: WorkspaceCategory[] = [
+  { id: 'apps', label: 'Apps', icon: '🚀', order: 1 },
+  { id: 'sessions', label: 'Sessions', icon: '🎛', order: 2 },
+  { id: 'devops', label: 'DevOps', icon: '🔧', order: 3 },
+  { id: 'partner', label: 'Partner', icon: '🤝', order: 4 },
+  { id: 'business', label: 'Business', icon: '📊', order: 5 },
+  { id: 'maintenance', label: 'Maintenance', icon: '🛠', order: 6 },
+  { id: 'stage', label: 'Stage', icon: '📁', order: 7 },
+];
+
+function getProjectCategory(project: Project): string {
+  return (project as any).category || 'stage';
+}
+
 export default memo(function ProjectTabs({ projects, activeId, attention, missingSessions = 0, onSelect, onNew, onEdit, onDelete, missionActive, onMissionClick, allChatsActive, onAllChatsClick, isMobile }: ProjectTabsProps) {
   const [syncState, setSyncState] = useState<SyncState>('idle');
   const [syncDetail, setSyncDetail] = useState('');
@@ -285,6 +307,35 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
     try { return localStorage.getItem('cui-show-sub-sessions') === 'true'; } catch { return false; }
   });
   const { user, authEnabled, logout, canAccessWorkspace } = useAuth();
+
+  // --- Category Navigation state ---
+  const [categories, setCategories] = useState<WorkspaceCategory[]>(FALLBACK_CATEGORIES);
+  const [activeCategory, _setActiveCategory] = useState<string>(() => {
+    try { return localStorage.getItem('cui-active-workspace-category') || 'apps'; } catch { return 'apps'; }
+  });
+  const [lastWorkspacePerCat, _setLastWorkspacePerCat] = useState<Record<string, string>>(() => {
+    try {
+      const raw = localStorage.getItem('cui-last-workspace-per-category');
+      return raw ? JSON.parse(raw) : {};
+    } catch { return {}; }
+  });
+  const lastWorkspacePerCatRef = useRef(lastWorkspacePerCat);
+  lastWorkspacePerCatRef.current = lastWorkspacePerCat;
+  const projectsRef = useRef(projects);
+  projectsRef.current = projects;
+
+  const setActiveCategory = useCallback((catId: string) => {
+    _setActiveCategory(catId);
+    try { localStorage.setItem('cui-active-workspace-category', catId); } catch {}
+  }, []);
+
+  const persistLastWorkspace = useCallback((catId: string, wsId: string) => {
+    _setLastWorkspacePerCat(prev => {
+      const next = { ...prev, [catId]: wsId };
+      try { localStorage.setItem('cui-last-workspace-per-category', JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, []);
 
   // Listen for update-available notifications via WebSocket (forwarded by App.tsx)
   useEffect(() => {
@@ -374,6 +425,63 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
     const interval = setInterval(checkPanelHealth, 30000); // Check every 30s
     return () => clearInterval(interval);
   }, [checkPanelHealth]);
+
+  // Fetch categories from API; fall back to FALLBACK_CATEGORIES on 404 or error
+  useEffect(() => {
+    fetch('/api/workspace-categories', { signal: AbortSignal.timeout(5000) })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data?.categories?.length > 0) {
+          setCategories([...data.categories].sort((a: WorkspaceCategory, b: WorkspaceCategory) => a.order - b.order));
+        }
+      })
+      .catch(() => { /* keep FALLBACK_CATEGORIES */ });
+  }, []);
+
+  // Auto-switch category when the active project belongs to a different category
+  useEffect(() => {
+    if (!activeId) return;
+    const activeProject = projectsRef.current.find(p => p.id === activeId);
+    if (!activeProject) return;
+    const projCategory = getProjectCategory(activeProject);
+    setActiveCategory(projCategory);
+    persistLastWorkspace(projCategory, activeId);
+  }, [activeId, setActiveCategory, persistLastWorkspace]);
+
+  // Count workspaces per category (from sortedProjects — already access-filtered)
+  const categoryCount = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const p of sortedProjects) {
+      const cat = getProjectCategory(p);
+      counts[cat] = (counts[cat] || 0) + 1;
+    }
+    return counts;
+  }, [sortedProjects]);
+
+  // Workspace tabs shown = only projects in the active category
+  const categorizedProjects = useMemo(
+    () => sortedProjects.filter(p => getProjectCategory(p) === activeCategory),
+    [sortedProjects, activeCategory]
+  );
+
+  // Click on a category tab: switch category + navigate to last (or first) workspace in it
+  const handleCategoryClick = useCallback((catId: string) => {
+    setActiveCategory(catId);
+    const catProjects = sortedProjects.filter(p => getProjectCategory(p) === catId);
+    const lastWs = lastWorkspacePerCatRef.current[catId];
+    if (lastWs && catProjects.some(p => p.id === lastWs)) {
+      onSelect(lastWs);
+    } else if (catProjects.length > 0) {
+      onSelect(catProjects[0].id);
+    }
+  }, [setActiveCategory, sortedProjects, onSelect]);
+
+  // Click on a workspace tab: persist last-workspace-per-category then delegate to onSelect
+  const handleWorkspaceSelect = useCallback((wsId: string) => {
+    const proj = sortedProjects.find(p => p.id === wsId);
+    if (proj) persistLastWorkspace(getProjectCategory(proj), wsId);
+    onSelect(wsId);
+  }, [sortedProjects, onSelect, persistLastWorkspace]);
 
   const handleRebuild = useCallback(async () => {
     if ((window as any).__cuiServerAlive === false) return;
@@ -531,7 +639,7 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
         flexShrink: 0,
       } as React.CSSProperties}
     >
-    {/* Row 1: Project tabs */}
+    {/* Row 1: Category tabs */}
     <div
       style={{
         display: 'flex',
@@ -540,7 +648,6 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
         padding: '2px 8px 2px 80px',
         minHeight: 30,
         WebkitAppRegion: 'drag',
-        flexWrap: 'wrap',
       } as React.CSSProperties}
     >
       <img src="/werking-logo.png" alt="W" style={{ width: 20, height: 20, borderRadius: 4, marginRight: 4 }} />
@@ -640,9 +747,52 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
 
       <div style={{ width: 1, height: 16, background: 'var(--tn-border)', marginRight: 4, opacity: 0.4, flexShrink: 0 }} />
 
-      {/* Project tabs — wrap to multiple rows */}
-      <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', minWidth: 0, flex: '1 1 0', gap: 1 }}>
-      {sortedProjects.map((p) => {
+      {/* Category tabs */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 0, minWidth: 0, flex: '1 1 0', overflowX: 'auto' }}>
+        {categories.map(cat => {
+          const count = categoryCount[cat.id] || 0;
+          const isActive = cat.id === activeCategory;
+          return (
+            <button
+              key={cat.id}
+              onClick={() => handleCategoryClick(cat.id)}
+              style={{
+                background: 'none',
+                border: 'none',
+                borderBottom: isActive ? '2px solid #e0af68' : '2px solid transparent',
+                color: isActive ? '#e0af68' : 'var(--tn-text-muted)',
+                opacity: isActive ? 1 : 0.6,
+                padding: '4px 10px',
+                fontSize: 11,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+                fontWeight: isActive ? 600 : 400,
+                flexShrink: 0,
+                WebkitAppRegion: 'no-drag',
+              } as React.CSSProperties}
+            >
+              {cat.icon} {cat.label}{count > 0 ? ` (${count})` : ''}
+            </button>
+          );
+        })}
+      </div>
+
+    </div>{/* end Row 1 */}
+
+    {/* Row 1.5: Workspace tabs for active category */}
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 1,
+        padding: '1px 8px',
+        borderTop: '1px solid rgba(255,255,255,0.04)',
+        flexWrap: 'wrap',
+        minHeight: 24,
+        WebkitAppRegion: 'no-drag',
+      } as React.CSSProperties}
+    >
+      {categorizedProjects.map((p) => {
         const origIdx = projects.indexOf(p);
         return (
         <div
@@ -667,14 +817,14 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
           }}
         >
           <button
-            onClick={() => onSelect(p.id)}
+            onClick={() => handleWorkspaceSelect(p.id)}
             onDoubleClick={(e) => { e.preventDefault(); onEdit(p.id); }}
             title={`${p.name} — ${p.workDir}\nDoppelklick zum Bearbeiten${origIdx < 9 ? `\nCmd+${origIdx + 1}` : ''}`}
             style={{
               background: 'none',
               color: p.id === activeId ? 'var(--tn-text)' : 'var(--tn-text-muted)',
               border: 'none',
-              padding: '4px 8px 4px 10px',
+              padding: '3px 8px 3px 10px',
               fontSize: 11,
               cursor: 'pointer',
               overflow: 'hidden',
@@ -720,7 +870,7 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
                 color: 'var(--tn-text-muted)',
                 cursor: 'pointer',
                 fontSize: 10,
-                padding: '4px 6px 4px 0',
+                padding: '3px 6px 3px 0',
                 opacity: 0.5,
                 transition: 'opacity 0.15s',
                 WebkitAppRegion: 'no-drag',
@@ -742,7 +892,7 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
           background: 'none',
           border: '1px dashed var(--tn-border)',
           color: 'var(--tn-text-muted)',
-          padding: '4px 10px',
+          padding: '3px 10px',
           fontSize: 11,
           cursor: 'pointer',
           borderRadius: 4,
@@ -753,9 +903,7 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
       >
         + Projekt
       </button>
-      </div>{/* end project tabs scrollable area */}
-
-    </div>{/* end Row 1 */}
+    </div>{/* end Row 1.5 */}
 
     {/* Row 2: Account usage pills + toolbar */}
     <div

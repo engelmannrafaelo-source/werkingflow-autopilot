@@ -247,6 +247,23 @@ export default function createLayoutsRouter(deps: LayoutsDeps): Router {
   });
 
   // ============================================================================
+  // Workspace Categories API
+  // ============================================================================
+  router.get('/workspace-categories', (_req: Request, res: Response) => {
+    const categoriesFile = join(DATA_DIR, 'workspace-categories.json');
+    if (!existsSync(categoriesFile)) {
+      res.status(404).json({ error: 'workspace-categories.json not found' });
+      return;
+    }
+    try {
+      const data = JSON.parse(readFileSync(categoriesFile, 'utf8'));
+      res.json(data);
+    } catch (err: any) {
+      res.status(500).json({ error: `Failed to read workspace-categories.json: ${err.message}` });
+    }
+  });
+
+  // ============================================================================
   // Notes API
   // ============================================================================
   // Common notes on a separate path to avoid clash with project ID 'common'
