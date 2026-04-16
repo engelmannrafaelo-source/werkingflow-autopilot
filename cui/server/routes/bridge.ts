@@ -743,6 +743,51 @@ router.get("/api/bridge/metrics/queue-forecast", async (req: any, res: any) => {
   }
 });
 
+// Adaptive limiter snapshots — fans out to all 4 workers (nginx round-robin)
+// and aggregates the per-worker `adaptive_limiter` blocks. Each worker
+// auto-tunes its own cap because each owns its own Anthropic OAuth account.
+router.get("/api/bridge/metrics/limiters", async (_req: any, res: any) => {
+  // 8 parallel calls is enough to hit each of 4 workers with high probability.
+  const FANOUT = 8;
+  try {
+    const responses = await Promise.allSettled(
+      Array.from({ length: FANOUT }).map(() =>
+        bridgeFetch(`/v1/metrics/queue-forecast?window=60`)
+      )
+    );
+    const limiters: Record<string, any> = {};
+    let lastNow = 0;
+    for (const r of responses) {
+      if (r.status !== 'fulfilled') continue;
+      const data = r.value as any;
+      if (!data) continue;
+      lastNow = Math.max(lastNow, data.now || 0);
+      const al = data.adaptive_limiter;
+      if (al && al.worker && !limiters[al.worker]) {
+        limiters[al.worker] = al;
+      }
+    }
+    // Bridge totals
+    const caps = Object.values(limiters).map((l: any) => l.cap_tokens || 0);
+    const inflights = Object.values(limiters).map((l: any) => l.inflight_tokens || 0);
+    const inflightCounts = Object.values(limiters).map((l: any) => l.inflight_count || 0);
+    const totals = {
+      worker_count: Object.keys(limiters).length,
+      cap_tokens: caps.reduce((a, b) => a + b, 0),
+      inflight_tokens: inflights.reduce((a, b) => a + b, 0),
+      inflight_count: inflightCounts.reduce((a, b) => a + b, 0),
+      utilization_pct: 0,
+    };
+    if (totals.cap_tokens > 0) {
+      totals.utilization_pct = Math.round((totals.inflight_tokens * 100) / totals.cap_tokens * 10) / 10;
+    }
+    res.json({ now: lastNow, limiters, totals, fanout: FANOUT, hits: Object.keys(limiters).length });
+  } catch (err: any) {
+    console.warn(`[Bridge] Limiters fanout: ${err.message}`);
+    res.json({ limiters: {}, totals: {}, _error: err.message });
+  }
+});
+
 // Usage Projection — time-series view: usage % curve + linear projection + error markers.
 // Used by the "Forecast" tab to visually validate prognose vs actual rate-limit events.
 router.get("/api/bridge/metrics/usage-projection", async (req: any, res: any) => {
@@ -756,6 +801,23 @@ router.get("/api/bridge/metrics/usage-projection", async (req: any, res: any) =>
     res.json(data);
   } catch (err: any) {
     console.warn(`[Bridge] UsageProjection: ${err.message}`);
+    res.json({ workers: {}, totals: {}, _error: err.message });
+  }
+});
+
+// Throughput — per-worker req/min + tokens/min timeline + empirical rate-limit ceiling.
+// Used by the "Forecast" tab to derive a safe bridge throttle setting from observed
+// throughput vs error events (instead of trusting Anthropic's quota %).
+router.get("/api/bridge/metrics/throughput", async (req: any, res: any) => {
+  const hours = req.query.hours || '24';
+  const bucketSeconds = req.query.bucket_seconds || '60';
+  try {
+    const data = await bridgeFetch(
+      `/v1/metrics/throughput?hours=${hours}&bucket_seconds=${bucketSeconds}`
+    );
+    res.json(data);
+  } catch (err: any) {
+    console.warn(`[Bridge] Throughput: ${err.message}`);
     res.json({ workers: {}, totals: {}, _error: err.message });
   }
 });
