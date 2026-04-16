@@ -274,39 +274,19 @@ export default function createControlRouter(deps: ControlDeps): Router {
       config: { initialSessionId: c.sessionId, accountId: c.accountId },
     }));
 
-    // Read pinned panels to avoid duplicating already-pinned components.
-    // If tool-hub is pinned, skip ALL utility tabs (tool-hub contains everything).
-    const pinnedComponents = new Set<string>();
-    let hasToolHub = false;
-    try {
-      const pinnedPath = join(DATA_DIR, 'pinned-panels.json');
-      if (existsSync(pinnedPath)) {
-        const pinned = JSON.parse(readFileSync(pinnedPath, 'utf8'));
-        for (const ts of pinned?.pinnedTabsets || []) {
-          for (const tab of ts.tabs || []) {
-            if (tab.component) pinnedComponents.add(tab.component);
-            if (tab.component === 'tool-hub') hasToolHub = true;
-          }
-        }
-      }
-    } catch { /* no pinned config */ }
-
-    const allUtility = hasToolHub ? [] : [
+    const utilityTabs = [
       { type: 'tab' as const, id: nextId(), name: 'File Preview', component: 'preview', config: {} },
       { type: 'tab' as const, id: nextId(), name: 'Notes', component: 'notes', config: {} },
       { type: 'tab' as const, id: nextId(), name: 'Browser', component: 'browser', config: {} },
       { type: 'tab' as const, id: nextId(), name: 'Images', component: 'images', config: {} },
     ];
     if (subConvs.length > 0) {
-      allUtility.push({ type: 'tab' as const, id: nextId(), name: 'Sub-Sessions', component: 'sub-sessions', config: {} });
+      utilityTabs.push({ type: 'tab' as const, id: nextId(), name: 'Sub-Sessions', component: 'sub-sessions', config: {} });
     }
-    // Filter out components that are already in pinned panels
-    const utilityTabs = allUtility.filter(t => !pinnedComponents.has(t.component));
 
     // Layout strategy: ALL children are tabsets at the SAME level (no nested rows!)
     // flexlayout alternates direction on nesting: row→horizontal, nested row→VERTICAL.
     // Keeping everything flat in one top-level row = all panels side by side horizontally.
-    // When utility tabs are all pinned, generate CUI-only layout (pinned merge adds them later).
     let layoutChildren: any[];
     const hasUtility = utilityTabs.length > 0;
 
@@ -354,26 +334,9 @@ export default function createControlRouter(deps: ControlDeps): Router {
 
     const layoutWithVersion = { ...newLayout, _v: currentVersion + 1 };
     try { mkdirSync(LAYOUTS_DIR, { recursive: true }); } catch { /* exists */ }
-    // Save without pinned panels (they're stored separately)
     writeFileSync(layoutPath, JSON.stringify(layoutWithVersion, null, 2));
 
-    // Broadcast merged version (with pinned panels) to clients
-    let broadcastLayout = layoutWithVersion;
-    try {
-      const pinnedPath = join(DATA_DIR, 'pinned-panels.json');
-      if (existsSync(pinnedPath)) {
-        const pinned = JSON.parse(readFileSync(pinnedPath, 'utf8'));
-        if (pinned?.pinnedTabsets?.length > 0) {
-          // Import merge logic inline to avoid circular deps
-          const { mergePinnedIntoLayout } = await import('./layouts.js');
-          const merged = mergePinnedIntoLayout(JSON.parse(JSON.stringify(layoutWithVersion)), pinned);
-          merged._v = currentVersion + 1;
-          broadcastLayout = merged;
-        }
-      }
-    } catch (err) { console.warn('[AutoLayout] Pinned merge error:', err); }
-
-    broadcast({ type: 'control:apply-layout', projectId, layout: broadcastLayout });
+    broadcast({ type: 'control:apply-layout', projectId, layout: layoutWithVersion });
     console.log(`[AutoLayout] ${projectId}: Generated fresh layout with ${mainConvs.length} main + ${subConvs.length} sub-sessions`);
 
     return { triggered: true, total: mainConvs.length + subConvs.length, subSessions: subConvs.length };

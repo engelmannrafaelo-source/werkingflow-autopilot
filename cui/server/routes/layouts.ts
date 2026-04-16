@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { join } from 'path';
 import { homedir } from 'os';
 import { IS_LOCAL_MODE, broadcast } from './state.js';
-import { readFileSync, readdirSync, statSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
+import { readFileSync, readdirSync, statSync, existsSync, mkdirSync, writeFileSync, unlinkSync, renameSync } from 'fs';
 import Busboy from 'busboy';
 
 interface LayoutsDeps {
@@ -13,139 +13,121 @@ interface LayoutsDeps {
   DATA_DIR: string;
 }
 
-// --- Pinned Panels ---
-interface PinnedTabset {
-  id: string;
-  position: 'left' | 'right';
-  weight: number;
-  tabs: Array<{ name: string; component: string; config: Record<string, unknown> }>;
-}
-
-interface PinnedPanelsConfig {
-  pinnedTabsets: PinnedTabset[];
-}
-
-function readPinnedPanels(dataDir: string): PinnedPanelsConfig {
-  const filePath = join(dataDir, 'pinned-panels.json');
-  if (!existsSync(filePath)) return { pinnedTabsets: [] };
-  try { return JSON.parse(readFileSync(filePath, 'utf8')); }
-  catch { return { pinnedTabsets: [] }; }
-}
-
-function writePinnedPanels(dataDir: string, config: PinnedPanelsConfig): void {
-  writeFileSync(join(dataDir, 'pinned-panels.json'), JSON.stringify(config, null, 2));
-}
-
-/** Merge pinned tabsets into a layout JSON (for GET responses).
- *  Pinned panels get injected at fixed positions with their exact saved weight,
- *  so every workspace has the identical panel arrangement and size. */
-export function mergePinnedIntoLayout(layout: any, pinned: PinnedPanelsConfig): any {
-  if (!pinned.pinnedTabsets.length || !layout?.layout) return layout;
-  const root = layout.layout;
-  if (root.type !== 'row' || !Array.isArray(root.children)) return layout;
-
-  // Remove any existing nodes with pinned IDs first (avoid duplicates on re-merge)
-  const pinnedIds = new Set(pinned.pinnedTabsets.map(pt => pt.id));
-  function stripPinned(node: any): any {
-    if (!node) return node;
-    if (pinnedIds.has(node.id)) return null;
-    if (Array.isArray(node.children)) {
-      node.children = node.children.map(stripPinned).filter(Boolean);
-    }
-    return node;
-  }
-  stripPinned(root);
-
-  // Also strip placeholder from previous merges
-  if (Array.isArray(root.children)) {
-    root.children = root.children.filter((c: any) => c.id !== '#pinned-placeholder');
-  }
-
-  // Build pinned tabset nodes with exact saved weight
-  const pinnedNodes = pinned.pinnedTabsets.map(pt => ({
-    type: 'tabset' as const,
-    id: pt.id,
-    weight: pt.weight,
-    children: pt.tabs.map((tab, i) => ({
-      type: 'tab' as const,
-      id: `${pt.id}-tab-${i}`,
-      name: tab.name,
-      component: tab.component,
-      config: { ...tab.config, _pinned: true },
-    })),
-    _pinned: true,
-  }));
-
-  // Group by position
-  const leftPinned = pinnedNodes.filter((_, i) => pinned.pinnedTabsets[i].position === 'left');
-  const rightPinned = pinnedNodes.filter((_, i) => pinned.pinnedTabsets[i].position === 'right');
-
-  // Calculate total pinned weight to set remaining content weight proportionally
-  const totalPinnedWeight = pinned.pinnedTabsets.reduce((s, pt) => s + pt.weight, 0);
-  const contentWeight = Math.max(100 - totalPinnedWeight, 20);
-
-  // Scale existing children's weights to fit within the remaining content space.
-  // IMPORTANT: Do NOT wrap in a nested row — flexlayout alternates direction on nesting,
-  // which would cause vertical stacking. Keep everything flat in the top-level row.
-  const existingChildren = root.children;
-  if (existingChildren.length > 0) {
-    const totalExisting = existingChildren.reduce((s: number, c: any) => s + (c.weight || 50), 0);
-    for (const child of existingChildren) {
-      const origWeight = child.weight || 50;
-      child.weight = Math.round((origWeight / totalExisting) * contentWeight);
-    }
-  } else {
-    existingChildren.push({ type: 'tabset', id: '#pinned-placeholder', weight: contentWeight, children: [] });
-  }
-
-  root.children = [...leftPinned, ...existingChildren, ...rightPinned];
-
-  return layout;
-}
-
-/** Strip pinned tabsets from a layout JSON (for POST/save — pinned panels stored separately).
- *  Also rescales remaining children weights back to fill the full space. */
-function stripPinnedFromLayout(layout: any, pinned: PinnedPanelsConfig): any {
-  if (!pinned.pinnedTabsets.length || !layout?.layout) return layout;
-  const pinnedIds = new Set(pinned.pinnedTabsets.map(pt => pt.id));
-
-  function strip(node: any): any {
-    if (!node) return node;
-    if (pinnedIds.has(node.id)) return null;
-    if (Array.isArray(node.children)) {
-      node.children = node.children.map(strip).filter(Boolean);
-    }
-    return node;
-  }
-  strip(layout.layout);
-
-  // Also remove placeholder if present
-  const root = layout.layout;
-  if (root?.type === 'row' && Array.isArray(root.children)) {
-    root.children = root.children.filter((c: any) => c.id !== '#pinned-placeholder');
-
-    // Rescale remaining children weights to fill full space (undo the scaling from merge)
-    const totalWeight = root.children.reduce((s: number, c: any) => s + (c.weight || 50), 0);
-    if (totalWeight > 0 && totalWeight < 95) {
-      // Weights were scaled down — scale them back up proportionally
-      for (const child of root.children) {
-        const w = child.weight || 50;
-        child.weight = Math.round((w / totalWeight) * 100);
-      }
-    }
-  }
-
-  return layout;
-}
-
 /** Validates that an ID param contains only safe characters (no path traversal) */
 function isValidId(id: string): boolean {
   return /^[a-zA-Z0-9_.-]+$/.test(id);
 }
 
+/** Find the rightmost tabset in a layout tree (DFS, last found = rightmost) */
+function findRightmostTabset(node: any): any | null {
+  if (!node) return null;
+  let result: any = null;
+  if (node.type === 'tabset') result = node;
+  for (const child of node.children ?? []) {
+    const found = findRightmostTabset(child);
+    if (found) result = found;
+  }
+  return result;
+}
+
+/** Remove a tab by ID from a layout tree. Returns true if found and removed. */
+function removeTabById(node: any, tabId: string): boolean {
+  if (!node || !Array.isArray(node.children)) return false;
+  const idx = node.children.findIndex((c: any) => c.id === tabId && c.type === 'tab');
+  if (idx !== -1) {
+    node.children.splice(idx, 1);
+    return true;
+  }
+  for (const child of node.children) {
+    if (removeTabById(child, tabId)) return true;
+  }
+  return false;
+}
+
+/** Check if a tab with the given ID exists anywhere in the layout tree */
+function tabExistsById(node: any, tabId: string): boolean {
+  if (!node) return false;
+  if (node.id === tabId && node.type === 'tab') return true;
+  for (const child of node.children ?? []) {
+    if (tabExistsById(child, tabId)) return true;
+  }
+  return false;
+}
+
+/** One-time migration: convert pinned-panels.json → synced tabs in all layouts */
+function runSyncedTabMigration(dataDir: string, layoutsDir: string): void {
+  const pinnedPath = join(dataDir, 'pinned-panels.json');
+  if (!existsSync(pinnedPath)) return;
+
+  let pinnedConfig: any;
+  try { pinnedConfig = JSON.parse(readFileSync(pinnedPath, 'utf8')); }
+  catch (err) { console.warn('[SyncedTab Migration] Failed to parse pinned-panels.json:', err); return; }
+
+  const tabs: Array<{ name: string; component: string; config: Record<string, unknown> }> =
+    (pinnedConfig.pinnedTabsets ?? []).flatMap((pt: any) => pt.tabs ?? []);
+
+  const backupPath = `${pinnedPath}.migrated-${new Date().toISOString().split('T')[0]}.bak`;
+
+  if (tabs.length === 0) {
+    try { renameSync(pinnedPath, backupPath); } catch { }
+    console.log('[SyncedTab Migration] No tabs to migrate, renamed pinned-panels.json');
+    return;
+  }
+
+  const layoutFiles = existsSync(layoutsDir)
+    ? readdirSync(layoutsDir).filter(f => f.endsWith('.json') && !f.endsWith('_template.json'))
+    : [];
+
+  let totalAdded = 0;
+  for (const file of layoutFiles) {
+    const layoutPath = join(layoutsDir, file);
+    let layout: any;
+    try { layout = JSON.parse(readFileSync(layoutPath, 'utf8')); }
+    catch { continue; }
+    if (!layout?.layout) continue;
+
+    const rightmost = findRightmostTabset(layout.layout);
+    if (!rightmost) continue;
+
+    let changed = false;
+    for (const tab of tabs) {
+      // Skip if a tab with the same component already exists in this layout
+      if (JSON.stringify(layout.layout).includes(`"component":"${tab.component}"`)) continue;
+
+      const tabId = `#synced-${tab.component}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { _pinned: _removed, ...cleanConfig } = tab.config as any;
+      if (!Array.isArray(rightmost.children)) rightmost.children = [];
+      rightmost.children.push({
+        type: 'tab',
+        id: tabId,
+        name: tab.name,
+        component: tab.component,
+        config: { ...cleanConfig, _synced: true },
+      });
+      changed = true;
+      totalAdded++;
+    }
+
+    if (changed) {
+      layout._v = (typeof layout._v === 'number' ? layout._v : 0) + 1;
+      try { writeFileSync(layoutPath, JSON.stringify(layout, null, 2)); }
+      catch (err) { console.warn(`[SyncedTab Migration] Failed to write ${file}:`, err); }
+    }
+  }
+
+  try { renameSync(pinnedPath, backupPath); }
+  catch (err) { console.warn('[SyncedTab Migration] Failed to rename pinned-panels.json:', err); }
+
+  console.log(`[SyncedTab Migration] Added ${totalAdded} synced tabs across ${layoutFiles.length} layouts, renamed pinned-panels.json`);
+}
+
 export default function createLayoutsRouter(deps: LayoutsDeps): Router {
   const router = Router();
   const { LAYOUTS_DIR, PROJECTS_DIR, NOTES_DIR, UPLOADS_DIR, DATA_DIR } = deps;
+
+  // Run one-time migration from pinned-panels.json to synced tabs
+  runSyncedTabMigration(DATA_DIR, LAYOUTS_DIR);
 
   // ============================================================================
   // Projects API
@@ -390,100 +372,132 @@ export default function createLayoutsRouter(deps: LayoutsDeps): Router {
   });
 
   // ============================================================================
-  // Pinned Panels API
+  // Sync Tabs API (replaces Pinned Panels)
   // ============================================================================
-  router.get('/pinned-panels', (_req: Request, res: Response) => {
-    res.json(readPinnedPanels(DATA_DIR));
+
+  // Sync a tab into all other workspace layouts
+  router.post('/sync-tab', (req: Request, res: Response) => {
+    const { sourceProjectId, tabConfig } = req.body;
+    if (!sourceProjectId || !tabConfig?.id || !tabConfig?.component) {
+      res.status(400).json({ error: 'sourceProjectId and tabConfig (id, component) required' });
+      return;
+    }
+    if (!isValidId(sourceProjectId)) {
+      res.status(400).json({ error: 'invalid sourceProjectId' });
+      return;
+    }
+
+    const layoutFiles = existsSync(LAYOUTS_DIR)
+      ? readdirSync(LAYOUTS_DIR).filter(f => f.endsWith('.json') && !f.endsWith('_template.json'))
+      : [];
+
+    const tabNode = {
+      type: 'tab' as const,
+      id: tabConfig.id,
+      name: tabConfig.name ?? tabConfig.component,
+      component: tabConfig.component,
+      config: { ...(tabConfig.config ?? {}), _synced: true },
+    };
+
+    const added: string[] = [];
+    for (const file of layoutFiles) {
+      const pid = file.replace('.json', '');
+      if (pid === sourceProjectId) continue;
+
+      const layoutPath = join(LAYOUTS_DIR, file);
+      let layout: any;
+      try { layout = JSON.parse(readFileSync(layoutPath, 'utf8')); }
+      catch { continue; }
+      if (!layout?.layout) continue;
+
+      // Skip if tab already present
+      if (tabExistsById(layout.layout, tabConfig.id)) continue;
+
+      const rightmost = findRightmostTabset(layout.layout);
+      if (!rightmost) continue;
+
+      if (!Array.isArray(rightmost.children)) rightmost.children = [];
+      rightmost.children.push(tabNode);
+      layout._v = (typeof layout._v === 'number' ? layout._v : 0) + 1;
+
+      try {
+        writeFileSync(layoutPath, JSON.stringify(layout, null, 2));
+        added.push(pid);
+      } catch (err) { console.warn(`[SyncTab] Failed to write ${file}:`, err); }
+    }
+
+    broadcast({ type: 'synced-tab-added', tabConfig: tabNode, affectedProjectIds: added });
+    res.json({ ok: true, added });
   });
 
-  router.post('/pinned-panels', (req: Request, res: Response) => {
-    const config = req.body as PinnedPanelsConfig;
-    if (!config?.pinnedTabsets || !Array.isArray(config.pinnedTabsets)) {
-      res.status(400).json({ error: 'pinnedTabsets array required' });
+  // Remove a synced tab from all layouts except the source (user turned off sync)
+  router.post('/unsync-tab', (req: Request, res: Response) => {
+    const { tabId, keepInProjectId } = req.body;
+    if (!tabId) {
+      res.status(400).json({ error: 'tabId required' });
       return;
     }
-    writePinnedPanels(DATA_DIR, config);
-    broadcast({ type: 'pinned-panels-changed', config });
-    res.json({ ok: true });
+
+    const layoutFiles = existsSync(LAYOUTS_DIR)
+      ? readdirSync(LAYOUTS_DIR).filter(f => f.endsWith('.json') && !f.endsWith('_template.json'))
+      : [];
+
+    const removed: string[] = [];
+    for (const file of layoutFiles) {
+      const pid = file.replace('.json', '');
+      if (keepInProjectId && pid === keepInProjectId) continue;
+
+      const layoutPath = join(LAYOUTS_DIR, file);
+      let layout: any;
+      try { layout = JSON.parse(readFileSync(layoutPath, 'utf8')); }
+      catch { continue; }
+      if (!layout?.layout) continue;
+
+      if (!removeTabById(layout.layout, tabId)) continue;
+
+      layout._v = (typeof layout._v === 'number' ? layout._v : 0) + 1;
+      try {
+        writeFileSync(layoutPath, JSON.stringify(layout, null, 2));
+        removed.push(pid);
+      } catch (err) { console.warn(`[UnsyncTab] Failed to write ${file}:`, err); }
+    }
+
+    broadcast({ type: 'synced-tab-removed', tabId, affectedProjectIds: removed });
+    res.json({ ok: true, removed });
   });
 
-  // Pin a tabset from the current layout
-  router.post('/pinned-panels/pin', (req: Request, res: Response) => {
-    const { tabsetId, projectId, position = 'right', weight = 30 } = req.body;
-    if (!tabsetId || !projectId) {
-      res.status(400).json({ error: 'tabsetId and projectId required' });
-      return;
-    }
-    if (!isValidId(projectId)) {
-      res.status(400).json({ error: 'invalid projectId' });
+  // Delete a synced tab from ALL layouts (user closed the tab)
+  router.post('/delete-synced-tab', (req: Request, res: Response) => {
+    const { tabId } = req.body;
+    if (!tabId) {
+      res.status(400).json({ error: 'tabId required' });
       return;
     }
 
-    // Read the current layout to extract the tabset's tabs
-    const layoutPath = join(LAYOUTS_DIR, `${projectId}.json`);
-    if (!existsSync(layoutPath)) {
-      res.status(404).json({ error: 'layout not found' });
-      return;
+    const layoutFiles = existsSync(LAYOUTS_DIR)
+      ? readdirSync(LAYOUTS_DIR).filter(f => f.endsWith('.json') && !f.endsWith('_template.json'))
+      : [];
+
+    const removed: string[] = [];
+    for (const file of layoutFiles) {
+      const pid = file.replace('.json', '');
+      const layoutPath = join(LAYOUTS_DIR, file);
+      let layout: any;
+      try { layout = JSON.parse(readFileSync(layoutPath, 'utf8')); }
+      catch { continue; }
+      if (!layout?.layout) continue;
+
+      if (!removeTabById(layout.layout, tabId)) continue;
+
+      layout._v = (typeof layout._v === 'number' ? layout._v : 0) + 1;
+      try {
+        writeFileSync(layoutPath, JSON.stringify(layout, null, 2));
+        removed.push(pid);
+      } catch (err) { console.warn(`[DeleteSyncedTab] Failed to write ${file}:`, err); }
     }
 
-    let tabsetNode: any = null;
-    let tabsetParent: any = null;
-    try {
-      const layout = JSON.parse(readFileSync(layoutPath, 'utf8'));
-      function findTabset(node: any, parent: any): void {
-        if (!node) return;
-        if (node.id === tabsetId && node.type === 'tabset') { tabsetNode = node; tabsetParent = parent; return; }
-        for (const child of node.children ?? []) { findTabset(child, node); if (tabsetNode) return; }
-      }
-      findTabset(layout?.layout, null);
-    } catch { /* parse error */ }
-
-    if (!tabsetNode) {
-      res.status(404).json({ error: `tabset ${tabsetId} not found in layout` });
-      return;
-    }
-
-    // Extract tabs (skip CUI panels — those are session-specific)
-    const tabs = (tabsetNode.children || [])
-      .filter((t: any) => t.type === 'tab' && t.component !== 'cui' && t.component !== 'cui-lite')
-      .map((t: any) => ({ name: t.name, component: t.component, config: t.config || {} }));
-
-    if (tabs.length === 0) {
-      res.status(400).json({ error: 'tabset has no pinnable tabs (CUI panels cannot be pinned)' });
-      return;
-    }
-
-    // Calculate percentage weight: tabset weight / sum of sibling weights * 100
-    // This ensures the pinned panel gets the exact same visual proportion in every layout
-    let percentWeight = weight;
-    if (tabsetParent && Array.isArray(tabsetParent.children)) {
-      const siblings = tabsetParent.children;
-      const totalWeight = siblings.reduce((s: number, c: any) => s + (c.weight || 50), 0);
-      const nodeWeight = tabsetNode.weight || 50;
-      percentWeight = Math.round((nodeWeight / totalWeight) * 100);
-    }
-
-    const pinnedId = `#pinned-${Date.now().toString(36)}`;
-    const config = readPinnedPanels(DATA_DIR);
-    config.pinnedTabsets.push({ id: pinnedId, position: position as 'left' | 'right', weight: percentWeight, tabs });
-    writePinnedPanels(DATA_DIR, config);
-    broadcast({ type: 'pinned-panels-changed', config });
-    res.json({ ok: true, pinnedId, tabs: tabs.length, weight: percentWeight });
-  });
-
-  // Unpin a tabset
-  router.delete('/pinned-panels/:pinnedId', (req: Request, res: Response) => {
-    const { pinnedId } = req.params;
-    const config = readPinnedPanels(DATA_DIR);
-    const before = config.pinnedTabsets.length;
-    config.pinnedTabsets = config.pinnedTabsets.filter(pt => pt.id !== `#${pinnedId}` && pt.id !== pinnedId);
-    if (config.pinnedTabsets.length === before) {
-      res.status(404).json({ error: 'pinned tabset not found' });
-      return;
-    }
-    writePinnedPanels(DATA_DIR, config);
-    broadcast({ type: 'pinned-panels-changed', config });
-    res.json({ ok: true });
+    broadcast({ type: 'synced-tab-removed', tabId, affectedProjectIds: removed });
+    res.json({ ok: true, removed });
   });
 
   // ============================================================================
@@ -497,14 +511,7 @@ export default function createLayoutsRouter(deps: LayoutsDeps): Router {
     const layoutPath = join(LAYOUTS_DIR, `${req.params.projectId}.json`);
     if (!existsSync(layoutPath)) { res.json(null); return; }
     try {
-      const layout = JSON.parse(readFileSync(layoutPath, 'utf8'));
-      // Merge pinned panels into the layout for the client
-      const pinned = readPinnedPanels(DATA_DIR);
-      const merged = mergePinnedIntoLayout(JSON.parse(JSON.stringify(layout)), pinned);
-      // Preserve version from disk
-      merged._v = layout._v;
-      merged._hasPinnedPanels = pinned.pinnedTabsets.length > 0;
-      res.json(merged);
+      res.json(JSON.parse(readFileSync(layoutPath, 'utf8')));
     } catch {
       res.json(null);
     }
@@ -518,10 +525,6 @@ export default function createLayoutsRouter(deps: LayoutsDeps): Router {
 
     const layoutPath = join(LAYOUTS_DIR, `${req.params.projectId}.json`);
 
-    // Strip pinned panels before saving (they're stored separately)
-    const pinned = readPinnedPanels(DATA_DIR);
-    const stripped = stripPinnedFromLayout(JSON.parse(JSON.stringify(req.body)), pinned);
-
     // Read current version from disk
     let currentV = 0;
     if (existsSync(layoutPath)) {
@@ -531,29 +534,23 @@ export default function createLayoutsRouter(deps: LayoutsDeps): Router {
       } catch { /* ignore — treat as v0 */ }
     }
 
-    const incomingV: number | undefined = typeof stripped._v === 'number' ? stripped._v : undefined;
+    const incomingV: number | undefined = typeof req.body._v === 'number' ? req.body._v : undefined;
 
     // Conflict: browser has stale version — reject and return current layout
     if (incomingV !== undefined && incomingV < currentV) {
       try {
         const current = JSON.parse(readFileSync(layoutPath, 'utf8'));
-        const merged = mergePinnedIntoLayout(JSON.parse(JSON.stringify(current)), pinned);
-        merged._v = currentV;
-        res.status(409).json({ conflict: true, _v: currentV, layout: merged });
+        res.status(409).json({ conflict: true, _v: currentV, layout: current });
       } catch {
         res.status(409).json({ conflict: true, _v: currentV });
       }
       return;
     }
 
-    // Accept: bump version and persist (without pinned panels)
-    const newBody = { ...stripped, _v: currentV + 1 };
-    delete newBody._hasPinnedPanels;
+    // Accept: bump version and persist
+    const newBody = { ...req.body, _v: currentV + 1 };
     writeFileSync(layoutPath, JSON.stringify(newBody, null, 2));
-    // Broadcast merged version (with pinned panels) to clients
-    const mergedForBroadcast = mergePinnedIntoLayout(JSON.parse(JSON.stringify(newBody)), pinned);
-    mergedForBroadcast._v = currentV + 1;
-    broadcast({ type: 'control:apply-layout', projectId: req.params.projectId, layout: mergedForBroadcast });
+    broadcast({ type: 'control:apply-layout', projectId: req.params.projectId, layout: newBody });
     res.json({ ok: true, _v: currentV + 1 });
   });
 

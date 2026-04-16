@@ -204,76 +204,39 @@ interface LayoutManagerProps {
 export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAttentionChange, onCuiStateReset, pendingActivation, onActivationProcessed, isActive, onMissingSessions }: LayoutManagerProps) {
   const { canAccessPanel } = useAuth();
 
-  // Pinned panels state: set of pinned tabset IDs
-  const [pinnedTabsetIds, setPinnedTabsetIds] = useState<Set<string>>(new Set());
-  const pinnedTabsetIdsRef = useRef(pinnedTabsetIds);
-  pinnedTabsetIdsRef.current = pinnedTabsetIds;
-
-  // Fetch pinned panels config on mount
-  useEffect(() => {
-    fetch(`${API}/pinned-panels`, { signal: AbortSignal.timeout(5000) })
-      .then(r => r.ok ? r.json() : null)
-      .then(data => {
-        if (data?.pinnedTabsets) {
-          setPinnedTabsetIds(new Set(data.pinnedTabsets.map((pt: any) => pt.id)));
-        }
-      })
-      .catch(() => {});
-  }, []);
-
-  // Pin/unpin a tabset
-  const togglePinTabset = useCallback((tabsetId: string) => {
+  // Toggle sync for a tab: synced tabs appear in all workspace layouts
+  const toggleSyncTab = useCallback((nodeId: string) => {
     const m = modelRef.current;
     if (!m) return;
 
-    const isPinned = pinnedTabsetIdsRef.current.has(tabsetId);
+    const node = m.getNodeById(nodeId) as TabNode | null;
+    if (!node) return;
 
-    if (isPinned) {
-      // Unpin
-      fetch(`${API}/pinned-panels/${encodeURIComponent(tabsetId.replace(/^#/, ''))}`, {
-        method: 'DELETE',
-        signal: AbortSignal.timeout(5000),
-      }).then(r => r.ok ? r.json() : null).then(() => {
-        setPinnedTabsetIds(prev => { const next = new Set(prev); next.delete(tabsetId); return next; });
-      }).catch(err => console.warn('[LayoutManager] unpin failed:', err));
-    } else {
-      // Pin: extract tab info + actual weight from the tabset
-      const node = m.getNodeById(tabsetId);
-      if (!node || !(node instanceof TabSetNode)) return;
+    const config = node.getConfig() ?? {};
+    const isSynced = !!config._synced;
 
-      // Check if tabset has non-CUI tabs
-      const tabs: Array<{ name: string; component: string }> = [];
-      node.getChildren().forEach(child => {
-        if (child instanceof TabNode) {
-          const comp = child.getComponent();
-          if (comp !== 'cui' && comp !== 'cui-lite') {
-            tabs.push({ name: child.getName(), component: comp || 'unknown' });
-          }
-        }
-      });
-      if (tabs.length === 0) {
-        console.warn('[LayoutManager] Cannot pin tabset: only CUI panels');
-        return;
-      }
-
-      // Extract actual weight from layout model for exact size reproduction
-      const actualWeight = (node as any).getWeight?.() ?? 50;
-      // Determine position: if tabset is the last child in its parent row, it's "right"
-      const parent = node.getParent();
-      const siblings = parent?.getChildren() ?? [];
-      const idx = siblings.indexOf(node);
-      const position = idx === 0 ? 'left' : 'right';
-
-      fetch(`${API}/pinned-panels/pin`, {
+    if (isSynced) {
+      // Turn off sync: update local config, remove from other layouts
+      m.doAction(Actions.updateNodeAttributes(nodeId, { config: { ...config, _synced: false } }));
+      fetch(`${API}/layouts/unsync-tab`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tabsetId, projectId, position, weight: actualWeight }),
+        body: JSON.stringify({ tabId: nodeId, keepInProjectId: projectId }),
         signal: AbortSignal.timeout(5000),
-      }).then(r => r.ok ? r.json() : null).then(data => {
-        if (data?.pinnedId) {
-          setPinnedTabsetIds(prev => new Set([...prev, data.pinnedId]));
-        }
-      }).catch(err => console.warn('[LayoutManager] pin failed:', err));
+      }).catch(err => console.warn('[LayoutManager] unsync-tab failed:', err));
+    } else {
+      // Turn on sync: update local config, add to all other layouts
+      const newConfig = { ...config, _synced: true };
+      m.doAction(Actions.updateNodeAttributes(nodeId, { config: newConfig }));
+      fetch(`${API}/layouts/sync-tab`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceProjectId: projectId,
+          tabConfig: { id: nodeId, name: node.getName(), component: node.getComponent(), config: newConfig },
+        }),
+        signal: AbortSignal.timeout(5000),
+      }).catch(err => console.warn('[LayoutManager] sync-tab failed:', err));
     }
   }, [projectId]);
 
@@ -675,45 +638,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
 
   const onRenderTabSet = useCallback((node: TabSetNode | BorderNode, renderValues: ITabSetRenderValues) => {
     if (node instanceof BorderNode) return;
-    const fullNodeId = node.getId();
-    const nodeId = fullNodeId.replace(/^#/, '');
-    const isPinned = pinnedTabsetIdsRef.current.has(fullNodeId);
-
-    // Pin/unpin button — only show for non-CUI-only tabsets
-    const hasPinnableTabs = node.getChildren().some(child => {
-      if (child instanceof TabNode) {
-        const comp = child.getComponent();
-        return comp !== 'cui' && comp !== 'cui-lite';
-      }
-      return false;
-    });
-
-    if (hasPinnableTabs) {
-      renderValues.stickyButtons.push(
-        <button
-          key="pin-toggle"
-          data-ai-id={`pin-toggle-${nodeId}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            togglePinTabset(fullNodeId);
-          }}
-          title={isPinned ? 'Panel loslösen (Unpin)' : 'Panel fixieren (Pin) — wird in allen Layouts angezeigt'}
-          className={isPinned ? 'pinned-panel-btn pinned-panel-btn--active' : 'pinned-panel-btn'}
-          style={{
-            background: 'none',
-            border: 'none',
-            color: isPinned ? 'var(--tn-blue, #7aa2f7)' : 'var(--tn-text-muted)',
-            fontSize: 13,
-            cursor: 'pointer',
-            padding: '0 3px',
-            opacity: isPinned ? 1 : 0.6,
-            transition: 'opacity 0.2s, color 0.2s',
-          }}
-        >
-          {isPinned ? '\u{1F4CC}' : '\u{1F4CC}'}
-        </button>
-      );
-    }
+    const nodeId = node.getId().replace(/^#/, '');
 
     // Add-tab dropdown
     renderValues.stickyButtons.push(
@@ -762,7 +687,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         )}
       </select>
     );
-  }, [addTab, canAccessPanel, togglePinTabset]);
+  }, [addTab, canAccessPanel]);
 
   // When cuiStates changes, update tab header dots via DOM (no React re-render needed).
   // Direct DOM manipulation avoids triggering flexlayout's expensive render/layout cycle.
@@ -811,6 +736,23 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         } catch (err) { console.warn('[LayoutManager] handleAction tab lookup failed:', err); }
       }
     }
+    // Intercept tab close: if synced, remove from all other layouts too
+    if (action.type === 'FlexLayout_DeleteTab' && m) {
+      const nodeId = action.data?.tabNode;
+      if (nodeId) {
+        try {
+          const node = m.getNodeById(nodeId);
+          if (node && (node as TabNode).getConfig?.()._synced) {
+            fetch(`${API}/layouts/delete-synced-tab`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ tabId: nodeId }),
+              signal: AbortSignal.timeout(5000),
+            }).catch(err => console.warn('[LayoutManager] delete-synced-tab failed:', err));
+          }
+        } catch (err) { console.warn('[LayoutManager] delete-synced-tab check failed:', err); }
+      }
+    }
     return action;
   }, []);
 
@@ -839,7 +781,36 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       >{shortId}</span>
     );
 
-    if (node.getComponent() !== 'cui' && node.getComponent() !== 'cui-lite') return;
+    // Sync toggle: show for all non-CUI, non-mission-chat tabs
+    const tabComp = node.getComponent();
+    if (tabComp !== 'cui' && tabComp !== 'cui-lite' && tabComp !== 'mission-chat') {
+      const tabConf = node.getConfig() ?? {};
+      const isSynced = !!tabConf._synced;
+      const tabNodeId = node.getId();
+      renderValues.buttons.push(
+        <span
+          key="sync-toggle"
+          title={isSynced ? 'In allen Workspaces — klicken zum Deaktivieren' : 'Nur hier — klicken zum Sync aktivieren'}
+          onClick={(e) => {
+            e.stopPropagation();
+            toggleSyncTab(tabNodeId);
+          }}
+          style={{
+            fontSize: 10,
+            color: isSynced ? 'var(--tn-blue, #7aa2f7)' : 'var(--tn-text-muted)',
+            opacity: isSynced ? 1 : 0.35,
+            marginLeft: 4,
+            cursor: 'pointer',
+            padding: '1px 3px',
+            borderRadius: 3,
+            background: isSynced ? 'rgba(122,162,247,0.12)' : 'none',
+            transition: 'opacity 0.2s, color 0.2s',
+            userSelect: 'none',
+          }}
+        >⇄</span>
+      );
+      return;
+    }
 
     // Primary: panel-reported attention state (from CuiLitePanel onStateChange callback)
     const panelState = node.getConfig()?._attention as string | undefined;
@@ -871,7 +842,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       renderValues.leading = <span key="dot" className="cui-tab-dot cui-tab-dot--idle" />;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tabRenderTick]);
+  }, [tabRenderTick, toggleSyncTab]);
 
   // Stable refs for Layout callbacks — prevent Layout element recreation on state changes.
   // Without these, every tabRenderTick bump recreates the <Layout> element via useMemo,
@@ -993,9 +964,37 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           } catch (e) { console.warn('[LayoutManager] nuke-layout-cache error:', e); }
           setTimeout(() => window.location.reload(), 500);
         }
-        // Pinned panels changed: update local state
-        if (msg.type === 'pinned-panels-changed' && msg.config?.pinnedTabsets) {
-          setPinnedTabsetIds(new Set(msg.config.pinnedTabsets.map((pt: any) => pt.id)));
+        // Synced tab added in another workspace → add to our layout if we're affected
+        if (msg.type === 'synced-tab-added' && msg.tabConfig && Array.isArray(msg.affectedProjectIds) && msg.affectedProjectIds.includes(projectId)) {
+          const tc = msg.tabConfig;
+          if (m) {
+            let alreadyPresent = false;
+            m.visitNodes((n) => { if (n.getId() === tc.id) alreadyPresent = true; });
+            if (!alreadyPresent) {
+              let rightmostTabsetId = '';
+              m.visitNodes((n) => { if (n.getType() === 'tabset') rightmostTabsetId = n.getId(); });
+              if (rightmostTabsetId) {
+                try {
+                  m.doAction(Actions.addNode(
+                    { type: 'tab', id: tc.id, name: tc.name, component: tc.component, config: tc.config },
+                    rightmostTabsetId, DockLocation.CENTER, -1
+                  ));
+                  saveLayoutRef.current(m);
+                } catch (err) { console.warn('[LayoutManager] synced-tab-added addNode failed:', err); }
+              }
+            }
+          }
+        }
+        // Synced tab removed in another workspace → remove from our layout
+        if (msg.type === 'synced-tab-removed' && msg.tabId && m) {
+          let found = false;
+          m.visitNodes((n) => { if (n.getId() === msg.tabId) found = true; });
+          if (found) {
+            try {
+              m.doAction(Actions.deleteTab(msg.tabId));
+              saveLayoutRef.current(m);
+            } catch (err) { console.warn('[LayoutManager] synced-tab-removed deleteTab failed:', err); }
+          }
         }
         // Server-pushed layout update: apply without reload (triggered by POST /api/layouts/:projectId)
         if (msg.type === 'control:apply-layout' && msg.projectId === projectId && msg.layout) {
