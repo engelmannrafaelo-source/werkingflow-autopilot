@@ -731,6 +731,35 @@ router.get("/api/bridge/metrics/cc-usage-history", async (req: any, res: any) =>
   }
 });
 
+// Queue Forecast (rolling per-worker rates + drain ETA + saturation)
+router.get("/api/bridge/metrics/queue-forecast", async (req: any, res: any) => {
+  const window = req.query.window || '60';
+  try {
+    const data = await bridgeFetch(`/v1/metrics/queue-forecast?window=${window}`);
+    res.json(data);
+  } catch (err: any) {
+    console.warn(`[Bridge] QueueForecast: ${err.message}`);
+    res.json({ workers: {}, totals: {}, forecast: {}, _error: err.message });
+  }
+});
+
+// Usage Projection — time-series view: usage % curve + linear projection + error markers.
+// Used by the "Forecast" tab to visually validate prognose vs actual rate-limit events.
+router.get("/api/bridge/metrics/usage-projection", async (req: any, res: any) => {
+  const days = req.query.days || '7';
+  const metric = req.query.metric || 'weeklyAllModels';
+  const projectMinutes = req.query.project_minutes || '0';
+  try {
+    const data = await bridgeFetch(
+      `/v1/metrics/usage-projection?days=${days}&metric=${metric}&project_minutes=${projectMinutes}`
+    );
+    res.json(data);
+  } catch (err: any) {
+    console.warn(`[Bridge] UsageProjection: ${err.message}`);
+    res.json({ workers: {}, totals: {}, _error: err.message });
+  }
+});
+
 // CC-Usage Snapshot Save (called after each scrape)
 router.post("/api/bridge/metrics/cc-usage-snapshot", async (req: any, res: any) => {
   try {

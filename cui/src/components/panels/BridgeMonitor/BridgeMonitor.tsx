@@ -12,6 +12,7 @@ import HealthTab from './tabs/HealthTab';
 import RateLimitsTab from './tabs/RateLimitsTab';
 import ActivityFeedTab from './tabs/ActivityFeedTab';
 import PromptPerformanceTab from './tabs/PromptPerformanceTab';
+import ForecastTab from './tabs/ForecastTab';
 // Legacy Technical Tabs
 import StatusTab from './tabs/StatusTab';
 import MetrikenTab from './tabs/MetrikenTab';
@@ -48,6 +49,7 @@ export default function BridgeMonitor() {
   const tabs: Tab[] = [
     // Primary Monitoring Tabs (Match Test Expectations)
     { key: 'overview',   label: 'Overview',     component: <ErrorBoundary componentName="OverviewTab"><OverviewTab /></ErrorBoundary> },
+    { key: 'forecast',   label: 'Forecast',     component: <ErrorBoundary componentName="ForecastTab"><ForecastTab /></ErrorBoundary> },
     { key: 'sessions',   label: 'Sessions',     component: <ErrorBoundary componentName="SessionsTab"><SessionsTab /></ErrorBoundary> },
     { key: 'stats',      label: 'Stats',        component: <ErrorBoundary componentName="UsageAnalyticsTab"><UsageAnalyticsTab /></ErrorBoundary> },
     { key: 'costs',      label: 'Costs',        component: <ErrorBoundary componentName="CostAnalyticsTab"><CostAnalyticsTab /></ErrorBoundary> },

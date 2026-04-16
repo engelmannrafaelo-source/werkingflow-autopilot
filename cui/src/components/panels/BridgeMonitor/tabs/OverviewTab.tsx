@@ -53,9 +53,60 @@ interface AppsResponse {
   _error?: string;
 }
 
+interface ForecastWorker {
+  arrivals: number;
+  completions: number;
+  errors: number;
+  rate_limit_hits: number;
+  arrivals_per_min: number;
+  completions_per_min: number;
+  input_tokens_per_min: number;
+  output_tokens_per_min: number;
+  avg_duration_ms: number;
+  in_flight: number;
+}
+
+interface ForecastWorkerLimit {
+  account: string;
+  weekly_percent: number;
+  session_percent: number;
+  active: boolean;
+}
+
+interface ForecastResponse {
+  window_seconds?: number;
+  worker_self?: string;
+  workers?: Record<string, ForecastWorker>;
+  worker_limits?: Record<string, ForecastWorkerLimit>;
+  saturation?: Record<string, string>;
+  totals?: {
+    arrivals: number;
+    completions: number;
+    errors: number;
+    rate_limit_hits: number;
+    in_flight: number;
+    arrivals_per_min: number;
+    completions_per_min: number;
+    input_tokens_per_min: number;
+    output_tokens_per_min: number;
+  };
+  forecast?: {
+    in_flight_total: number;
+    drain_rate_per_s: number;
+    arrival_rate_per_s: number;
+    net_per_s: number;
+    backlog_trend: string;
+    eta_empty_s: number | null;
+    active_workers: number | null;
+    rate_limit_risk: string;
+  };
+  _error?: string;
+}
+
 export default function OverviewTab() {
   const [data, setData] = useState<OverviewData | null>(null);
   const [apps, setApps] = useState<AppInfo[]>([]);
+  const [forecast, setForecast] = useState<ForecastResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -64,9 +115,10 @@ export default function OverviewTab() {
     setLoading(true);
     setError('');
     try {
-      const [overviewRes, appsRes] = await Promise.allSettled([
+      const [overviewRes, appsRes, forecastRes] = await Promise.allSettled([
         fetch('/api/bridge/metrics/overview', { signal: AbortSignal.timeout(20000) }).then(r => r.json()),
         fetch('/api/bridge/metrics/apps', { signal: AbortSignal.timeout(10000) }).then(r => r.json()),
+        fetch('/api/bridge/metrics/queue-forecast?window=120', { signal: AbortSignal.timeout(10000) }).then(r => r.json()),
       ]);
 
       if (overviewRes.status === 'fulfilled') {
@@ -86,6 +138,10 @@ export default function OverviewTab() {
       if (appsRes.status === 'fulfilled') {
         const appsData = appsRes.value as AppsResponse;
         setApps(appsData.apps_realtime ?? appsData.apps_period ?? []);
+      }
+
+      if (forecastRes.status === 'fulfilled' && !forecastRes.value._error) {
+        setForecast(forecastRes.value as ForecastResponse);
       }
     } catch (err: any) {
       console.warn('[BridgeOverview] fetch failed:', err);
@@ -222,6 +278,106 @@ export default function OverviewTab() {
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* Queue Forecast (rolling per-worker rates from Bridge) */}
+      {forecast?.forecast && forecast.workers && (
+        <div data-ai-id="bridge-queue-forecast" style={{ marginBottom: 16 }}>
+          <h4 style={{ fontSize: 11, fontWeight: 600, margin: '0 0 8px', color: 'var(--tn-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Queue Forecast — Bridge Workers (window {forecast.window_seconds ?? 120}s)
+          </h4>
+          {(() => {
+            const f = forecast.forecast!;
+            const totals = forecast.totals;
+            const riskColor =
+              f.rate_limit_risk === 'high' ? 'var(--tn-red)' :
+              f.rate_limit_risk === 'medium' ? 'var(--tn-orange)' :
+              'var(--tn-green)';
+            const trendColor =
+              f.backlog_trend === 'growing' ? 'var(--tn-red)' :
+              f.backlog_trend === 'draining' ? 'var(--tn-green)' :
+              'var(--tn-text-muted)';
+            return (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8, marginBottom: 8 }}>
+                {statCard('In-Flight', String(f.in_flight_total), f.in_flight_total > 5 ? 'var(--tn-orange)' : 'var(--tn-text)', '🔄', 'forecast-in-flight')}
+                {statCard('Drain rate', `${f.drain_rate_per_s.toFixed(2)}/s`, 'var(--tn-blue)', '📉', 'forecast-drain')}
+                {statCard('Arrival rate', `${f.arrival_rate_per_s.toFixed(2)}/s`, 'var(--tn-blue)', '📥', 'forecast-arrival')}
+                {statCard('Trend', f.backlog_trend, trendColor, '📊', 'forecast-trend')}
+                {statCard(
+                  'Rate-limit risk',
+                  `${f.rate_limit_risk}${f.active_workers != null ? ` (${f.active_workers} active)` : ''}`,
+                  riskColor,
+                  f.rate_limit_risk === 'high' ? '🚨' : f.rate_limit_risk === 'medium' ? '⚠️' : '✅',
+                  'forecast-risk',
+                )}
+                {f.eta_empty_s != null && (
+                  statCard(
+                    'ETA queue empty',
+                    f.eta_empty_s === 0 ? 'now' : `${f.eta_empty_s.toFixed(0)}s`,
+                    'var(--tn-text)',
+                    '⏳',
+                    'forecast-eta',
+                  )
+                )}
+                {totals && totals.input_tokens_per_min > 0 && (
+                  statCard('Input tok/min', formatNumber(totals.input_tokens_per_min), 'var(--tn-text-muted)', '📝', 'forecast-input-tpm')
+                )}
+                {totals && totals.output_tokens_per_min > 0 && (
+                  statCard('Output tok/min', formatNumber(totals.output_tokens_per_min), 'var(--tn-text-muted)', '✏️', 'forecast-output-tpm')
+                )}
+              </div>
+            );
+          })()}
+
+          {/* Per-worker rows */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {(['worker1', 'worker2', 'worker3', 'worker4'] as const).map((w) => {
+              const wd = forecast.workers?.[w];
+              const limit = forecast.worker_limits?.[w];
+              const sat = forecast.saturation?.[w];
+              const satColor =
+                sat === 'rate_limited' ? 'var(--tn-red)' :
+                sat === 'saturated' ? 'var(--tn-orange)' :
+                sat === 'busy' ? 'var(--tn-orange)' :
+                sat === 'ok' ? 'var(--tn-green)' :
+                'var(--tn-text-muted)';
+              const downByLimit = limit && !limit.active;
+              return (
+                <div key={w} style={{
+                  display: 'grid',
+                  gridTemplateColumns: '70px 1fr 1fr 1fr 90px 90px',
+                  alignItems: 'center', gap: 8,
+                  padding: '6px 10px',
+                  background: downByLimit ? 'rgba(247,118,142,0.05)' : 'var(--tn-bg-dark)',
+                  border: `1px solid ${downByLimit ? 'rgba(247,118,142,0.3)' : 'var(--tn-border)'}`,
+                  borderLeft: `3px solid ${downByLimit ? 'var(--tn-red)' : satColor}`,
+                  borderRadius: 4,
+                  fontSize: 10, fontFamily: 'monospace',
+                }}>
+                  <span style={{ fontWeight: 600, color: 'var(--tn-text)' }}>{w}</span>
+                  <span style={{ color: 'var(--tn-text-muted)' }}>
+                    {limit ? `${limit.account} W:${limit.weekly_percent}% S:${limit.session_percent}%` : '-'}
+                  </span>
+                  <span style={{ color: 'var(--tn-text-muted)' }}>
+                    in:{wd?.in_flight ?? 0} · arr:{(wd?.arrivals_per_min ?? 0).toFixed(1)}/m · done:{(wd?.completions_per_min ?? 0).toFixed(1)}/m
+                  </span>
+                  <span style={{ color: 'var(--tn-text-muted)' }}>
+                    {wd?.avg_duration_ms ? `${(wd.avg_duration_ms / 1000).toFixed(1)}s avg` : '-'}
+                  </span>
+                  <span style={{ color: (wd?.errors ?? 0) > 0 ? 'var(--tn-orange)' : 'var(--tn-text-muted)' }}>
+                    err:{wd?.errors ?? 0}{(wd?.rate_limit_hits ?? 0) > 0 ? ` rl:${wd?.rate_limit_hits}` : ''}
+                  </span>
+                  <span style={{ color: satColor, fontWeight: 600, textAlign: 'right' }}>
+                    {downByLimit ? 'DOWN' : (sat ?? 'idle').toUpperCase()}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ fontSize: 9, color: 'var(--tn-text-dim)', marginTop: 4, fontStyle: 'italic' }}>
+            Note: Rolling-rates only include the worker that served this request. Refresh for cross-worker view.
           </div>
         </div>
       )}
