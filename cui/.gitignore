@@ -26,3 +26,10 @@ data/conv-metadata.json
 data/session-states.json
 server/data/conv-metadata.json
 server/data/session-states.json
+data/report-builder/
+claude-usage-scraped.json
+
+# Backups / temp artefacts
+*.bak
+*.tmp
+*.deprecated-*
