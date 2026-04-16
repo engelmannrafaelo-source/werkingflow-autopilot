@@ -60,9 +60,9 @@ import PanelConnectivityGuard from './panels/PanelConnectivityGuard';
 import {
   MissionControl, OfficePanel, KnowledgeFullscreen, WerkingReportAdmin,
   LinkedInPanel, BridgeMonitor, InfisicalMonitor, QADashboard, RepoDashboard,
-  SystemHealth, WatchdogPanel, PeerAwarenessPanel, BackgroundOpsPanel,
+  WatchdogPanel, BackgroundOpsPanel,
   ConversationQueuePanel, MaintenancePanel, UserInputAuditPanel,
-  ArchitectureExplorer, ReportBuilder, PromptExplorer, BusinessAngelPanel, SubSessionPanel,
+  ArchitectureExplorer, ReportBuilder, PromptExplorer, BusinessAngelPanel,
   MyTasksPanel, ActivityFeedPanel, PartnerInboxPanel,
   FeedbackPanel, TeamStatusPanel, BusinessDocsPanel, UploadPanel, ToolHub,
   PANEL_NAMES, PANEL_MENU_OPTIONS,
@@ -470,15 +470,12 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         return wrapPanel('InfisicalMonitor', withSuspense(<InfisicalMonitor />));
       case 'repo-dashboard':
         return wrapPanel('RepoDashboard', withSuspense(<RepoDashboard />));
-      case 'system-health':
-        return wrapPanel('SystemHealth', withSuspense(<SystemHealth />));
       case 'watchdog':
       case 'infrastructure': // Alias: both point to Watchdog (iframe on :9090)
+      case 'system-health': // Legacy alias: System Health is now a tab inside Watchdog
         return wrapPanel('WatchdogPanel', withSuspense(<WatchdogPanel />));
       case 'background-ops':
         return wrapPanel('BackgroundOps', withSuspense(<BackgroundOpsPanel />));
-      case 'peer-awareness':
-        return wrapPanel('PeerAwareness', withSuspense(<PeerAwarenessPanel />));
       case 'conversation-queue':
         return wrapPanel('ConversationQueue', withSuspense(<ConversationQueuePanel projectId={projectId} />));
       case 'maintenance':
@@ -493,8 +490,6 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         return wrapPanel('Business Angel', withSuspense(<BusinessAngelPanel />));
       case 'prompt-explorer':
         return wrapPanel('PromptExplorer', withSuspense(<PromptExplorer />));
-      case 'sub-sessions':
-        return wrapPanel('Sub-Sessions', withSuspense(<SubSessionPanel workDir={workDir} isVisible={node.isVisible()} />));
       case 'my-tasks':
         return wrapPanel('MyTasks', withSuspense(<MyTasksPanel />));
       case 'activity-feed':
@@ -1561,44 +1556,6 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         if (mounted > 0) {
           saveLayoutRef.current(m);
           console.log(`[LM] Auto-sync: mounted ${mounted} conversations`);
-        }
-
-        // Auto-add SubSessionPanel when Layout button clicked and sub-sessions exist
-        if ((window as any).__cuiAutoLayoutActive) {
-          try {
-            const subRes = await fetch('/api/mission/sub-sessions', { signal: AbortSignal.timeout(5000) });
-            if (subRes.ok) {
-              const subData = await subRes.json();
-              const activeSubs = (subData.sessions || []).filter((s: any) =>
-                s.attentionState === 'working' || s.attentionState === 'needs_attention'
-              );
-              if (activeSubs.length > 0) {
-                // Check if a sub-sessions panel already exists
-                let hasSubPanel = false;
-                m.visitNodes((node) => {
-                  if (node.getType() === 'tab') {
-                    const tab = node as TabNode;
-                    if (tab.getComponent?.() === 'sub-sessions') hasSubPanel = true;
-                  }
-                });
-                if (!hasSubPanel) {
-                  // Find a tabset to dock the sub-sessions panel into
-                  let targetTabsetId = '';
-                  m.visitNodes((node) => {
-                    if (!targetTabsetId && node.getType() === 'tabset') targetTabsetId = node.getId();
-                  });
-                  if (targetTabsetId) {
-                    m.doAction(Actions.addNode(
-                      { type: 'tab', name: 'Sub-Sessions', component: 'sub-sessions', config: {} },
-                      targetTabsetId, DockLocation.BOTTOM, -1
-                    ));
-                    saveLayoutRef.current(m);
-                    console.log(`[LM] Auto-added Sub-Sessions panel (${activeSubs.length} active sub-sessions)`);
-                  }
-                }
-              }
-            }
-          } catch (err) { console.warn('[LM] sub-session panel check failed:', err); }
         }
       } catch (err) { console.warn('[LM] auto-sync error:', err); }
     };

@@ -9,6 +9,7 @@ import PersonaDocumentList from './PersonaDocumentList';
 import AgentDashboard from './AgentDashboard';
 import CommandSidebar from './CommandSidebar';
 import VirtualOffice from './VirtualOffice';
+import KnowledgeFullscreen from './KnowledgeFullscreen';
 import { validateApiResponse } from '../../lib/validateApiResponse';
 
 const API = '/api';
@@ -37,7 +38,7 @@ interface OfficePanelProps {
 }
 
 // Simplified view types - removed redundant tabs (dashboard is now the main office view)
-type OfficePanelView = 'office' | 'tasks' | 'reviews';
+type OfficePanelView = 'office' | 'tasks' | 'reviews' | 'knowledge';
 
 export default function OfficePanel({ projectId, workDir }: OfficePanelProps) {
   const [personas, setPersonas] = useState<PersonaCard[]>([]);
@@ -105,9 +106,10 @@ export default function OfficePanel({ projectId, workDir }: OfficePanelProps) {
       <div className="office-header">
         <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
           {([
-            ['office',   '🏢 Office'],
-            ['tasks',    '📋 Tasks'],
-            ['reviews',  '📝 Reviews'],
+            ['office',    '🏢 Office'],
+            ['tasks',     '📋 Tasks'],
+            ['reviews',   '📝 Reviews'],
+            ['knowledge', '📚 Knowledge'],
           ] as [OfficePanelView, string][]).map(([v, label]) => (
             <button
               key={v}
@@ -132,10 +134,13 @@ export default function OfficePanel({ projectId, workDir }: OfficePanelProps) {
         </span>
       </div>
 
-      {/* Body: Main + Command Sidebar (or full-width office view) */}
+      {/* Body: Main + Command Sidebar (or full-width view) */}
       {view === 'office' ? (
         /* Full-width Virtual Office - 3-panel dashboard with Activity Stream, Agent Grid, Action Items */
         <VirtualOffice projectId={projectId} workDir={workDir} />
+      ) : view === 'knowledge' ? (
+        /* Full-width Knowledge Graph */
+        <KnowledgeFullscreen projectId={projectId} workDir={workDir} />
       ) : (
         <div className="office-body">
           {/* Main Content */}

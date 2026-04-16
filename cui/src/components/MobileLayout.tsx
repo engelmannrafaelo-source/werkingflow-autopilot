@@ -12,9 +12,9 @@ import ErrorBoundary from './ErrorBoundary';
 import {
   MissionControl, OfficePanel, KnowledgeFullscreen, WerkingReportAdmin,
   LinkedInPanel, BridgeMonitor, InfisicalMonitor, QADashboard, RepoDashboard,
-  SystemHealth, WatchdogPanel, PeerAwarenessPanel, BackgroundOpsPanel,
+  WatchdogPanel, BackgroundOpsPanel,
   ConversationQueuePanel, MaintenancePanel, UserInputAuditPanel,
-  ArchitectureExplorer, ReportBuilder, PromptExplorer, BusinessAngelPanel, SubSessionPanel,
+  ArchitectureExplorer, ReportBuilder, PromptExplorer, BusinessAngelPanel,
   MyTasksPanel, ActivityFeedPanel, PartnerInboxPanel,
   FeedbackPanel, TeamStatusPanel, BusinessDocsPanel, UploadPanel,
   PANEL_NAMES, PANEL_MENU_OPTIONS,
@@ -150,14 +150,10 @@ export default function MobileLayout({ projectId, workDir }: MobileLayoutProps) 
         return wrapPanel('InfisicalMonitor', S(<InfisicalMonitor />));
       case 'repo-dashboard':
         return wrapPanel('RepoDashboard', S(<RepoDashboard />));
-      case 'system-health':
-        return wrapPanel('SystemHealth', S(<SystemHealth />));
-      case 'watchdog': case 'infrastructure':
+      case 'watchdog': case 'infrastructure': case 'system-health':
         return wrapPanel('WatchdogPanel', S(<WatchdogPanel />));
       case 'background-ops':
         return wrapPanel('BackgroundOps', S(<BackgroundOpsPanel />));
-      case 'peer-awareness':
-        return wrapPanel('PeerAwareness', S(<PeerAwarenessPanel />));
       case 'conversation-queue':
         return wrapPanel('ConversationQueue', S(<ConversationQueuePanel projectId={projectId} />));
       case 'maintenance':
@@ -172,8 +168,6 @@ export default function MobileLayout({ projectId, workDir }: MobileLayoutProps) 
         return wrapPanel('Business Angel', S(<BusinessAngelPanel />));
       case 'prompt-explorer':
         return wrapPanel('PromptExplorer', S(<PromptExplorer />));
-      case 'sub-sessions':
-        return wrapPanel('Sub-Sessions', S(<SubSessionPanel workDir={workDir} isVisible={node.isVisible()} />));
       case 'my-tasks':
         return wrapPanel('MyTasks', S(<MyTasksPanel />));
       case 'activity-feed':

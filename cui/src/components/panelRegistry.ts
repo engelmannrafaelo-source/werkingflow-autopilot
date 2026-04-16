@@ -21,9 +21,7 @@ export const BridgeMonitor = lazy(() => import('./panels/BridgeMonitor/BridgeMon
 export const InfisicalMonitor = lazy(() => import('./panels/InfisicalMonitor/InfisicalMonitor'));
 export const QADashboard = lazy(() => import('./panels/QADashboard/QADashboard'));
 export const RepoDashboard = lazy(() => import('./panels/RepoDashboard/RepoDashboard'));
-export const SystemHealth = lazy(() => import('./panels/SystemHealth'));
 export const WatchdogPanel = lazy(() => import('./panels/WatchdogPanel'));
-export const PeerAwarenessPanel = lazy(() => import('./panels/PeerAwarenessPanel'));
 export const BackgroundOpsPanel = lazy(() => import('./panels/BackgroundOpsPanel'));
 export const ConversationQueuePanel = lazy(() => import('./panels/ConversationQueuePanel'));
 export const MaintenancePanel = lazy(() => import('./panels/MaintenancePanel/MaintenancePanel'));
@@ -32,7 +30,6 @@ export const ArchitectureExplorer = lazy(() => import('./panels/ArchitectureExpl
 export const ReportBuilder = lazy(() => import('./panels/ReportBuilder/ReportBuilder'));
 export const PromptExplorer = lazy(() => import('./panels/PromptExplorer/PromptExplorer'));
 export const BusinessAngelPanel = lazy(() => import('./panels/BusinessAngelPanel'));
-export const SubSessionPanel = lazy(() => import('./panels/SubSessionPanel'));
 export const BusinessDocsPanel = lazy(() => import('./panels/BusinessDocsPanel'));
 export const MyTasksPanel = lazy(() => import('./panels/MyTasksPanel/MyTasksPanel'));
 export const ActivityFeedPanel = lazy(() => import('./panels/ActivityFeedPanel'));
@@ -63,11 +60,9 @@ export const PANEL_NAMES: Record<string, string> = {
   'bridge-monitor': 'Bridge Monitor',
   'infisical-monitor': 'Infisical Monitor',
   'repo-dashboard': 'Git & Pipeline Monitor',
-  'system-health': 'System Health',
   watchdog: 'Dev Server Watchdog',
   infrastructure: 'Dev Server Watchdog',
   'background-ops': 'Background Ops',
-  'peer-awareness': 'Peer Awareness',
   'conversation-queue': 'Conversation Queue',
   maintenance: 'Maintenance',
   'input-audit': 'Input Audit',
@@ -75,7 +70,6 @@ export const PANEL_NAMES: Record<string, string> = {
   'report-builder': 'Report Builder',
   'prompt-explorer': 'Workflow Explorer',
   'business-angel': 'Business Angel',
-  'sub-sessions': 'Sub-Sessions',
   'business-docs': 'Business Docs',
   'my-tasks': 'My Tasks',
   'activity-feed': 'Activity Feed',
@@ -108,7 +102,6 @@ export const PANEL_MENU_OPTIONS: PanelMenuGroup[] = [
       { value: 'mission', label: 'Mission Control' },
       { value: 'mission-chat', label: 'Mission Chat' },
       { value: 'conversation-queue', label: 'Conversation Queue' },
-      { value: 'sub-sessions', label: 'Sub-Sessions' },
       { value: 'office', label: 'Virtual Office' },
     ],
   },
@@ -125,12 +118,10 @@ export const PANEL_MENU_OPTIONS: PanelMenuGroup[] = [
   {
     category: 'Monitoring',
     items: [
-      { value: 'system-health', label: 'System Health' },
       { value: 'bridge-monitor', label: 'Bridge Monitor' },
       { value: 'repo-dashboard', label: 'Git & Pipeline Monitor' },
       { value: 'infisical-monitor', label: 'Infisical Monitor' },
       { value: 'watchdog', label: 'Dev Server Watchdog' },
-      { value: 'peer-awareness', label: 'Peer Awareness' },
     ],
   },
   {

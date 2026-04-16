@@ -11,10 +11,10 @@ import NotesPanel from './NotesPanel';
 import {
   MissionControl, OfficePanel, KnowledgeFullscreen, WerkingReportAdmin,
   LinkedInPanel, BridgeMonitor, InfisicalMonitor, QADashboard, RepoDashboard,
-  SystemHealth, WatchdogPanel, PeerAwarenessPanel, BackgroundOpsPanel,
+  WatchdogPanel, BackgroundOpsPanel,
   ConversationQueuePanel, MaintenancePanel, UserInputAuditPanel,
   ArchitectureExplorer, ReportBuilder, PromptExplorer, BusinessAngelPanel,
-  SubSessionPanel, MyTasksPanel, ActivityFeedPanel, PartnerInboxPanel,
+  MyTasksPanel, ActivityFeedPanel, PartnerInboxPanel,
   FeedbackPanel, TeamStatusPanel, BusinessDocsPanel, UploadPanel,
 } from '../panelRegistry';
 
@@ -30,11 +30,11 @@ const PanelLoader = () => (
 const TOOL_ICONS: Record<string, string> = {
   browser: '🌐', preview: '📄', notes: '📝', images: '🖼️',
   mission: '🎯', 'mission-chat': '💬', 'conversation-queue': '📋',
-  'sub-sessions': '🔀', office: '🏢',
+  office: '🏢',
   'qa-dashboard': '✅', architecture: '🏗️', knowledge: '📚',
   'report-builder': '📑', 'prompt-explorer': '🧪',
-  'system-health': '💚', 'bridge-monitor': '🌉', 'repo-dashboard': '🔧',
-  'infisical-monitor': '🔐', watchdog: '🐕', 'peer-awareness': '👁️',
+  'bridge-monitor': '🌉', 'repo-dashboard': '🔧',
+  'infisical-monitor': '🔐', watchdog: '🐕',
   'admin-wr': '📊', 'business-angel': '😇', 'background-ops': '⏳',
   maintenance: '🔨', 'input-audit': '📥', linkedin: '💼',
   'business-docs': '📂', 'my-tasks': '✏️', 'activity-feed': '📰',
@@ -45,11 +45,11 @@ const TOOL_ICONS: Record<string, string> = {
 const SHORT_LABELS: Record<string, string> = {
   browser: 'Browser', preview: 'Files', notes: 'Notes', images: 'Images',
   mission: 'Mission', 'mission-chat': 'M-Chat', 'conversation-queue': 'Queue',
-  'sub-sessions': 'Subs', office: 'Office',
+  office: 'Office',
   'qa-dashboard': 'QA', architecture: 'Arch', knowledge: 'Know',
   'report-builder': 'Report', 'prompt-explorer': 'Prompts',
-  'system-health': 'Health', 'bridge-monitor': 'Bridge', 'repo-dashboard': 'Repos',
-  'infisical-monitor': 'Secrets', watchdog: 'Watch', 'peer-awareness': 'Peers',
+  'bridge-monitor': 'Bridge', 'repo-dashboard': 'Repos',
+  'infisical-monitor': 'Secrets', watchdog: 'Watch',
   'admin-wr': 'WR Admin', 'business-angel': 'Angel', 'background-ops': 'BgOps',
   maintenance: 'Maint', 'input-audit': 'Audit', linkedin: 'LinkedIn',
   'business-docs': 'BizDocs', 'my-tasks': 'Tasks', 'activity-feed': 'Feed',
@@ -162,10 +162,8 @@ export default function ToolHub({ projectId, workDir }: ToolHubProps) {
       case 'bridge-monitor': return withSuspense(<BridgeMonitor />);
       case 'infisical-monitor': return withSuspense(<InfisicalMonitor />);
       case 'repo-dashboard': return withSuspense(<RepoDashboard />);
-      case 'system-health': return withSuspense(<SystemHealth />);
-      case 'watchdog': case 'infrastructure': return withSuspense(<WatchdogPanel />);
+      case 'watchdog': case 'infrastructure': case 'system-health': return withSuspense(<WatchdogPanel />);
       case 'background-ops': return withSuspense(<BackgroundOpsPanel />);
-      case 'peer-awareness': return withSuspense(<PeerAwarenessPanel />);
       case 'conversation-queue': return withSuspense(<ConversationQueuePanel projectId={projectId} />);
       case 'maintenance': return withSuspense(<MaintenancePanel />);
       case 'input-audit': return withSuspense(<UserInputAuditPanel />);
@@ -173,7 +171,6 @@ export default function ToolHub({ projectId, workDir }: ToolHubProps) {
       case 'report-builder': return withSuspense(<ReportBuilder />);
       case 'prompt-explorer': return withSuspense(<PromptExplorer />);
       case 'business-angel': return withSuspense(<BusinessAngelPanel />);
-      case 'sub-sessions': return withSuspense(<SubSessionPanel workDir={workDir} isVisible={true} />);
       case 'my-tasks': return withSuspense(<MyTasksPanel />);
       case 'activity-feed': return withSuspense(<ActivityFeedPanel />);
       case 'partner-inbox': return withSuspense(<PartnerInboxPanel projectId={projectId} />);
