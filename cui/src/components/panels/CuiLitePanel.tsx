@@ -496,6 +496,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   const [convName, setConvName] = useState('');
   const [sessionModel, setSessionModel] = useState('');
   const [isPaused, setIsPaused] = useState(false);
+  const [manualFinished, setManualFinished] = useState(false);
   const [reviewState, setReviewState] = useState<'idle' | 'running' | 'done'>('idle');
   const [planMode, setPlanMode] = useState(false);
   const [liveMode, setLiveMode] = useState(false);
@@ -552,6 +553,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   // Track last poll data to skip redundant setState (avoids re-render + LCP shift)
   const lastPollHashRef = useRef('');
   const autoUnfinishedRef = useRef(false); // Track if we've already auto-unfinished for current session
+  const manualFinishedRef = useRef(false); // Mirror for manualFinished state (accessible in callbacks)
 
   const account = ACCOUNTS.find(a => a.id === selectedId) || ACCOUNTS[0];
   const pollInterval = liveMode ? 3000 : 0; // STATIC=0 (no polling, WS only), LIVE=3s fallback
@@ -568,16 +570,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       if (convResp.ok) {
         const data = await convResp.json().catch(() => null);
         if (!data) { console.warn('[CuiLite] Poll: invalid JSON response'); return; }
-        // Opening a finished session unfinishes it — "visible = not finished"
-        if (data.manualFinished === true && !autoUnfinishedRef.current && sessionId) {
-          autoUnfinishedRef.current = true;
-          fetch(`/api/mission/conversation/${sessionId}/finish`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ finished: false }),
-            signal: AbortSignal.timeout(5000),
-          }).catch(() => {});
-        }
+        if (typeof data.manualFinished === 'boolean') { manualFinishedRef.current = data.manualFinished; setManualFinished(data.manualFinished); }
         const newMsgs: Message[] = data.messages || [];
         const newStatus = data.status === 'ongoing' ? 'ongoing' : 'completed';
         const newPerms: Permission[] = (data.permissions || []).map((item: unknown, i: number) =>
@@ -714,6 +707,8 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     sessionIdRef.current = sessionId;
     selectedIdRef.current = selectedId;
     autoUnfinishedRef.current = false; // Reset on session change so new session can be auto-unfinished
+    manualFinishedRef.current = false;
+    setManualFinished(false);
     // Report visibility change to server (session exclusivity)
     const ws = panelWsRef.current;
     if (ws?.readyState === WebSocket.OPEN) {
@@ -1174,6 +1169,19 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     }
   }, []);
 
+  // Unfinish a manually-finished session (called on explicit user interaction only)
+  const doUnfinish = useCallback((sid: string) => {
+    if (!manualFinishedRef.current) return;
+    manualFinishedRef.current = false;
+    setManualFinished(false);
+    fetch(`/api/mission/conversation/${sid}/finish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ finished: false }),
+      signal: AbortSignal.timeout(5000),
+    }).catch(() => {});
+  }, []);
+
   const handleSend = useCallback(async (overrideMessage?: string) => {
     const rawMsg = overrideMessage || input.trim();
     if (!rawMsg || !sessionId) return;
@@ -1181,6 +1189,8 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       setMessages(prev => [...prev, { role: 'system', content: 'Server nicht erreichbar — bitte warten bis Verbindung wiederhergestellt ist.', timestamp: new Date().toISOString() }]);
       return;
     }
+    // User is actively sending — unfinish if session was manually finished
+    doUnfinish(sessionId);
     setIsLoading(true);
     const msg = (!overrideMessage && planMode) ? `Bitte verwende Plan-Modus: ${rawMsg}` : rawMsg;
     if (!overrideMessage) setInput('');
@@ -1231,7 +1241,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     setIsAgentDone(false); // Reset so WS events can set working again
     setAttention('working');
     setTimeout(pollNow, 1000);
-  }, [input, sessionId, selectedId, workDir, planMode, pollNow, onRouteChange]);
+  }, [input, sessionId, selectedId, workDir, planMode, pollNow, onRouteChange, doUnfinish]);
 
   // Respond to tool_use blocks (AskUserQuestion, ExitPlanMode, EnterPlanMode)
   const handleRespond = useCallback(async (text: string) => {
@@ -1461,6 +1471,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     <div
       className={isPaused ? 'cui-panel-border--paused' : attention === 'working' ? 'cui-panel-border--working' : attention === 'needs_attention' ? 'cui-panel-border--attention' : ''}
       style={{ display: 'flex', flexDirection: 'column', height: '100%', background: isPaused ? 'rgba(122,162,247,0.13)' : 'var(--tn-surface)', overflow: 'hidden' }}
+      onClick={sessionId ? () => doUnfinish(sessionId) : undefined}
     >
       {/* Header */}
       <div style={{
@@ -1546,7 +1557,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         {isPaused && sessionId && (
           <span style={{ fontSize: 9, color: '#7aa2f7', fontWeight: 600, letterSpacing: '0.3px' }}>Pausiert</span>
         )}
-        {!isPaused && attention === 'idle' && isAgentDone && sessionId && attentionReason === 'done' && (
+        {!isPaused && attention === 'idle' && isAgentDone && sessionId && attentionReason === 'done' && !manualFinished && (
           <span style={{ fontSize: 9, color: '#ff9e64', fontWeight: 600 }}>Wartet</span>
         )}
         {!isPaused && attention === 'needs_attention' && sessionId && (
