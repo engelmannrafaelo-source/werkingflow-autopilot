@@ -137,6 +137,9 @@ import partnerDocsRouter, { initPartnerDocsRouter } from './routes/partner-docs.
 // Partner Messages (admin↔partner inbox with announcements + DMs)
 import partnerMessagesRouter from './routes/partner-messages.js';
 
+// Calendar (private event storage — /root/projekte/local-storage/privat/calendar.json)
+import { createCalendarRouter } from './routes/calendar.js';
+
 // Partner Feedback (structured feedback form for partners)
 import createPartnerFeedbackRouter from './routes/partner-feedback.js';
 
@@ -316,6 +319,9 @@ app.use('/api/partner', createPartnerFeedbackRouter());     // /api/partner/feed
 
 // --- Partner Team Status API ---
 app.use('/api/partner', createPartnerTeamStatusRouter());   // /api/partner/team-status?app=
+
+// --- Calendar API ---
+app.use(createCalendarRouter());                            // /api/calendar/events (GET/POST/PUT/DELETE)
 
 // --- Document Manager (Phase 3) ---
 app.use('/api/team', documentManager);

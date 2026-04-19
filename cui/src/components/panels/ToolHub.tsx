@@ -16,6 +16,7 @@ import {
   ArchitectureExplorer, ReportBuilder, PromptExplorer, BusinessAngelPanel,
   MyTasksPanel, ActivityFeedPanel, PartnerInboxPanel,
   FeedbackPanel, TeamStatusPanel, BusinessDocsPanel, UploadPanel,
+  CalendarPanel,
 } from '../panelRegistry';
 
 const API = '/api';
@@ -39,6 +40,7 @@ const TOOL_ICONS: Record<string, string> = {
   maintenance: '🔨', 'input-audit': '📥', linkedin: '💼',
   'business-docs': '📂', 'my-tasks': '✏️', 'activity-feed': '📰',
   'partner-inbox': '📬', feedback: '💡', 'team-status': '👥', uploads: '📤',
+  calendar: '📅',
 };
 
 // Short labels for the icon bar (max ~8 chars)
@@ -54,6 +56,7 @@ const SHORT_LABELS: Record<string, string> = {
   maintenance: 'Maint', 'input-audit': 'Audit', linkedin: 'LinkedIn',
   'business-docs': 'BizDocs', 'my-tasks': 'Tasks', 'activity-feed': 'Feed',
   'partner-inbox': 'Inbox', feedback: 'Fdbk', 'team-status': 'Team', uploads: 'Upload',
+  calendar: 'Kalender',
 };
 
 const EXCLUDED_TOOLS = new Set(['cui', 'cui-lite']);
@@ -178,6 +181,7 @@ export default function ToolHub({ projectId, workDir }: ToolHubProps) {
       case 'team-status': return withSuspense(<TeamStatusPanel />);
       case 'business-docs': return withSuspense(<BusinessDocsPanel />);
       case 'uploads': return withSuspense(<UploadPanel />);
+      case 'calendar': return withSuspense(<CalendarPanel />);
       default: return <div style={{ padding: 20, color: 'var(--tn-text-muted)' }}>Unknown: {activeTool}</div>;
     }
   };

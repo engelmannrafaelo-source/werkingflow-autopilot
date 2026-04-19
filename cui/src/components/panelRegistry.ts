@@ -37,6 +37,7 @@ export const PartnerInboxPanel = lazy(() => import('./panels/PartnerInboxPanel')
 export const FeedbackPanel = lazy(() => import('./panels/FeedbackPanel'));
 export const TeamStatusPanel = lazy(() => import('./panels/TeamStatusPanel'));
 export const UploadPanel = lazy(() => import('./panels/UploadPanel'));
+export const CalendarPanel = lazy(() => import('./panels/CalendarPanel'));
 export const ToolHub = lazy(() => import('./panels/ToolHub'));
 // --- Panel ID → Display Name ---
 // Aliases (virtual-office, gmail, knowledge-fullscreen, infrastructure) sind enthalten.
@@ -77,6 +78,7 @@ export const PANEL_NAMES: Record<string, string> = {
   feedback: 'Feedback',
   'team-status': 'Team Status',
   'uploads': 'Uploads',
+  'calendar': 'Kalender',
   'tool-hub': 'Tool Hub',
 };
 
@@ -145,6 +147,7 @@ export const PANEL_MENU_OPTIONS: PanelMenuGroup[] = [
       { value: 'feedback', label: 'Feedback' },
       { value: 'team-status', label: 'Team Status' },
       { value: 'uploads', label: 'Uploads' },
+      { value: 'calendar', label: 'Kalender' },
     ],
   },
 ];
