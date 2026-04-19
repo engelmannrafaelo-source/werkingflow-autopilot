@@ -49,6 +49,7 @@ function cleanupSubSession(sessionId: string) {
   convMeta.setFinished(sessionId, true);
   const parentSessionId = convMeta.getParentSessionId(sessionId);
   convMeta.deleteParentSession(sessionId);
+  convMeta.flush(); // Persist immediately — debounced write could be lost on restart
   // Clear pending-reminder state so if parent has other active sub-sessions,
   // reminders can fire again without waiting for a stale dedup entry.
   if (parentSessionId) _lastReminderSentAt.delete(parentSessionId);
@@ -167,6 +168,11 @@ export function initMissionRouter(deps: MissionDeps) {
   const SUB_INJECT_RETRY_DELAY_MS = 30_000;
 
   async function injectSubSessionResult(sessionId: string, parentSessionId: string, attempt: number = 1) {
+    // Guard: session was explicitly finished by parent — stop all retries
+    if (convMeta.isFinished(sessionId)) {
+      _subSessionsInjectInProgress.delete(sessionId);
+      return;
+    }
     // Guard: don't re-inject if already completed
     if (_subSessionsAwaitingFinish.has(sessionId)) return;
     // Guard: prevent concurrent injection runs for the same sub-session
