@@ -54,7 +54,10 @@ const EMPTY_FORM: Omit<CalendarEvent, 'id'> = {
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function toDateStr(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 function formatDateRange(date: string, endDate: string): string {
@@ -372,7 +375,7 @@ export default function CalendarPanel() {
         </div>
 
         {/* Day columns */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2, padding: '6px 4px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 2, padding: '6px 4px' }}>
           {/* Day name headers */}
           {DAY_NAMES_SHORT.map(n => (
             <div key={n} style={{ textAlign: 'center', fontSize: 9, fontWeight: 700, color: 'var(--tn-text-muted)', paddingBottom: 3 }}>
@@ -389,6 +392,8 @@ export default function CalendarPanel() {
             return (
               <div key={i} style={{
                 minHeight: 80,
+                minWidth: 0,
+                overflow: 'hidden',
                 padding: 3,
                 borderRadius: 4,
                 background: isToday ? 'rgba(122,162,247,0.1)' : 'rgba(255,255,255,0.02)',
