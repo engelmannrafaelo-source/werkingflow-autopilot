@@ -17,6 +17,7 @@ import {
   ArchitectureExplorer, ReportBuilder, PromptExplorer, BusinessAngelPanel,
   MyTasksPanel, ActivityFeedPanel, PartnerInboxPanel,
   FeedbackPanel, TeamStatusPanel, BusinessDocsPanel, UploadPanel,
+  CalendarPanel,
   PANEL_NAMES, PANEL_MENU_OPTIONS,
 } from './panelRegistry';
 
@@ -182,6 +183,8 @@ export default function MobileLayout({ projectId, workDir }: MobileLayoutProps) 
         return wrapPanel('Business Docs', S(<BusinessDocsPanel />));
       case 'uploads':
         return wrapPanel('Uploads', S(<UploadPanel />));
+      case 'calendar':
+        return wrapPanel('Kalender', S(<CalendarPanel />));
       default:
         return wrapPanel(`Unknown:${component}`, <div style={{ padding: 20, color: 'var(--tn-text-muted)' }}>Unknown: {component}</div>);
     }
