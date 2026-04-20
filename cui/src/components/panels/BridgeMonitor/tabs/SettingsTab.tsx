@@ -33,7 +33,7 @@ export default function SettingsTab() {
     try {
       const [authRes, lbRes, privRes, rlRes] = await Promise.allSettled([
         bridgeJson<{ server_info: { api_key_required: boolean; api_key_source: string; version: string } }>('/v1/auth/status'),
-        bridgeJson<{ load_balancer: string; workers: number; strategy: string; failover: string; paused: string[] }>('/lb-status'),
+        bridgeJson<any>('/lb-status'),
         bridgeJson<{ privacy: { enabled: boolean; language: string } }>('/v1/privacy/status'),
         bridgeJson<{ all_rate_limits: Record<string, { reset_time?: string; retry_after_seconds?: number }> }>('/rate-limits'),
       ]);
@@ -43,30 +43,43 @@ export default function SettingsTab() {
         const lb = lbRes.value;
         const priv = privRes.status === 'fulfilled' ? privRes.value.privacy : null;
 
+        // Handle both metrics-reader format and legacy format
+        const workerCount = typeof lb.workers === 'object' ? lb.workers?.total ?? 0 : lb.workers ?? 0;
+        const strategy = lb.pools?.normal?.strategy ?? lb.strategy ?? 'round-robin';
+        const failover = lb.pools?.production ? 'enabled' : (lb.failover ?? 'unknown');
+
         setConfig({
           api_key_required: auth.api_key_required,
           api_key_source: auth.api_key_source,
           version: auth.version,
           load_balancer: lb.load_balancer,
-          workers: lb.workers,
-          strategy: lb.strategy,
-          failover: lb.failover,
+          workers: workerCount,
+          strategy,
+          failover,
           privacy_enabled: priv?.enabled ?? false,
           privacy_language: priv?.language ?? 'en',
         });
 
-        // Build workers list
-        if (rlRes.status === 'fulfilled') {
+        // Build workers list from per_worker (metrics-reader) or rate-limits
+        const perWorker = typeof lb.workers === 'object' ? lb.workers?.per_worker : null;
+        if (perWorker) {
+          const rateLimits = rlRes.status === 'fulfilled' ? rlRes.value.all_rate_limits ?? {} : {};
+          const workerList: WorkerConfig[] = Object.entries(perWorker).map(([name, info]: [string, any]) => ({
+            worker_id: name,
+            status: info.status === 'up' ? 'active' : 'paused',
+            rate_limited: !!rateLimits[name]?.retry_after_seconds,
+            retry_after: rateLimits[name]?.retry_after_seconds ?? null,
+          }));
+          setWorkers(workerList);
+        } else if (rlRes.status === 'fulfilled') {
           const rateLimits = rlRes.value.all_rate_limits ?? {};
           const pausedSet = new Set(lb.paused ?? []);
-
           const workerList: WorkerConfig[] = Object.keys(rateLimits).map(workerId => ({
             worker_id: workerId,
             status: pausedSet.has(workerId) ? 'paused' : 'active',
             rate_limited: !!rateLimits[workerId]?.retry_after_seconds,
             retry_after: rateLimits[workerId]?.retry_after_seconds ?? null,
           }));
-
           setWorkers(workerList);
         }
       } else {

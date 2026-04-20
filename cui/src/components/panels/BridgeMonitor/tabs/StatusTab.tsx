@@ -9,12 +9,24 @@ interface HealthData {
 
 interface LbStatus {
   load_balancer: string;
-  workers: number;
-  strategy: string;
-  failover: string;
-  accounts: string[];
-  paused: string[];
   status: string;
+  // Current metrics-reader format
+  workers?: {
+    total: number;
+    up: number;
+    down: number;
+    per_worker: Record<string, { status: string; http_code?: number; error?: string }>;
+  };
+  pools?: {
+    normal: { workers: number; strategy: string };
+    production: { target: string; fallback: string };
+  };
+  routing?: string;
+  // Legacy worker format (may still appear)
+  strategy?: string;
+  failover?: string;
+  accounts?: string[];
+  paused?: string[];
 }
 
 interface PrivacyData {
@@ -98,11 +110,17 @@ export default function StatusTab() {
     return () => clearInterval(interval);
   }, [fetchAll]);
 
+  // Handle both metrics-reader format (per_worker object) and legacy format (accounts array)
   const workers = lbStatus
-    ? lbStatus.accounts.map(acc => ({
-        account: acc,
-        status: lbStatus.paused.includes(acc) ? 'paused' as const : 'active' as const,
-      }))
+    ? lbStatus.workers && typeof lbStatus.workers === 'object' && lbStatus.workers.per_worker
+      ? Object.entries(lbStatus.workers.per_worker).map(([name, info]) => ({
+          account: name,
+          status: info.status === 'up' ? 'active' as const : 'paused' as const,
+        }))
+      : (lbStatus.accounts ?? []).map(acc => ({
+          account: acc,
+          status: (lbStatus.paused ?? []).includes(acc) ? 'paused' as const : 'active' as const,
+        }))
     : [];
 
   const activeCount = workers.filter(w => w.status === 'active').length;
@@ -127,8 +145,8 @@ export default function StatusTab() {
           {lbStatus && (
             <Section title={`Worker-Accounts (${activeCount} aktiv / ${pausedCount} pausiert / ${workers.length} gesamt)`}>
               <Row label="Load Balancer" value={lbStatus.load_balancer} mono />
-              <Row label="Strategie" value={lbStatus.strategy} />
-              <Row label="Failover" value={lbStatus.failover === 'enabled' ? 'Aktiviert' : 'Deaktiviert'} />
+              <Row label="Strategie" value={lbStatus.pools?.normal?.strategy ?? lbStatus.strategy ?? 'round-robin'} />
+              <Row label="Failover" value={lbStatus.pools?.production ? `${lbStatus.pools.production.target} + fallback` : (lbStatus.failover === 'enabled' ? 'Aktiviert' : 'Deaktiviert')} />
               {rateLimits && (
                 <Row
                   label="Rate-Limited Workers"
