@@ -669,8 +669,55 @@ router.get('/api/bridge/metrics/usage-breakdown', async (req: any, res: any) => 
   }
 });
 
-// Persistent metrics from PostgreSQL (survives worker restarts)
-router.get("/api/bridge/metrics/persistent", bridgeMetricHandler("Persistent", "/v1/metrics/persistent", { source: "postgresql", realtime: {}, daily: [], endpoints: [], models: [], apps: [] }));
+// Persistent metrics — composited from real JSONL-backed endpoints (survives worker restarts)
+router.get("/api/bridge/metrics/persistent", async (req: any, res: any) => {
+  try {
+    const [usageBreakdown, promptPerf] = await Promise.all([
+      bridgeFetch('/v1/metrics/usage-breakdown?hours=24').catch(() => null),
+      bridgeFetch('/v1/metrics/prompt-performance?hours=168').catch(() => null),
+    ]);
+
+    const summary = usageBreakdown?.summary || {};
+    const apps = (usageBreakdown?.apps || []).map((a: any) => ({
+      app_id: a.app_id,
+      total_requests: a.calls || 0,
+      total_tokens: a.total_tokens || 0,
+      total_cost_usd: estimateTokenCost(a.input_tokens || 0, a.output_tokens || 0),
+      avg_response_time_ms: 0,
+      success_rate: a.calls > 0 ? Math.round((1 - (a.errors || 0) / a.calls) * 100) : 100,
+      last_seen: undefined,
+      unique_users: a.users ? Object.keys(a.users).length : 0,
+    }));
+    const models = (usageBreakdown?.models || []).map((m: any) => ({
+      model: m.model,
+      total_requests: m.calls || 0,
+      total_tokens: m.total_tokens || 0,
+      total_cost_usd: estimateTokenCost(m.input_tokens || 0, m.output_tokens || 0),
+    }));
+
+    res.json({
+      source: "jsonl",
+      realtime: {
+        total_requests: summary.total_calls || 0,
+        total_tokens: summary.total_tokens || 0,
+        total_cost_usd: estimateTokenCost(summary.total_input_tokens || 0, summary.total_output_tokens || 0),
+        avg_response_time_ms: 0,
+        success_rate: summary.total_calls > 0 ? Math.round((1 - (summary.total_errors || 0) / summary.total_calls) * 100) : 100,
+      },
+      daily: [],
+      apps,
+      models,
+    });
+  } catch (err: any) {
+    console.warn(`[Bridge] Persistent: ${err.message}`);
+    res.json({ source: "jsonl", realtime: {}, daily: [], apps: [], models: [], _error: err.message });
+  }
+});
+
+function estimateTokenCost(inputTokens: number, outputTokens: number): number {
+  // Default Sonnet pricing as rough estimate
+  return (inputTokens / 1_000_000) * 3.0 + (outputTokens / 1_000_000) * 15.0;
+}
 
 // Per-app metrics breakdown (connected frontend apps)
 router.get("/api/bridge/metrics/apps", bridgeMetricHandler("Apps", "/v1/metrics/apps", { source: "postgresql", apps_period: [], apps_realtime: [] }));

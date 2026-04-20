@@ -61,7 +61,7 @@ export default function CostAnalyticsTab() {
 
   const getChartData = () => {
     if (!data) return [];
-    return Object.entries(data.breakdown).map(([model, stats]) => ({
+    return Object.entries(data.breakdown ?? {}).map(([model, stats]) => ({
       model,
       cost: stats.cost_usd,
       tokens: stats.tokens,
