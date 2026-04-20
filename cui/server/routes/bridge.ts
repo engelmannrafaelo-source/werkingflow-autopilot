@@ -320,6 +320,9 @@ const BRIDGE_API_KEY = process.env.AI_BRIDGE_API_KEY || '';
 async function bridgeFetch(path: string, options: any = {}) {
   const headers = {
     'Authorization': `Bearer ${BRIDGE_API_KEY}`,
+    'X-App-ID': 'cui',
+    'X-User-ID': 'cui-system',
+    'X-Agent-ID': 'bridge-monitor',
     ...options.headers,
   };
 
