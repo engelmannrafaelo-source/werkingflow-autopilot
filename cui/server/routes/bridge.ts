@@ -457,60 +457,49 @@ router.get('/api/bridge/metrics/usage', async (_req, res) => {
     });
   }
 });
-// Cost: Composite from /stats + /v1/metrics/request-log (Bridge has no native cost tracking)
+// Cost: Real token data from usage-breakdown (JSONL-based, metrics-reader)
 router.get('/api/bridge/metrics/cost', async (_req, res) => {
   try {
-    const [stats, requestLog] = await Promise.all([
-      bridgeFetch('/stats').catch(() => null),
-      bridgeFetch('/v1/metrics/request-log?hours=24&limit=2000').catch(() => null),
-    ]);
+    const usage = await bridgeFetch('/v1/metrics/usage-breakdown?hours=24');
+    if (!usage || !usage.summary) {
+      throw new Error('usage-breakdown returned no data');
+    }
 
-    const totalRequests = stats?.request_limiting?.total_requests ?? 0;
+    const PRICING: Record<string, { input: number; output: number }> = {
+      'claude-haiku-4-5-20251001':   { input: 0.80,  output: 4.00 },
+      'claude-sonnet-4-5-20250929':  { input: 3.00,  output: 15.00 },
+      'claude-opus-4-6':             { input: 15.00, output: 75.00 },
+      'claude-opus-4-20250514':      { input: 15.00, output: 75.00 },
+    };
 
-    // Count requests by model from the request log (endpoint = /v1/chat/completions)
-    const chatRequests = (requestLog?.entries ?? []).filter(
-      (e: any) => e.endpoint === '/v1/chat/completions' && e.status === 200
-    );
+    const breakdown: Record<string, { requests: number; input_tokens: number; output_tokens: number; cost_usd: number }> = {};
+    let totalCost = 0;
 
-    // Estimate tokens/costs from duration (rough heuristic since Bridge doesn't track tokens)
-    // Average: ~500 tokens/s output, ~2000 tokens input per request
-    const estimatedTokens = chatRequests.length * 3000; // rough estimate
-    const estimatedCost = chatRequests.length * 0.015; // ~$0.015 per sonnet request avg
-
-    // Build model breakdown (we don't have model info in logs, show aggregate)
-    const breakdown: Record<string, { requests: number; tokens: number; cost_usd: number }> = {};
-    if (chatRequests.length > 0) {
-      breakdown['claude-sonnet (estimated)'] = {
-        requests: chatRequests.length,
-        tokens: estimatedTokens,
-        cost_usd: estimatedCost,
+    for (const m of (usage.models ?? [])) {
+      const p = PRICING[m.model];
+      const cost = p
+        ? (m.input_tokens / 1_000_000) * p.input + (m.output_tokens / 1_000_000) * p.output
+        : 0;
+      totalCost += cost;
+      breakdown[m.model] = {
+        requests: m.calls ?? 0,
+        input_tokens: m.input_tokens ?? 0,
+        output_tokens: m.output_tokens ?? 0,
+        cost_usd: cost,
       };
     }
 
     res.json({
-      total_requests: totalRequests,
-      estimated_tokens: estimatedTokens,
-      estimated_cost_usd: estimatedCost,
+      total_requests: usage.summary.total_calls ?? 0,
+      total_input_tokens: usage.summary.total_input_tokens ?? 0,
+      total_output_tokens: usage.summary.total_output_tokens ?? 0,
+      total_cost_usd: totalCost,
       breakdown,
-      note: 'Cost estimates based on request count. Bridge does not track per-request token usage.',
       timestamp: new Date().toISOString(),
-      _contractViolations: [{
-        code: 'BRIDGE_COST_ESTIMATED', severity: 'error',
-        message: 'Kosten sind Schätzwerte — nicht Token-basiert',
-        detail: `${chatRequests.length} Requests x $0.015 Durchschnitt = $${estimatedCost.toFixed(2)}. Echte Token-Daten fehlen.`,
-      }],
     });
   } catch (err: any) {
-    console.warn('[Bridge] Cost composite error:', err.message);
-    res.json({
-      total_requests: 0,
-      estimated_tokens: 0,
-      estimated_cost_usd: 0,
-      breakdown: {},
-      note: 'Bridge not reachable',
-      timestamp: new Date().toISOString(),
-      _error: err.message,
-    });
+    console.warn('[Bridge] Cost error:', err.message);
+    res.status(502).json({ error: err.message });
   }
 });
 router.get('/api/bridge/metrics/limits', bridgeMetricHandler('Limits', '/rate-limits', { current_worker: 'unknown', all_rate_limits: {} }));

@@ -8,8 +8,6 @@ const PRICING: Record<string, { input: number; output: number; label: string }> 
   'claude-opus-4-20250514':      { input: 15.00, output: 75.00, label: 'Opus 4' },
 };
 
-const EUR_RATE = 0.92;
-
 interface UsageRecord {
   model: string;
   input_tokens: number;
@@ -48,8 +46,8 @@ function calcCost(model: string, input: number, output: number): number {
   return (input / 1_000_000) * p.input + (output / 1_000_000) * p.output;
 }
 
-function formatEur(usd: number): string {
-  return `€${(usd * EUR_RATE).toFixed(2)}`;
+function formatUsd(usd: number): string {
+  return `$${usd.toFixed(2)}`;
 }
 
 export default function KostenTab() {
@@ -106,8 +104,8 @@ export default function KostenTab() {
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
                 <StatCard
                   label="Kosten"
-                  value={formatEur(tenantUsage.current_month.cost_usd)}
-                  sub={`≈ $${(tenantUsage.current_month.cost_usd ?? 0).toFixed(2)} USD`}
+                  value={formatUsd(tenantUsage.current_month.cost_usd)}
+                  sub="USD"
                   color="var(--tn-orange)"
                 />
                 <StatCard
@@ -119,7 +117,7 @@ export default function KostenTab() {
                 <StatCard
                   label="Budget"
                   value={`${(tenantUsage.usage_percent.budget ?? 0).toFixed(1)}%`}
-                  sub={`Limit: €${tenantUsage.limits.budget_limit_eur ?? 0}`}
+                  sub={`Limit: $${tenantUsage.limits.budget_limit_eur ?? 0}`}
                   color={(tenantUsage.usage_percent.budget ?? 0) > 80 ? 'var(--tn-red)' : 'var(--tn-green)'}
                 />
                 <StatCard
@@ -136,8 +134,8 @@ export default function KostenTab() {
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
               <StatCard
                 label="Gesamtkosten"
-                value={formatEur(totalCostUsd)}
-                sub={`≈ $${(totalCostUsd ?? 0).toFixed(2)} USD`}
+                value={formatUsd(totalCostUsd)}
+                sub="USD"
                 color="var(--tn-orange)"
               />
               <StatCard label="Input-Tokens" value={formatTokens(totalInputTokens)} sub="prompt" />
@@ -175,7 +173,7 @@ export default function KostenTab() {
                       <div style={{ textAlign: 'right', color: 'var(--tn-text-muted)', fontFamily: 'monospace', fontSize: 10 }}>{formatTokens(r.input_tokens)}</div>
                       <div style={{ textAlign: 'right', color: 'var(--tn-text-muted)', fontFamily: 'monospace', fontSize: 10 }}>{formatTokens(r.output_tokens)}</div>
                       <div style={{ textAlign: 'right', color: 'var(--tn-text-muted)', fontSize: 10 }}>{r.requests}</div>
-                      <div style={{ textAlign: 'right', color: 'var(--tn-orange)', fontWeight: 600, fontFamily: 'monospace' }}>{formatEur(cost)}</div>
+                      <div style={{ textAlign: 'right', color: 'var(--tn-orange)', fontWeight: 600, fontFamily: 'monospace' }}>{formatUsd(cost)}</div>
                     </div>
                   );
                 })}

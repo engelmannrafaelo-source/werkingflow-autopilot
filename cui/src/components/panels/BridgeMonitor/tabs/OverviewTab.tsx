@@ -333,7 +333,7 @@ export default function OverviewTab() {
 
           {/* Per-worker rows */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {(['worker1', 'worker2', 'worker3', 'worker4'] as const).map((w) => {
+            {Object.keys(forecast.workers ?? {}).map((w) => {
               const wd = forecast.workers?.[w];
               const limit = forecast.worker_limits?.[w];
               const sat = forecast.saturation?.[w];

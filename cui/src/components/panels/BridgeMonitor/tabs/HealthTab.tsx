@@ -107,7 +107,7 @@ export default function HealthTab() {
 
       setHealth({
         overall_status: overallStatus,
-        uptime_seconds: 86400, // Mock - would come from actual Bridge API
+        uptime_seconds: 0,
         checks,
       });
 
@@ -156,9 +156,11 @@ export default function HealthTab() {
             status={health.overall_status === 'healthy' ? 'ok' : health.overall_status === 'degraded' ? 'warn' : 'error'}
             label={health.overall_status.toUpperCase()}
           />
-          <div style={{ fontSize: 11, color: 'var(--tn-text-dim)' }}>
-            Uptime: {uptimeDays}d {uptimeHours % 24}h
-          </div>
+          {health.uptime_seconds > 0 && (
+            <div style={{ fontSize: 11, color: 'var(--tn-text-dim)' }}>
+              Uptime: {uptimeDays}d {uptimeHours % 24}h
+            </div>
+          )}
         </div>
       </div>
 

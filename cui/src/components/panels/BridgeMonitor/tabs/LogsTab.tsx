@@ -2,26 +2,26 @@ import { useState, useEffect, useCallback } from 'react';
 import { bridgeJson, StatusBadge, Toolbar, ErrorBanner, LoadingSpinner, SectionFlat, timeAgo } from '../shared';
 
 interface LogEntry {
-  timestamp: string;
+  ts: number;
   method: string;
   endpoint: string;
   status: number;
-  duration_ms: number;
-  model?: string;
-  tokens?: number;
+  duration_s: number;
+  worker?: string;
+  app_id?: string;
+  user_id?: string;
   error?: string;
 }
 
-interface LogStats {
-  total_requests: number;
-  success_rate: number;
-  avg_duration_ms: number;
-  errors_24h: number;
+interface RequestLogResponse {
+  entries: LogEntry[];
+  total: number;
+  period_hours: number;
 }
 
 export default function LogsTab() {
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [stats, setStats] = useState<LogStats | null>(null);
+  const [entries, setEntries] = useState<LogEntry[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
@@ -32,54 +32,20 @@ export default function LogsTab() {
     setLoading(true);
     setError('');
     try {
-      // Simulate log fetching - in reality this would call Bridge API endpoints
-      // For now, we'll use session/usage data as proxy until real logs endpoint exists
-      const [sessionsRes] = await Promise.allSettled([
-        bridgeJson<{ sessions: any[] }>('/v1/sessions', { timeout: 10000 }),
-      ]);
+      const data = await bridgeJson<RequestLogResponse>(
+        '/v1/metrics/request-log?hours=24&limit=200',
+        { timeout: 15000 }
+      );
 
-      // Mock logs from sessions data
-      if (sessionsRes.status === 'fulfilled') {
-        const sessions = sessionsRes.value.sessions ?? [];
-
-        // Convert sessions to log-like entries
-        const mockLogs: LogEntry[] = sessions.slice(0, 50).map((s: any, idx: number) => ({
-          timestamp: s.created_at || new Date().toISOString(),
-          method: 'POST',
-          endpoint: '/v1/messages',
-          status: s.status === 'completed' ? 200 : s.status === 'failed' ? 500 : 202,
-          duration_ms: s.duration_seconds ? s.duration_seconds * 1000 : Math.random() * 5000,
-          model: s.model || 'unknown',
-          tokens: s.total_tokens,
-        }));
-
-        setLogs(mockLogs);
-
-        // Calculate stats (defensive: handle empty array)
-        const successCount = mockLogs.filter(l => l.status < 400).length;
-        const errorCount = mockLogs.filter(l => l.status >= 400).length;
-        const totalDuration = mockLogs.reduce((sum, l) => sum + l.duration_ms, 0);
-
-        setStats({
-          total_requests: mockLogs.length,
-          success_rate: mockLogs.length > 0 ? (successCount / mockLogs.length) * 100 : 0,
-          avg_duration_ms: mockLogs.length > 0 ? totalDuration / mockLogs.length : 0,
-          errors_24h: errorCount,
-        });
-      } else {
-        // Fallback: empty logs
-        setLogs([]);
-        setStats({
-          total_requests: 0,
-          success_rate: 0,
-          avg_duration_ms: 0,
-          errors_24h: 0,
-        });
+      if (!data || !Array.isArray(data.entries)) {
+        throw new Error('Invalid response from /v1/metrics/request-log');
       }
 
+      setEntries(data.entries);
+      setTotal(data.total ?? data.entries.length);
       setLastRefresh(new Date());
     } catch (err: any) {
-      setError(err.message || 'Failed to load logs');
+      setError(err.message || 'Failed to load request log');
     } finally {
       setLoading(false);
     }
@@ -91,23 +57,27 @@ export default function LogsTab() {
     return () => clearInterval(interval);
   }, [fetchAll]);
 
-  // Filter logs
-  const filteredLogs = logs.filter(log => {
-    if (statusFilter === 'success' && log.status >= 400) return false;
-    if (statusFilter === 'error' && log.status < 400) return false;
-    if (searchTerm && !log.endpoint.toLowerCase().includes(searchTerm.toLowerCase())) return false;
+  const filteredEntries = entries.filter(entry => {
+    if (statusFilter === 'success' && entry.status >= 400) return false;
+    if (statusFilter === 'error' && entry.status < 400) return false;
+    if (searchTerm && !entry.endpoint.toLowerCase().includes(searchTerm.toLowerCase())) return false;
     return true;
   });
+
+  const successCount = entries.filter(e => e.status < 400).length;
+  const errorCount = entries.filter(e => e.status >= 400).length;
+  const avgDuration = entries.length > 0
+    ? entries.reduce((sum, e) => sum + (e.duration_s ?? 0), 0) / entries.length
+    : 0;
 
   return (
     <div data-ai-id="logs-tab-content" style={{ padding: '16px 12px', overflowY: 'auto', height: '100%' }}>
       <Toolbar onRefresh={fetchAll} lastRefresh={lastRefresh} />
 
-      {/* Defensive: Show loading/error INSIDE wrapper, never replace it */}
       {loading && <LoadingSpinner />}
       {error && <ErrorBanner message={error} onRetry={fetchAll} />}
 
-      {/* Filters - ALWAYS visible (defensive: works even during loading) */}
+      {/* Filters */}
       <div data-ai-id="logs-filters" style={{ marginBottom: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
         <input
           data-ai-id="logs-search-input"
@@ -144,35 +114,35 @@ export default function LogsTab() {
         </select>
       </div>
 
-      {/* Stats Cards - Conditional on loading/error */}
-      {!loading && !error && stats && (
+      {/* Stats Cards */}
+      {!loading && !error && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 16 }}>
           <div style={{ padding: 12, background: 'var(--tn-surface)', borderRadius: 4, border: '1px solid var(--tn-border)' }}>
-            <div style={{ fontSize: 11, color: 'var(--tn-text-dim)', marginBottom: 4 }}>Total Requests</div>
-            <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--tn-text)' }}>{stats.total_requests}</div>
+            <div style={{ fontSize: 11, color: 'var(--tn-text-dim)', marginBottom: 4 }}>Total (24h)</div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--tn-text)' }}>{total}</div>
           </div>
           <div style={{ padding: 12, background: 'var(--tn-surface)', borderRadius: 4, border: '1px solid var(--tn-border)' }}>
             <div style={{ fontSize: 11, color: 'var(--tn-text-dim)', marginBottom: 4 }}>Success Rate</div>
-            <div style={{ fontSize: 20, fontWeight: 700, color: stats.success_rate >= 95 ? 'var(--tn-green)' : 'var(--tn-yellow)' }}>
-              {stats.success_rate.toFixed(1)}%
+            <div style={{ fontSize: 20, fontWeight: 700, color: entries.length > 0 && (successCount / entries.length) >= 0.95 ? 'var(--tn-green)' : 'var(--tn-yellow)' }}>
+              {entries.length > 0 ? ((successCount / entries.length) * 100).toFixed(1) : '0'}%
             </div>
           </div>
           <div style={{ padding: 12, background: 'var(--tn-surface)', borderRadius: 4, border: '1px solid var(--tn-border)' }}>
             <div style={{ fontSize: 11, color: 'var(--tn-text-dim)', marginBottom: 4 }}>Avg Duration</div>
-            <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--tn-text)' }}>{stats.avg_duration_ms.toFixed(0)}ms</div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--tn-text)' }}>{(avgDuration * 1000).toFixed(0)}ms</div>
           </div>
           <div style={{ padding: 12, background: 'var(--tn-surface)', borderRadius: 4, border: '1px solid var(--tn-border)' }}>
             <div style={{ fontSize: 11, color: 'var(--tn-text-dim)', marginBottom: 4 }}>Errors (24h)</div>
-            <div style={{ fontSize: 20, fontWeight: 700, color: stats.errors_24h > 0 ? 'var(--tn-red)' : 'var(--tn-green)' }}>
-              {stats.errors_24h}
+            <div style={{ fontSize: 20, fontWeight: 700, color: errorCount > 0 ? 'var(--tn-red)' : 'var(--tn-green)' }}>
+              {errorCount}
             </div>
           </div>
         </div>
       )}
 
       {/* Logs Table */}
-      <SectionFlat title={`Request Logs (${filteredLogs.length})`}>
-        {filteredLogs.length === 0 ? (
+      <SectionFlat title={`Request Log (${filteredEntries.length} shown)`}>
+        {filteredEntries.length === 0 ? (
           <div data-ai-id="logs-empty-state" style={{ padding: 24, textAlign: 'center', color: 'var(--tn-text-dim)', fontSize: 13 }}>
             No log entries found
           </div>
@@ -185,11 +155,11 @@ export default function LogsTab() {
                 <th style={{ padding: '8px 12px', fontWeight: 600, color: 'var(--tn-text-dim)' }}>Endpoint</th>
                 <th style={{ padding: '8px 12px', fontWeight: 600, color: 'var(--tn-text-dim)' }}>Status</th>
                 <th style={{ padding: '8px 12px', fontWeight: 600, color: 'var(--tn-text-dim)' }}>Duration</th>
-                <th style={{ padding: '8px 12px', fontWeight: 600, color: 'var(--tn-text-dim)' }}>Model</th>
+                <th style={{ padding: '8px 12px', fontWeight: 600, color: 'var(--tn-text-dim)' }}>Worker</th>
               </tr>
             </thead>
             <tbody>
-              {filteredLogs.map((log, idx) => (
+              {filteredEntries.map((entry, idx) => (
                 <tr
                   key={idx}
                   style={{
@@ -198,25 +168,25 @@ export default function LogsTab() {
                   }}
                 >
                   <td style={{ padding: '8px 12px', color: 'var(--tn-text-dim)', fontFamily: 'monospace' }}>
-                    {timeAgo(log.timestamp)}
+                    {entry.ts ? timeAgo(new Date(entry.ts * 1000).toISOString()) : '-'}
                   </td>
                   <td style={{ padding: '8px 12px', color: 'var(--tn-text)', fontFamily: 'monospace' }}>
-                    {log.method}
+                    {entry.method}
                   </td>
                   <td style={{ padding: '8px 12px', color: 'var(--tn-text)', fontFamily: 'monospace' }}>
-                    {log.endpoint}
+                    {entry.endpoint}
                   </td>
                   <td style={{ padding: '8px 12px' }}>
                     <StatusBadge
-                      status={log.status < 400 ? 'ok' : 'error'}
-                      label={log.status.toString()}
+                      status={entry.status < 400 ? 'ok' : 'error'}
+                      label={entry.status.toString()}
                     />
                   </td>
                   <td style={{ padding: '8px 12px', color: 'var(--tn-text)', fontFamily: 'monospace' }}>
-                    {log.duration_ms.toFixed(0)}ms
+                    {entry.duration_s != null ? `${(entry.duration_s * 1000).toFixed(0)}ms` : '-'}
                   </td>
                   <td style={{ padding: '8px 12px', color: 'var(--tn-text-dim)', fontSize: 10 }}>
-                    {log.model || '-'}
+                    {entry.worker || '-'}
                   </td>
                 </tr>
               ))}
@@ -224,10 +194,6 @@ export default function LogsTab() {
           </table>
         )}
       </SectionFlat>
-
-      <div style={{ marginTop: 12, padding: 12, background: 'var(--tn-bg-dark)', borderRadius: 4, fontSize: 11, color: 'var(--tn-text-dim)' }}>
-        <strong>Note:</strong> Currently showing session data as proxy logs. Full HTTP request logs require Bridge API extension.
-      </div>
     </div>
   );
 }

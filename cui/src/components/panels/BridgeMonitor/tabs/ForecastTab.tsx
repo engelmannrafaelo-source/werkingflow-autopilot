@@ -146,12 +146,16 @@ interface LimitersResponse {
   _error?: string;
 }
 
-const WORKER_META: Record<string, { color: string; label: string }> = {
-  worker1: { color: '#7aa2f7', label: 'W1 (engelmann)' },
-  worker2: { color: '#9ece6a', label: 'W2 (office)' },
-  worker3: { color: '#e0af68', label: 'W3 (gmail)' },
-  worker4: { color: '#bb9af7', label: 'W4 (werking)' },
-};
+const WORKER_COLORS = ['#7aa2f7', '#9ece6a', '#e0af68', '#bb9af7', '#f7768e', '#73daca', '#ff9e64', '#c0caf5'];
+
+function getWorkerMeta(name: string): { color: string; label: string } {
+  const num = parseInt(name.replace(/\D/g, ''), 10);
+  const colorIdx = isNaN(num) ? name.length : num - 1;
+  return {
+    color: WORKER_COLORS[colorIdx % WORKER_COLORS.length],
+    label: name.replace('worker', 'W').replace('-', ' '),
+  };
+}
 
 type MetricMeta = {
   key: MetricKey;
@@ -217,9 +221,7 @@ export default function ForecastTab() {
   const [bucketSec, setBucketSec] = useState(60);
   const [metric, setMetric] = useState<MetricKey>('rpm');
   const [showRejects, setShowRejects] = useState(true);
-  const [enabledWorkers, setEnabledWorkers] = useState<Record<string, boolean>>({
-    worker1: true, worker2: true, worker3: true, worker4: true,
-  });
+  const [enabledWorkers, setEnabledWorkers] = useState<Record<string, boolean>>({});
 
   const fetchData = useCallback(async () => {
     if ((window as any).__cuiServerAlive === false) return;
@@ -241,6 +243,15 @@ export default function ForecastTab() {
         const raw: ApiResponse = await thrRes.value.json();
         if (raw._error) setError(raw._error);
         setData(raw);
+        // Initialize enabledWorkers from actual data (only on first load)
+        if (raw.workers) {
+          setEnabledWorkers(prev => {
+            if (Object.keys(prev).length > 0) return prev;
+            const init: Record<string, boolean> = {};
+            Object.keys(raw.workers).forEach(k => { init[k] = true; });
+            return init;
+          });
+        }
       }
       if (limRes.status === 'fulfilled' && limRes.value.ok) {
         try {
@@ -395,16 +406,16 @@ export default function ForecastTab() {
       </div>
 
       {/* Bridge totals strip */}
-      {data && (
+      {data && data.totals && (
         <div style={{
           display: 'flex', gap: 16, fontSize: 10, color: 'var(--tn-text-muted)',
           padding: '6px 10px', background: 'var(--tn-bg)', border: '1px solid var(--tn-border)',
           borderRadius: 4, marginBottom: 8, flexWrap: 'wrap', alignItems: 'center',
         }}>
-          <div><b style={{ color: 'var(--tn-text)' }}>{data.totals.calls.toLocaleString()}</b> calls</div>
-          <div style={{ color: 'var(--tn-green)' }}><b>{data.totals.successes.toLocaleString()}</b> success</div>
-          <div style={{ color: 'var(--tn-red)' }}><b>{data.totals.concurrency_rejects_503.toLocaleString()}</b> 503 concurrency-rejects (bridge voll)</div>
-          <div style={{ color: 'var(--tn-orange)' }}><b>{data.totals.upstream_errors.toLocaleString()}</b> upstream errors (Anthropic)</div>
+          <div><b style={{ color: 'var(--tn-text)' }}>{(data.totals.calls ?? 0).toLocaleString()}</b> calls</div>
+          <div style={{ color: 'var(--tn-green)' }}><b>{(data.totals.successes ?? 0).toLocaleString()}</b> success</div>
+          <div style={{ color: 'var(--tn-red)' }}><b>{(data.totals.concurrency_rejects_503 ?? 0).toLocaleString()}</b> 503 concurrency-rejects (bridge voll)</div>
+          <div style={{ color: 'var(--tn-orange)' }}><b>{(data.totals.upstream_errors ?? 0).toLocaleString()}</b> upstream errors (Anthropic)</div>
           <div style={{ marginLeft: 'auto', color: 'var(--tn-green)', fontWeight: 700 }}>
             → safe bridge throttle: {fmtNum(data.totals.bridge_recommendation_rpm, 'req/min')} total
           </div>
@@ -436,9 +447,9 @@ export default function ForecastTab() {
             </div>
           </div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {(['worker1', 'worker2', 'worker3', 'worker4'] as const).map(wkey => {
+            {Object.keys(limiters.limiters).map((wkey, idx) => {
               const lim = limiters.limiters[wkey];
-              const meta = WORKER_META[wkey] || { color: '#888', label: wkey };
+              const meta = getWorkerMeta(wkey);
               if (!lim) {
                 return (
                   <div key={wkey} style={{
@@ -510,7 +521,7 @@ export default function ForecastTab() {
       {data && (
         <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
           {Object.entries(data.workers).map(([wkey, w]) => {
-            const meta = WORKER_META[wkey] || { color: '#888', label: wkey };
+            const meta = getWorkerMeta(wkey);
             const on = enabledWorkers[wkey];
             const c = w.ceiling;
             const cur = w.current ? (w.current[metricMeta.successKey] as number) : null;
@@ -622,7 +633,7 @@ export default function ForecastTab() {
                 {/* Per-worker reference lines */}
                 {Object.entries(data.workers).map(([wkey, w]) => {
                   if (!enabledWorkers[wkey]) return null;
-                  const meta = WORKER_META[wkey] || { color: '#888', label: wkey };
+                  const meta = getWorkerMeta(wkey);
                   const rec = metric === 'rpm'
                     ? w.ceiling.recommendation_rpm
                     : metric === 'in_tpm'
@@ -660,7 +671,7 @@ export default function ForecastTab() {
                 {/* Success throughput lines per worker (solid) */}
                 {Object.entries(data.workers).map(([wkey]) => {
                   if (!enabledWorkers[wkey]) return null;
-                  const meta = WORKER_META[wkey] || { color: '#888', label: wkey };
+                  const meta = getWorkerMeta(wkey);
                   return (
                     <Line
                       key={`${wkey}_success`}
@@ -679,7 +690,7 @@ export default function ForecastTab() {
                 {/* 503 reject lines per worker (dotted) — only on rpm metric */}
                 {metric === 'rpm' && showRejects && Object.entries(data.workers).map(([wkey]) => {
                   if (!enabledWorkers[wkey]) return null;
-                  const meta = WORKER_META[wkey] || { color: '#888', label: wkey };
+                  const meta = getWorkerMeta(wkey);
                   return (
                     <Line
                       key={`${wkey}_reject`}
@@ -700,7 +711,7 @@ export default function ForecastTab() {
                 {/* Upstream-error markers (red dots) */}
                 {Object.entries(errorScatter).map(([wkey, points]) => {
                   if (!enabledWorkers[wkey] || points.length === 0) return null;
-                  const meta = WORKER_META[wkey] || { color: '#888', label: wkey };
+                  const meta = getWorkerMeta(wkey);
                   return (
                     <Scatter
                       key={`${wkey}_err`}
