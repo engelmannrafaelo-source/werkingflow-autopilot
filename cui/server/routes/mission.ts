@@ -46,6 +46,7 @@ const _lastReminderSentAt = new Map<string, number>();
 
 function cleanupSubSession(sessionId: string) {
   _subSessionsAwaitingFinish.delete(sessionId);
+  _subSessionsInjectInProgress.delete(sessionId);
   convMeta.setFinished(sessionId, true);
   const parentSessionId = convMeta.getParentSessionId(sessionId);
   convMeta.deleteParentSession(sessionId);
@@ -220,6 +221,12 @@ export function initMissionRouter(deps: MissionDeps) {
 
       const result = await claudeCli.startConversation(parentAccountId, injectMessage, parentWorkDir, parentSessionId, parentModel);
       if (result.ok) {
+        // Re-check after await: cleanupSubSession may have run during the async call.
+        // Without this, we'd re-add a finished session to awaitingFinish → stale reminders.
+        if (convMeta.isFinished(sessionId)) {
+          _subSessionsInjectInProgress.delete(sessionId);
+          return;
+        }
         broadcast({ type: 'conv-subsession-complete', sessionId: parentSessionId, subSessionId: sessionId, result: subResult });
         console.log(`[SubSession] Result injected into parent ${parentSessionId.slice(0, 8)} — awaiting explicit finish`);
         _subSessionsAwaitingFinish.add(sessionId);
