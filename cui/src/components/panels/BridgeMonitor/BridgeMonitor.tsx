@@ -1,22 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { BRIDGE_URL, bridgeJson } from './shared';
+import { bridgeJson } from './shared';
 import ErrorBoundary from '../../ErrorBoundary';
-// New Business-Focused Tabs
-import OverviewTab from './tabs/OverviewTab';
-import SessionsTab from './tabs/SessionsTab';
-import UsageAnalyticsTab from './tabs/UsageAnalyticsTab';
-import CostAnalyticsTab from './tabs/CostAnalyticsTab';
-import SettingsTab from './tabs/SettingsTab';
-import LogsTab from './tabs/LogsTab';
-import HealthTab from './tabs/HealthTab';
-import RateLimitsTab from './tabs/RateLimitsTab';
-import ActivityFeedTab from './tabs/ActivityFeedTab';
-import PromptPerformanceTab from './tabs/PromptPerformanceTab';
-import ForecastTab from './tabs/ForecastTab';
-// Legacy Technical Tabs
 import StatusTab from './tabs/StatusTab';
-import MetrikenTab from './tabs/MetrikenTab';
-import CCUsageTab from './tabs/CCUsageTab';
+import LiveTab from './tabs/LiveTab';
+import AnalyticsTab from './tabs/AnalyticsTab';
+import ErrorsTab from './tabs/ErrorsTab';
+import HelpModal from './tabs/HelpModal';
 import { BuildInfo } from '../../BuildInfo';
 
 interface Tab {
@@ -47,27 +36,15 @@ interface QuickStatus {
 
 export default function BridgeMonitor() {
   const tabs: Tab[] = [
-    // Primary Monitoring Tabs (Match Test Expectations)
-    { key: 'overview',   label: 'Overview',     component: <ErrorBoundary componentName="OverviewTab"><OverviewTab /></ErrorBoundary> },
-    { key: 'forecast',   label: 'Forecast',     component: <ErrorBoundary componentName="ForecastTab"><ForecastTab /></ErrorBoundary> },
-    { key: 'sessions',   label: 'Sessions',     component: <ErrorBoundary componentName="SessionsTab"><SessionsTab /></ErrorBoundary> },
-    { key: 'stats',      label: 'Stats',        component: <ErrorBoundary componentName="UsageAnalyticsTab"><UsageAnalyticsTab /></ErrorBoundary> },
-    { key: 'costs',      label: 'Costs',        component: <ErrorBoundary componentName="CostAnalyticsTab"><CostAnalyticsTab /></ErrorBoundary> },
-    { key: 'settings',   label: 'Settings',     component: <ErrorBoundary componentName="SettingsTab"><SettingsTab /></ErrorBoundary> },
-    { key: 'logs',       label: 'Logs',         component: <ErrorBoundary componentName="LogsTab"><LogsTab /></ErrorBoundary> },
-    { key: 'health',     label: 'Health',       component: <ErrorBoundary componentName="HealthTab"><HealthTab /></ErrorBoundary> },
-    // Prompt Performance (per-agent duration, error rate, tokens)
-    { key: 'prompts',    label: 'Prompts',      component: <ErrorBoundary componentName="PromptPerformanceTab"><PromptPerformanceTab /></ErrorBoundary> },
-    // Additional Tabs
-    { key: 'limits',     label: 'Limits',       component: <ErrorBoundary componentName="RateLimitsTab"><RateLimitsTab /></ErrorBoundary> },
-    { key: 'activity',   label: 'Activity',     component: <ErrorBoundary componentName="ActivityFeedTab"><ActivityFeedTab /></ErrorBoundary> },
-    { key: 'status',     label: 'Status',       component: <ErrorBoundary componentName="StatusTab"><StatusTab /></ErrorBoundary> },
-    { key: 'metriken',   label: 'Metriken',     component: <ErrorBoundary componentName="MetrikenTab"><MetrikenTab /></ErrorBoundary> },
-    { key: 'cc-usage',   label: 'CC-Usage',     component: <ErrorBoundary componentName="CCUsageTab"><CCUsageTab /></ErrorBoundary> },
+    { key: 'status',    label: 'Status',    component: <ErrorBoundary componentName="StatusTab"><StatusTab /></ErrorBoundary> },
+    { key: 'live',      label: 'Live',      component: <ErrorBoundary componentName="LiveTab"><LiveTab /></ErrorBoundary> },
+    { key: 'analytics', label: 'Analytics', component: <ErrorBoundary componentName="AnalyticsTab"><AnalyticsTab /></ErrorBoundary> },
+    { key: 'errors',    label: 'Errors',    component: <ErrorBoundary componentName="ErrorsTab"><ErrorsTab /></ErrorBoundary> },
   ];
 
   const [activeTab, setActiveTab] = useState(tabs[0].key);
   const [quickStatus, setQuickStatus] = useState<QuickStatus | null>(null);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   // Lightweight status poll for header badge
   useEffect(() => {
@@ -75,7 +52,10 @@ export default function BridgeMonitor() {
       try {
         const [healthRes, lbRes, cliRes, guardRes] = await Promise.allSettled([
           bridgeJson<{ status: string }>('/health', { timeout: 5000 }),
-          bridgeJson<{ workers: number; paused: string[] }>('/lb-status', { timeout: 5000 }),
+          bridgeJson<{
+            workers?: { total?: number; up?: number; down?: number } | number;
+            paused?: string[];
+          }>('/lb-status', { timeout: 5000 }),
           bridgeJson<{ cli_session_stats: { running: number } }>('/v1/cli-sessions/stats', { timeout: 5000 }),
           fetch('/api/bridge/guard/status', { signal: AbortSignal.timeout(3000) }).then(r => r.json()),
         ]);
@@ -85,14 +65,23 @@ export default function BridgeMonitor() {
         const cli = cliRes.status === 'fulfilled' ? cliRes.value.cli_session_stats : null;
         const guard = guardRes.status === 'fulfilled' ? guardRes.value : { running: false };
 
-        // Workers: lb-status may return empty/invalid — fallback to health check result
-        const workers = lb?.workers ?? (healthy ? 4 : 0); // Bridge has 4 workers by default
-        const paused = lb?.paused?.length ?? 0;
+        let workers = 0;
+        let activeWorkers = 0;
+        if (lb?.workers && typeof lb.workers === 'object') {
+          workers = lb.workers.total ?? 0;
+          activeWorkers = lb.workers.up ?? 0;
+        } else if (typeof lb?.workers === 'number') {
+          workers = lb.workers;
+          activeWorkers = workers - (lb.paused?.length ?? 0);
+        } else {
+          workers = healthy ? 4 : 0;
+          activeWorkers = workers;
+        }
 
         setQuickStatus({
           healthy,
           workers,
-          activeWorkers: workers - paused,
+          activeWorkers,
           cliRunning: cli?.running ?? 0,
           guard,
         });
@@ -158,7 +147,6 @@ export default function BridgeMonitor() {
               }}>
                 {quickStatus.activeWorkers}/{quickStatus.workers} workers
               </span>
-              {/* AI-Guard status badge */}
               {quickStatus.guard?.running ? (
                 <span style={{
                   fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 3,
@@ -182,6 +170,20 @@ export default function BridgeMonitor() {
             </div>
           )}
 
+          {/* Help button */}
+          <button
+            data-ai-id="bridge-help-btn"
+            onClick={() => setHelpOpen(true)}
+            style={{
+              background: 'none', border: '1px solid var(--tn-border)',
+              color: 'var(--tn-text-muted)', borderRadius: 4,
+              fontSize: 11, fontWeight: 700, padding: '2px 8px',
+              cursor: 'pointer',
+            }}
+          >
+            ?
+          </button>
+
           <span style={{
             fontSize: 9, fontWeight: 700, letterSpacing: '0.05em',
             background: 'rgba(122,162,247,0.15)', color: 'var(--tn-blue)',
@@ -192,14 +194,13 @@ export default function BridgeMonitor() {
           </span>
         </div>
 
-        {/* Sub-Tabs */}
+        {/* Tabs */}
         <div
           data-ai-id="bridge-monitor-tabs"
           style={{
             display: 'flex',
             gap: 4,
             padding: '0 12px 8px',
-            overflowX: 'auto',
           }}
         >
           {tabs.map((tab) => (
@@ -227,7 +228,7 @@ export default function BridgeMonitor() {
         </div>
       </div>
 
-      {/* Tab Content - Defensive: Keep all mounted, toggle visibility to prevent race conditions */}
+      {/* Tab Content */}
       <div style={{ flex: 1, overflow: 'auto', minHeight: 0, position: 'relative' }}>
         {tabs.map((tab) => (
           <div
@@ -243,6 +244,9 @@ export default function BridgeMonitor() {
           </div>
         ))}
       </div>
+
+      {/* Help Modal */}
+      {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}
     </div>
   );
 }

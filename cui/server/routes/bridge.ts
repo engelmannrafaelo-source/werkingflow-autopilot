@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { resolve, join } from 'path';
-import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, statSync, openSync, readSync, closeSync } from 'fs';
 import { execFile } from 'child_process';
 import { ACCOUNT_CONFIG } from './claude-cli.js';
 
@@ -374,7 +374,7 @@ function bridgeMetricHandler(name: string, path: string | ((req: any) => string)
 // Overview: Composite from /stats + /health + /v1/sessions/stats + /rate-limits + AI-Guard
 router.get('/api/bridge/metrics/overview', async (_req, res) => {
   try {
-    const [stats, health, sessions, rateLimits, guardStatus] = await Promise.all([
+    const [stats, health, sessions, rateLimits, guardStatus, lbStatus, usageBreakdown] = await Promise.all([
       bridgeFetch('/stats').catch(() => null),
       bridgeFetch('/health').catch(() => null),
       bridgeFetch('/v1/sessions/stats').catch(() => null),
@@ -382,17 +382,44 @@ router.get('/api/bridge/metrics/overview', async (_req, res) => {
       // AI-Guard status (local service, fast)
       fetch('http://localhost:8050/status', { signal: AbortSignal.timeout(2000) })
         .then(r => r.json()).catch(() => null),
+      // Worker health aggregate (metrics-reader)
+      bridgeFetch('/lb-status').catch(() => null),
+      // Historical usage from JSONL (24h)
+      bridgeFetch('/v1/metrics/usage-breakdown?hours=24').catch(() => null),
     ]);
-    console.log('[Bridge] Overview: stats=%s health=%s sessions=%s limits=%s guard=%s',
+    console.log('[Bridge] Overview: stats=%s health=%s sessions=%s limits=%s guard=%s lb=%s usage=%s',
       stats ? 'ok' : 'fail', health ? 'ok' : 'fail', sessions ? 'ok' : 'fail',
-      rateLimits ? 'ok' : 'fail', guardStatus ? 'ok' : 'fail');
+      rateLimits ? 'ok' : 'fail', guardStatus ? 'ok' : 'fail',
+      lbStatus ? 'ok' : 'fail', usageBreakdown ? 'ok' : 'fail');
+
+    // Calculate cost from usage-breakdown
+    const PRICING: Record<string, { input: number; output: number }> = {
+      'claude-haiku-4-5-20251001':   { input: 0.80,  output: 4.00 },
+      'claude-sonnet-4-5-20250929':  { input: 3.00,  output: 15.00 },
+      'claude-opus-4-6':             { input: 15.00, output: 75.00 },
+      'claude-opus-4-20250514':      { input: 15.00, output: 75.00 },
+    };
+    let totalCostUsd = 0;
+    if (usageBreakdown?.models) {
+      for (const m of usageBreakdown.models) {
+        const p = PRICING[m.model];
+        if (p) totalCostUsd += (m.input_tokens / 1_000_000) * p.input + (m.output_tokens / 1_000_000) * p.output;
+      }
+    }
+
+    // Worker count from lb-status
+    const workersUp = lbStatus?.workers?.up ?? 0;
+    const workersTotal = lbStatus?.workers?.total ?? 0;
+
     res.json({
       health: health?.status ?? stats?.status ?? 'unknown',
       worker: rateLimits?.current_worker ?? health?.worker_instance ?? '-',
       uptime_hours: 0,
-      total_requests: stats?.request_limiting?.total_requests ?? 0,
+      total_requests: usageBreakdown?.summary?.total_calls ?? stats?.request_limiting?.total_requests ?? 0,
       avg_response_time: 0,
-      success_rate: stats?.request_limiting?.rejected_requests === 0 ? 100 : 99,
+      success_rate: usageBreakdown?.summary?.total_calls > 0
+        ? ((1 - (usageBreakdown.summary.total_errors / usageBreakdown.summary.total_calls)) * 100)
+        : (stats?.request_limiting?.rejected_requests === 0 ? 100 : 99),
       active_sessions: sessions?.session_stats?.active_sessions ?? 0,
       active_requests: stats?.request_limiting?.active_requests ?? 0,
       max_concurrent: stats?.request_limiting?.max_concurrent ?? 0,
@@ -400,6 +427,23 @@ router.get('/api/bridge/metrics/overview', async (_req, res) => {
       memory_used_gb: stats?.request_limiting?.memory_used_gb ?? 0,
       can_accept_requests: stats?.can_accept_requests ?? false,
       rate_limited: rateLimits?.current_worker_rate_limited ?? false,
+      // Historical data (24h from JSONL)
+      usage_24h: usageBreakdown?.summary ? {
+        total_calls: usageBreakdown.summary.total_calls,
+        total_input_tokens: usageBreakdown.summary.total_input_tokens,
+        total_output_tokens: usageBreakdown.summary.total_output_tokens,
+        total_tokens: usageBreakdown.summary.total_tokens,
+        total_errors: usageBreakdown.summary.total_errors,
+        cost_usd: totalCostUsd,
+        models: (usageBreakdown.models ?? []).length,
+        apps: (usageBreakdown.apps ?? []).length,
+      } : null,
+      // Worker fleet status
+      workers_status: lbStatus ? {
+        up: workersUp,
+        total: workersTotal,
+        status: lbStatus.status,
+      } : null,
       // AI-Guard data
       guard: guardStatus ? {
         running: true,
@@ -712,7 +756,29 @@ function estimateTokenCost(inputTokens: number, outputTokens: number): number {
 }
 
 // Per-app metrics breakdown (connected frontend apps)
-router.get("/api/bridge/metrics/apps", bridgeMetricHandler("Apps", "/v1/metrics/apps", { source: "postgresql", apps_period: [], apps_realtime: [] }));
+// Bridge has no dedicated /v1/metrics/apps — derive from usage-breakdown instead
+router.get("/api/bridge/metrics/apps", async (req: any, res: any) => {
+  const hours = req.query.hours || '24';
+  try {
+    const data: any = await bridgeFetch(`/v1/metrics/usage-breakdown?hours=${hours}`);
+    const apps = (data?.apps || []).map((a: any) => ({
+      app_id: a.app_id,
+      requests: a.calls ?? 0,
+      total_requests: a.calls ?? 0,
+      tokens: a.total_tokens ?? 0,
+      total_tokens: a.total_tokens ?? 0,
+      input_tokens: a.input_tokens ?? 0,
+      output_tokens: a.output_tokens ?? 0,
+      errors: a.errors ?? 0,
+      error_rate: a.error_rate ?? 0,
+      last_seen: null,
+    }));
+    res.json({ source: 'usage-breakdown', apps_period: apps, apps_realtime: apps });
+  } catch (err: any) {
+    console.warn(`[Bridge] Apps: ${err.message}`);
+    res.json({ source: 'usage-breakdown', apps_period: [], apps_realtime: [], _error: err.message, _note: 'Bridge endpoint not available' });
+  }
+});
 
 // Prompt Performance metrics (per app + agent — duration, error rate, tokens)
 router.get("/api/bridge/metrics/prompt-performance", async (req: any, res: any) => {
@@ -935,6 +1001,574 @@ router.use('/api/bridge-proxy', async (req: any, res: any) => {
   } catch (err: any) {
     console.warn(`[Bridge-Proxy] ${req.method} ${bridgePath}: ${err.message}`);
     res.status(502).json({ error: `Bridge proxy error: ${err.message}`, path: bridgePath });
+  }
+});
+
+// ============================================================================
+// Error Feed — reads from rsync'd nginx access.jsonl on local disk.
+// Independent of Bridge availability: panel works even when Bridge is down.
+// Logs live at /root/projekte/local-storage/bridge-logs/{dev,prod}/nginx/
+// ============================================================================
+const BRIDGE_LOGS_DIR = '/root/projekte/local-storage/bridge-logs';
+
+interface NginxLogEntry {
+  ts: string;
+  ts_epoch: number;
+  remote: string;
+  method: string;
+  uri: string;
+  status: number;
+  bytes: number;
+  req_time: number;
+  upstream_addr: string;
+  upstream_status: string;
+  upstream_resp_time: string;
+  upstream_conn_time: string;
+  pool: string;
+  priority: string;
+  user_agent: string;
+  app_id: string;
+  user_id: string;
+  workflow_id: string;
+  job_id: string;
+  agent_id: string;
+  _source: 'dev' | 'prod';
+}
+
+function readLastLines(path: string, maxBytes: number): string[] {
+  if (!existsSync(path)) return [];
+  const stat = statSync(path);
+  const start = Math.max(0, stat.size - maxBytes);
+  const buf = Buffer.alloc(stat.size - start);
+  const fd = openSync(path, 'r');
+  try {
+    readSync(fd, buf, 0, buf.length, start);
+  } finally {
+    closeSync(fd);
+  }
+  const text = buf.toString('utf-8');
+  const lines = text.split('\n');
+  if (start > 0) lines.shift();
+  return lines.filter(Boolean);
+}
+
+router.get('/api/bridge/errors', async (req: any, res: any) => {
+  try {
+    const hours = parseFloat(req.query.hours || '24');
+    const minStatus = parseInt(req.query.min_status || '400', 10);
+    const limit = Math.min(parseInt(req.query.limit || '200', 10), 2000);
+    const endpoint = (req.query.endpoint || '').toLowerCase();
+    const app = (req.query.app || '').toLowerCase();
+    // Read last 10 MB per source — more than enough for 24h of errors
+    const READ_BYTES = 10 * 1024 * 1024;
+    const cutoff = Date.now() / 1000 - hours * 3600;
+
+    const sources: Array<{ label: 'dev' | 'prod'; path: string }> = [
+      { label: 'dev',  path: join(BRIDGE_LOGS_DIR, 'dev',  'nginx', 'access.jsonl') },
+      { label: 'prod', path: join(BRIDGE_LOGS_DIR, 'prod', 'nginx', 'access.jsonl') },
+    ];
+
+    const entries: NginxLogEntry[] = [];
+    const sourceStats: Record<string, { present: boolean; mtime: number | null; bytes: number }> = {};
+
+    for (const src of sources) {
+      if (!existsSync(src.path)) {
+        sourceStats[src.label] = { present: false, mtime: null, bytes: 0 };
+        continue;
+      }
+      const s = statSync(src.path);
+      sourceStats[src.label] = { present: true, mtime: s.mtimeMs, bytes: s.size };
+      const lines = readLastLines(src.path, READ_BYTES);
+      for (const line of lines) {
+        try {
+          const obj = JSON.parse(line);
+          if (obj.ts_epoch < cutoff) continue;
+          if (obj.status < minStatus) continue;
+          if (endpoint && !String(obj.uri || '').toLowerCase().includes(endpoint)) continue;
+          if (app && String(obj.app_id || '').toLowerCase() !== app) continue;
+          obj._source = src.label;
+          entries.push(obj);
+        } catch {
+          // skip malformed line
+        }
+      }
+    }
+
+    entries.sort((a, b) => b.ts_epoch - a.ts_epoch);
+    const trimmed = entries.slice(0, limit);
+
+    // Aggregate summary
+    const byStatus: Record<string, number> = {};
+    const byEndpoint: Record<string, number> = {};
+    const byApp: Record<string, number> = {};
+    const byUpstream: Record<string, number> = {};
+    for (const e of entries) {
+      byStatus[String(e.status)] = (byStatus[String(e.status)] ?? 0) + 1;
+      const ep = String(e.uri || '').split('?')[0];
+      byEndpoint[ep] = (byEndpoint[ep] ?? 0) + 1;
+      if (e.app_id) byApp[e.app_id] = (byApp[e.app_id] ?? 0) + 1;
+      if (e.upstream_addr) byUpstream[e.upstream_addr] = (byUpstream[e.upstream_addr] ?? 0) + 1;
+    }
+
+    res.json({
+      entries: trimmed,
+      total_matched: entries.length,
+      returned: trimmed.length,
+      summary: { byStatus, byEndpoint, byApp, byUpstream },
+      sources: sourceStats,
+      query: { hours, minStatus, limit, endpoint, app },
+    });
+  } catch (err: any) {
+    console.warn(`[Bridge] Errors: ${err.message}`);
+    res.status(500).json({ entries: [], _error: err.message });
+  }
+});
+
+// ============================================================================
+// Events Feed — Pool summaries, failover stats, incidents for Status tab
+// ============================================================================
+// An "incident" = >=3 errors on same endpoint within 60s (grouped).
+// A "rescued" request = multi-upstream with final status 2xx (failover worked).
+// A "lost" request = final status 5xx (failover failed or none attempted).
+// ============================================================================
+
+interface PoolSummary {
+  requests: number;
+  errors: number;          // all 4xx+5xx combined (legacy)
+  client_errors: number;   // 4xx — not an infra problem
+  server_errors: number;   // 5xx — infra problem
+  error_rate: number;      // 4xx+5xx / total (%)
+  server_error_rate: number; // 5xx / total (%)
+  p50_ms: number;
+  p95_ms: number;
+  avg_ms: number;
+  rescued: number;         // 5xx rescued by failover (success for customer)
+  lost: number;            // 5xx delivered to customer (real outage)
+  retry_count: number;
+  present: boolean;
+}
+
+interface Incident {
+  id: string;
+  source: 'dev' | 'prod';
+  endpoint: string;
+  start_ts: number;
+  end_ts: number;
+  count: number;
+  status_codes: Record<string, number>;
+  apps: Record<string, number>;
+  sample_user_agents: string[];
+  last_msg: string;
+  resolved: boolean;
+  rescued_via_failover: number;
+}
+
+function percentile(sorted: number[], p: number): number {
+  if (sorted.length === 0) return 0;
+  const idx = Math.min(sorted.length - 1, Math.floor(sorted.length * p));
+  return sorted[idx];
+}
+
+function summarizePool(entries: NginxLogEntry[]): PoolSummary {
+  if (entries.length === 0) {
+    return {
+      requests: 0, errors: 0, client_errors: 0, server_errors: 0,
+      error_rate: 0, server_error_rate: 0,
+      p50_ms: 0, p95_ms: 0, avg_ms: 0,
+      rescued: 0, lost: 0, retry_count: 0, present: false,
+    };
+  }
+  let errors = 0, clientErrors = 0, serverErrors = 0;
+  let rescued = 0, lost = 0, retries = 0, totalMs = 0;
+  const durations: number[] = [];
+  for (const e of entries) {
+    if (e.status >= 400) {
+      errors++;
+      if (e.status >= 500) serverErrors++;
+      else clientErrors++;
+    }
+    const hasMultiUpstream = typeof e.upstream_addr === 'string' && e.upstream_addr.includes(',');
+    if (hasMultiUpstream) {
+      const statuses = String(e.upstream_status || '').split(',').map(s => s.trim());
+      retries += Math.max(0, statuses.length - 1);
+      const finalStatus = parseInt(statuses[statuses.length - 1] || '0', 10);
+      const earlierFailure = statuses.slice(0, -1).some(s => parseInt(s, 10) >= 500);
+      if (earlierFailure && finalStatus >= 200 && finalStatus < 400) rescued++;
+      else if (finalStatus >= 500) lost++;
+    } else if (e.status >= 500) {
+      lost++;
+    }
+    const ms = Math.max(0, (e.req_time || 0) * 1000);
+    durations.push(ms);
+    totalMs += ms;
+  }
+  durations.sort((a, b) => a - b);
+  return {
+    requests: entries.length,
+    errors,
+    client_errors: clientErrors,
+    server_errors: serverErrors,
+    error_rate: (errors / entries.length) * 100,
+    server_error_rate: (serverErrors / entries.length) * 100,
+    p50_ms: percentile(durations, 0.5),
+    p95_ms: percentile(durations, 0.95),
+    avg_ms: totalMs / entries.length,
+    rescued,
+    lost,
+    retry_count: retries,
+    present: true,
+  };
+}
+
+function clusterIncidents(errors: NginxLogEntry[]): Incident[] {
+  // Group by endpoint + source. Within group, split into incidents when gap > 60s.
+  const GAP_SEC = 60;
+  const MIN_COUNT = 3;
+  const groups: Record<string, NginxLogEntry[]> = {};
+  for (const e of errors) {
+    const endpoint = String(e.uri || '').split('?')[0];
+    const key = `${e._source}::${endpoint}`;
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(e);
+  }
+  const incidents: Incident[] = [];
+  for (const [key, arr] of Object.entries(groups)) {
+    arr.sort((a, b) => a.ts_epoch - b.ts_epoch);
+    let bucket: NginxLogEntry[] = [];
+    const flush = () => {
+      if (bucket.length < MIN_COUNT) { bucket = []; return; }
+      const first = bucket[0];
+      const last = bucket[bucket.length - 1];
+      const statusCodes: Record<string, number> = {};
+      const apps: Record<string, number> = {};
+      const userAgents = new Set<string>();
+      let rescuedInBucket = 0;
+      for (const e of bucket) {
+        statusCodes[String(e.status)] = (statusCodes[String(e.status)] ?? 0) + 1;
+        if (e.app_id) apps[e.app_id] = (apps[e.app_id] ?? 0) + 1;
+        if (e.user_agent) userAgents.add(String(e.user_agent).slice(0, 40));
+        const hasMulti = typeof e.upstream_addr === 'string' && e.upstream_addr.includes(',');
+        if (hasMulti) {
+          const statuses = String(e.upstream_status || '').split(',').map(s => s.trim());
+          const finalStatus = parseInt(statuses[statuses.length - 1] || '0', 10);
+          if (finalStatus >= 200 && finalStatus < 400) rescuedInBucket++;
+        }
+      }
+      const nowEpoch = Date.now() / 1000;
+      incidents.push({
+        id: `${key}::${Math.floor(first.ts_epoch)}`,
+        source: first._source,
+        endpoint: key.split('::')[1],
+        start_ts: first.ts_epoch,
+        end_ts: last.ts_epoch,
+        count: bucket.length,
+        status_codes: statusCodes,
+        apps,
+        sample_user_agents: Array.from(userAgents).slice(0, 3),
+        last_msg: `${bucket.length} errors · ${Object.keys(statusCodes).join('/')} · ${Object.keys(apps).slice(0, 2).join(', ')}`,
+        resolved: (nowEpoch - last.ts_epoch) > 120,
+        rescued_via_failover: rescuedInBucket,
+      });
+      bucket = [];
+    };
+    for (const e of arr) {
+      if (bucket.length === 0) { bucket.push(e); continue; }
+      const prev = bucket[bucket.length - 1];
+      if (e.ts_epoch - prev.ts_epoch > GAP_SEC) flush();
+      bucket.push(e);
+    }
+    flush();
+  }
+  incidents.sort((a, b) => b.end_ts - a.end_ts);
+  return incidents;
+}
+
+// ============================================================================
+// Stability Ledger — hourly availability snapshots, persists across restarts.
+// Customer-impact metric: "lost" requests (5xx that weren't rescued).
+// Uptime = minutes in hour with ZERO lost requests / total minutes with traffic.
+// ============================================================================
+
+const STABILITY_DIR = '/root/projekte/local-storage/bridge-stability';
+const STABILITY_LEDGER = join(STABILITY_DIR, 'hourly.jsonl');
+
+interface HourSnapshot {
+  hour: string;             // ISO 2026-04-22T13:00:00Z
+  hour_epoch: number;       // seconds since epoch, floor to hour
+  dev: { requests: number; errors: number; server_errors: number; lost: number; outage_minutes: number };
+  prod: { requests: number; errors: number; server_errors: number; lost: number; outage_minutes: number };
+  generated_at: string;
+}
+
+function bucketEntriesByMinute(entries: NginxLogEntry[]): Map<number, { req: number; lost: number }> {
+  const map = new Map<number, { req: number; lost: number }>();
+  for (const e of entries) {
+    const minute = Math.floor(e.ts_epoch / 60) * 60;
+    let cell = map.get(minute);
+    if (!cell) { cell = { req: 0, lost: 0 }; map.set(minute, cell); }
+    cell.req++;
+    const hasMulti = typeof e.upstream_addr === 'string' && e.upstream_addr.includes(',');
+    if (hasMulti) {
+      const statuses = String(e.upstream_status || '').split(',').map(s => s.trim());
+      const finalStatus = parseInt(statuses[statuses.length - 1] || '0', 10);
+      if (finalStatus >= 500) cell.lost++;
+    } else if (e.status >= 500) {
+      cell.lost++;
+    }
+  }
+  return map;
+}
+
+function buildPoolSnapshot(entries: NginxLogEntry[]): HourSnapshot['dev'] {
+  const summary = summarizePool(entries);
+  const byMinute = bucketEntriesByMinute(entries);
+  let outageMinutes = 0;
+  for (const cell of byMinute.values()) {
+    if (cell.lost > 0) outageMinutes++;
+  }
+  return {
+    requests: summary.requests,
+    errors: summary.errors,
+    server_errors: summary.server_errors,
+    lost: summary.lost,
+    outage_minutes: outageMinutes,
+  };
+}
+
+function readLedger(): HourSnapshot[] {
+  if (!existsSync(STABILITY_LEDGER)) return [];
+  try {
+    const raw = readFileSync(STABILITY_LEDGER, 'utf-8');
+    const snapshots: HourSnapshot[] = [];
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue;
+      try { snapshots.push(JSON.parse(line)); } catch { /* skip */ }
+    }
+    return snapshots.sort((a, b) => a.hour_epoch - b.hour_epoch);
+  } catch {
+    return [];
+  }
+}
+
+// The ledger is written by a dedicated cron:
+//   /root/projekte/orchestrator/bin/bridge-stability-snapshot.py (*/15 min)
+// This server ONLY reads from the ledger (single-writer architecture) and
+// supplements with live-computed current-hour data for freshness.
+
+router.get('/api/bridge/stability', async (_req: any, res: any) => {
+  try {
+    const ledger = readLedger();
+    const now = Date.now() / 1000;
+
+    // Also compute current (in-progress) hour from live JSONL
+    const currentHourStart = Math.floor(now / 3600) * 3600;
+    const sources: Array<{ label: 'dev' | 'prod'; path: string }> = [
+      { label: 'dev',  path: join(BRIDGE_LOGS_DIR, 'dev',  'nginx', 'access.jsonl') },
+      { label: 'prod', path: join(BRIDGE_LOGS_DIR, 'prod', 'nginx', 'access.jsonl') },
+    ];
+    const liveByPool: Record<'dev' | 'prod', NginxLogEntry[]> = { dev: [], prod: [] };
+    for (const src of sources) {
+      if (!existsSync(src.path)) continue;
+      const lines = readLastLines(src.path, 20 * 1024 * 1024);
+      for (const line of lines) {
+        try {
+          const obj: NginxLogEntry = JSON.parse(line);
+          if (obj.ts_epoch < currentHourStart) continue;
+          liveByPool[src.label].push(obj);
+        } catch { /* skip */ }
+      }
+    }
+    const currentHour: HourSnapshot = {
+      hour: new Date(currentHourStart * 1000).toISOString(),
+      hour_epoch: currentHourStart,
+      dev: buildPoolSnapshot(liveByPool.dev),
+      prod: buildPoolSnapshot(liveByPool.prod),
+      generated_at: new Date().toISOString(),
+    };
+
+    const allHours = [...ledger.filter(h => h.hour_epoch !== currentHourStart), currentHour];
+
+    // Aggregate over windows
+    function aggregate(hours: HourSnapshot[]) {
+      const dev = { requests: 0, errors: 0, server_errors: 0, lost: 0, outage_minutes: 0 };
+      const prod = { requests: 0, errors: 0, server_errors: 0, lost: 0, outage_minutes: 0 };
+      for (const h of hours) {
+        dev.requests += h.dev.requests; dev.errors += h.dev.errors;
+        dev.server_errors += h.dev.server_errors; dev.lost += h.dev.lost;
+        dev.outage_minutes += h.dev.outage_minutes;
+        prod.requests += h.prod.requests; prod.errors += h.prod.errors;
+        prod.server_errors += h.prod.server_errors; prod.lost += h.prod.lost;
+        prod.outage_minutes += h.prod.outage_minutes;
+      }
+      return { dev, prod, hours_covered: hours.length };
+    }
+
+    // Uptime = (total_minutes - outage_minutes) / total_minutes, only counting hours with traffic
+    function uptimePct(aggregated: { requests: number; outage_minutes: number }, hoursCovered: number): number | null {
+      if (hoursCovered === 0 || aggregated.requests === 0) return null;
+      const totalMinutes = hoursCovered * 60;
+      return Math.max(0, Math.min(100, ((totalMinutes - aggregated.outage_minutes) / totalMinutes) * 100));
+    }
+
+    const nowHour = Math.floor(now / 3600);
+    const windows = {
+      '24h': allHours.filter(h => (nowHour - Math.floor(h.hour_epoch / 3600)) < 24),
+      '7d':  allHours.filter(h => (nowHour - Math.floor(h.hour_epoch / 3600)) < 24 * 7),
+      '30d': allHours.filter(h => (nowHour - Math.floor(h.hour_epoch / 3600)) < 24 * 30),
+    };
+    const agg24h = aggregate(windows['24h']);
+    const agg7d  = aggregate(windows['7d']);
+    const agg30d = aggregate(windows['30d']);
+
+    // Time since last Prod outage (last hour snapshot with prod.lost > 0)
+    let lastProdOutage: { hour: string; lost: number } | null = null;
+    for (let i = allHours.length - 1; i >= 0; i--) {
+      if (allHours[i].prod.lost > 0) {
+        lastProdOutage = { hour: allHours[i].hour, lost: allHours[i].prod.lost };
+        break;
+      }
+    }
+    const timeSinceProdOutageSec = lastProdOutage
+      ? Math.floor(now - new Date(lastProdOutage.hour).getTime() / 1000)
+      : null;
+
+    // Tracking window
+    const firstHour = allHours.length > 0 ? allHours[0].hour : null;
+    const trackingSec = firstHour ? Math.floor(now - new Date(firstHour).getTime() / 1000) : 0;
+
+    // Last 30 days daily aggregation (for sparkline/heatmap)
+    const daily: Array<{ day: string; dev_requests: number; dev_lost: number; prod_requests: number; prod_lost: number; prod_uptime_pct: number | null }> = [];
+    const byDay = new Map<string, HourSnapshot[]>();
+    for (const h of windows['30d']) {
+      const day = h.hour.slice(0, 10);
+      let list = byDay.get(day);
+      if (!list) { list = []; byDay.set(day, list); }
+      list.push(h);
+    }
+    for (const [day, hours] of Array.from(byDay.entries()).sort()) {
+      const agg = aggregate(hours);
+      daily.push({
+        day,
+        dev_requests: agg.dev.requests,
+        dev_lost: agg.dev.lost,
+        prod_requests: agg.prod.requests,
+        prod_lost: agg.prod.lost,
+        prod_uptime_pct: uptimePct(agg.prod, hours.length),
+      });
+    }
+
+    res.json({
+      tracking_since: firstHour,
+      tracking_duration_sec: trackingSec,
+      last_prod_outage: lastProdOutage,
+      time_since_prod_outage_sec: timeSinceProdOutageSec,
+      windows: {
+        '24h': {
+          uptime_prod_pct: uptimePct(agg24h.prod, agg24h.hours_covered),
+          uptime_dev_pct:  uptimePct(agg24h.dev,  agg24h.hours_covered),
+          dev: agg24h.dev, prod: agg24h.prod, hours_covered: agg24h.hours_covered,
+        },
+        '7d': {
+          uptime_prod_pct: uptimePct(agg7d.prod, agg7d.hours_covered),
+          uptime_dev_pct:  uptimePct(agg7d.dev,  agg7d.hours_covered),
+          dev: agg7d.dev, prod: agg7d.prod, hours_covered: agg7d.hours_covered,
+        },
+        '30d': {
+          uptime_prod_pct: uptimePct(agg30d.prod, agg30d.hours_covered),
+          uptime_dev_pct:  uptimePct(agg30d.dev,  agg30d.hours_covered),
+          dev: agg30d.dev, prod: agg30d.prod, hours_covered: agg30d.hours_covered,
+        },
+      },
+      daily,
+      generated_at: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    console.warn(`[Bridge] Stability: ${err.message}`);
+    res.status(500).json({ _error: err.message });
+  }
+});
+
+router.get('/api/bridge/events', async (req: any, res: any) => {
+  try {
+    const hours = parseFloat(req.query.hours || '1');
+    const READ_BYTES = 20 * 1024 * 1024;
+    const cutoff = Date.now() / 1000 - hours * 3600;
+
+    const sources: Array<{ label: 'dev' | 'prod'; path: string }> = [
+      { label: 'dev',  path: join(BRIDGE_LOGS_DIR, 'dev',  'nginx', 'access.jsonl') },
+      { label: 'prod', path: join(BRIDGE_LOGS_DIR, 'prod', 'nginx', 'access.jsonl') },
+    ];
+
+    const byPool: Record<'dev' | 'prod', NginxLogEntry[]> = { dev: [], prod: [] };
+    const sourceStats: Record<string, { present: boolean; mtime: number | null; bytes: number; age_sec: number | null }> = {};
+
+    for (const src of sources) {
+      if (!existsSync(src.path)) {
+        sourceStats[src.label] = { present: false, mtime: null, bytes: 0, age_sec: null };
+        continue;
+      }
+      const s = statSync(src.path);
+      const age = (Date.now() - s.mtimeMs) / 1000;
+      sourceStats[src.label] = { present: true, mtime: s.mtimeMs, bytes: s.size, age_sec: age };
+      const lines = readLastLines(src.path, READ_BYTES);
+      for (const line of lines) {
+        try {
+          const obj: NginxLogEntry = JSON.parse(line);
+          if (obj.ts_epoch < cutoff) continue;
+          obj._source = src.label;
+          byPool[src.label].push(obj);
+        } catch {
+          // skip malformed line
+        }
+      }
+    }
+
+    const pools = {
+      dev: summarizePool(byPool.dev),
+      prod: summarizePool(byPool.prod),
+    };
+
+    const errors = [...byPool.dev, ...byPool.prod].filter(e => e.status >= 400);
+    const incidents = clusterIncidents(errors);
+
+    const failover = {
+      dev_rescued: pools.dev.rescued,
+      dev_lost: pools.dev.lost,
+      prod_rescued: pools.prod.rescued,
+      prod_lost: pools.prod.lost,
+      total_retries: pools.dev.retry_count + pools.prod.retry_count,
+      total_rescued: pools.dev.rescued + pools.prod.rescued,
+      total_lost: pools.dev.lost + pools.prod.lost,
+      success_rate: (pools.dev.rescued + pools.prod.rescued + pools.dev.lost + pools.prod.lost) > 0
+        ? ((pools.dev.rescued + pools.prod.rescued) /
+           (pools.dev.rescued + pools.prod.rescued + pools.dev.lost + pools.prod.lost)) * 100
+        : 100,
+    };
+
+    const activeIncidents = incidents.filter(i => !i.resolved);
+    // Only Prod-lost (customer received 5xx) drives "critical".
+    // 4xx are client errors, rescued 5xx had zero customer impact.
+    const prodActiveLost = activeIncidents
+      .filter(i => i.source === 'prod')
+      .some(i => (i.count - (i.rescued_via_failover || 0)) > 0);
+    const overall_status: 'healthy' | 'degraded' | 'critical' =
+      (pools.prod.lost > 0 || prodActiveLost) ? 'critical' :
+      (pools.prod.server_error_rate >= 0.5 || !pools.dev.present) ? 'degraded' :
+      'healthy';
+
+    res.json({
+      overall_status,
+      pools,
+      failover,
+      incidents: incidents.slice(0, 50),
+      active_incidents: activeIncidents.length,
+      window_hours: hours,
+      sources: sourceStats,
+      generated_at: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    console.warn(`[Bridge] Events: ${err.message}`);
+    res.status(500).json({ _error: err.message });
   }
 });
 
