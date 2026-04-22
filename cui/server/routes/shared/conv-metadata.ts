@@ -31,9 +31,11 @@ interface ConvMetadata {
   parentSessions: Record<string, string>;
   /** sessionId → userId (for partner isolation) */
   users: Record<string, string>;
+  /** subSessionId → timestamp (ms) of first successful inject into parent — prevents re-inject loop */
+  injectedAt: Record<string, number>;
 }
 
-const EMPTY: ConvMetadata = { titles: {}, accounts: {}, workdirs: {}, finished: {}, lastPrompt: {}, models: {}, paused: {}, reviews: {}, subSessions: {}, parentSessions: {}, users: {} };
+const EMPTY: ConvMetadata = { titles: {}, accounts: {}, workdirs: {}, finished: {}, lastPrompt: {}, models: {}, paused: {}, reviews: {}, subSessions: {}, parentSessions: {}, users: {}, injectedAt: {} };
 
 let _data: ConvMetadata | null = null;
 let _filePath: string = '';
@@ -62,7 +64,7 @@ function _load(): ConvMetadata {
 
 function _scheduleSave() {
   _dirty = true;
-  if (_writeTimer) return; // Already scheduled
+  if (_writeTimer) return;
   _writeTimer = setTimeout(() => {
     _writeTimer = null;
     if (_dirty && _data) {
@@ -336,5 +338,27 @@ export function saveUser(sessionId: string, userId: string) {
   const data = _load();
   if (!data.users) data.users = {};
   data.users[sessionId] = userId;
+  _scheduleSave();
+}
+
+// ---------------------------------------------------------------------------
+// InjectedAt (subSessionId → timestamp of first successful inject into parent)
+// Prevents Phase 1 reminder loop from re-injecting the same result every tick.
+// ---------------------------------------------------------------------------
+
+export function getInjectedAt(sessionId: string): number | undefined {
+  return _load().injectedAt?.[sessionId];
+}
+
+export function setInjectedAt(sessionId: string, ts: number) {
+  const data = _load();
+  if (!data.injectedAt) data.injectedAt = {};
+  data.injectedAt[sessionId] = ts;
+  flush(); // persist immediately — critical guard, must survive server restart
+}
+
+export function deleteInjectedAt(sessionId: string) {
+  const data = _load();
+  if (data.injectedAt) delete data.injectedAt[sessionId];
   _scheduleSave();
 }

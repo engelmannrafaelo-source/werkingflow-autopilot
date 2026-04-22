@@ -46,6 +46,7 @@ const _lastReminderSentAt = new Map<string, number>();
 function cleanupSubSession(sessionId: string) {
   _subSessionsInjectInProgress.delete(sessionId);
   convMeta.setFinished(sessionId, true);
+  convMeta.deleteInjectedAt(sessionId);
   const parentSessionId = convMeta.getParentSessionId(sessionId);
   convMeta.deleteParentSession(sessionId);
   convMeta.flush(); // Persist immediately — debounced write could be lost on restart
@@ -222,6 +223,7 @@ export function initMissionRouter(deps: MissionDeps) {
         }
         broadcast({ type: 'conv-subsession-complete', sessionId: parentSessionId, subSessionId: sessionId, result: subResult });
         console.log(`[SubSession] Result injected into parent ${parentSessionId.slice(0, 8)} — awaiting explicit finish`);
+        convMeta.setInjectedAt(sessionId, Date.now()); // persistent guard: Phase 1 will skip on next tick
         _subSessionsInjectInProgress.delete(sessionId);
         claudeCli.stopConversation(sessionId);
       } else {
@@ -410,6 +412,7 @@ export function initMissionRouter(deps: MissionDeps) {
     // Exception: sub-sessions without a parent — those are truly orphaned, handled in Phase 3.
     for (const sessionId of Object.keys(allSubs)) {
       if (convMeta.isFinished(sessionId)) continue;
+      if (convMeta.getInjectedAt(sessionId)) continue; // already injected — parent must call /finish
       if (_subSessionsInjectInProgress.has(sessionId)) continue; // inject already running
       if (claudeCli.isActive(sessionId)) continue; // process still running — wait for done hook
       const parentSessionId = convMeta.getParentSessionId(sessionId);
@@ -483,7 +486,7 @@ export function initMissionRouter(deps: MissionDeps) {
     const byParent = new Map<string, Array<{ sessionId: string; isCompleted: boolean }>>();
     for (const [sessionId, parentSessionId] of allSubSessions) {
       if (!byParent.has(parentSessionId)) byParent.set(parentSessionId, []);
-      const isCompleted = !claudeCli.isActive(sessionId); // no running process → work done, awaiting /finish
+      const isCompleted = !!convMeta.getInjectedAt(sessionId) || !claudeCli.isActive(sessionId); // injected or process gone → awaiting /finish
       byParent.get(parentSessionId)!.push({ sessionId, isCompleted });
     }
 
