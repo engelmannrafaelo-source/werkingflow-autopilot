@@ -35,9 +35,8 @@ const MAX_TAIL_MESSAGES = 500;
 const COMMANDER_CACHE_TTL_MS = 60_000;
 
 // --- Sub-session tracking (module-level so finish endpoint can access) ---
-const _subSessionsAwaitingFinish = new Set<string>();
-// Tracks sub-sessions whose injectSubSessionResult() is currently in-flight.
-// Prevents duplicate injection runs from the reminder loop during retry windows.
+// Mutex: prevents concurrent injectSubSessionResult() runs for the same sub-session.
+// Set on first attempt (attempt===1), cleared only in cleanupSubSession or after all retries exhausted.
 const _subSessionsInjectInProgress = new Set<string>();
 // Tracks when the last reminder was sent to each parent session.
 // Used to dedupe: only fire a new reminder AFTER the parent has completed at least
@@ -45,7 +44,6 @@ const _subSessionsInjectInProgress = new Set<string>();
 const _lastReminderSentAt = new Map<string, number>();
 
 function cleanupSubSession(sessionId: string) {
-  _subSessionsAwaitingFinish.delete(sessionId);
   _subSessionsInjectInProgress.delete(sessionId);
   convMeta.setFinished(sessionId, true);
   const parentSessionId = convMeta.getParentSessionId(sessionId);
@@ -174,10 +172,7 @@ export function initMissionRouter(deps: MissionDeps) {
       _subSessionsInjectInProgress.delete(sessionId);
       return;
     }
-    // Guard: don't re-inject if already completed
-    if (_subSessionsAwaitingFinish.has(sessionId)) return;
-    // Guard: prevent concurrent injection runs for the same sub-session
-    // (first attempt sets the flag; retries are the same run so they don't re-check)
+    // Guard: prevent concurrent injection runs for the same sub-session (mutex)
     if (attempt === 1) {
       if (_subSessionsInjectInProgress.has(sessionId)) return;
       _subSessionsInjectInProgress.add(sessionId);
@@ -205,8 +200,7 @@ export function initMissionRouter(deps: MissionDeps) {
       }
 
       if (!subResult) {
-        console.warn(`[SubSession] No result found for sub-session ${sessionId.slice(0, 8)} — marking as awaiting finish anyway`);
-        _subSessionsAwaitingFinish.add(sessionId);
+        console.warn(`[SubSession] No result found for sub-session ${sessionId.slice(0, 8)} — signalling parent to finish`);
         _subSessionsInjectInProgress.delete(sessionId);
         claudeCli.stopConversation(sessionId);
         return;
@@ -221,17 +215,14 @@ export function initMissionRouter(deps: MissionDeps) {
 
       const result = await claudeCli.startConversation(parentAccountId, injectMessage, parentWorkDir, parentSessionId, parentModel);
       if (result.ok) {
-        // Re-check after await: cleanupSubSession may have run during the async call.
-        // Without this, we'd re-add a finished session to awaitingFinish → stale reminders.
+        // Re-check after await: cleanupSubSession may have run during the async inject call.
         if (convMeta.isFinished(sessionId)) {
           _subSessionsInjectInProgress.delete(sessionId);
           return;
         }
         broadcast({ type: 'conv-subsession-complete', sessionId: parentSessionId, subSessionId: sessionId, result: subResult });
         console.log(`[SubSession] Result injected into parent ${parentSessionId.slice(0, 8)} — awaiting explicit finish`);
-        _subSessionsAwaitingFinish.add(sessionId);
         _subSessionsInjectInProgress.delete(sessionId);
-        // Stop CLI process (work is done) but do NOT mark as finished — parent must do that
         claudeCli.stopConversation(sessionId);
       } else {
         console.warn(`[SubSession] Injection into parent failed: ${result.error}`);
@@ -239,8 +230,7 @@ export function initMissionRouter(deps: MissionDeps) {
           console.log(`[SubSession] Retrying in ${SUB_INJECT_RETRY_DELAY_MS / 1000}s...`);
           setTimeout(() => injectSubSessionResult(sessionId, parentSessionId, attempt + 1), SUB_INJECT_RETRY_DELAY_MS);
         } else {
-          console.warn(`[SubSession] All ${SUB_INJECT_MAX_RETRIES} retries exhausted for ${sessionId.slice(0, 8)} → marking as awaiting finish`);
-          _subSessionsAwaitingFinish.add(sessionId);
+          console.warn(`[SubSession] All ${SUB_INJECT_MAX_RETRIES} retries exhausted for ${sessionId.slice(0, 8)}`);
           _subSessionsInjectInProgress.delete(sessionId);
           claudeCli.stopConversation(sessionId);
         }
@@ -251,8 +241,7 @@ export function initMissionRouter(deps: MissionDeps) {
         console.log(`[SubSession] Retrying in ${SUB_INJECT_RETRY_DELAY_MS / 1000}s...`);
         setTimeout(() => injectSubSessionResult(sessionId, parentSessionId, attempt + 1), SUB_INJECT_RETRY_DELAY_MS);
       } else {
-        console.warn(`[SubSession] All ${SUB_INJECT_MAX_RETRIES} retries exhausted for ${sessionId.slice(0, 8)} — marking as awaiting finish`);
-        _subSessionsAwaitingFinish.add(sessionId);
+        console.warn(`[SubSession] All ${SUB_INJECT_MAX_RETRIES} retries exhausted for ${sessionId.slice(0, 8)}`);
         _subSessionsInjectInProgress.delete(sessionId);
         claudeCli.stopConversation(sessionId);
       }
@@ -281,7 +270,7 @@ export function initMissionRouter(deps: MissionDeps) {
     for (const proc of claudeCli.getActiveProcesses()) {
       const parentSessionId = convMeta.getParentSessionId(proc.sessionId);
       if (!parentSessionId) continue;
-      if (_subSessionsAwaitingFinish.has(proc.sessionId)) continue;
+      if (convMeta.isFinished(proc.sessionId)) continue;
 
       // Extract latest assistant message summary from JSONL
       const found = findJsonlPathAllAccounts(proc.sessionId);
@@ -421,15 +410,12 @@ export function initMissionRouter(deps: MissionDeps) {
     // Exception: sub-sessions without a parent — those are truly orphaned, handled in Phase 3.
     for (const sessionId of Object.keys(allSubs)) {
       if (convMeta.isFinished(sessionId)) continue;
-      if (_subSessionsAwaitingFinish.has(sessionId)) continue;
-      const hasProcess = !!states[sessionId];
-      if (hasProcess) continue;
+      if (_subSessionsInjectInProgress.has(sessionId)) continue; // inject already running
+      if (claudeCli.isActive(sessionId)) continue; // process still running — wait for done hook
       const parentSessionId = convMeta.getParentSessionId(sessionId);
       if (!parentSessionId) continue; // handled later in Phase 3 (orphans)
       const title = convMeta.getTitle(sessionId) || sessionId.slice(0, 8);
       console.log(`[SubSession] Silently-exited sub-session "${title}" (${sessionId.slice(0, 8)}) — routing through injectSubSessionResult so parent can review/finish`);
-      // Fire-and-forget: this will inject result into parent + add to awaitingFinish.
-      // Parent will then see "FERTIG, bitte pruefen" on next reminder loop.
       injectSubSessionResult(sessionId, parentSessionId).catch(err => {
         console.warn(`[SubSession] injectSubSessionResult failed for silently-exited ${sessionId.slice(0, 8)}: ${(err as Error).message}`);
       });
@@ -443,12 +429,6 @@ export function initMissionRouter(deps: MissionDeps) {
       if (parentSessionId) {
         allSubSessions.set(sessionId, parentSessionId);
       }
-    }
-    // Also check completed sub-sessions awaiting finish (their CLI is stopped, so they won't be in states)
-    for (const sessionId of _subSessionsAwaitingFinish) {
-      if (convMeta.isFinished(sessionId)) { _subSessionsAwaitingFinish.delete(sessionId); continue; }
-      const parentSessionId = convMeta.getParentSessionId(sessionId);
-      if (parentSessionId) allSubSessions.set(sessionId, parentSessionId);
     }
 
     // Phase 3: Orphan sub-sessions (active, but no parent)
@@ -503,7 +483,7 @@ export function initMissionRouter(deps: MissionDeps) {
     const byParent = new Map<string, Array<{ sessionId: string; isCompleted: boolean }>>();
     for (const [sessionId, parentSessionId] of allSubSessions) {
       if (!byParent.has(parentSessionId)) byParent.set(parentSessionId, []);
-      const isCompleted = _subSessionsAwaitingFinish.has(sessionId);
+      const isCompleted = !claudeCli.isActive(sessionId); // no running process → work done, awaiting /finish
       byParent.get(parentSessionId)!.push({ sessionId, isCompleted });
     }
 
@@ -1308,6 +1288,13 @@ router.post('/send', async (req, res) => {
       elapsedSeconds: elapsed,
       retryAfterMs: 10000,
     });
+    return;
+  }
+
+  // Block sends to finished sub-sessions — they must not be re-opened by the send path.
+  // Parent sessions may be re-opened freely (setFinished(false) below is correct for them).
+  if (convMeta.isSubSession(sessionId) && convMeta.isFinished(sessionId)) {
+    res.status(409).json({ error: 'Sub-session is finished. Cannot send messages to a finished sub-session.' });
     return;
   }
 
