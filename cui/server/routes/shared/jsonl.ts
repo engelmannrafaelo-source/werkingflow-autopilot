@@ -490,6 +490,67 @@ export function unstickConversation(sessionId: string): number {
 
 
 // ---------------------------------------------------------------------------
+// purgeSubSessionReminders — strip [Sub-Session Reminder] user messages
+// ---------------------------------------------------------------------------
+// Sub-session reminders are transient nags. When they live forever in the
+// parent's JSONL they bloat the context on resume (one observed parent had
+// 418 reminder messages → tens of KB of redundant prefix on every resume).
+//
+// Called from cleanupSubSession when the parent finishes a sub. Safe to
+// purge ALL reminder messages: any still-active sub will get a fresh reminder
+// on the next 5-minute tick. The reminder text carries no information not
+// derivable from current state.
+//
+// Returns the number of reminder lines removed.
+export function purgeSubSessionReminders(parentSessionId: string): number {
+  const filePath = findJsonlPath(parentSessionId);
+  if (!filePath) return 0;
+  try {
+    const stat = statSync(filePath);
+    if (stat.size === 0) return 0;
+    if (stat.size > 50 * 1024 * 1024) {
+      console.warn(`[PurgeReminders] ${parentSessionId.slice(0, 8)}: ${(stat.size / 1024 / 1024).toFixed(1)}MB file — refusing to rewrite`);
+      return 0;
+    }
+
+    const lines = readFileSync(filePath, 'utf-8').split('\n');
+    const kept: string[] = [];
+    let removed = 0;
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) { kept.push(line); continue; }
+      try {
+        const obj = JSON.parse(trimmed);
+        if (obj.type === 'user' && obj.message?.role === 'user') {
+          const content = obj.message.content;
+          // content can be a string OR an array of {type:'text', text:...}
+          let text = '';
+          if (typeof content === 'string') text = content;
+          else if (Array.isArray(content)) {
+            for (const part of content) {
+              if (part?.type === 'text' && typeof part.text === 'string') { text = part.text; break; }
+            }
+          }
+          if (text.startsWith('[Sub-Session Reminder]')) { removed++; continue; }
+        }
+      } catch { /* keep malformed lines as-is */ }
+      kept.push(line);
+    }
+
+    if (removed > 0) {
+      writeFileSync(filePath, kept.join('\n'));
+      clearMetaCache(filePath);
+      console.log(`[PurgeReminders] ${parentSessionId.slice(0, 8)}: removed ${removed} stale reminder message(s)`);
+    }
+    return removed;
+  } catch (err) {
+    console.warn(`[PurgeReminders] ${parentSessionId.slice(0, 8)}: ${(err as Error).message}`);
+    return 0;
+  }
+}
+
+
+// ---------------------------------------------------------------------------
 // hasIncompleteToolUse — detect sessions that ended mid-tool-use
 // ---------------------------------------------------------------------------
 // Returns true if the last assistant message contains only tool_use blocks

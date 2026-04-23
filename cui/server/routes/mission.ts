@@ -10,7 +10,7 @@ import { bridgeChat } from '../lib/bridge-fetch.js';
 import { isAuthEnabled } from '../auth/users.js';
 import type { AttentionReason, ConvAttentionState, SessionState, PanelVisibility } from './shared/types.js';
 import { logUserInput as sharedLogUserInput, atomicWriteFileSync } from './shared/utils.js';
-import { findJsonlPath, findJsonlPathAllAccounts, ensureJsonlForAccount, readJsonlMetadata, clearMetaCache, readConversationMessages, getOriginalCwd, extractConversationContext, unstickConversation, deepRepairJsonl, compactJsonlForResume, diagnoseSessionHealth } from './shared/jsonl.js';
+import { findJsonlPath, findJsonlPathAllAccounts, ensureJsonlForAccount, readJsonlMetadata, clearMetaCache, readConversationMessages, getOriginalCwd, extractConversationContext, unstickConversation, deepRepairJsonl, compactJsonlForResume, diagnoseSessionHealth, purgeSubSessionReminders } from './shared/jsonl.js';
 import * as convMeta from './shared/conv-metadata.js';
 import { updateAutoInjectSession, disableAutoInject } from './autoinject.js';
 
@@ -50,9 +50,17 @@ function cleanupSubSession(sessionId: string) {
   const parentSessionId = convMeta.getParentSessionId(sessionId);
   convMeta.deleteParentSession(sessionId);
   convMeta.flush(); // Persist immediately — debounced write could be lost on restart
-  // Clear pending-reminder state so if parent has other active sub-sessions,
-  // reminders can fire again without waiting for a stale dedup entry.
-  if (parentSessionId) _lastReminderSentAt.delete(parentSessionId);
+  if (parentSessionId) {
+    // Clear pending-reminder state so if parent has other active sub-sessions,
+    // reminders can fire again without waiting for a stale dedup entry.
+    _lastReminderSentAt.delete(parentSessionId);
+    // Purge stale [Sub-Session Reminder] messages from parent JSONL — they bloat
+    // resume-context (one observed session: 418 reminders). Active subs will get
+    // a fresh reminder on the next 5-min tick.
+    try { purgeSubSessionReminders(parentSessionId); } catch (err) {
+      console.warn(`[SubSession] purge reminders failed for ${parentSessionId.slice(0, 8)}: ${(err as Error).message}`);
+    }
+  }
   claudeCli.stopConversation(sessionId);
   // Build panelsToClose from visibilityRegistry (same as normal finish)
   const panelsToClose: Array<{ panelId: string; projectId: string }> = [];
