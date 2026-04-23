@@ -95,6 +95,7 @@ import bridgeRouter from './routes/bridge.js';
 import qaRouter from './routes/qa.js';
 import repoDashboardRouter from './routes/repo-dashboard.js';
 import maintenanceRouter from './routes/maintenance.js';
+import panelsInspectRouter from './routes/panels-inspect.js';
 import auditRouter, { initAuditRouter } from './routes/audit.js';
 import createInfrastructureRouter from './routes/infrastructure.js';
 import createTeamRouter from './routes/team.js';
@@ -281,6 +282,7 @@ app.use(bridgeRouter);                               // /api/claude-code/*, /api
 app.use(qaRouter);                                   // /api/qa/* (QA Dashboard - Unified-Tester integration)
 app.use('/api/repo-dashboard', repoDashboardRouter);  // /api/repo-dashboard/repositories, /pipeline, /structure, /hierarchy
 app.use('/api/maintenance', maintenanceRouter);       // /api/maintenance/status, /refresh, /run
+app.use(panelsInspectRouter);                         // /api/panels/inspect (meta: probes each panel's GET endpoints)
 app.use('/api/audit', auditRouter);                   // /api/audit/inputs, /summary, /inputs/:id/context
 app.use(infrastructureRouter);                       // /watchdog/*, /api/rebuild, /api/panel-health, /api/bridge-db/*, /api/infrastructure/*
 app.use('/api/team', teamRouter);                    // /api/team/personas, /worklist, /tasks, /events, /reviews, /task-board, /chat
