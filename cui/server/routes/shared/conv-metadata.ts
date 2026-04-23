@@ -83,6 +83,18 @@ export function flush() {
   }
 }
 
+/**
+ * Force a fresh re-read from disk on next access. Use for periodic loops where
+ * stale in-memory data could drift from another process's writes (e.g.
+ * sub-session reminder loop must see parent-child changes immediately).
+ *
+ * Flushes any pending writes first to avoid losing dirty state.
+ */
+export function reload() {
+  flush();
+  _data = null;
+}
+
 // ---------------------------------------------------------------------------
 // Init — must be called once with DATA_DIR path
 // ---------------------------------------------------------------------------

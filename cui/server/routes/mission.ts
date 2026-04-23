@@ -211,8 +211,8 @@ export function initMissionRouter(deps: MissionDeps) {
       const parentAccountId = convMeta.getAssignment(parentSessionId) || claudeCli.ACCOUNT_CONFIG[0]?.id || 'werking';
       const parentWorkDir = convMeta.getWorkDir(parentSessionId) || '';
       const parentModel = convMeta.getModel(parentSessionId) || '';
-      const finishCmd = `curl -s -X POST http://localhost:4005/api/mission/conversation/${sessionId}/finish -H 'Content-Type: application/json' -d '{"finished":true}'`;
-      const injectMessage = `[Sub-Session Ergebnis: ${subjectTitle}]\n\n${subResult}\n\nPruefe ob alles korrekt ist. Wenn erledigt, finishe die Sub-Session mit:\n${finishCmd}`;
+      const finishCmd = `curl -s -X POST http://localhost:${PORT}/api/mission/conversation/${sessionId}/finish -H 'Content-Type: application/json' -d '{"finished":true,"confirm":true}'`;
+      const injectMessage = `[Sub-Session Ergebnis: ${subjectTitle}]\n\n${subResult}\n\nPruefe ob alles korrekt ist. Nur DU entscheidest wann die Sub-Session beendet wird — Reminder laufen bis du explizit finishst:\n${finishCmd}`;
 
       const result = await claudeCli.startConversation(parentAccountId, injectMessage, parentWorkDir, parentSessionId, parentModel);
       if (result.ok) {
@@ -396,25 +396,64 @@ export function initMissionRouter(deps: MissionDeps) {
     }, RATE_LIMIT_SWITCH_DELAY_MS);
   });
 
+  // ===========================================================================
+  // CORE PRINCIPLE — DO NOT VIOLATE:
+  //
+  //   The PARENT (Claude Code) is the single source of truth for sub-session
+  //   lifecycle. The system NEVER auto-finishes sub-sessions. Reminders run
+  //   indefinitely — there is NO max-count, NO timeout-finish. Only an explicit
+  //   POST /api/mission/conversation/:sub/finish from the parent ends a sub.
+  //
+  //   Why: if the system finishes subs on its own, results can be lost or
+  //   decisions made that the parent never approved. Better to spam reminders
+  //   than to silently drop work.
+  //
+  //   If you find yourself adding a "max retries" counter or "auto-finish after
+  //   N hours" check below — STOP. That is the bug, not the fix.
+  // ===========================================================================
+  //
   // Sub-session reminder loop: every 5 minutes, remind parent sessions about
   // their active sub-sessions. Keeps reminding until parent explicitly finishes them.
   const SUB_REMINDER_INTERVAL_MS = 5 * 60_000; // 5 minutes
 
   setInterval(() => {
+    // Hard-reload conv-metadata from disk every tick. The in-memory map can
+    // drift from disk if another process writes (or if a previous server zombie
+    // left stale state in our cache). Phase 1-4 below depend on accurate
+    // parent-child mappings — stale data → wrong reminders to wrong parents.
+    convMeta.reload();
+
     const states = getSessionStates();
     const allSubs = convMeta.getAllSubSessions(); // all sessions marked as sub-session
 
     // Phase 1: Detect "silently exited" sub-sessions and route them through the normal
-    // completion workflow instead of auto-finishing. A sub-session whose CLI process is gone
-    // but that never fired the onSessionStateChange 'done' hook needs to go through
-    // injectSubSessionResult() so the parent gets notified and can explicitly finish.
-    // This preserves the core invariant: ONLY the parent marks a sub-session finished.
-    // Exception: sub-sessions without a parent — those are truly orphaned, handled in Phase 3.
+    // completion workflow. A sub-session whose CLI process is gone but that never fired
+    // the onSessionStateChange 'done' hook needs to go through injectSubSessionResult()
+    // so the parent gets notified and can explicitly finish.
+    //
+    // CORE INVARIANT: We only INJECT the result into the parent — we never auto-finish.
+    // The parent reads the result, decides if it's good, and explicitly calls /finish.
+    //
+    // Exception: sub-sessions without a parent → handled later in Phase 3 (orphans).
     for (const sessionId of Object.keys(allSubs)) {
       if (convMeta.isFinished(sessionId)) continue;
       if (convMeta.getInjectedAt(sessionId)) continue; // already injected — parent must call /finish
       if (_subSessionsInjectInProgress.has(sessionId)) continue; // inject already running
-      if (claudeCli.isActive(sessionId)) continue; // process still running — wait for done hook
+
+      // isActive() trusts the in-memory state cache. After a server crash + reconnect
+      // the cache can be wrong — flag the session as alive even when the OS process
+      // is long gone. Verify against /proc/{pid} before trusting "still running".
+      const isActive = claudeCli.isActive(sessionId);
+      let isReallyAlive = isActive;
+      if (isActive) {
+        const pid = claudeCli.getActivePid(sessionId);
+        if (pid && !existsSync(`/proc/${pid}`)) {
+          console.log(`[SubSession] ${sessionId.slice(0, 8)}: claudeCli says active but /proc/${pid} missing — treating as exited`);
+          isReallyAlive = false;
+        }
+      }
+      if (isReallyAlive) continue; // process truly running — wait for done hook
+
       const parentSessionId = convMeta.getParentSessionId(sessionId);
       if (!parentSessionId) continue; // handled later in Phase 3 (orphans)
       const title = convMeta.getTitle(sessionId) || sessionId.slice(0, 8);
@@ -509,18 +548,25 @@ export function initMissionRouter(deps: MissionDeps) {
       try {
         const lines: string[] = [];
         const finishCmds: string[] = [];
+        const killCmds: string[] = [];
         for (const { sessionId, isCompleted } of subs) {
           const title = convMeta.getTitle(sessionId) || sessionId.slice(0, 8);
           if (isCompleted) {
             lines.push(`- "${title}" — ist FERTIG. Bitte Ergebnis pruefen und finishen.`);
           } else {
             lines.push(`- "${title}" — arbeitet noch. Wenn fertig: finishen, sonst bleibt die Session offen.`);
+            killCmds.push(`curl -s -X POST http://localhost:${PORT}/api/mission/conversation/${sessionId}/kill`);
           }
-          finishCmds.push(`curl -s -X POST http://localhost:4005/api/mission/conversation/${sessionId}/finish -H 'Content-Type: application/json' -d '{"finished":true,"confirm":true}'`);
+          finishCmds.push(`curl -s -X POST http://localhost:${PORT}/api/mission/conversation/${sessionId}/finish -H 'Content-Type: application/json' -d '{"finished":true,"confirm":true}'`);
         }
 
         const finishBlock = finishCmds.length > 0 ? `\n\nZum Finishen (nachdem du das Ergebnis geprueft hast):\n${finishCmds.join('\n')}` : '';
-        const reminderMsg = `[Sub-Session Reminder]\nDu hast aktive Sub-Sessions:\n${lines.join('\n')}${finishBlock}`;
+        const killBlock = killCmds.length > 0 ? `\n\nFalls eine Sub haengt und du den Prozess stoppen willst (Sub bleibt offen, nur der CLI-Prozess wird gekillt — du musst trotzdem /finish aufrufen wenn du das Ergebnis geprueft hast):\n${killCmds.join('\n')}` : '';
+
+        const principle = `\n\nLeitsatz: Nur DU entscheidest wann eine Sub-Session beendet wird. Der Reminder stoppt erst wenn du /finish aufrufst.`;
+        const transparency = `\nDieser Reminder kommt von Server PID ${process.pid}, Log: /var/log/cui-workspace.log. Bei Spam-Verdacht: ps -ef | grep "tsx server/index.ts" — bei mehreren Treffern laufen Zombies.`;
+
+        const reminderMsg = `[Sub-Session Reminder]\nDu hast aktive Sub-Sessions:\n${lines.join('\n')}${finishBlock}${killBlock}${principle}${transparency}`;
 
         const parentAccountId = convMeta.getAssignment(parentSessionId) || claudeCli.ACCOUNT_CONFIG[0]?.id || 'werking';
         const parentWorkDir = convMeta.getWorkDir(parentSessionId) || '';
@@ -1642,6 +1688,24 @@ router.post('/conversation/:sessionId/finish', async (req, res) => {
   res.json({ ok: true, sessionId: sid, finished });
 });
 
+// 5d-bis. Kill the CLI process for a session WITHOUT finishing it.
+// For sub-sessions: parent uses this to stop a hung/runaway sub-process so it
+// can review the partial result. Crucially this does NOT mark finished and does
+// NOT clear parent-tracking — the reminder loop will continue, the parent must
+// still call /finish explicitly. Keeps the core invariant intact: only the
+// parent ends the lifecycle.
+router.post('/conversation/:sessionId/kill', async (req, res) => {
+  const sid = req.params.sessionId;
+  const isAlive = claudeCli.isActive(sid);
+  if (!isAlive) {
+    res.json({ ok: true, sessionId: sid, killed: false, reason: 'process_not_active' });
+    return;
+  }
+  const stopped = await claudeCli.stopConversation(sid);
+  console.log(`[Kill] CLI process for ${sid.slice(0, 8)} stopped=${stopped} (NOT finished — parent must still call /finish)`);
+  res.json({ ok: true, sessionId: sid, killed: stopped, finished: false });
+});
+
 // 5e. Start a review session for a conversation
 // Extracts user inputs, starts independent review session, auto-injects result when done
 router.post('/conversation/:sessionId/review', async (req, res) => {
@@ -1979,40 +2043,27 @@ router.post('/start', async (req, res) => {
     return;
   }
 
-  // Sub-session gate: a sub-session MUST have a valid parentSessionId before it can be spawned.
-  // This guarantees the finish-contract: the parent is responsible for reviewing and finishing
-  // the sub-session. Spawning a sub-session without a parent breaks the completion flow and
-  // leaves the sub-session zombie-forever in reminder loops.
-  const SUB_PREFIXES_GATE = ['[Sub]', '[Arch-Fix]', '[Arch-App]', '[Arch-Cross]', '[Fix]', '[Analysis]'];
+  // Sub-session gate: parentSessionId is the ONLY signal for sub-session semantics.
+  // Subject prefixes ([Sub], [Arch-*], [Fix], [Analysis]) are cosmetic, not gates.
+  // If parentSessionId is present, it must refer to a known, non-finished session.
   const hasExplicitParent_gate = typeof parentSessionId === 'string' && parentSessionId.trim().length > 0;
-  const looksLikeSubSession = hasExplicitParent_gate || (subject && SUB_PREFIXES_GATE.some(p => subject.startsWith(p)));
-  if (looksLikeSubSession) {
-    if (!hasExplicitParent_gate) {
-      console.warn(`[SubSession] REJECTED: subject "${subject?.slice(0, 80)}" looks like a sub-session but parentSessionId missing.`);
-      res.status(400).json({
-        error: 'parentSessionId is required for sub-sessions',
-        reason: 'A sub-session must have an explicit parentSessionId so the parent is responsible for reviewing and finishing it. Include "parentSessionId" in the request body.',
-        hint: 'The parentSessionId is the UUID of the session that is spawning this sub-session.',
-      });
-      return;
-    }
-    // Validate that the parent actually exists (has metadata and is a known session)
-    const parentWorkDir = convMeta.getWorkDir(parentSessionId.trim());
-    const parentTitle = convMeta.getTitle(parentSessionId.trim());
+  if (hasExplicitParent_gate) {
+    const pid = parentSessionId.trim();
+    const parentWorkDir = convMeta.getWorkDir(pid);
+    const parentTitle = convMeta.getTitle(pid);
     if (!parentWorkDir && !parentTitle) {
-      console.warn(`[SubSession] REJECTED: parentSessionId ${parentSessionId.slice(0, 8)} does not exist (no metadata).`);
+      console.warn(`[SubSession] REJECTED: parentSessionId ${pid.slice(0, 8)} does not exist (no metadata).`);
       res.status(400).json({
         error: 'parentSessionId does not refer to a known session',
-        parentSessionId,
+        parentSessionId: pid,
       });
       return;
     }
-    // Parent MUST not already be finished/closed — we cannot inject results into a dead parent
-    if (convMeta.isFinished(parentSessionId.trim())) {
-      console.warn(`[SubSession] REJECTED: parentSessionId ${parentSessionId.slice(0, 8)} is already finished.`);
+    if (convMeta.isFinished(pid)) {
+      console.warn(`[SubSession] REJECTED: parentSessionId ${pid.slice(0, 8)} is already finished.`);
       res.status(400).json({
         error: 'parent session is already finished — cannot spawn sub-session under a finished parent',
-        parentSessionId,
+        parentSessionId: pid,
       });
       return;
     }
@@ -2049,28 +2100,45 @@ router.post('/start', async (req, res) => {
   const startUserId = (req as any).user?.sub || (req as any).user?.id;
   if (startUserId) convMeta.saveUser(sessionId, startUserId);
   convMeta.setLastPrompt(sessionId);
-  // Mark as sub-session if parentSessionId is explicitly provided OR subject starts with known sub-session prefixes
-  const SUB_PREFIXES = ['[Sub]', '[Arch-Fix]', '[Arch-App]', '[Fix]', '[Analysis]'];
+  // Sub-session marking: parentSessionId is the ONLY signal. Subject prefixes are cosmetic.
+  // Invariant: convMeta.isSubSession(sid) === (convMeta.getParentSessionId(sid) !== undefined)
   const hasExplicitParent = typeof parentSessionId === 'string' && parentSessionId.trim().length > 0;
-  const isSubSession = hasExplicitParent || (subject && SUB_PREFIXES.some(p => subject.startsWith(p)));
-  if (isSubSession) {
+  if (hasExplicitParent) {
+    const pid = parentSessionId.trim();
     convMeta.setSubSession(sessionId, true);
-
-    if (hasExplicitParent) {
-      // Explicit parent — link directly, skip auto-detect
-      convMeta.setParentSession(sessionId, parentSessionId);
-      console.log(`[SubSession] ${sessionId.slice(0, 8)} explicitly linked to parent ${parentSessionId.slice(0, 8)}`);
-    } else if (!parentSessionId) {
-      // No explicit parent provided — require parentSessionId for sub-sessions
-      // Do NOT auto-detect: fallback to "any idle session" causes reminders to go to wrong sessions
-      console.warn(`[SubSession] ${sessionId.slice(0, 8)} ("${subject?.slice(0, 50)}") spawned WITHOUT parentSessionId — reminders disabled. Caller MUST provide parentSessionId.`);
-    }
+    convMeta.setParentSession(sessionId, pid);
+    console.log(`[SubSession] ${sessionId.slice(0, 8)} explicitly linked to parent ${pid.slice(0, 8)}`);
   }
   invalidateConvCache();
 
   // State tracking is handled by claude-cli stdout parsing
   // Broadcast so LayoutManagers can auto-mount immediately
   broadcast({ type: 'control:conversation-started', sessionId, accountId, workDir: resolvedWorkDir });
+
+  // Auto-activate main sessions in their target workspace panel. Sub-sessions are never
+  // auto-activated (they work invisibly and report to parent). Opt-out via autoActivate:false.
+  const isMainSession = !hasExplicitParent;
+  const autoActivate = typeof req.body.autoActivate === 'boolean' ? req.body.autoActivate : isMainSession;
+  if (autoActivate && isMainSession) {
+    try {
+      const projectFiles = readdirSync(PROJECTS_DIR).filter(f => f.endsWith('.json'));
+      const projectsData = projectFiles
+        .map(f => { try { return JSON.parse(readFileSync(join(PROJECTS_DIR, f), 'utf8')); } catch { return null; } })
+        .filter(Boolean);
+      const proj = projectsData.find((p: any) => p.workDir && (resolvedWorkDir === p.workDir || resolvedWorkDir.startsWith(p.workDir + '/')));
+      if (proj) {
+        // Defer so LayoutManager has time to process 'control:conversation-started' first
+        setTimeout(() => {
+          const plan = [{ projectId: proj.id, conversations: [{ sessionId, accountId }] }];
+          broadcast({ type: 'control:activate-conversations', plan });
+          console.log(`[Start] Auto-activated ${sessionId.slice(0, 8)} in project ${proj.name}`);
+        }, 1500);
+      }
+    } catch (err) {
+      console.warn('[Start] Auto-activate failed:', err instanceof Error ? err.message : err);
+    }
+  }
+
   res.json({ ok: true, sessionId, model: resolvedModel });
   } catch (err: any) {
     console.warn('[Server] POST /api/mission/start error:', err);
