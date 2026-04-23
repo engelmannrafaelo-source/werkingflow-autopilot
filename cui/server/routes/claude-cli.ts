@@ -120,6 +120,13 @@ export function initClaudeCli(deps: {
     reconnectExistingSessions()
       .then(() => {
         console.log('[ClaudeCLI] Reconnect done. Sessions re-attached from OS processes.');
+        // Reap wrappers that were re-parented to init (PPID=1) after a previous
+        // server zombie died. They hold FDs but receive no stdin and never exit
+        // on their own — accumulate over days. Safe to kill: anything still
+        // alive belongs to the previous (now-dead) server, not this process.
+        cleanupOrphanedWrappers().catch(err => {
+          console.warn('[ClaudeCLI] Orphan wrapper cleanup failed:', err instanceof Error ? err.message : err);
+        });
         // Auto-continue sessions that were working when server went down
         // Delay to allow JSONL files to be accessible after reconnect
         setTimeout(() => checkRestoredSessionsAutoContinue(), 5_000);
@@ -1026,6 +1033,57 @@ async function reconnectExistingSessions(): Promise<void> {
       await cleanupSessionFiles(sessionId);
     }
   }
+}
+
+// --- Reap orphaned wrappers (PPID=1) left behind by previous server zombies ---
+// When a tsx server dies abruptly, its child cui-session-wrapper processes get
+// re-parented to init (PPID=1). They sit there with open FIFOs/FDs but receive
+// no new stdin and never exit on their own. Without this cleanup, they pile up
+// over days (we've seen 7+ wrappers, oldest 6 days old).
+//
+// Conservative scope: only kill wrappers with PPID=1 — anything else is either
+// a child of THIS server (PPID=our pid) or another supervised process.
+async function cleanupOrphanedWrappers(): Promise<void> {
+  let psOut = '';
+  try {
+    psOut = execSync('ps -eo pid,ppid,args --no-headers 2>/dev/null', { encoding: 'utf8', timeout: 5000 });
+  } catch (err) {
+    console.warn('[ClaudeCLI] cleanupOrphanedWrappers: ps failed:', err instanceof Error ? err.message : err);
+    return;
+  }
+
+  const orphans: number[] = [];
+  for (const line of psOut.split('\n')) {
+    if (!line.includes('cui-session-wrapper')) continue;
+    if (line.includes('grep ')) continue;
+    const m = line.trim().match(/^(\d+)\s+(\d+)\s+/);
+    if (!m) continue;
+    const pid = parseInt(m[1], 10);
+    const ppid = parseInt(m[2], 10);
+    // Only PPID=1 (re-parented to init) — these are zombies of dead servers
+    if (ppid !== 1) continue;
+    if (pid === process.pid) continue; // never kill ourselves (paranoia)
+    orphans.push(pid);
+  }
+
+  if (orphans.length === 0) {
+    console.log('[ClaudeCLI] No orphaned wrappers found');
+    return;
+  }
+
+  console.log(`[ClaudeCLI] Reaping ${orphans.length} orphaned cui-session-wrapper(s) (PPID=1): ${orphans.join(', ')}`);
+  for (const pid of orphans) {
+    try { process.kill(pid, 'SIGTERM'); } catch { /* already dead */ }
+  }
+
+  // Grace period, then SIGKILL anything still alive
+  await new Promise(r => setTimeout(r, 2000));
+  let killed = 0;
+  for (const pid of orphans) {
+    try { process.kill(pid, 0); /* still alive */ } catch { continue; }
+    try { process.kill(pid, 'SIGKILL'); killed++; } catch { /* */ }
+  }
+  if (killed > 0) console.log(`[ClaudeCLI] SIGKILLed ${killed} stubborn orphan wrapper(s)`);
 }
 
 // --- Re-attach to an existing OS-level wrapper (no new spawn) ---
