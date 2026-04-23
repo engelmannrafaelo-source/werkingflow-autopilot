@@ -1041,9 +1041,24 @@ async function reconnectExistingSessions(): Promise<void> {
 // no new stdin and never exit on their own. Without this cleanup, they pile up
 // over days (we've seen 7+ wrappers, oldest 6 days old).
 //
-// Conservative scope: only kill wrappers with PPID=1 — anything else is either
-// a child of THIS server (PPID=our pid) or another supervised process.
+// IMPORTANT: After a normal restart, ALL surviving wrappers also have PPID=1
+// (the previous tsx died). Wrappers we successfully re-attached via
+// reconnectExistingSessions are tracked in activeProcesses by both wrapperPid
+// and claudePid — those must NEVER be killed. Only wrappers we did NOT
+// re-attach (no PID file / file pointed at a dead Claude / re-attach failed)
+// are true orphans.
 async function cleanupOrphanedWrappers(): Promise<void> {
+  // Build the set of "alive" wrapper PIDs from activeProcesses (set up during
+  // reconnect). These belong to THIS server now — leave them alone.
+  const knownWrapperPids = new Set<number>();
+  const knownClaudePids = new Set<number>();
+  for (const entry of activeProcesses.values()) {
+    if (entry.mode === 'persistent') {
+      if (entry.wrapperPid) knownWrapperPids.add(entry.wrapperPid);
+      if (entry.claudePid) knownClaudePids.add(entry.claudePid);
+    }
+  }
+
   let psOut = '';
   try {
     psOut = execSync('ps -eo pid,ppid,args --no-headers 2>/dev/null', { encoding: 'utf8', timeout: 5000 });
@@ -1060,18 +1075,19 @@ async function cleanupOrphanedWrappers(): Promise<void> {
     if (!m) continue;
     const pid = parseInt(m[1], 10);
     const ppid = parseInt(m[2], 10);
-    // Only PPID=1 (re-parented to init) — these are zombies of dead servers
-    if (ppid !== 1) continue;
-    if (pid === process.pid) continue; // never kill ourselves (paranoia)
+    if (ppid !== 1) continue;             // only re-parented (orphaned) wrappers
+    if (pid === process.pid) continue;    // never kill ourselves (paranoia)
+    if (knownWrapperPids.has(pid)) continue; // re-attached → owned by this server
+    if (knownClaudePids.has(pid)) continue;  // shouldn't happen but defensive
     orphans.push(pid);
   }
 
   if (orphans.length === 0) {
-    console.log('[ClaudeCLI] No orphaned wrappers found');
+    console.log(`[ClaudeCLI] No orphaned wrappers found (${knownWrapperPids.size} re-attached wrappers preserved)`);
     return;
   }
 
-  console.log(`[ClaudeCLI] Reaping ${orphans.length} orphaned cui-session-wrapper(s) (PPID=1): ${orphans.join(', ')}`);
+  console.log(`[ClaudeCLI] Reaping ${orphans.length} orphaned cui-session-wrapper(s) (PPID=1, not re-attached): ${orphans.join(', ')}`);
   for (const pid of orphans) {
     try { process.kill(pid, 'SIGTERM'); } catch { /* already dead */ }
   }
