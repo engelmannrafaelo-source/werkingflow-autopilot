@@ -1059,14 +1059,18 @@ router.get('/api/bridge/errors', async (req: any, res: any) => {
     const limit = Math.min(parseInt(req.query.limit || '200', 10), 2000);
     const endpoint = (req.query.endpoint || '').toLowerCase();
     const app = (req.query.app || '').toLowerCase();
+    const bridgeFilter = (req.query.bridge || 'all').toLowerCase() as 'all' | 'dev' | 'prod';
     // Read last 10 MB per source — more than enough for 24h of errors
     const READ_BYTES = 10 * 1024 * 1024;
     const cutoff = Date.now() / 1000 - hours * 3600;
 
-    const sources: Array<{ label: 'dev' | 'prod'; path: string }> = [
+    const allSources: Array<{ label: 'dev' | 'prod'; path: string }> = [
       { label: 'dev',  path: join(BRIDGE_LOGS_DIR, 'dev',  'nginx', 'access.jsonl') },
       { label: 'prod', path: join(BRIDGE_LOGS_DIR, 'prod', 'nginx', 'access.jsonl') },
     ];
+    const sources = bridgeFilter === 'all'
+      ? allSources
+      : allSources.filter(s => s.label === bridgeFilter);
 
     const entries: NginxLogEntry[] = [];
     const sourceStats: Record<string, { present: boolean; mtime: number | null; bytes: number }> = {};
@@ -1116,7 +1120,7 @@ router.get('/api/bridge/errors', async (req: any, res: any) => {
       returned: trimmed.length,
       summary: { byStatus, byEndpoint, byApp, byUpstream },
       sources: sourceStats,
-      query: { hours, minStatus, limit, endpoint, app },
+      query: { hours, minStatus, limit, endpoint, app, bridge: bridgeFilter },
     });
   } catch (err: any) {
     console.warn(`[Bridge] Errors: ${err.message}`);
@@ -1143,9 +1147,20 @@ interface PoolSummary {
   p95_ms: number;
   avg_ms: number;
   rescued: number;         // 5xx rescued by failover (success for customer)
-  lost: number;            // 5xx delivered to customer (real outage)
+  lost: number;            // total 5xx delivered (user + monitoring combined)
+  lost_user: number;       // 5xx on real user requests (app_id ∈ {engelmann, werking-*, …})
+  lost_monitoring: number; // 5xx on internal polling (cui, unified-tester, no app_id)
   retry_count: number;
   present: boolean;
+}
+
+// Internal clients whose lost 5xx reflect monitoring noise, not user-visible outages.
+// Keep in sync with the Errors-Tab classification so UI numbers agree across tabs.
+const MONITORING_APP_IDS = new Set(['cui', 'unified-tester']);
+function isMonitoringEntry(e: NginxLogEntry): boolean {
+  const app = (e.app_id || '').trim().toLowerCase();
+  if (!app) return true;                     // no app_id → internal probe
+  return MONITORING_APP_IDS.has(app);
 }
 
 interface Incident {
@@ -1175,11 +1190,13 @@ function summarizePool(entries: NginxLogEntry[]): PoolSummary {
       requests: 0, errors: 0, client_errors: 0, server_errors: 0,
       error_rate: 0, server_error_rate: 0,
       p50_ms: 0, p95_ms: 0, avg_ms: 0,
-      rescued: 0, lost: 0, retry_count: 0, present: false,
+      rescued: 0, lost: 0, lost_user: 0, lost_monitoring: 0,
+      retry_count: 0, present: false,
     };
   }
   let errors = 0, clientErrors = 0, serverErrors = 0;
-  let rescued = 0, lost = 0, retries = 0, totalMs = 0;
+  let rescued = 0, lost = 0, lostUser = 0, lostMonitoring = 0;
+  let retries = 0, totalMs = 0;
   const durations: number[] = [];
   for (const e of entries) {
     if (e.status >= 400) {
@@ -1188,15 +1205,21 @@ function summarizePool(entries: NginxLogEntry[]): PoolSummary {
       else clientErrors++;
     }
     const hasMultiUpstream = typeof e.upstream_addr === 'string' && e.upstream_addr.includes(',');
+    let wasLost = false;
     if (hasMultiUpstream) {
       const statuses = String(e.upstream_status || '').split(',').map(s => s.trim());
       retries += Math.max(0, statuses.length - 1);
       const finalStatus = parseInt(statuses[statuses.length - 1] || '0', 10);
       const earlierFailure = statuses.slice(0, -1).some(s => parseInt(s, 10) >= 500);
       if (earlierFailure && finalStatus >= 200 && finalStatus < 400) rescued++;
-      else if (finalStatus >= 500) lost++;
+      else if (finalStatus >= 500) { lost++; wasLost = true; }
     } else if (e.status >= 500) {
       lost++;
+      wasLost = true;
+    }
+    if (wasLost) {
+      if (isMonitoringEntry(e)) lostMonitoring++;
+      else lostUser++;
     }
     const ms = Math.max(0, (e.req_time || 0) * 1000);
     durations.push(ms);
@@ -1215,6 +1238,8 @@ function summarizePool(entries: NginxLogEntry[]): PoolSummary {
     avg_ms: totalMs / entries.length,
     rescued,
     lost,
+    lost_user: lostUser,
+    lost_monitoring: lostMonitoring,
     retry_count: retries,
     present: true,
   };
@@ -1546,14 +1571,20 @@ router.get('/api/bridge/events', async (req: any, res: any) => {
     };
 
     const activeIncidents = incidents.filter(i => !i.resolved);
-    // Only Prod-lost (customer received 5xx) drives "critical".
-    // 4xx are client errors, rescued 5xx had zero customer impact.
+    // Status ladder — only real user impact drives colors:
+    //   critical : any user-visible 5xx on Prod (lost_user > 0 or active prod incident)
+    //   degraded : user-visible 5xx on Dev, OR high 5xx rate on Prod, OR Dev data missing
+    //   healthy  : everything else (monitoring-only noise is ignored, see lost_monitoring)
     const prodActiveLost = activeIncidents
       .filter(i => i.source === 'prod')
       .some(i => (i.count - (i.rescued_via_failover || 0)) > 0);
+    const devActiveLost = activeIncidents
+      .filter(i => i.source === 'dev')
+      .some(i => (i.count - (i.rescued_via_failover || 0)) > 0);
     const overall_status: 'healthy' | 'degraded' | 'critical' =
-      (pools.prod.lost > 0 || prodActiveLost) ? 'critical' :
-      (pools.prod.server_error_rate >= 0.5 || !pools.dev.present) ? 'degraded' :
+      (pools.prod.lost_user > 0 || prodActiveLost) ? 'critical' :
+      (pools.dev.lost_user > 0 || devActiveLost ||
+       pools.prod.server_error_rate >= 0.5 || !pools.dev.present) ? 'degraded' :
       'healthy';
 
     res.json({
