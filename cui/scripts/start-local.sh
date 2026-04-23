@@ -17,6 +17,13 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
 
+# ── 0. Pre-start cleanup ────────────────────────────────────────────────
+# Always run port-cleanup BEFORE starting. Prevents zombie tsx servers when
+# launched manually (systemd already handles this via ExecStartPre, but manual
+# `npm run start:local` invocations were producing parallel servers — duplicate
+# setInterval timers caused weeks of sub-session reminder spam).
+bash "$SCRIPT_DIR/pre-start-cleanup.sh"
+
 # ── 1. Load Infisical helpers ────────────────────────────────────────────
 # Try multiple paths: bashrc (dev-server), direct source, or env already set
 INFISICAL_LOADED=false
@@ -99,6 +106,10 @@ if [ "$INFISICAL_LOADED" = "true" ]; then
     _cui_infisical_env="prod"
   fi
   _inject_infisical_secret CUI_APP_HOST "${INFISICAL_WS_DEV_SERVER:-}" "$_cui_infisical_env" CUI_APP_HOST
+
+  # Error Webhook Secret (shared with Sentry webhook + partner-forward — same value in dev/prod)
+  _inject_infisical_secret ERROR_WEBHOOK_SECRET "${INFISICAL_WS_DEV_SERVER:-}" "$_cui_infisical_env" ERROR_WEBHOOK_SECRET
+
   unset _cui_infisical_env
 
   # Syncthing API Key (config.xml first, Infisical fallback)

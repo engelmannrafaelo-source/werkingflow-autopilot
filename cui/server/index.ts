@@ -146,6 +146,9 @@ import createPartnerFeedbackRouter from './routes/partner-feedback.js';
 // Partner Team Status (worklist sections visible to partners)
 import createPartnerTeamStatusRouter from './routes/partner-team-status.js';
 
+// Error Monitor (Sentry webhook ingestion + CUI panel API)
+import createErrorsRouter, { createPublicErrorsRouter } from './routes/errors.js';
+
 // ─── Section 4: Constants ───────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT ?? '4005', 10);
 const PROD = process.env.NODE_ENV === 'production';
@@ -257,6 +260,9 @@ app.get('/api/config/paths', (_req, res) => {
 // --- App Proxy (BEFORE /api auth — has its own requireAuth per-route) ---
 app.use(createAppProxyRouter());
 
+// --- Error Webhooks (BEFORE /api auth — protected via ERROR_WEBHOOK_SECRET) ---
+app.use('/api', createPublicErrorsRouter());  // POST /api/errors/sentry-webhook, /api/errors/report
+
 // --- Auth routes (public — must be BEFORE requireAuth middleware) ---
 app.use('/api/auth', authRouter);
 
@@ -322,6 +328,9 @@ app.use('/api/partner', createPartnerTeamStatusRouter());   // /api/partner/team
 
 // --- Calendar API ---
 app.use(createCalendarRouter());                            // /api/calendar/events (GET/POST/PUT/DELETE)
+
+// --- Error Monitor API (protected — Sentry webhook is public above) ---
+app.use('/api/errors', createErrorsRouter());               // /api/errors (GET), /stream, /:id, spawn-fix, etc.
 
 // --- Document Manager (Phase 3) ---
 app.use('/api/team', documentManager);
@@ -394,6 +403,14 @@ process.on('SIGTERM', async () => {
   stopAutoInjectTimer();
   stopPeerAwarenessTimer();
   await stopAllCli();
+  // Persist conv-metadata before exit — debounced writes would be lost otherwise
+  try {
+    const convMeta = await import('./routes/shared/conv-metadata.js');
+    convMeta.flush();
+    console.log('[Process] convMeta flushed to disk');
+  } catch (err) {
+    console.error('[Process] convMeta flush failed:', (err as Error).message);
+  }
   cleanupState();
   process.exit(0);
 });
@@ -406,7 +423,20 @@ process.on('unhandledRejection', (reason) => {
   console.error('[FATAL] Unhandled rejection:', reason instanceof Error ? reason.message : String(reason));
 });
 
-// Start Server
+// Start Server — fail loud if port is occupied (zombie protection).
+// Defensive in-process guard: pre-start-cleanup.sh should have terminated any
+// prior instance, but if it didn't (or wasn't run) we MUST NOT silently coexist.
+// Parallel tsx servers fire duplicate setInterval timers → sub-session reminder spam.
+server.on('error', (err: NodeJS.ErrnoException) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`[FATAL] Port ${PORT} already in use — another CUI server is running. Refusing to start. ` +
+      `Run scripts/pre-start-cleanup.sh or kill the existing tsx process.`);
+    process.exit(1);
+  }
+  console.error('[FATAL] Server error:', err.message);
+  process.exit(1);
+});
+
 server.listen(PORT, () => {
-  console.log(`CUI Workspace ${PROD ? '(production)' : '(dev)'} on http://localhost:${PORT}`);
+  console.log(`CUI Workspace ${PROD ? '(production)' : '(dev)'} on http://localhost:${PORT} (pid=${process.pid})`);
 });

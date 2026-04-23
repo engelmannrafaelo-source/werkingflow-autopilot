@@ -1,6 +1,11 @@
 #!/bin/bash
 # CUI Server Startup Script with Environment Loading
 
+# Pre-start cleanup: terminate zombie tsx servers on port 4005 before starting.
+# Without this, parallel servers caused duplicate setInterval timers (sub-session
+# reminder spam) and drifting in-memory parentSessions maps.
+bash "$(dirname "$0")/scripts/pre-start-cleanup.sh"
+
 # Load environment variables
 if [ -f .env.server ]; then
   set -a  # automatically export all variables
