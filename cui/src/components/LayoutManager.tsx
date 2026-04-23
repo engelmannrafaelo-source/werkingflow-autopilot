@@ -65,7 +65,7 @@ import {
   ArchitectureExplorer, ReportBuilder, PromptExplorer, BusinessAngelPanel,
   MyTasksPanel, ActivityFeedPanel, PartnerInboxPanel,
   FeedbackPanel, TeamStatusPanel, BusinessDocsPanel, UploadPanel, ToolHub,
-  CalendarPanel,
+  CalendarPanel, ErrorMonitor,
   PANEL_NAMES, PANEL_MENU_OPTIONS,
 } from './panelRegistry';
 // LayoutBuilder ist Desktop-only — bleibt hier
@@ -509,6 +509,8 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         return wrapPanel('Kalender', withSuspense(<CalendarPanel />));
       case 'tool-hub':
         return wrapPanel('ToolHub', withSuspense(<ToolHub projectId={projectId} workDir={workDir} />));
+      case 'error-monitor':
+        return wrapPanel('ErrorMonitor', withSuspense(<ErrorMonitor />));
       default:
         return wrapPanel(`Unknown:${component}`,
           <div style={{ padding: 20, color: 'var(--tn-text-muted)' }}>

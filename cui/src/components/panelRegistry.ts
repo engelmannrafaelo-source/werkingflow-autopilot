@@ -39,6 +39,7 @@ export const TeamStatusPanel = lazy(() => import('./panels/TeamStatusPanel'));
 export const UploadPanel = lazy(() => import('./panels/UploadPanel'));
 export const CalendarPanel = lazy(() => import('./panels/CalendarPanel'));
 export const ToolHub = lazy(() => import('./panels/ToolHub'));
+export const ErrorMonitor = lazy(() => import('./panels/ErrorMonitor/ErrorMonitor'));
 // --- Panel ID → Display Name ---
 // Aliases (virtual-office, gmail, knowledge-fullscreen, infrastructure) sind enthalten.
 export const PANEL_NAMES: Record<string, string> = {
@@ -80,6 +81,7 @@ export const PANEL_NAMES: Record<string, string> = {
   'uploads': 'Uploads',
   'calendar': 'Kalender',
   'tool-hub': 'Tool Hub',
+  'error-monitor': 'Error Monitor',
 };
 
 // --- Dropdown-Optionen für den [+] Tab-Picker (grouped) ---
@@ -120,6 +122,7 @@ export const PANEL_MENU_OPTIONS: PanelMenuGroup[] = [
   {
     category: 'Monitoring',
     items: [
+      { value: 'error-monitor', label: 'Error Monitor' },
       { value: 'bridge-monitor', label: 'Bridge Monitor' },
       { value: 'repo-dashboard', label: 'Git & Pipeline Monitor' },
       { value: 'infisical-monitor', label: 'Infisical Monitor' },
