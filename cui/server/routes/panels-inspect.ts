@@ -54,7 +54,6 @@ const PANELS: PanelDefinition[] = [
     component: 'components/panels/BridgeMonitor/BridgeMonitor.tsx',
     coverage: 'read-only',
     probes: [
-      { method: 'GET', path: '/api/bridge/health' },
       { method: 'GET', path: '/api/bridge/guard/status' },
       { method: 'GET', path: '/api/bridge/metrics/overview' },
       { method: 'GET', path: '/api/bridge/metrics/cost' },
@@ -84,7 +83,6 @@ const PANELS: PanelDefinition[] = [
     probes: [
       { method: 'GET', path: '/api/agents/status' },
       { method: 'GET', path: '/api/team/events' },
-      { method: 'GET', path: '/api/team/approvals' },
     ],
     notes: 'Chat + Knowledge-Graph sind client-only State',
   },
@@ -113,14 +111,14 @@ const PANELS: PanelDefinition[] = [
   {
     name: 'infisical-monitor',
     component: 'components/panels/InfisicalMonitor/InfisicalMonitor.tsx',
-    coverage: 'read-only',
+    coverage: 'partial',
     probes: [
-      { method: 'GET', path: '/api/infisical/overview' },
+      { method: 'GET', path: '/api/infisical/status' },
       { method: 'GET', path: '/api/infisical/projects' },
       { method: 'GET', path: '/api/infisical/syncs' },
       { method: 'GET', path: '/api/infisical/health' },
     ],
-    notes: 'Sync-Trigger und Settings-Mutations fehlen',
+    mutations: ['POST /api/infisical/trigger-sync'],
   },
   {
     name: 'background-ops',
@@ -346,6 +344,12 @@ async function runProbe(probe: EndpointProbe, cookie: string | undefined): Promi
     });
     const latencyMs = Date.now() - start;
     const text = await res.text();
+    const contentType = res.headers.get('content-type') ?? '';
+    // SPA-fallback detection: Vite serves index.html for unknown /api/* paths,
+    // which returns HTTP 200 but is NOT the intended API — treat as error.
+    const isSpaFallback =
+      contentType.toLowerCase().includes('text/html') ||
+      text.trimStart().startsWith('<!DOCTYPE');
     let bodyKeys: string[] | undefined;
     try {
       const parsed = JSON.parse(text);
@@ -357,14 +361,16 @@ async function runProbe(probe: EndpointProbe, cookie: string | undefined): Promi
     } catch {
       // non-JSON body — leave bodyKeys undefined
     }
+    const ok = res.ok && !isSpaFallback;
     return {
       method: probe.method,
       path: probe.path + (probe.query ? `?${probe.query}` : ''),
-      status: res.ok ? 'ok' : 'error',
+      status: ok ? 'ok' : 'error',
       http: res.status,
       latencyMs,
       bodySize: text.length,
       bodyKeys,
+      error: isSpaFallback ? 'SPA-fallback (route not registered)' : undefined,
     };
   } catch (err: unknown) {
     const latencyMs = Date.now() - start;
