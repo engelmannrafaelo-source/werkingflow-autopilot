@@ -180,8 +180,14 @@ export default function UsageAnalyticsTab() {
     });
   }, [data]);
 
-  const dataQuality = useMemo(() => {
-    if (!data || data.summary.total_calls === 0) return 100;
+  // dataQuality === null bei: kein Datensatz, 0 Calls, oder Bridge-Outage-Violations
+  // (BRIDGE_FALLBACK/OFFLINE/UNAVAILABLE). Verhindert grüne 100% bei kaputter Bridge.
+  const dataQuality = useMemo<number | null>(() => {
+    if (!data || data.summary.total_calls === 0) return null;
+    const serverViolations = extractViolations(data);
+    const outageCodes = ['BRIDGE_FALLBACK', 'BRIDGE_OFFLINE', 'BRIDGE_UNAVAILABLE'];
+    if (serverViolations.some(v => outageCodes.includes(v.code))) return null;
+
     let checks = 0, passed = 0;
     // User attribution
     const anonCalls = (data.users || []).filter(u => !u.user_id || u.user_id === 'anonymous').reduce((s, u) => s + u.calls, 0);
@@ -189,7 +195,7 @@ export default function UsageAnalyticsTab() {
     passed += data.summary.total_calls - anonCalls;
     // Token tracking
     if (data.summary.total_tokens > 0) { checks++; passed++; } else if (data.summary.total_calls > 0) { checks++; }
-    return checks > 0 ? Math.round((passed / checks) * 100) : 100;
+    return checks > 0 ? Math.round((passed / checks) * 100) : null;
   }, [data]);
 
   return (
@@ -360,7 +366,7 @@ export default function UsageAnalyticsTab() {
                       <YAxis tick={{ fontSize: 9, fill: 'var(--tn-text-muted)' }} width={50} tickFormatter={fmtTokens} />
                       <Tooltip
                         contentStyle={{ background: 'var(--tn-bg-dark)', border: '1px solid var(--tn-border)', fontSize: 10 }}
-                        formatter={(value: number) => [fmtTokens(value), 'Tokens']}
+                        formatter={(value: number | undefined) => [fmtTokens(value ?? 0), 'Tokens']}
                       />
                       <Bar dataKey="total_tokens" radius={[4, 4, 0, 0]}>
                         {data.models.map((_, i) => (
