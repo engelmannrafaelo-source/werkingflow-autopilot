@@ -1,4 +1,4 @@
-import type { ActivityEvent } from './VirtualOffice';
+import type { ActivityEvent } from './virtualOfficeTypes';
 
 interface ActivityStreamProps {
   activities: ActivityEvent[];

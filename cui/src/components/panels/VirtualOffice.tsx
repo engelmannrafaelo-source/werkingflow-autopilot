@@ -12,45 +12,10 @@ import PersonaDocumentList from './PersonaDocumentList';
 import AgentDetailModal from '../modals/AgentDetailModal';
 import { BuildInfo } from '../BuildInfo';
 
+export type { AgentStatus, ActivityEvent, ActionItem } from './virtualOfficeTypes';
+import type { AgentStatus, ActivityEvent, ActionItem } from './virtualOfficeTypes';
+
 const API = '/api';
-
-export interface AgentStatus {
-  id: string;
-  persona_id: string;
-  persona_name: string;
-  schedule: string;
-  status: 'idle' | 'working' | 'error';
-  last_run: string | null;
-  last_actions: number;
-  last_action_types: string[];
-  last_trigger: string | null;
-  next_run: string;
-  has_pending_approvals: boolean;
-  approvals_count: number;
-  inbox_count: number;
-}
-
-export interface ActivityEvent {
-  timestamp: string;
-  personaId: string;
-  personaName: string;
-  action: string; // "started", "completed", "error", "wrote", "messaged"
-  description: string;
-  progress?: number; // 0-100
-}
-
-export interface ActionItem {
-  id: string;
-  type: 'approval' | 'review' | 'decision' | 'suggestion';
-  priority: 'urgent' | 'normal' | 'low';
-  title: string;
-  description: string;
-  personaId?: string;
-  personaName?: string;
-  age?: number; // days old
-  blocking?: boolean; // blocks other work
-  quickAction?: string; // URL for one-click action
-}
 
 interface VirtualOfficeProps {
   projectId?: string;

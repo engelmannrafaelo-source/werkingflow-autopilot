@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { AgentStatus } from './VirtualOffice';
+import type { AgentStatus } from './virtualOfficeTypes';
 import AgentDetailModal from '../modals/AgentDetailModal';
 
 const API = '/api';

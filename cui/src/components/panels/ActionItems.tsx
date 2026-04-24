@@ -1,4 +1,4 @@
-import type { ActionItem } from './VirtualOffice';
+import type { ActionItem } from './virtualOfficeTypes';
 
 interface ActionItemsProps {
   items: ActionItem[];

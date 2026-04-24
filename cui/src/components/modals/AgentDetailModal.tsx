@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import type { AgentStatus } from '../panels/VirtualOffice';
+import type { AgentStatus } from '../panels/virtualOfficeTypes';
 
 const API = '/api';
 
