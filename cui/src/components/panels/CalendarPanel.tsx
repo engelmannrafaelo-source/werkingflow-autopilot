@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, type ReactNode } from 'react';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -125,6 +125,25 @@ function getMonthGridDays(year: number, month: number): Date[] {
     d.setDate(d.getDate() + i);
     return d;
   });
+}
+
+// ── Shared Sub-Components ────────────────────────────────────────────────────
+
+function CalendarViewNav({ onPrev, onNext, children, titleStyle }: {
+  onPrev: () => void;
+  onNext: () => void;
+  children: ReactNode;
+  titleStyle?: React.CSSProperties;
+}) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', padding: '4px 8px 6px', gap: 6, borderBottom: '1px solid var(--tn-border)' }}>
+      <button onClick={onPrev} style={btnNav}>‹</button>
+      <span style={{ flex: 1, textAlign: 'center', ...titleStyle }}>
+        {children}
+      </span>
+      <button onClick={onNext} style={btnNav}>›</button>
+    </div>
+  );
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -365,14 +384,13 @@ export default function CalendarPanel() {
 
     return (
       <div style={{ flex: 1, overflowY: 'auto' }}>
-        {/* Navigation */}
-        <div style={{ display: 'flex', alignItems: 'center', padding: '4px 8px 6px', gap: 6, borderBottom: '1px solid var(--tn-border)' }}>
-          <button onClick={() => setNavDate(d => { const nd = new Date(d); nd.setDate(nd.getDate() - 7); return nd; })} style={btnNav}>‹</button>
-          <span style={{ flex: 1, textAlign: 'center', fontSize: 11, color: 'var(--tn-text-muted)' }}>
-            {startStr} – {endStr}
-          </span>
-          <button onClick={() => setNavDate(d => { const nd = new Date(d); nd.setDate(nd.getDate() + 7); return nd; })} style={btnNav}>›</button>
-        </div>
+        <CalendarViewNav
+          onPrev={() => setNavDate(d => { const nd = new Date(d); nd.setDate(nd.getDate() - 7); return nd; })}
+          onNext={() => setNavDate(d => { const nd = new Date(d); nd.setDate(nd.getDate() + 7); return nd; })}
+          titleStyle={{ fontSize: 11, color: 'var(--tn-text-muted)' }}
+        >
+          {startStr} – {endStr}
+        </CalendarViewNav>
 
         {/* Day columns */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 2, padding: '6px 4px' }}>
@@ -452,14 +470,13 @@ export default function CalendarPanel() {
 
     return (
       <div style={{ flex: 1, overflowY: 'auto' }}>
-        {/* Navigation */}
-        <div style={{ display: 'flex', alignItems: 'center', padding: '4px 8px 6px', gap: 6, borderBottom: '1px solid var(--tn-border)' }}>
-          <button onClick={() => setNavDate(d => new Date(d.getFullYear(), d.getMonth() - 1, 1))} style={btnNav}>‹</button>
-          <span style={{ flex: 1, textAlign: 'center', fontSize: 12, fontWeight: 600, color: 'var(--tn-text)' }}>
-            {MONTH_NAMES_FULL[month]} {year}
-          </span>
-          <button onClick={() => setNavDate(d => new Date(d.getFullYear(), d.getMonth() + 1, 1))} style={btnNav}>›</button>
-        </div>
+        <CalendarViewNav
+          onPrev={() => setNavDate(d => new Date(d.getFullYear(), d.getMonth() - 1, 1))}
+          onNext={() => setNavDate(d => new Date(d.getFullYear(), d.getMonth() + 1, 1))}
+          titleStyle={{ fontSize: 12, fontWeight: 600, color: 'var(--tn-text)' }}
+        >
+          {MONTH_NAMES_FULL[month]} {year}
+        </CalendarViewNav>
 
         {/* Calendar grid */}
         <div style={{ padding: '4px 6px' }}>
@@ -560,14 +577,13 @@ export default function CalendarPanel() {
 
     return (
       <div style={{ flex: 1, overflowY: 'auto' }}>
-        {/* Navigation */}
-        <div style={{ display: 'flex', alignItems: 'center', padding: '4px 8px 6px', gap: 6, borderBottom: '1px solid var(--tn-border)' }}>
-          <button onClick={() => setNavDate(d => new Date(d.getFullYear() - 1, 0, 1))} style={btnNav}>‹</button>
-          <span style={{ flex: 1, textAlign: 'center', fontSize: 13, fontWeight: 700, color: 'var(--tn-text)' }}>
-            {year}
-          </span>
-          <button onClick={() => setNavDate(d => new Date(d.getFullYear() + 1, 0, 1))} style={btnNav}>›</button>
-        </div>
+        <CalendarViewNav
+          onPrev={() => setNavDate(d => new Date(d.getFullYear() - 1, 0, 1))}
+          onNext={() => setNavDate(d => new Date(d.getFullYear() + 1, 0, 1))}
+          titleStyle={{ fontSize: 13, fontWeight: 700, color: 'var(--tn-text)' }}
+        >
+          {year}
+        </CalendarViewNav>
 
         {/* 12 mini calendars */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, padding: '6px 4px' }}>
