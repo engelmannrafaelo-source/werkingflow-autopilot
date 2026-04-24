@@ -1,4 +1,4 @@
-import type { Project } from '../InfisicalMonitor';
+import type { Project } from '../types';
 
 interface Props {
   projects: Project[];

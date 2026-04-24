@@ -1,4 +1,4 @@
-import type { InfisicalData } from '../InfisicalMonitor';
+import type { InfisicalData } from '../types';
 
 interface Props {
   data: InfisicalData;

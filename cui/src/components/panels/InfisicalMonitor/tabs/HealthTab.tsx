@@ -1,4 +1,4 @@
-import type { HealthStatus } from '../InfisicalMonitor';
+import type { HealthStatus } from '../types';
 
 interface Props {
   health: HealthStatus | null;

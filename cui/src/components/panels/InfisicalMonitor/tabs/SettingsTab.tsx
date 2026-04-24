@@ -1,4 +1,4 @@
-import type { ServerInfo } from '../InfisicalMonitor';
+import type { ServerInfo } from '../types';
 
 interface SettingsItem {
   label: string;

@@ -1,4 +1,4 @@
-import type { Sync } from '../InfisicalMonitor';
+import type { Sync } from '../types';
 
 interface Props {
   syncs: Sync[];
