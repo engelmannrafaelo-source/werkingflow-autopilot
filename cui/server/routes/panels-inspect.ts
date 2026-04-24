@@ -320,6 +320,62 @@ const PANELS: PanelDefinition[] = [
       'POST /api/team/chat/:personaId',
     ],
   },
+  {
+    name: 'business-docs',
+    component: 'components/panels/BusinessDocsPanel.tsx',
+    coverage: 'full',
+    probes: [
+      { method: 'GET', path: '/api/partner/docs' },
+      { method: 'GET', path: '/api/partner/docs/workspaces' },
+    ],
+    mutations: [
+      'POST /api/partner/docs',
+      'PATCH /api/partner/docs/:docId',
+      'POST /api/partner/docs/publish',
+      'DELETE /api/partner/docs/:docId',
+      'DELETE /api/partner/docs/:docId/permanent',
+    ],
+  },
+  {
+    name: 'feedback',
+    component: 'components/panels/FeedbackPanel.tsx',
+    coverage: 'full',
+    probes: [
+      { method: 'GET', path: '/api/partner/feedback' },
+    ],
+    mutations: [
+      'POST /api/partner/feedback',
+      'PATCH /api/partner/feedback/:id/status',
+    ],
+  },
+  {
+    name: 'knowledge',
+    component: 'components/panels/KnowledgeFullscreen.tsx',
+    coverage: 'read-only',
+    probes: [
+      { method: 'GET', path: '/api/agents/claude/status' },
+    ],
+    notes: 'Knowledge graph and persona editor are client-only; only agent-status read is API-backed',
+  },
+  {
+    name: 'team-status',
+    component: 'components/panels/TeamStatusPanel.tsx',
+    coverage: 'read-only',
+    probes: [
+      { method: 'GET', path: '/api/partner/team-status' },
+    ],
+    notes: 'Inherent read-only — displays team status snapshot, no mutations',
+  },
+  {
+    name: 'watchdog',
+    component: 'components/panels/WatchdogPanel.tsx',
+    coverage: 'read-only',
+    probes: [
+      { method: 'GET', path: '/api/admin/wr/system-health' },
+      { method: 'GET', path: '/api/ops/deployments' },
+    ],
+    notes: 'Inherent read-only — system health + deployment monitoring dashboard',
+  },
 ];
 
 
