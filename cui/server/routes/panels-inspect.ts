@@ -328,12 +328,21 @@ interface ProbeResult {
   error?: string;
 }
 
+interface MutationProbeResult {
+  method: string;
+  path: string;
+  status: 'wired' | 'missing';
+  http?: number;
+  error?: string;
+}
+
 interface PanelResult {
   name: string;
   component: string;
   coverage: PanelDefinition['coverage'];
   probes: ProbeResult[];
   mutations: string[];
+  mutationProbes: MutationProbeResult[];
   notes?: string;
   allOk: boolean;
 }
@@ -394,6 +403,52 @@ async function runProbe(probe: EndpointProbe, cookie: string | undefined): Promi
   }
 }
 
+/**
+ * Probe a mutation endpoint with OPTIONS to verify the route is registered,
+ * without triggering the actual handler. Parses entries like
+ *   "POST /api/foo/bar"   or   "DELETE /api/foo/:id"
+ * and replaces :params with a safe literal for the probe.
+ *
+ * Verdicts:
+ *   - wired: OPTIONS returned non-HTML (Express matched a route)
+ *   - missing: OPTIONS returned HTML (SPA-fallback — route not registered)
+ */
+async function runMutationProbe(entry: string): Promise<MutationProbeResult> {
+  const match = entry.match(/^([A-Z]+)\s+(\/\S+)$/);
+  if (!match) {
+    return { method: '?', path: entry, status: 'missing', error: 'unparseable' };
+  }
+  const method = match[1];
+  // Only probe HTTP methods; tags like "SSE" are informational only.
+  if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+    return { method, path: match[2], status: 'wired', error: `not probed (${method})` };
+  }
+  const path = match[2].replace(/:[A-Za-z_][A-Za-z0-9_]*/g, '__probe__');
+  const url = `${SELF_BASE}${path}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const res = await fetch(url, { method: 'OPTIONS', signal: controller.signal });
+    const text = await res.text();
+    const contentType = res.headers.get('content-type') ?? '';
+    const isSpaFallback =
+      contentType.toLowerCase().includes('text/html') ||
+      text.trimStart().startsWith('<!DOCTYPE');
+    return {
+      method,
+      path,
+      status: isSpaFallback ? 'missing' : 'wired',
+      http: res.status,
+      error: isSpaFallback ? 'SPA-fallback (route not registered)' : undefined,
+    };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { method, path, status: 'missing', error: message.slice(0, 120) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const router = Router();
 
 router.get('/api/panels/inspect', async (req: Request, res: Response) => {
@@ -414,21 +469,32 @@ router.get('/api/panels/inspect', async (req: Request, res: Response) => {
     for (const p of panel.probes) {
       probes.push(await runProbe(p, cookie));
     }
-    const allOk = probes.length === 0 ? true : probes.every(p => p.status === 'ok');
+    const mutationProbes: MutationProbeResult[] = [];
+    for (const m of panel.mutations ?? []) {
+      mutationProbes.push(await runMutationProbe(m));
+    }
+    const getsOk = probes.length === 0 ? true : probes.every(p => p.status === 'ok');
+    const mutationsOk = mutationProbes.every(m => m.status === 'wired');
     results.push({
       name: panel.name,
       component: panel.component,
       coverage: panel.coverage,
       probes,
       mutations: panel.mutations ?? [],
+      mutationProbes,
       notes: panel.notes,
-      allOk,
+      allOk: getsOk && mutationsOk,
     });
   }
 
   const totalProbes = results.reduce((sum, r) => sum + r.probes.length, 0);
   const okProbes = results.reduce(
     (sum, r) => sum + r.probes.filter(p => p.status === 'ok').length,
+    0,
+  );
+  const totalMutations = results.reduce((sum, r) => sum + r.mutationProbes.length, 0);
+  const wiredMutations = results.reduce(
+    (sum, r) => sum + r.mutationProbes.filter(m => m.status === 'wired').length,
     0,
   );
   const summary = {
@@ -438,6 +504,9 @@ router.get('/api/panels/inspect', async (req: Request, res: Response) => {
     probes: totalProbes,
     probesOk: okProbes,
     probesFailed: totalProbes - okProbes,
+    mutations: totalMutations,
+    mutationsWired: wiredMutations,
+    mutationsMissing: totalMutations - wiredMutations,
     coverageBreakdown: {
       full: results.filter(r => r.coverage === 'full').length,
       partial: results.filter(r => r.coverage === 'partial').length,
