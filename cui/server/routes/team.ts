@@ -1,12 +1,12 @@
 import { Router, Request, Response } from 'express';
-import { readdir, readFile } from 'fs/promises';
-import { join } from 'path';
+import { readdir, readFile, writeFile, mkdir } from 'fs/promises';
+import { join, dirname } from 'path';
 
 import { parsePersonaMd } from './shared/utils.js';
 import { PATHS, BRIDGE_URL } from '../config/paths.js';
 import { bridgeChat } from '../lib/bridge-fetch.js';
 
-// --- Task Management ---
+// --- Task Management (file-backed: data/active/team/tasks.json) ---
 interface Task {
   id: string;
   title: string;
@@ -14,12 +14,72 @@ interface Task {
   assignee: string;        // Persona ID
   status: 'backlog' | 'in_progress' | 'review' | 'done';
   priority: 'low' | 'medium' | 'high';
-  documentRef?: string;    // Optional: Business-Doc Path
+  documentRef?: string;
   createdAt: string;
   updatedAt: string;
+  // Preserved pass-through fields from legacy demo data
+  tags?: string[];
+  dependencies?: string[];
+  comments?: unknown[];
+  estimatedHours?: number;
+  actualHours?: number;
+  dueDate?: string;
 }
 
-let tasks: Task[] = [];  // In-Memory for MVP - later DB
+const TASKS_FILE = join(PATHS.dataDir, 'active/team/tasks.json');
+
+function normalizeStatus(s: unknown): Task['status'] {
+  const str = String(s ?? '').toLowerCase();
+  if (str === 'todo' || str === 'blocked') return 'backlog';
+  if (str === 'in_review' || str === 'review') return 'review';
+  if (str === 'completed' || str === 'done') return 'done';
+  if (str === 'in_progress') return 'in_progress';
+  return 'backlog';
+}
+
+function normalizePriority(p: unknown): Task['priority'] {
+  const str = String(p ?? 'medium').toLowerCase();
+  if (str === 'critical' || str === 'high') return 'high';
+  if (str === 'low') return 'low';
+  return 'medium';
+}
+
+function normalizeTask(raw: any): Task {
+  return {
+    id: String(raw.id ?? `TASK-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
+    title: String(raw.title ?? ''),
+    description: String(raw.description ?? ''),
+    assignee: String(raw.assignedTo ?? raw.assignee ?? ''),
+    status: normalizeStatus(raw.status),
+    priority: normalizePriority(raw.priority),
+    documentRef: raw.documentRef,
+    createdAt: String(raw.created ?? raw.createdAt ?? new Date().toISOString()),
+    updatedAt: String(raw.updated ?? raw.updatedAt ?? new Date().toISOString()),
+    tags: Array.isArray(raw.tags) ? raw.tags : undefined,
+    dependencies: Array.isArray(raw.dependencies) ? raw.dependencies : undefined,
+    comments: Array.isArray(raw.comments) ? raw.comments : undefined,
+    estimatedHours: typeof raw.estimatedHours === 'number' ? raw.estimatedHours : undefined,
+    actualHours: typeof raw.actualHours === 'number' ? raw.actualHours : undefined,
+    dueDate: raw.dueDate,
+  };
+}
+
+async function loadTasks(): Promise<Task[]> {
+  try {
+    const content = await readFile(TASKS_FILE, 'utf-8');
+    const data = JSON.parse(content);
+    const raw = Array.isArray(data) ? data : (Array.isArray(data?.tasks) ? data.tasks : []);
+    return raw.map(normalizeTask);
+  } catch (err: any) {
+    if (err?.code === 'ENOENT') return [];
+    throw err;
+  }
+}
+
+async function saveTasks(tasks: Task[]): Promise<void> {
+  await mkdir(dirname(TASKS_FILE), { recursive: true });
+  await writeFile(TASKS_FILE, JSON.stringify(tasks, null, 2), 'utf-8');
+}
 
 export default function createTeamRouter(): Router {
   const router = Router();
@@ -62,50 +122,77 @@ export default function createTeamRouter(): Router {
   });
 
   // GET /api/team/tasks
-  router.get('/tasks', (req: Request, res: Response) => {
-    const { assignee, status } = req.query;
-    let filtered = tasks;
-
-    if (assignee) filtered = filtered.filter(t => t.assignee === assignee);
-    if (status) filtered = filtered.filter(t => t.status === status);
-
-    res.json(filtered);
+  router.get('/tasks', async (req: Request, res: Response) => {
+    try {
+      const { assignee, status } = req.query;
+      let tasks = await loadTasks();
+      if (assignee) tasks = tasks.filter(t => t.assignee === assignee);
+      if (status) tasks = tasks.filter(t => t.status === status);
+      res.json(tasks);
+    } catch (err: any) {
+      console.error('[Team API] GET /tasks failed:', err);
+      res.status(500).json({ error: err.message ?? 'load failed' });
+    }
   });
 
   // POST /api/team/tasks
-  router.post('/tasks', (req: Request, res: Response) => {
-    const task: Task = {
-      id: Date.now().toString(),
-      ...req.body,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    tasks.push(task);
-    res.json(task);
+  router.post('/tasks', async (req: Request, res: Response) => {
+    try {
+      const tasks = await loadTasks();
+      const now = new Date().toISOString();
+      const task = normalizeTask({
+        id: `TASK-${Date.now()}`,
+        ...req.body,
+        createdAt: now,
+        updatedAt: now,
+      });
+      if (!task.title.trim()) return res.status(400).json({ error: 'title required' });
+      tasks.push(task);
+      await saveTasks(tasks);
+      res.status(201).json(task);
+    } catch (err: any) {
+      console.error('[Team API] POST /tasks failed:', err);
+      res.status(500).json({ error: err.message ?? 'save failed' });
+    }
   });
 
   // PATCH /api/team/tasks/:id
-  router.patch('/tasks/:id', (req: Request, res: Response) => {
-    const task = tasks.find(t => t.id === req.params.id);
-    if (!task) return res.status(404).send('Task not found');
+  router.patch('/tasks/:id', async (req: Request, res: Response) => {
+    try {
+      const tasks = await loadTasks();
+      const idx = tasks.findIndex(t => t.id === req.params.id);
+      if (idx === -1) return res.status(404).json({ error: 'Task not found' });
 
-    const { title, description, status, priority, assignee } = req.body;
-    if (title !== undefined) task.title = title;
-    if (description !== undefined) task.description = description;
-    if (status !== undefined) task.status = status;
-    if (priority !== undefined) task.priority = priority;
-    if (assignee !== undefined) task.assignee = assignee;
-    task.updatedAt = new Date().toISOString();
-    res.json(task);
+      const { title, description, status, priority, assignee, documentRef } = req.body;
+      const task = tasks[idx];
+      if (title !== undefined) task.title = String(title);
+      if (description !== undefined) task.description = String(description);
+      if (status !== undefined) task.status = normalizeStatus(status);
+      if (priority !== undefined) task.priority = normalizePriority(priority);
+      if (assignee !== undefined) task.assignee = String(assignee);
+      if (documentRef !== undefined) task.documentRef = String(documentRef);
+      task.updatedAt = new Date().toISOString();
+      await saveTasks(tasks);
+      res.json(task);
+    } catch (err: any) {
+      console.error('[Team API] PATCH /tasks failed:', err);
+      res.status(500).json({ error: err.message ?? 'save failed' });
+    }
   });
 
   // DELETE /api/team/tasks/:id
-  router.delete('/tasks/:id', (req: Request, res: Response) => {
-    const index = tasks.findIndex(t => t.id === req.params.id);
-    if (index === -1) return res.status(404).send('Task not found');
-
-    tasks.splice(index, 1);
-    res.json({ ok: true });
+  router.delete('/tasks/:id', async (req: Request, res: Response) => {
+    try {
+      const tasks = await loadTasks();
+      const idx = tasks.findIndex(t => t.id === req.params.id);
+      if (idx === -1) return res.status(404).json({ error: 'Task not found' });
+      tasks.splice(idx, 1);
+      await saveTasks(tasks);
+      res.json({ ok: true });
+    } catch (err: any) {
+      console.error('[Team API] DELETE /tasks failed:', err);
+      res.status(500).json({ error: err.message ?? 'save failed' });
+    }
   });
 
   // GET /api/team/events - Load activity events from events.json
@@ -139,16 +226,14 @@ export default function createTeamRouter(): Router {
     }
   });
 
-  // GET /api/team/task-board - Load tasks from tasks.json (for Task Board)
+  // GET /api/team/task-board - Load normalized tasks (same store as /tasks CRUD)
   router.get('/task-board', async (_req: Request, res: Response) => {
-    const tasksPath = join(PATHS.dataDir, 'active/team/tasks.json');
     try {
-      const content = await readFile(tasksPath, 'utf-8');
-      const data = JSON.parse(content);
-      res.json(data); // Returns { tasks: [...] }
+      const tasks = await loadTasks();
+      res.json(tasks);
     } catch (err: any) {
-      console.error('Failed to load tasks.json:', err);
-      res.status(500).json({ error: 'Failed to load tasks', tasks: [] });
+      console.error('[Team API] GET /task-board failed:', err);
+      res.status(500).json({ error: err.message ?? 'load failed' });
     }
   });
 

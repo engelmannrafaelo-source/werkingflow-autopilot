@@ -288,12 +288,19 @@ const PANELS: PanelDefinition[] = [
   {
     name: 'team',
     component: 'components/Team*.tsx',
-    coverage: 'partial',
+    coverage: 'full',
     probes: [
       { method: 'GET', path: '/api/team/personas' },
       { method: 'GET', path: '/api/team/events' },
       { method: 'GET', path: '/api/team/task-board' },
+      { method: 'GET', path: '/api/team/tasks' },
       { method: 'GET', path: '/api/team/knowledge/registry' },
+    ],
+    mutations: [
+      'POST /api/team/tasks',
+      'PATCH /api/team/tasks/:id',
+      'DELETE /api/team/tasks/:id',
+      'POST /api/team/chat/:personaId',
     ],
   },
   {
