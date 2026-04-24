@@ -66,15 +66,24 @@ const PANELS: PanelDefinition[] = [
   {
     name: 'qa-dashboard',
     component: 'components/panels/QADashboard/QADashboard.tsx',
-    coverage: 'partial',
+    coverage: 'full',
     probes: [
       { method: 'GET', path: '/api/qa/runs' },
+      { method: 'GET', path: '/api/qa/overview' },
+      { method: 'GET', path: '/api/qa/scenarios' },
+      { method: 'GET', path: '/api/qa/journey', query: 'latest=true' },
+      { method: 'GET', path: '/api/qa/dependency-graph/apps' },
+      { method: 'GET', path: '/api/qa/arch-test/freshness' },
+      { method: 'GET', path: '/api/qa/product-docs' },
+      { method: 'GET', path: '/api/qa/backend-pyramid' },
     ],
     mutations: [
-      'POST /api/qa/staleness/:app/retest',
-      'POST /api/qa/coverage-gaps/:app/refresh',
+      'POST /api/qa/staleness/:appId/retest',
+      'POST /api/qa/staleness/:appId/refresh',
+      'POST /api/qa/coverage-gaps/:appId/refresh',
+      'POST /api/qa/product-docs/:appId/regenerate',
+      'POST /api/qa/arch-test/:appId/refresh',
     ],
-    notes: 'Sub-Tabs (TestRuns, Scenarios, Backend) haben keine dedizierten GET-Endpoints',
   },
   {
     name: 'virtual-office',
@@ -89,7 +98,7 @@ const PANELS: PanelDefinition[] = [
   {
     name: 'repo-dashboard',
     component: 'components/panels/RepoDashboard/RepoDashboard.tsx',
-    coverage: 'partial',
+    coverage: 'full',
     probes: [
       { method: 'GET', path: '/api/repo-dashboard/repositories' },
       { method: 'GET', path: '/api/repo-dashboard/pipeline' },
@@ -101,17 +110,16 @@ const PANELS: PanelDefinition[] = [
   {
     name: 'maintenance',
     component: 'components/panels/MaintenancePanel/MaintenancePanel.tsx',
-    coverage: 'partial',
+    coverage: 'full',
     probes: [
       { method: 'GET', path: '/api/maintenance/status' },
     ],
     mutations: ['POST /api/maintenance/refresh', 'POST /api/maintenance/run'],
-    notes: 'Team/Docs/Repos Sub-Tabs sind client-only',
   },
   {
     name: 'infisical-monitor',
     component: 'components/panels/InfisicalMonitor/InfisicalMonitor.tsx',
-    coverage: 'partial',
+    coverage: 'full',
     probes: [
       { method: 'GET', path: '/api/infisical/status' },
       { method: 'GET', path: '/api/infisical/projects' },
@@ -129,7 +137,7 @@ const PANELS: PanelDefinition[] = [
       { method: 'GET', path: '/api/peer-awareness' },
       { method: 'GET', path: '/api/auto-inject' },
     ],
-    notes: 'Settings-Tab hat kein Backend',
+    notes: 'Inherent read-only — zeigt Peer-Awareness, AutoInject-Status und Event-Log',
   },
   {
     name: 'error-monitor',
@@ -182,12 +190,13 @@ const PANELS: PanelDefinition[] = [
   {
     name: 'architecture-explorer',
     component: 'components/panels/ArchitectureExplorer/*.tsx',
-    coverage: 'partial',
+    coverage: 'read-only',
     probes: [
       { method: 'GET', path: '/api/architecture/graph' },
       { method: 'GET', path: '/api/architecture/status' },
       { method: 'GET', path: '/api/architecture/subgraphs' },
     ],
+    notes: 'Inherent read-only — Visualisierung des Monorepo-Graphen, keine Mutations',
   },
   {
     name: 'calendar',
@@ -232,11 +241,12 @@ const PANELS: PanelDefinition[] = [
   {
     name: 'prompt-explorer',
     component: 'components/panels/PromptExplorer/*.tsx',
-    coverage: 'partial',
+    coverage: 'read-only',
     probes: [
       { method: 'GET', path: '/api/prompt-explorer/pipelines' },
+      { method: 'GET', path: '/api/prompt-explorer/scan', query: '' },
     ],
-    notes: 'Scan-Aktionen via POST, aber keine Mutation für Pipeline-Änderungen',
+    notes: 'Scan via GET /scan/:id — kein Schreib-Zugriff by design (read-only explorer)',
   },
   {
     name: 'business-angel',
@@ -265,12 +275,16 @@ const PANELS: PanelDefinition[] = [
   {
     name: 'conversation-queue',
     component: 'components/ConversationQueuePanel.tsx',
-    coverage: 'partial',
+    coverage: 'full',
     probes: [
       { method: 'GET', path: '/api/mission/conversations' },
       { method: 'GET', path: '/api/projects' },
     ],
-    notes: 'Queue-Reorder nur lokal, keine API',
+    mutations: [
+      'POST /api/mission/conversation/:sessionId/finish',
+      'DELETE /api/mission/conversation/:sessionId',
+      'POST /api/mission/activate',
+    ],
   },
   {
     name: 'prompt-templates',
