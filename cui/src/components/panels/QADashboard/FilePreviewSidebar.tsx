@@ -233,7 +233,7 @@ function PreviewContent({ data }: { data: FilePreviewData }) {
     // JSON — pretty-printed
     if (data.ext === '.json') {
       let formatted = data.content;
-      try { formatted = JSON.stringify(JSON.parse(data.content), null, 2); } catch {}
+      try { formatted = JSON.stringify(JSON.parse(data.content), null, 2); } catch {} // silent-ok: invalid JSON formatting attempt fails gracefully; raw content displayed
       return (
         <pre style={{
           padding: 12,

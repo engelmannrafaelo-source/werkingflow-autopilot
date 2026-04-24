@@ -129,7 +129,7 @@ export default function BrowserPanel({ initialUrl = '', panelId, onUrlChange }: 
       u.searchParams.delete('_cb');
       u.searchParams.set('_cb', key.toString());
       return u.toString();
-    } catch {
+    } catch { // silent-ok: URL parse failure returns original base URL unchanged
       return base;
     }
   }

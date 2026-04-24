@@ -556,11 +556,11 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         signal: AbortSignal.timeout(15000),
       }).then(async (res) => {
         if (res.ok) {
-          const data = await res.json().catch(() => ({}));
+          const data = await res.json().catch(() => ({})); // silent-ok: malformed layout save response; layout already persisted
           if (typeof data._v === 'number') currentLayoutVersionRef.current = data._v;
         } else if (res.status === 409) {
           // Server has newer version — apply it, suppress echo
-          const data = await res.json().catch(() => ({}));
+          const data = await res.json().catch(() => ({})); // silent-ok: malformed 409 response; server-side layout version ignored
           if (data.layout) {
             currentLayoutVersionRef.current = typeof data._v === 'number' ? data._v : currentLayoutVersionRef.current;
             suppressNextSaveRef.current = true;
@@ -1432,7 +1432,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
                   m.doAction(Actions.updateNodeAttributes(tab.getId(), {
                     config: { ...tab.getConfig(), initialSessionId: sid }
                   }));
-                } catch {}
+                } catch {} // silent-ok: FlexLayout node attribute update is best-effort for session routing
               }
             } else {
               emptyPanels.push(tab.getId());
@@ -1484,10 +1484,10 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
                 try {
                   m.doAction(Actions.deleteTab(nodeId));
                   mountedSessions.delete(sid);
-                } catch {}
+                } catch {} // silent-ok: stale sub-session tab removal is non-critical
               }
             }
-          } catch {}
+          } catch {} // silent-ok: sub-sessions fetch failure; sub-session tabs stay mounted temporarily
         }
         const missing = active.filter((c: any) => !mountedSessions.has(c.sessionId) && (showSubs || !c.isSubSession));
 
@@ -1524,7 +1524,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
                 newlyMounted.push({ panelId: reuseNodeId, sessionId: conv.sessionId });
                 mounted++;
                 continue;
-              } catch {}
+              } catch {} // silent-ok: panel config reuse failure is non-critical; session gets a new tab
             }
           }
 

@@ -147,7 +147,7 @@ export default function ConversationQueuePanel({ projectId: _projectId }: { proj
     try {
       const [convRes, visRes] = await Promise.all([
         fetch(`${API}/mission/conversations`, { signal: AbortSignal.timeout(10000) }),
-        fetch(`${API}/mission/visibility`, { signal: AbortSignal.timeout(5000) }).catch(() => null),
+        fetch(`${API}/mission/visibility`, { signal: AbortSignal.timeout(5000) }).catch(() => null), // silent-ok: visibility check is optional; UI renders without panel visibility info
       ]);
       if (convRes.ok) {
         const raw = await convRes.json();
@@ -170,7 +170,7 @@ export default function ConversationQueuePanel({ projectId: _projectId }: { proj
         for (const p of (v.panels || [])) if (p.sessionId) pm.set(p.sessionId, p.projectId || 'Panel');
         setPanelMap(pm);
       }
-    } catch {} finally { setLoading(false); }
+    } catch {} finally { setLoading(false); } // silent-ok: conversation list fetch failure; loading state cleaned in finally
   }, []);
 
   useEffect(() => { fetchData(); pollRef.current = setInterval(fetchData, 5000); return () => { if (pollRef.current) clearInterval(pollRef.current); }; }, [fetchData]);
@@ -255,13 +255,13 @@ export default function ConversationQueuePanel({ projectId: _projectId }: { proj
 
   // Actions
   const doFinish = useCallback(async (sid: string, finished = true) => {
-    await fetch(`${API}/mission/conversation/${sid ?? ''}/finish`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ finished }), signal: AbortSignal.timeout(10000) }).catch(() => {});
+    await fetch(`${API}/mission/conversation/${sid ?? ''}/finish`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ finished }), signal: AbortSignal.timeout(10000) }).catch(() => {}); // silent-ok: finish request is fire-and-forget; UI optimistically updates and list refreshes
     showFeedback(finished ? 'Beendet' : 'Wiederhergestellt'); fetchData();
   }, [fetchData]);
 
   const doDelete = useCallback(async (conv: Conversation) => {
     if (!confirm(`"${conv.customName || conv.summary?.slice(0, 40) || (conv.sessionId)}" löschen?`)) return;
-    await fetch(`${API}/mission/conversation/${conv.sessionId}`, { method: 'DELETE', signal: AbortSignal.timeout(10000) }).catch(() => {});
+    await fetch(`${API}/mission/conversation/${conv.sessionId}`, { method: 'DELETE', signal: AbortSignal.timeout(10000) }).catch(() => {}); // silent-ok: delete is fire-and-forget; list refreshes after
     showFeedback('Gelöscht'); fetchData();
   }, [fetchData]);
 
@@ -270,14 +270,14 @@ export default function ConversationQueuePanel({ projectId: _projectId }: { proj
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ conversations: [{ sessionId: conv.sessionId, accountId: conv.accountId, projectName: targetProject }] }),
       signal: AbortSignal.timeout(10000),
-    }).catch(() => {});
+    }).catch(() => {}); // silent-ok: activate request is best-effort; user sees feedback regardless
     showFeedback(`Geöffnet in ${targetProject}`);
   }, []);
 
   const doBulkFinish = useCallback(async () => {
     const t = ongoing.filter(c => selected.has(c.sessionId));
     if (!t.length) return;
-    await Promise.all(t.map(c => fetch(`${API}/mission/conversation/${c.sessionId}/finish`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ finished: true }), signal: AbortSignal.timeout(10000) }).catch(() => {})));
+    await Promise.all(t.map(c => fetch(`${API}/mission/conversation/${c.sessionId}/finish`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ finished: true }), signal: AbortSignal.timeout(10000) }).catch(() => {}))); // silent-ok: bulk finish requests are fire-and-forget; list refreshes after
     setSelected(new Set()); showFeedback(`${t.length} beendet`); fetchData();
   }, [ongoing, selected, fetchData]);
 

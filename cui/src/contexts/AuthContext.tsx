@@ -117,6 +117,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const err = await res.json().catch(() => ({ error: 'Login failed' }));
       return { ok: false, error: err.error || 'Login failed' };
     } catch (e: any) {
+      console.error('[Auth] login error:', e);
       return { ok: false, error: e.message || 'Network error' };
     }
   }, []);

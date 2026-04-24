@@ -706,7 +706,7 @@ export default function MissionControl({ projectId }: MissionControlProps) {
   useEffect(() => {
     ensureStyles();
     // Clean up legacy hiddenProjects setting
-    try { localStorage.removeItem('mc-hidden-projects'); } catch {}
+    try { localStorage.removeItem('mc-hidden-projects'); } catch {} // silent-ok: localStorage may be disabled
   }, []);
   useEffect(() => {
     if ((window as any).__cuiServerAlive === false) return;

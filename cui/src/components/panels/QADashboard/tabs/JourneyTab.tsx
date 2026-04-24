@@ -364,7 +364,7 @@ function formatDate(iso: string): string {
     return new Date(iso).toLocaleString('de-DE', {
       day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'
     });
-  } catch {
+  } catch { // silent-ok: date formatting failure returns original ISO string unchanged
     return iso;
   }
 }

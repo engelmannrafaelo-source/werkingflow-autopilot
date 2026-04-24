@@ -74,7 +74,7 @@ export default function ToolHub({ projectId, workDir }: ToolHubProps) {
     fetch(`${API}/toolhub/active`)
       .then(r => r.ok ? r.json() : null)
       .then(data => { if (data?.activeTool) setActiveTool(data.activeTool); })
-      .catch(() => {});
+      .catch(() => {}); // silent-ok: active tool load failure; default tool used
   }, []);
 
   // Collect components from layout tree that are synced (have _synced: true config)
@@ -99,7 +99,7 @@ export default function ToolHub({ projectId, workDir }: ToolHubProps) {
           collectSyncedComponents(data.layout, synced);
           setSyncedComponents(synced);
         })
-        .catch(() => {});
+        .catch(() => {}); // silent-ok: layout sync poll failure; sync state refreshes on next interval
     };
     refresh();
     const onLayoutChanged = () => refresh();
@@ -119,7 +119,7 @@ export default function ToolHub({ projectId, workDir }: ToolHubProps) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ activeTool: tool }),
-    }).catch(() => {});
+    }).catch(() => {}); // silent-ok: tool selection persistence is best-effort
   }, []);
 
   // Toggle sync for a tool: dispatches event to parent LayoutManager (projectId-filtered)

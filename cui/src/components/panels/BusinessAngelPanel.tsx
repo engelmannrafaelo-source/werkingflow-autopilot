@@ -585,7 +585,7 @@ export default function BusinessAngelPanel() {
     fetch('/api/business-angel/session/active')
       .then(r => r.json())
       .then(d => { if (d.active) startSession(true); })
-      .catch(() => {});
+      .catch(() => {}); // silent-ok: active session check on mount is best-effort
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chatMessages]);
@@ -690,7 +690,7 @@ export default function BusinessAngelPanel() {
   };
 
   const endSession = async () => {
-    await fetch('/api/business-angel/session/end', { method: 'POST' }).catch(() => {});
+    await fetch('/api/business-angel/session/end', { method: 'POST' }).catch(() => {}); // silent-ok: session end notification is best-effort; state cleared immediately
     setSession(null);
     setChatMessages([]);
     setActiveSessionInfo(null);

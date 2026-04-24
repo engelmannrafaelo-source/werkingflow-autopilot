@@ -459,7 +459,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   const getSessionKey = (acctId: string) => `cui-lite-session-${panelId || projectId || 'default'}-${acctId}`;
 
   // Resolve initial account: localStorage > prop > first account (user's switch must survive reload)
-  const initialAccount = (() => { try { return localStorage.getItem(storageKey) || accountId || ACCOUNTS[0].id; } catch { return accountId || ACCOUNTS[0].id; } })();
+  const initialAccount = (() => { try { return localStorage.getItem(storageKey) || accountId || ACCOUNTS[0].id; } catch { return accountId || ACCOUNTS[0].id; } })(); // silent-ok: localStorage account read fails gracefully; defaults to prop value
 
   const [selectedId, setSelectedId] = useState(initialAccount);
   const [sessionId, setSessionId] = useState<string | null>(() => {
@@ -471,7 +471,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     try {
       const cached = localStorage.getItem(`cui-msgs-${sessionId}`);
       if (cached) return JSON.parse(cached);
-    } catch {}
+    } catch {} // silent-ok: cached messages load failure; fresh poll renders messages
     return [];
   });
   const [input, setInput] = useState('');
@@ -568,7 +568,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     try {
       const convResp = await fetch(`/api/mission/conversation/${selectedId}/${sessionId}?tail=50`, { signal: AbortSignal.timeout(15000) });
       if (convResp.ok) {
-        const data = await convResp.json().catch(() => null);
+        const data = await convResp.json().catch(() => null); // silent-ok: invalid JSON response logged as warn below; poll retries
         if (!data) { console.warn('[CuiLite] Poll: invalid JSON response'); return; }
         if (typeof data.manualFinished === 'boolean') { manualFinishedRef.current = data.manualFinished; setManualFinished(data.manualFinished); }
         const newMsgs: Message[] = data.messages || [];
@@ -592,7 +592,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
           pendingSystemMsgsRef.current = []; // Clear after merge
           setMessages(merged);
           // Cache messages for instant load on next visit
-          try { localStorage.setItem(`cui-msgs-${sessionId}`, JSON.stringify(newMsgs)); } catch {}
+          try { localStorage.setItem(`cui-msgs-${sessionId}`, JSON.stringify(newMsgs)); } catch {} // silent-ok: message cache write; localStorage may be disabled
           setConvStatus(newStatus as 'ongoing' | 'completed');
           setPermissions(newPerms);
           setConvName(newName);
@@ -724,7 +724,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ panelId, projectId }),
-      }).catch(() => {}); // best-effort
+      }).catch(() => {}); // silent-ok: panel-removed notification is best-effort
     }
   }, [isTabVisible, panelId, projectId]);
 
@@ -778,7 +778,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
               setAttention(prev => prev === 'needs_attention' ? prev : 'idle');
               setAttentionReason(serverState.reason || 'done');
             }
-          }).catch(() => {}); // ignore network errors during reconnect
+          }).catch(() => {}); // silent-ok: state re-sync on WS reconnect is non-critical; events will update state
         }
       };
       ws.onclose = () => {
@@ -810,7 +810,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
               setAttentionReason(undefined);
               setRateLimitMessage(null);
               setLiveMode(false);
-              if (persistSession) try { localStorage.removeItem(getSessionKey(selectedId)); } catch {}
+              if (persistSession) try { localStorage.removeItem(getSessionKey(selectedId)); } catch {} // silent-ok: localStorage may be disabled
               onRouteChange?.('');
               return;
             }
@@ -834,7 +834,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
             if (acMsg.type === "conv-account-changed" && acMsg.sessionId === sessionIdRef.current && acMsg.accountId !== selectedIdRef.current) {
               console.log(`[CuiLite] Account changed externally: ${selectedIdRef.current} -> ${acMsg.accountId}`);
               setSelectedId(acMsg.accountId);
-              try { localStorage.setItem(storageKey, acMsg.accountId); } catch {}
+              try { localStorage.setItem(storageKey, acMsg.accountId); } catch {} // silent-ok: localStorage may be disabled
               setMessages(prev => [...prev, { role: "system", content: `Account gewechselt → ${acMsg.accountId}`, timestamp: new Date().toISOString() }]);
               return;
             }
@@ -1006,7 +1006,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     try {
       const r = await fetch(`/api/auto-inject/session/${sessionId}`, { signal: AbortSignal.timeout(10000) });
       if (!r.ok) return;
-      const data = await r.json().catch(() => null);
+      const data = await r.json().catch(() => null); // silent-ok: auto-inject config response parse failure; feature disabled until next poll
       if (!data) return;
       if (data.config) {
         setLoopEnabled(data.config.enabled);
@@ -1095,7 +1095,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
           signal: AbortSignal.timeout(20000),
         });
         if (resp.ok) {
-          const data = await resp.json().catch(() => null);
+          const data = await resp.json().catch(() => null); // silent-ok: template response parse failure; outer catch logs the error
           if (data?.template) setReplyTemplates(prev => prev.map(t => t.id === data.template.id ? data.template : t));
         }
       } else {
@@ -1106,7 +1106,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
           signal: AbortSignal.timeout(20000),
         });
         if (resp.ok) {
-          const data = await resp.json().catch(() => null);
+          const data = await resp.json().catch(() => null); // silent-ok: template response parse failure; outer catch logs the error
           if (data?.template) setReplyTemplates(prev => [...prev, data.template]);
         }
       }
@@ -1179,7 +1179,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ finished: false }),
       signal: AbortSignal.timeout(5000),
-    }).catch(() => {});
+    }).catch(() => {}); // silent-ok: unfinish API call is best-effort; WS turn event will restore working state
   }, []);
 
   const handleSend = useCallback(async (overrideMessage?: string) => {
@@ -1215,12 +1215,12 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         pendingSystemMsgsRef.current.push(errMsg); // Survives poll overwrites
         setMessages(prev => [...prev, errMsg]);
       } else {
-        const data = await resp.json().catch(() => ({}));
+        const data = await resp.json().catch(() => ({})); // silent-ok: send response parse failure uses empty object; resume-failed detection skipped
         // Server auto-recovered from broken resume → switch to new session
         if (data.resumeFailed && data.sessionId) {
           console.log(`[CuiLite] Resume failed, switched to new session: ${data.sessionId}`);
           setSessionId(data.sessionId);
-          if (persistSession) try { localStorage.setItem(getSessionKey(selectedId), data.sessionId); } catch {}
+          if (persistSession) try { localStorage.setItem(getSessionKey(selectedId), data.sessionId); } catch {} // silent-ok: localStorage may be disabled
           onRouteChange?.(`/c/${data.sessionId}`);
           setMessages([{ role: 'system', content: 'Neue Session gestartet (alte Session konnte nicht fortgesetzt werden)', timestamp: new Date().toISOString() }, { role: 'user', content: msg, timestamp: new Date().toISOString() }]);
         }
@@ -1260,11 +1260,11 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         signal: AbortSignal.timeout(65000),
       });
       if (resp.ok) {
-        const data = await resp.json().catch(() => ({}));
+        const data = await resp.json().catch(() => ({})); // silent-ok: respond response parse failure uses empty object; resume detection skipped
         if (data.resumeFailed && data.sessionId) {
           console.log(`[CuiLite] Respond: resume failed, new session: ${data.sessionId}`);
           setSessionId(data.sessionId);
-          if (persistSession) try { localStorage.setItem(getSessionKey(selectedId), data.sessionId); } catch {}
+          if (persistSession) try { localStorage.setItem(getSessionKey(selectedId), data.sessionId); } catch {} // silent-ok: localStorage may be disabled
           onRouteChange?.(`/c/${data.sessionId}`);
         }
       } else {
@@ -1311,7 +1311,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     }
     try {
       const resp = await fetch(`/api/mission/conversation/${selectedId}/${sessionId}/stop`, { method: 'POST', signal: AbortSignal.timeout(10000) });
-      const data = await resp.json().catch(() => ({}));
+      const data = await resp.json().catch(() => ({})); // silent-ok: stop response parse failure; stop status check uses falsy defaults
       setAttention('idle');
       setAttentionReason('done');
       setConvStatus('completed');
@@ -1335,7 +1335,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         signal: AbortSignal.timeout(15000),
       });
-      const data = await resp.json().catch(() => ({}));
+      const data = await resp.json().catch(() => ({})); // silent-ok: hard-kill response parse failure; processes are killed regardless
       setAttention('idle');
       setAttentionReason('done');
       setConvStatus('completed');
@@ -1354,7 +1354,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     setAttention('idle');
     setAttentionReason(undefined);
             setRateLimitMessage(null);
-    if (persistSession) try { localStorage.setItem(getSessionKey(selectedId), sid); } catch {}
+    if (persistSession) try { localStorage.setItem(getSessionKey(selectedId), sid); } catch {} // silent-ok: localStorage may be disabled
     onRouteChange?.(`/c/${sid}`);
   }, [onRouteChange, selectedId, persistSession]);
 
@@ -1377,7 +1377,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         onRouteChange?.('');
         return false;
       }
-      const data = await resp.json().catch(() => null);
+      const data = await resp.json().catch(() => null); // silent-ok: start-new response parse failure returns null; warning logged and false returned
       if (!data || !data.sessionId) {
         console.warn('[CuiLite] Start new: invalid response (missing sessionId)');
         onRouteChange?.('');
@@ -1386,7 +1386,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       setSessionId(data.sessionId);
       setShowQueue(false);
       setMessages([]);
-      if (persistSession) try { localStorage.setItem(getSessionKey(selectedId), data.sessionId); } catch {}
+      if (persistSession) try { localStorage.setItem(getSessionKey(selectedId), data.sessionId); } catch {} // silent-ok: localStorage may be disabled
       onRouteChange?.(`/c/${data.sessionId}`);
       return true;
     } catch (err) {
@@ -1507,8 +1507,8 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
               }
               // Save session for BOTH old and new account
               if (persistSession) {
-                try { localStorage.setItem(getSessionKey(selectedId), sessionId); } catch {}
-                try { localStorage.setItem(getSessionKey(newAcct), sessionId); } catch {}
+                try { localStorage.setItem(getSessionKey(selectedId), sessionId); } catch {} // silent-ok: localStorage may be disabled
+                try { localStorage.setItem(getSessionKey(newAcct), sessionId); } catch {} // silent-ok: localStorage may be disabled
               }
               setSelectedId(newAcct);
               // Keep sessionId, messages, and chat view — just switch account
@@ -1516,11 +1516,11 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
               setAttention('idle');
               setAttentionReason(undefined);
               setRateLimitMessage(null);
-              try { localStorage.setItem(storageKey, newAcct); } catch {}
+              try { localStorage.setItem(storageKey, newAcct); } catch {} // silent-ok: localStorage may be disabled
             } else {
               // No chat open (queue view) — normal switch
               let savedSession: string | null = null;
-              try { savedSession = localStorage.getItem(getSessionKey(newAcct)); } catch {}
+              try { savedSession = localStorage.getItem(getSessionKey(newAcct)); } catch {} // silent-ok: localStorage may be disabled
               setSelectedId(newAcct);
               setSessionId(savedSession);
               setShowQueue(!savedSession);
@@ -1529,7 +1529,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
               setAttentionReason(undefined);
               setRateLimitMessage(null);
               setLiveMode(false);
-              try { localStorage.setItem(storageKey, newAcct); } catch {}
+              try { localStorage.setItem(storageKey, newAcct); } catch {} // silent-ok: localStorage may be disabled
             }
           }}
           style={{

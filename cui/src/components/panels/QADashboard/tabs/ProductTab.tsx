@@ -83,7 +83,7 @@ export default function ProductTab() {
               setReloadKey(k => k + 1);
             }
           }
-        } catch {}
+        } catch (e) { console.warn('[ProductTab] regen poll failed:', e); }
       }, 5000);
       // Stop polling after 5 minutes max
       setTimeout(() => {
@@ -107,7 +107,7 @@ export default function ProductTab() {
           apps: 'array',
         });
         setApps(json.apps);
-      } catch {}
+      } catch (e) { console.warn('[ProductTab] app list load failed:', e); }
     })();
   }, []);
 
@@ -121,7 +121,7 @@ export default function ProductTab() {
       try {
         const res = await resilientFetch(`/api/qa/product-docs/${selectedApp}`);
         if (!res.ok) {
-          const json = await res.json().catch(() => ({}));
+          const json = await res.json().catch(() => ({})); // silent-ok: error response parse failure falls back to empty object; generic error message shown
           setError(json.hint || `PRODUCT.md nicht gefunden fuer ${selectedApp}`);
           return;
         }
@@ -150,7 +150,7 @@ export default function ProductTab() {
           apps: 'array',
         });
         setApps(json.apps);
-      } catch {}
+      } catch (e) { console.warn('[ProductTab] app list reload failed:', e); }
     })();
   }, [reloadKey]);
 

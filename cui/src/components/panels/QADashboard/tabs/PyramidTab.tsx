@@ -345,7 +345,7 @@ function JourneyPane({ scenarioId, persona }: { scenarioId: string; persona: str
     resilientFetch(`/api/qa/journey?scenario=${encodeURIComponent(persona)}&latest=true`)
       .then(res => res.ok ? res.json() : null)
       .then(data => { if (data) setJourneyData(data); })
-      .catch(() => {})
+      .catch(() => {}) // silent-ok: journey fetch failure shows 'No journey data' message to user
       .finally(() => setLoading(false));
   }, [persona]);
 
@@ -402,7 +402,7 @@ function JourneyStepCard({ step, isLast }: { step: JourneyStep; isLast: boolean 
           setImgSrc(`data:${data.mimeType ?? 'image/png'};base64,${data.base64}`);
         }
       })
-      .catch(() => {})
+      .catch(() => {}) // silent-ok: screenshot fetch failure shows step without image
       .finally(() => setImgLoading(false));
   }, [step.screenshotPath, step.screenshotExists]);
 
@@ -599,7 +599,7 @@ function GenerateCoverageButton({ appId, onGenerated }: { appId: string; onGener
         signal: AbortSignal.timeout(90000),
       });
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
+        const data = await res.json().catch(() => ({})); // silent-ok: error response parse failure falls back to empty object; HTTP status used for error
         throw new Error(data.error || `HTTP ${res.status}`);
       }
       const data = await res.json();
@@ -922,11 +922,11 @@ export default function PyramidTab() {
         app: 'string',
         layers: 'array',
       }))
-      .catch(() => null);
+      .catch(() => null); // silent-ok: pyramid data fetch failure returns null; loading shows empty state
 
     const stalenessFetch = fetch(`/api/qa/staleness/${selectedApp}`, { signal: AbortSignal.timeout(20000) })
       .then(r => r.ok ? r.json() : null)
-      .catch(() => null);
+      .catch(() => null); // silent-ok: staleness data fetch failure returns null; staleness indicator hidden
 
     Promise.all([pyramidFetch, stalenessFetch]).then(([pyramidData, stalenessData]) => {
       setPyramid(pyramidData);

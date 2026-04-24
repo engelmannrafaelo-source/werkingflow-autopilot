@@ -33,8 +33,8 @@ export default function DeploymentsTab({ envMode }: { envMode?: string }) {
     setError('');
     try {
       const [depsRes, bridgeRes] = await Promise.all([
-        fetch('/api/ops/deployments', { signal: AbortSignal.timeout(20000) }).catch(() => null),
-        fetch('/api/admin/wr/health', { signal: AbortSignal.timeout(20000) }).catch(() => null),
+        fetch('/api/ops/deployments', { signal: AbortSignal.timeout(20000) }).catch(() => null), // silent-ok: deployment fetch failure returns null; partial data shown
+        fetch('/api/admin/wr/health', { signal: AbortSignal.timeout(20000) }).catch(() => null), // silent-ok: health check failure returns null; health indicator hidden
       ]);
       if (depsRes?.ok) {
         const data = await depsRes.json();

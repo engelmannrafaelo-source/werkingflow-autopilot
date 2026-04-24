@@ -100,7 +100,7 @@ export default function ChatInput({
         reply.sort((a: PromptTemplate, b: PromptTemplate) => a.order - b.order);
         setReplyTemplates(reply);
       })
-      .catch(() => {});
+      .catch(() => {}); // silent-ok: prompt templates load is best-effort; templates unavailable until next reconnect
   }, []);
 
   useEffect(() => { loadTemplates(); }, [loadTemplates]);
@@ -117,7 +117,7 @@ export default function ChatInput({
           signal: AbortSignal.timeout(20000),
         });
         if (resp.ok) {
-          const data = await resp.json().catch(() => null);
+          const data = await resp.json().catch(() => null); // silent-ok: template response parse failure; outer catch logs the error
           if (data?.template) setReplyTemplates(prev => prev.map(t => t.id === data.template.id ? data.template : t));
         }
       } else {
@@ -128,7 +128,7 @@ export default function ChatInput({
           signal: AbortSignal.timeout(20000),
         });
         if (resp.ok) {
-          const data = await resp.json().catch(() => null);
+          const data = await resp.json().catch(() => null); // silent-ok: template response parse failure; outer catch logs the error
           if (data?.template) setReplyTemplates(prev => [...prev, data.template]);
         }
       }

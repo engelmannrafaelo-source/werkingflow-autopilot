@@ -259,7 +259,7 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
         setConversations(filtered);
         setLoading(false);
         // Cache for instant load next time
-        try { localStorage.setItem(`cui-convs-${workDir || 'all'}`, JSON.stringify(filtered.slice(0, 20))); } catch {}
+        try { localStorage.setItem(`cui-convs-${workDir || 'all'}`, JSON.stringify(filtered.slice(0, 20))); } catch {} // silent-ok: localStorage may be disabled
       })
       .catch((err) => { console.warn('[QueueOverlay] fetchConversations:', err); setLoading(false); });
   }, [workDir, useLocal, isAdmin, projectId]); // accountId intentionally excluded — conversations are shown for ALL accounts

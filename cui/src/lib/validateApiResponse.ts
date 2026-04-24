@@ -88,7 +88,7 @@ function tryValidateApiResponse<T>(
   try {
     const validated = validateApiResponse<T>(data, endpoint, schema);
     return [validated, null];
-  } catch (err: any) {
+  } catch (err: any) { // silent-ok: validation error returned as [null, message] tuple; caller handles explicitly
     return [null, err.message];
   }
 }

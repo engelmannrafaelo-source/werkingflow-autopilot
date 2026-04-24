@@ -184,7 +184,7 @@ function ReaderView({ isAdmin }: { isAdmin: boolean }) {
     try {
       const res = await fetch(`${API}/partner/docs/${encodeURIComponent(docId)}`, { signal: AbortSignal.timeout(10000) });
       if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
+        const errData = await res.json().catch(() => ({})); // silent-ok: error response parse failure falls back to empty object; HTTP status used for error
         throw new Error(errData.error ?? `HTTP ${res.status}`);
       }
       const raw = await res.json();
@@ -657,7 +657,7 @@ function NewDocForm({ workspaces, onCreated }: { workspaces: string[]; onCreated
         }),
       });
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
+        const err = await res.json().catch(() => ({})); // silent-ok: error response parse failure falls back to empty object; HTTP status used for error
         throw new Error(err.error ?? `HTTP ${res.status}`);
       }
       onCreated();

@@ -54,15 +54,15 @@ export default function OverviewTab() {
       if (staleApps.length === 0) return;
       setRefreshingApps(new Set(staleApps));
       await Promise.all(staleApps.map(appId =>
-        resilientFetch(`/api/qa/arch-test/${appId}/refresh`, { method: 'POST' }).catch(() => null)
+        resilientFetch(`/api/qa/arch-test/${appId}/refresh`, { method: 'POST' }).catch(() => null) // silent-ok: arch-test refresh is non-critical background task
       ));
       // Re-fetch overview after a delay to pick up fresh results
       setTimeout(() => {
         fetchData();
         setRefreshingApps(new Set());
       }, 90000); // arch-test takes ~60-90s
-    } catch {
-      // Non-critical — silently ignore
+    } catch (e) {
+      console.warn('[QADashboard] arch-test auto-refresh failed:', e); // silent-ok: arch-test refresh is non-critical background task
     }
   }, [fetchData]);
 

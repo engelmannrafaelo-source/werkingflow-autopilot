@@ -138,7 +138,7 @@ function SourceSelector({ selected, onToggle, onExtract, brief, setBrief, extrac
   useEffect(() => {
     fetch(`${API}/business-tree`).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then(raw => { const d = validateApiResponse<{ tree: TreeNode[] }>(raw, '/api/report-builder/business-tree', { tree: 'array' }); setTree(d.tree); })
-      .catch(() => {});
+      .catch(e => console.warn('[ReportBuilder] business-tree load failed:', e));
   }, []);
 
   function toggleExpand(path: string) {
@@ -823,7 +823,7 @@ function TemplateBrowser({ selectedIds, onToggle, onSetCategory, autoMatchResult
       });
       const data = await resp.json();
       if (data.ok) setFavorites({ favorites: data.favorites, categories: data.categories });
-    } catch {}
+    } catch (e) { console.warn('[ReportBuilder] toggleFavorite failed:', e); }
   }
 
   async function setCategory(sectionId: string, category: string) {
@@ -835,7 +835,7 @@ function TemplateBrowser({ selectedIds, onToggle, onSetCategory, autoMatchResult
       const data = await resp.json();
       if (data.ok) setFavorites({ favorites: data.favorites, categories: data.categories });
       onSetCategory(sectionId, category);
-    } catch {}
+    } catch (e) { console.warn('[ReportBuilder] setCategory failed:', e); }
     setCatEdit(null);
   }
 
@@ -1377,7 +1377,7 @@ function UpdatePlanStep({ sessionId, groups, updateProposals, setUpdateProposals
   useEffect(() => {
     fetch(`${API}/business-tree`).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then(raw => { const d = validateApiResponse<{ tree: TreeNode[] }>(raw, '/api/report-builder/business-tree', { tree: 'array' }); setTree(d.tree); })
-      .catch(() => {});
+      .catch(e => console.warn('[ReportBuilder] business-tree load failed:', e));
   }, []);
 
   // Filter tree to only .md files
@@ -1812,7 +1812,7 @@ export default function ReportBuilder() {
         fetch(`${API}/sessions/${sessionId}`, {
           method: 'PUT', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ mode: 'update', step: 'update-plan' }),
-        }).catch(() => {});
+        }).catch(() => {}); // silent-ok: session step persistence is best-effort; React state is authoritative
       }
       setStep('update-plan');
       return;
@@ -1960,7 +1960,7 @@ export default function ReportBuilder() {
       fetch(`${API}/sessions/${sessionId}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ step, groups, draftOutline, generalNotes, outputFormat, tone, language, customInstructions, templateSectionIds: [...templateSectionIds], generatedContent, sources: [...selectedSources], brief, extractionPrompt, mode: sessionMode }),
-      }).catch(() => {});
+      }).catch(() => {}); // silent-ok: session state auto-save is best-effort; React state is authoritative
     }, 1500);
   }, [sessionId, showPicker, step, groups, generalNotes, outputFormat, tone, language, customInstructions, templateSectionIds, generatedContent, brief]);
 
@@ -1992,7 +1992,7 @@ export default function ReportBuilder() {
           setLoading(true); setStep('update-plan');
           startPolling(sessionId);
         }
-      } catch {}
+      } catch (e) { console.warn('[ReportBuilder] checkResume failed:', e); }
     };
     checkResume();
   }, [sessionId]);
@@ -2047,7 +2047,7 @@ export default function ReportBuilder() {
           setUpdateStatus('error');
         }
         // else: still in progress, keep polling
-      } catch {}
+      } catch (e) { console.warn('[ReportBuilder] session poll failed:', e); }
     }, 2000);
   }
 
@@ -2107,7 +2107,7 @@ export default function ReportBuilder() {
       fetch(`${API}/sessions/${sessionId}/active-revision`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ index }),
-      }).catch(() => {});
+      }).catch(() => {}); // silent-ok: active revision index persistence is best-effort; in-memory state is authoritative
     }
   }
 

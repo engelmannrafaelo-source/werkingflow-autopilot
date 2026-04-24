@@ -40,7 +40,7 @@ export default function ReviewQueue() {
             setSelectedReview(null);
           }
         }
-      } catch {}
+      } catch (e) { console.warn('[ReviewQueue] WS message error:', e); }
     };
 
     ws.onclose = () => {

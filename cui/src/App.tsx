@@ -364,7 +364,7 @@ function AppContent() {
             fetch(`/api/screenshot/${msg.panel}/error`, {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ error: errMsg }), signal: AbortSignal.timeout(20000),
-            }).catch(() => {});
+            }).catch(() => {}); // silent-ok: error report after screenshot failure is best-effort
           }
         })();
       }
@@ -378,7 +378,7 @@ function AppContent() {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ panels, timestamp: new Date().toISOString() }),
           signal: AbortSignal.timeout(20000),
-        }).catch(() => {});
+        }).catch(() => {}); // silent-ok: control message panel-list response is best-effort
       }
       // CPU Profile
       if (msg.type === 'control:cpu-profile' && window.electronAPI?.cpuProfile) {
@@ -430,7 +430,7 @@ function AppContent() {
           convTickRef.current++;
           setConvTick(convTickRef.current);
         })
-        .catch(() => {}); // Keep cached data on error
+        .catch(() => {}); // silent-ok: conversation polling failure keeps cached data; next interval retries
     };
     fetchConvs();
     const interval = setInterval(fetchConvs, 5000);

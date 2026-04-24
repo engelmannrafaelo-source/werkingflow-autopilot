@@ -89,7 +89,7 @@ export default function MobileLayout({ projectId, workDir }: MobileLayoutProps) 
       if (cached && ver === MOBILE_LAYOUT_VERSION) return Model.fromJson(JSON.parse(cached));
       // Clear stale cache
       localStorage.removeItem(`cui-mobile-layout-${projectId}`);
-    } catch { /* ignore */ }
+    } catch { /* ignore */ } // silent-ok: cached layout load failure is expected; fresh layout renders from scratch
     return null;
   });
   // MUST be before any conditional return — React requires stable hook order

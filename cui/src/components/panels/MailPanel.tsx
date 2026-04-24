@@ -233,6 +233,7 @@ export default function MailPanel() {
         id = d.id;
         setCompose(c => ({ ...c, id: d.id }));
       } catch (e) {
+        console.error('[MailPanel] save draft error:', e);
         setError(String(e));
         setSaving(false);
         return;

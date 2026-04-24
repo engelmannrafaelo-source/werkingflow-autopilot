@@ -116,7 +116,7 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
             }
             if (changed) setSessionStatesTick(t => t + 1);
           })
-          .catch(() => {}); // Non-critical, WS events will populate soon
+          .catch(() => {}); // silent-ok: initial session state fetch is non-critical; WS events populate state
       };
 
       ws.onclose = () => {

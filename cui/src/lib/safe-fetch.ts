@@ -38,6 +38,7 @@ export async function safeFetch<T>(
 
     return { data: json as T, error: null };
   } catch (err: any) {
+    console.warn('[safeFetch] error:', url, err.message);
     return { data: fallback, error: err.message || 'Unknown error' };
   }
 }
@@ -88,7 +89,7 @@ function safeFormatDate(date: string | Date | undefined | null): string {
   if (!date) return 'N/A';
   try {
     return new Date(date).toLocaleString();
-  } catch {
+  } catch { // silent-ok: date constructor failure returns descriptive 'Invalid Date' string
     return 'Invalid Date';
   }
 }

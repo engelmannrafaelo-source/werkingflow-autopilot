@@ -84,7 +84,7 @@ function formatUptime(seconds: number): string {
 function formatTime(iso: string): string {
   try {
     return new Date(iso).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  } catch {
+  } catch { // silent-ok: date formatting failure returns original ISO string unchanged
     return iso;
   }
 }

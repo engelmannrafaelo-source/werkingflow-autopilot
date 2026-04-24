@@ -183,7 +183,7 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
   const changeFontSize = (delta: number) => {
     setFontSize(prev => {
       const next = Math.max(9, Math.min(28, prev + delta));
-      try { localStorage.setItem('cui-filepreview-fontsize', String(next)); } catch {}
+      try { localStorage.setItem('cui-filepreview-fontsize', String(next)); } catch {} // silent-ok: localStorage may be disabled
       return next;
     });
   };
@@ -653,7 +653,7 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
 
     if (ext === '.json') {
       let formatted = content;
-      try { formatted = JSON.stringify(JSON.parse(content), null, 2); } catch {}
+      try { formatted = JSON.stringify(JSON.parse(content), null, 2); } catch {} // silent-ok: invalid JSON formatting attempt fails gracefully; raw content displayed
       return (
         <pre style={{
           flex: 1, overflow: 'auto', padding: 12, fontSize,

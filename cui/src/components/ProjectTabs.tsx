@@ -322,7 +322,7 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
   const persistLastWorkspace = useCallback((catId: string, wsId: string) => {
     _setLastWorkspacePerCat(prev => {
       const next = { ...prev, [catId]: wsId };
-      try { localStorage.setItem('cui-last-workspace-per-category', JSON.stringify(next)); } catch {}
+      try { localStorage.setItem('cui-last-workspace-per-category', JSON.stringify(next)); } catch {} // silent-ok: localStorage may be disabled
       return next;
     });
   }, []);
@@ -1159,7 +1159,7 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
         onClick={() => {
           const next = !showSubSessions;
           setShowSubSessions(next);
-          try { localStorage.setItem('cui-show-sub-sessions', String(next)); } catch {}
+          try { localStorage.setItem('cui-show-sub-sessions', String(next)); } catch {} // silent-ok: localStorage may be disabled
           // Trigger immediate layout sync in active LayoutManager
           window.dispatchEvent(new CustomEvent('cui-auto-layout', { detail: { projectId: activeId } }));
         }}

@@ -65,7 +65,7 @@ export default function AllChatsView({ onNavigateToProject, isVisible = true }: 
     fetch('/api/control/health', { signal: AbortSignal.timeout(5000) })
       .then(r => r.json())
       .then(d => setOrphanInfo({ killed: d.orphanCleanup?.killed ?? 0, activeProcesses: d.activeProcesses ?? 0 }))
-      .catch(() => {});
+      .catch(() => {}); // silent-ok: health check info is optional display only
   }, [fetchChats]);
 
   // Refresh only on manual action (Retry/Aktualisieren button), not on visibility change
@@ -140,7 +140,7 @@ export default function AllChatsView({ onNavigateToProject, isVisible = true }: 
               const d = await r.json();
               setOrphanInfo(prev => prev ? { ...prev, killed: d.killed } : null);
               fetchChats();
-            } catch {}
+            } catch (e) { console.error('[AllChats] kill-orphans failed:', e); }
           }}
           style={{ marginLeft: 'auto', padding: '1px 6px', fontSize: 9, border: '1px solid var(--tn-border)', borderRadius: 3, background: 'transparent', color: 'var(--tn-text-muted)', cursor: 'pointer', opacity: 0.6 }}
           title="Scan and kill orphan wrapper/claude processes"
@@ -162,7 +162,7 @@ export default function AllChatsView({ onNavigateToProject, isVisible = true }: 
         })}
         <span style={{ flex: 1 }} />
         <button
-          onClick={() => setCompactInputBar(prev => { const next = !prev; try { localStorage.setItem("cui-allchats-compact", String(next)); } catch {} return next; })}
+          onClick={() => setCompactInputBar(prev => { const next = !prev; try { localStorage.setItem("cui-allchats-compact", String(next)); } catch {} return next; })} // silent-ok: localStorage may be disabled
           title={compactInputBar ? "Eingabebereich einblenden" : "Eingabebereich ausblenden"}
           style={{
             padding: '2px 8px', fontSize: 10, borderRadius: 3, cursor: 'pointer',
