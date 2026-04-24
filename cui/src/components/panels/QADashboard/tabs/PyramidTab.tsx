@@ -5,7 +5,7 @@ import { validateApiResponse } from '../../../../lib/validateApiResponse';
 import { resilientFetch } from '../../../../utils/resilientFetch';
 import type { JourneyData, JourneyStep } from '../types';
 
-const APP_IDS = ['werking-report', 'engelmann', 'werking-energy', 'werking-safety', 'werking-noise', 'platform', 'acro-community'];
+const APP_IDS = ['werking-report', 'engelmann', 'werking-energy', 'werking-safety', 'werking-noise', 'platform', 'acro-community', 'cui'];
 const APP_NAMES: Record<string, string> = {
   'werking-report': 'WerkING Report',
   'engelmann': 'Engelmann AI Hub',
@@ -14,6 +14,7 @@ const APP_NAMES: Record<string, string> = {
   'werking-safety': 'WerkING Safety',
   'werking-noise': 'WerkING Noise',
   'acro-community': 'Acro Community',
+  'cui': 'CUI Workspace',
 };
 
 interface PyramidTest {
