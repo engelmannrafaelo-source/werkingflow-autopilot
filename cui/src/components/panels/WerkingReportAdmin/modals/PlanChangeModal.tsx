@@ -84,7 +84,7 @@ export default function PlanChangeModal({
       return;
     }
 
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
 

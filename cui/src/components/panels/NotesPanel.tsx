@@ -142,7 +142,7 @@ export default function NotesPanel({ projectId }: NotesPanelProps) {
   const fetchWithRetry = useCallback(async (url: string, maxRetries = 3): Promise<string> => {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        if ((window as any).__cuiServerAlive === false) return '';
+        if (window.__cuiServerAlive === false) return '';
         const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const d = await r.json();
@@ -183,7 +183,7 @@ export default function NotesPanel({ projectId }: NotesPanelProps) {
     if (commonTimer.current) clearTimeout(commonTimer.current);
     setSaveStatus('saving');
     commonTimer.current = setTimeout(async () => {
-      if ((window as any).__cuiServerAlive === false) return;
+      if (window.__cuiServerAlive === false) return;
       try {
         const res = await fetch(`${API}/common-notes`, {
           method: 'POST',
@@ -205,7 +205,7 @@ export default function NotesPanel({ projectId }: NotesPanelProps) {
     if (projectTimer.current) clearTimeout(projectTimer.current);
     setSaveStatus('saving');
     projectTimer.current = setTimeout(async () => {
-      if ((window as any).__cuiServerAlive === false) return;
+      if (window.__cuiServerAlive === false) return;
       try {
         const res = await fetch(`${API}/notes/${projectId}`, {
           method: 'POST',
@@ -317,7 +317,7 @@ export default function NotesPanel({ projectId }: NotesPanelProps) {
             </span>
             <button
               onClick={async () => {
-                if ((window as any).__cuiServerAlive === false) return;
+                if (window.__cuiServerAlive === false) return;
                 setSaveStatus('saving');
                 try {
                   const refreshRes = await fetch(`${API}/shared-notes/refresh`, { method: 'POST', signal: AbortSignal.timeout(15000) });

@@ -70,7 +70,7 @@ export default function SystemHealthTab({ envMode }: { envMode?: string }) {
   }, []);
 
   const fetchHealth = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {

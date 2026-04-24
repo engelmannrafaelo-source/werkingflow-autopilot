@@ -199,7 +199,7 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
   const [claudeLoading, setClaudeLoading] = useState(false);
 
   const loadDir = useCallback(async (dirPath: string) => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const res = await resilientFetch(`${API}/files?path=${encodeURIComponent(dirPath)}`);
       if (!res.ok) throw new Error(await res.text());
@@ -218,7 +218,7 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
   }, []);
 
   const loadFile = useCallback(async (filePath: string) => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     // Reset rendered HTML cache when loading a new file
     setMdHtml('');
     setMdView('preview');
@@ -264,7 +264,7 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
   }, []);
 
   const loadClaudeMap = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setClaudeLoading(true);
     try {
       const res = await resilientFetch(`${API}/claude-map`);
@@ -318,7 +318,7 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
   }
 
   async function stageFile() {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     if (!selectedFile || !stageDir) return;
     setStageLoading(true);
     setStageSuccess(false);

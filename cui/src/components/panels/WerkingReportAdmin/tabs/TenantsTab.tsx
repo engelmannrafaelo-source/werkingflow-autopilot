@@ -41,7 +41,7 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
   const [creating, setCreating] = useState(false);
 
   const fetchTenants = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {
@@ -74,7 +74,7 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
 
   const handleCreate = async () => {
     if (!newName.trim()) return;
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setCreating(true);
     setError('');
     try {
@@ -100,7 +100,7 @@ export default function TenantsTab({ envMode }: { envMode?: string }) {
 
   const handleDelete = async (id: string, name: string) => {
     if (!confirm(`Delete tenant "${name}"? This cannot be undone.`)) return;
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setProcessingId(id);
     try {
       const res = await fetch(`/api/admin/wr/tenants/${id}`, { method: 'DELETE', signal: AbortSignal.timeout(15000) });

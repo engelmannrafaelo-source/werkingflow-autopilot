@@ -57,7 +57,7 @@ function ToolUseBlock({ block, onRespond, workDir, serverPlanText, sessionCwd }:
     const effectiveDir = sessionCwd || workDir;
     if (!effectiveDir) { setPlanText(''); return; }
     setPlanLoading(true);
-    if ((window as any).__cuiServerAlive === false) { setPlanLoading(false); return; }
+    if (window.__cuiServerAlive === false) { setPlanLoading(false); return; }
     fetch(`/api/file-read?path=${encodeURIComponent(effectiveDir + '/.claude/plan.md')}`, { signal: AbortSignal.timeout(5000) })
       .then(r => r.ok ? r.text() : Promise.reject('not found'))
       .then(text => setPlanText(text))
@@ -332,13 +332,13 @@ function LoadingConversation({ sessionId, onBack, onRetry, onLoadFailed }: { ses
   const retriedOnReconnectRef = useRef(false);
   useEffect(() => {
     const t = setInterval(() => {
-      if ((window as any).__cuiServerAlive === false) return;
+      if (window.__cuiServerAlive === false) return;
       setElapsed(s => s + 1);
     }, 1000);
     return () => clearInterval(t);
   }, []);
   useEffect(() => {
-    if ((window as any).__cuiServerAlive === true && !retriedOnReconnectRef.current && elapsed > 0) {
+    if (window.__cuiServerAlive === true && !retriedOnReconnectRef.current && elapsed > 0) {
       retriedOnReconnectRef.current = true;
       onRetry();
     }
@@ -349,7 +349,7 @@ function LoadingConversation({ sessionId, onBack, onRetry, onLoadFailed }: { ses
       onLoadFailed(sessionId);
     }
   }, [elapsed, onLoadFailed, sessionId]);
-  const serverDown = (window as any).__cuiServerAlive === false;
+  const serverDown = window.__cuiServerAlive === false;
   return (
     <div style={{ textAlign: 'center', color: 'var(--tn-text-muted)', marginTop: 40, fontSize: 13 }}>
       {serverDown ? (

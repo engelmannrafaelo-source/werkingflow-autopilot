@@ -218,7 +218,7 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
   // Fetch conversations
   const lastCountRef = useRef(-1);
   const fetchConversations = useCallback(() => {
-    if ((window as any).__cuiServerAlive === false) { setLoading(false); return; }
+    if (window.__cuiServerAlive === false) { setLoading(false); return; }
     fetch(`${API}/mission/conversations`, { signal: AbortSignal.timeout(10000) })
       .then(r => { if (!r.ok) throw new Error('fetch failed'); return r.json(); })
       .then(data => {
@@ -296,7 +296,7 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
 
   // --- Fetch Start Templates ---
   useEffect(() => {
-    if ((window as any).__cuiServerAlive !== true) return;
+    if (window.__cuiServerAlive !== true) return;
     fetch('/api/prompt-templates', { signal: AbortSignal.timeout(10000) })
       .then(r => r.ok ? r.json() : null)
       .then(data => {
@@ -309,7 +309,7 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
   }, []);
 
   const handleSaveStartTemplate = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     if (!newStartTplLabel.trim() || !newStartTplMessage.trim()) return;
     try {
       if (editingStartTpl) {
@@ -344,7 +344,7 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
   }, [newStartTplLabel, newStartTplSubject, newStartTplMessage, editingStartTpl]);
 
   const handleDeleteStartTemplate = useCallback(async (id: string) => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const resp = await fetch(`/api/prompt-templates/${id}`, { method: 'DELETE', signal: AbortSignal.timeout(15000) });
       if (!resp.ok) throw new Error(`DELETE prompt-templates ${resp.status}`);
@@ -370,7 +370,7 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
 
   // Stop conversation
   const handleStop = useCallback((conv: Conversation) => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}/stop`, { method: 'POST', signal: AbortSignal.timeout(15000) })
       .then(r => { if (!r.ok) throw new Error(`stop ${r.status}`); })
       .then(() => setTimeout(fetchConversations, 1000))
@@ -379,7 +379,7 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
 
   // Set custom name
   const handleSetName = useCallback((conv: Conversation, name: string) => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     fetch(`${API}/mission/conversation/${conv.accountId}/${conv.sessionId}/name`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ custom_name: name }),

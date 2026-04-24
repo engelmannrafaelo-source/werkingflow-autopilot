@@ -68,7 +68,7 @@ export default function DependenciesTab() {
 
   // ─── Data fetching ──────────────────────────────────────────────────────
   const fetchApps = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const res = await resilientFetch('/api/qa/dependency-graph/apps');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -79,7 +79,7 @@ export default function DependenciesTab() {
   }, [selectedApp]);
 
   const fetchGraph = useCallback(async () => {
-    if (!selectedApp || (window as any).__cuiServerAlive === false) return;
+    if (!selectedApp || window.__cuiServerAlive === false) return;
     try {
       setError(null); setLoading(true);
       const res = await resilientFetch(`/api/qa/dependency-graph/${selectedApp}`);

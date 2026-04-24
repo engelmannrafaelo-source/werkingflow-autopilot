@@ -49,7 +49,7 @@ export default function DashboardTab({ envMode }: { envMode?: string }) {
   };
 
   const fetchAll = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {

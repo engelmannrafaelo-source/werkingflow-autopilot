@@ -44,7 +44,7 @@ export default function AuditTab({ envMode }: { envMode?: string }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const fetchLogs = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {

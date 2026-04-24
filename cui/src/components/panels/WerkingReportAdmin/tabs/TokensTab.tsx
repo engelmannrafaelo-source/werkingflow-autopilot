@@ -41,7 +41,7 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
   const [processingId, setProcessingId] = useState<string | null>(null);
 
   const fetchTenants = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const res = await fetch('/api/admin/wr/tenants?limit=1000', { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -62,7 +62,7 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
   }, []);
 
   const fetchTokens = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {
@@ -99,7 +99,7 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
       setError('Please select a tenant');
       return;
     }
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setCreating(true);
     setError('');
     setNewToken(null);
@@ -132,7 +132,7 @@ export default function TokensTab({ envMode }: { envMode?: string }) {
 
   const handleRevoke = async (id: string, name?: string) => {
     if (!confirm(`Revoke token "${name || id}"?`)) return;
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setProcessingId(id);
     try {
       const res = await fetch(`/api/admin/wr/developer-tokens/${id}`, { method: 'DELETE', signal: AbortSignal.timeout(15000) });

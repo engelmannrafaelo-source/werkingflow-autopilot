@@ -57,7 +57,7 @@ export default function ChatInput({
       }
     }
     if (imageFiles.length === 0) return;
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
 
     setPasteUploading(true);
     try {
@@ -91,7 +91,7 @@ export default function ChatInput({
 
   // Fetch templates on mount
   const loadTemplates = useCallback(() => {
-    if ((window as any).__cuiServerAlive !== true) return;
+    if (window.__cuiServerAlive !== true) return;
     fetch('/api/prompt-templates', { signal: AbortSignal.timeout(10000) })
       .then(r => r.ok ? r.json() : null)
       .then(data => {
@@ -107,7 +107,7 @@ export default function ChatInput({
 
   const handleSaveTemplate = useCallback(async () => {
     if (!newTplLabel.trim() || !newTplMessage.trim()) return;
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       if (editingTemplate) {
         const resp = await fetch(`/api/prompt-templates/${editingTemplate.id}`, {
@@ -140,7 +140,7 @@ export default function ChatInput({
   }, [newTplLabel, newTplMessage, editingTemplate]);
 
   const handleDeleteTemplate = useCallback(async (id: string) => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const resp = await fetch(`/api/prompt-templates/${id}`, { method: 'DELETE', signal: AbortSignal.timeout(20000) });
       if (resp.ok) setReplyTemplates(prev => prev.filter(t => t.id !== id));

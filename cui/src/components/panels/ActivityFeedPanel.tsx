@@ -114,7 +114,7 @@ export default function ActivityFeedPanel({ app }: ActivityFeedPanelProps) {
   const resolvedApp = app ?? (new URLSearchParams(window.location.search).get('app') ?? 'werking-energy');
 
   const fetchActivity = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const res = await fetch(
         `/api/partner/activity?app=${encodeURIComponent(resolvedApp)}&limit=50`,

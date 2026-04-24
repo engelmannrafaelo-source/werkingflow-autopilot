@@ -25,7 +25,7 @@ export default function PanelConnectivityGuard({
     let cancelled = false;
 
     const checkConnectivity = async () => {
-      if ((window as any).__cuiServerAlive === false) return;
+      if (window.__cuiServerAlive === false) return;
       try {
         // Check if URL is external (not localhost/127.0.0.1)
         const isExternal = checkUrl.includes('://') && !checkUrl.includes('localhost') && !checkUrl.includes('127.0.0.1');

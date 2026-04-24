@@ -19,7 +19,7 @@ export default function FeedbackTab({ envMode }: { envMode?: string }) {
   const [error, setError] = useState('');
 
   const fetchFeedback = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {

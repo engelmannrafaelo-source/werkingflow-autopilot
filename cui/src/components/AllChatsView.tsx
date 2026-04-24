@@ -43,7 +43,7 @@ export default function AllChatsView({ onNavigateToProject, isVisible = true }: 
   const prevVisibleRef = useRef(isVisible);
 
   const fetchChats = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) { setLoading(false); return; }
+    if (window.__cuiServerAlive === false) { setLoading(false); return; }
     try {
       const resp = await fetch('/api/all-active-chats', { signal: AbortSignal.timeout(20000) });
       if (!resp.ok) throw new Error('fetch failed');
@@ -52,9 +52,7 @@ export default function AllChatsView({ onNavigateToProject, isVisible = true }: 
       setFailedSessions(new Set());
       setLocalFinished(new Set());
     } catch (err) {
-      if ((window as any).__cuiServerAlive !== false) {
-        console.warn('[AllChats] Fetch error:', (err as Error).message);
-      }
+      console.warn('[AllChats] Fetch error:', (err as Error).message);
     }
     setLoading(false);
   }, []);

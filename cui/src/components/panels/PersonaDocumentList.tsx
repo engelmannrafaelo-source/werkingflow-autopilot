@@ -36,7 +36,7 @@ export default function PersonaDocumentList({ personaId, personaName }: PersonaD
   }, [personaId]);
 
   async function loadPersonaDocuments() {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       setLoading(true);
       const response = await fetch(`/api/team/knowledge/persona/${personaId}`, { signal: AbortSignal.timeout(20000) });

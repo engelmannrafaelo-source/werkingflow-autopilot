@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, memo } from 'react';
+import type React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ACCOUNTS } from '../../types';
@@ -6,6 +7,12 @@ import QueueOverlay from './QueueOverlay';
 import { validateApiResponse } from '../../lib/validateApiResponse';
 
 // --- Types ---
+interface AgentSessionState {
+  accountId?: string;
+  state: 'idle' | 'working' | 'needs_attention';
+  reason?: string;
+}
+
 const SWITCHABLE_ACCOUNTS = ACCOUNTS.filter(a => a.id !== 'local');
 
 interface ContentBlock {
@@ -55,7 +62,7 @@ const markdownComponents = {
   ul: ({ ...props }) => <ul style={{ marginLeft: '16px', marginBottom: '8px', listStyleType: 'disc' }} {...props} />,
   ol: ({ ...props }) => <ol style={{ marginLeft: '16px', marginBottom: '8px' }} {...props} />,
   li: ({ ...props }) => <li style={{ marginBottom: '3px' }} {...props} />,
-  code: ({ className, children, ...props }: any) => {
+  code: ({ className, children, ...props }: React.ComponentPropsWithoutRef<'code'>) => {
     // react-markdown v10: inline code has no className, block code gets className="language-xxx"
     const isBlock = !!className;
     if (!isBlock) {
@@ -69,7 +76,7 @@ const markdownComponents = {
       </div>
     );
   },
-  pre: ({ children, ...props }: any) => <pre style={{ margin: 0 }} {...props}>{children}</pre>,
+  pre: ({ children, ...props }: React.ComponentPropsWithoutRef<'pre'>) => <pre style={{ margin: 0 }} {...props}>{children}</pre>,
   table: ({ ...props }) => <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '12px', fontSize: '13px' }} {...props} />,
   thead: ({ ...props }) => <thead style={{ background: 'var(--tn-bg-highlight)' }} {...props} />,
   th: ({ ...props }) => <th style={{ padding: '8px 10px', textAlign: 'left' as const, fontWeight: '600', borderBottom: '1px solid var(--tn-border)' }} {...props} />,
@@ -104,7 +111,7 @@ function ToolUseBlock({ block, onRespond, workDir, serverPlanText, sessionCwd }:
     const effectiveDir = sessionCwd || workDir;
     if (!effectiveDir) { setPlanText(''); return; }
     setPlanLoading(true);
-    if ((window as any).__cuiServerAlive === false) { setPlanLoading(false); return; }
+    if (window.__cuiServerAlive === false) { setPlanLoading(false); return; }
     fetch(`/api/file-read?path=${encodeURIComponent(effectiveDir + '/.claude/plan.md')}`, { signal: AbortSignal.timeout(5000) })
       .then(r => r.ok ? r.text() : Promise.reject('not found'))
       .then(text => setPlanText(text))
@@ -406,14 +413,14 @@ function LoadingConversation({ sessionId, onBack, onRetry, onLoadFailed }: { ses
   useEffect(() => {
     const t = setInterval(() => {
       // Pause timeout while server is down — session is likely fine, just can't reach it
-      if ((window as any).__cuiServerAlive === false) return;
+      if (window.__cuiServerAlive === false) return;
       setElapsed(s => s + 1);
     }, 1000);
     return () => clearInterval(t);
   }, []);
   // Auto-retry when server comes back alive
   useEffect(() => {
-    if ((window as any).__cuiServerAlive === true && !retriedOnReconnectRef.current && elapsed > 0) {
+    if (window.__cuiServerAlive === true && !retriedOnReconnectRef.current && elapsed > 0) {
       retriedOnReconnectRef.current = true;
       onRetry();
     }
@@ -424,7 +431,7 @@ function LoadingConversation({ sessionId, onBack, onRetry, onLoadFailed }: { ses
       onLoadFailed(sessionId);
     }
   }, [elapsed, onLoadFailed, sessionId]);
-  const serverDown = (window as any).__cuiServerAlive === false;
+  const serverDown = window.__cuiServerAlive === false;
   return (
     <div style={{ textAlign: 'center', color: 'var(--tn-text-muted)', marginTop: 40, fontSize: 13 }}>
       {serverDown ? (
@@ -562,7 +569,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   const pollNow = useCallback(async () => {
     if (!sessionId) return;
     // Skip if server is known to be down (WS disconnected)
-    if ((window as any).__cuiServerAlive !== true) return;
+    if (window.__cuiServerAlive !== true) return;
     // Skip if circuit breaker is open (persistent 502s for this conversation)
     if (circuitOpenRef.current) return;
     try {
@@ -637,15 +644,15 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
 
   // Fetch states once on mount/account change (WS handles updates after that)
   useEffect(() => {
-    if ((window as any).__cuiServerAlive !== true) return;
+    if (window.__cuiServerAlive !== true) return;
     fetch('/api/mission/states', { signal: AbortSignal.timeout(10000) })
       .then(r => r.ok ? r.json() : null)
-      .then(states => {
+      .then((states: Record<string, AgentSessionState> | null) => {
         if (!states) return;
         // States are keyed by sessionId, not accountId — look up by current session or find by account
         const sid = sessionIdRef.current;
-        const myState = sid ? states[sid]
-          : Object.values(states).find((s: any) => s.accountId === selectedId && s.state === 'working') as any;
+        const myState: AgentSessionState | undefined = sid ? states[sid]
+          : Object.values(states).find((s) => s.accountId === selectedId && s.state === 'working');
         if (myState) {
           setAttention(myState.state || 'idle');
           setAttentionReason(myState.reason);
@@ -698,7 +705,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       .catch(() => { /* timeout expected — templates load lazily on next attempt */ });
   }, []);
   useEffect(() => {
-    if ((window as any).__cuiServerAlive !== true) return;
+    if (window.__cuiServerAlive !== true) return;
     loadTemplates();
   }, [loadTemplates]);
 
@@ -738,7 +745,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     const connect = () => {
       if (disposed) return;
       // Don't hammer WS when server is down — wait for App WS to restore __cuiServerAlive
-      if ((window as any).__cuiServerAlive === false) {
+      if (window.__cuiServerAlive === false) {
         reconnectTimer = setTimeout(connect, Math.min(backoff, 10000));
         return;
       }
@@ -1002,7 +1009,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
 
   // --- Auto-Inject (Loop) Sync ---
   const syncLoopState = useCallback(async () => {
-    if ((window as any).__cuiServerAlive !== true || !sessionId) return;
+    if (window.__cuiServerAlive !== true || !sessionId) return;
     try {
       const r = await fetch(`/api/auto-inject/session/${sessionId}`, { signal: AbortSignal.timeout(10000) });
       if (!r.ok) return;
@@ -1023,7 +1030,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
 
   const toggleLoop = useCallback(async (enable: boolean) => {
     if (!selectedId || !sessionId) return;
-    if ((window as any).__cuiServerAlive === false) {
+    if (window.__cuiServerAlive === false) {
       console.warn('[CuiLite] Toggle loop blocked: server not alive');
       return;
     }
@@ -1057,7 +1064,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
 
   const saveLoopConfig = useCallback(async () => {
     if (!selectedId) return;
-    if ((window as any).__cuiServerAlive === false) {
+    if (window.__cuiServerAlive === false) {
       console.warn('[CuiLite] Save loop config blocked: server not alive');
       return;
     }
@@ -1082,7 +1089,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
 
   const handleSaveTemplate = useCallback(async () => {
     if (!newTplLabel.trim() || !newTplMessage.trim()) return;
-    if ((window as any).__cuiServerAlive === false) {
+    if (window.__cuiServerAlive === false) {
       console.warn('[CuiLite] Save template blocked: server not alive');
       return;
     }
@@ -1118,7 +1125,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   }, [newTplLabel, newTplMessage, editingTemplate]);
 
   const handleDeleteTemplate = useCallback(async (id: string) => {
-    if ((window as any).__cuiServerAlive === false) {
+    if (window.__cuiServerAlive === false) {
       console.warn('[CuiLite] Delete template blocked: server not alive');
       return;
     }
@@ -1140,7 +1147,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       }
     }
     if (imageFiles.length === 0) return;
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setPasteUploading(true);
     try {
       const imageData = await Promise.all(imageFiles.map(file =>
@@ -1185,7 +1192,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   const handleSend = useCallback(async (overrideMessage?: string) => {
     const rawMsg = overrideMessage || input.trim();
     if (!rawMsg || !sessionId) return;
-    if ((window as any).__cuiServerAlive === false) {
+    if (window.__cuiServerAlive === false) {
       setMessages(prev => [...prev, { role: 'system', content: 'Server nicht erreichbar — bitte warten bis Verbindung wiederhergestellt ist.', timestamp: new Date().toISOString() }]);
       return;
     }
@@ -1246,7 +1253,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   // Respond to tool_use blocks (AskUserQuestion, ExitPlanMode, EnterPlanMode)
   const handleRespond = useCallback(async (text: string) => {
     if (!sessionId) return;
-    if ((window as any).__cuiServerAlive === false) {
+    if (window.__cuiServerAlive === false) {
       console.warn('[CuiLite] Respond blocked: server not alive');
       return;
     }
@@ -1285,7 +1292,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   }, [sessionId, selectedId, workDir, pollNow, onRouteChange]);
 
   const handlePermission = useCallback(async (permId: string, action: 'approve' | 'deny') => {
-    if ((window as any).__cuiServerAlive === false) {
+    if (window.__cuiServerAlive === false) {
       console.warn('[CuiLite] Permission blocked: server not alive');
       return;
     }
@@ -1305,7 +1312,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
 
   const handleStop = useCallback(async () => {
     if (!sessionId) return;
-    if ((window as any).__cuiServerAlive === false) {
+    if (window.__cuiServerAlive === false) {
       console.warn('[CuiLite] Stop blocked: server not alive');
       return;
     }
@@ -1328,7 +1335,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
 
   const handleHardKill = useCallback(async () => {
     if (!sessionId) return;
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     if (!confirm('HARD KILL — Alle Prozesse dieser Session sofort beenden?')) return;
     try {
       const resp = await fetch(`/api/mission/conversation/${sessionId}/hard-kill`, {
@@ -1359,7 +1366,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   }, [onRouteChange, selectedId, persistSession]);
 
   const handleStartNew = useCallback(async (subject: string, message: string, model: string = 'opus') => {
-    if ((window as any).__cuiServerAlive === false) {
+    if (window.__cuiServerAlive === false) {
       console.warn('[CuiLite] Start new blocked: server not alive');
       return false;
     }
@@ -1497,7 +1504,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
 
             if (sessionId) {
               // Chat is open — reassign conversation to new account, stay in chat
-              if ((window as any).__cuiServerAlive !== false) {
+              if (window.__cuiServerAlive !== false) {
                 fetch(`/api/mission/conversation/${sessionId}/assign`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },

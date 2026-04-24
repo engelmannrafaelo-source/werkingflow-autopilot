@@ -6,7 +6,7 @@ export const BRIDGE_URL = '/api/bridge-proxy';
 // Bridge API key — loaded from server-injected global, not hardcoded
 // API key injected by CUI server at page load (not hardcoded in source)
 const API_KEY = typeof window !== 'undefined'
-  ? (window as any).__CUI_BRIDGE_API_KEY__ || ''
+  ? window.__CUI_BRIDGE_API_KEY__ || ''
   : '';
 
 export function authHeaders(): Record<string, string> {

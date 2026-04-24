@@ -25,7 +25,7 @@ export default function QADashboard() {
 
   // Lightweight poll für Running Tests Badge
   const fetchRunningCount = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const res = await resilientFetch('/api/qa/runs');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

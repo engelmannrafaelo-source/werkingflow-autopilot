@@ -35,7 +35,7 @@ export default function VirtualOffice({ projectId, workDir }: VirtualOfficeProps
 
   // Fetch agent status
   const loadAgents = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const res = await fetch(`${API}/agents/claude/status`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`agents/claude/status ${res.status}`);
@@ -48,7 +48,7 @@ export default function VirtualOffice({ projectId, workDir }: VirtualOfficeProps
 
   // Fetch activity events from events.json
   const loadActivities = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const res = await fetch(`${API}/team/events`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`team/events ${res.status}`);
@@ -72,7 +72,7 @@ export default function VirtualOffice({ projectId, workDir }: VirtualOfficeProps
 
   // Fetch action items (approvals, pending reviews, etc.)
   const loadActionItems = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const [pendingRes, recommendationsRes] = await Promise.all([
         fetch(`${API}/agents/business/pending`, { signal: AbortSignal.timeout(20000) }),

@@ -67,7 +67,7 @@ export default function AgentGrid({ agents, selectedAgent, onSelectAgent, onAgen
   const [detailModalAgent, setDetailModalAgent] = useState<AgentStatus | null>(null);
 
   async function runAgent(personaId: string) {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       setRunningAgent(personaId);
       const res = await fetch(`${API}/agents/claude/run`, {

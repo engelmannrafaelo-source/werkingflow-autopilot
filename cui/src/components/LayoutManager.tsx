@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, useEffect, useMemo, lazy, Suspense } from 'react';
-import { Layout, Model, TabNode, TabSetNode, BorderNode, IJsonModel, ITabSetRenderValues, ITabRenderValues, Actions, DockLocation, Rect } from 'flexlayout-react';
+import { Layout, Model, TabNode, TabSetNode, BorderNode, IJsonModel, ITabSetRenderValues, ITabRenderValues, Actions, DockLocation, Rect, Action } from 'flexlayout-react';
 import type { CuiStates } from '../types';
 import { copyToClipboard } from '../utils/clipboard';
 import { useAuth } from '../contexts/AuthContext';
@@ -33,7 +33,14 @@ rectProto.equalSize = function patchedEqualSize(rect: Rect | undefined) {
 // Each call triggers full LayoutInternal render → useLayoutEffect hooks → getBoundingClientRect
 // → forced synchronous browser layout. At 60fps this consumes 100% CPU.
 // Layout ref → Layout class → selfRef → LayoutInternal (where redrawInternal lives).
-function patchLayoutRedraw(layoutRef: any) {
+interface FlexLayoutInternal {
+  _redrawPatched?: boolean;
+  redrawInternal?: (reason?: string) => void;
+}
+interface PatchableLayoutRef {
+  selfRef?: { current?: FlexLayoutInternal };
+}
+function patchLayoutRedraw(layoutRef: PatchableLayoutRef | null) {
   const internal = layoutRef?.selfRef?.current;
   if (!internal || internal._redrawPatched) return;
   const orig = internal.redrawInternal;
@@ -84,7 +91,7 @@ const API = '/api';
 
 // Map workspace to default browser URL for new panels
 // Host comes from env (partner=Tailscale IP, dev=localhost)
-const CUI_APP_HOST = (typeof window !== 'undefined' && (window as any).__CUI_APP_HOST__) || 'http://localhost';
+const CUI_APP_HOST = (typeof window !== 'undefined' && window.__CUI_APP_HOST__) || 'http://localhost';
 const WORKSPACE_BROWSER_PORTS: Record<string, number> = {
   "engelmann-ai-hub": 3009,
   "engelmann-dashboards": 3010,
@@ -547,7 +554,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     const payload = { ...json, _v: currentLayoutVersionRef.current };
     // Cache locally for instant load on next visit
     try { localStorage.setItem(`cui-layout-${projectId}`, JSON.stringify(payload)); } catch (e) { console.warn('[LayoutManager] Failed to cache layout locally:', e); }
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       fetch(`${API}/layouts/${projectId}`, {
         method: 'POST',
@@ -589,7 +596,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
 
   const saveTemplate = useCallback((tpl: IJsonModel) => {
     templateRef.current = tpl;
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       fetch(`${API}/layouts/${projectId}/template`, {
         method: 'POST',
@@ -736,7 +743,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
   }, [model, cuiStates]);
 
   // Reset CUI state to idle when user selects a CUI tab
-  const handleAction = useCallback((action: any) => {
+  const handleAction = useCallback((action: Action) => {
     const m = modelRef.current;
     if (action.type === 'FlexLayout_SelectTab' && m) {
       const nodeId = action.data?.tabNode;
@@ -859,7 +866,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
 
     const connect = () => {
       if (disposed) return;
-      if ((window as any).__cuiServerAlive === false) {
+      if (window.__cuiServerAlive === false) {
         reconnectTimer = setTimeout(connect, Math.min(backoff, 10000));
         return;
       }
@@ -1147,11 +1154,11 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           m.visitNodes((node) => { if (node.getType() === 'tabset') tabsetCount++; });
 
           // Only create new panels if auto-layout is explicitly triggered (not automatic)
-          if (!(window as any).__cuiAutoLayoutActive && unmatched.length > 0) {
+          if (!window.__cuiAutoLayoutActive && unmatched.length > 0) {
             console.log(`[LM] activate-conversations: ${unmatched.length} unmatched convs skipped (auto-layout disabled)`);
           }
 
-          for (const conv of (window as any).__cuiAutoLayoutActive ? unmatched : []) {
+          for (const conv of window.__cuiAutoLayoutActive ? unmatched : []) {
             // Target an existing CUI tabset directly — flexlayout splits it into a sibling tabset
             let targetId = '';
             m.visitNodes((node) => {
@@ -1393,7 +1400,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     const syncConversations = async () => {
       const m = modelRef.current;
       const ws = controlWsRef.current;
-      if (!m || disposed || (window as any).__cuiServerAlive === false) return;
+      if (!m || disposed || window.__cuiServerAlive === false) return;
 
       try {
         // Filter by projectId (precise — resolves multi-workspace users like David/Sahori).
@@ -1448,7 +1455,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         // Cleanup: remove tabs whose session is no longer active (finished or too old)
         // ONLY when user explicitly clicked Layout button (prevents sessions from disappearing)
         let removed = 0;
-        if ((window as any).__cuiAutoLayoutActive) {
+        if (window.__cuiAutoLayoutActive) {
           for (const [sid, nodeId] of mountedSessions) {
             // Keep if session is in active list
             if (activeSessionIds.has(sid)) continue;
@@ -1529,7 +1536,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           }
 
           // Priority 2: Add as separate split panel — only when explicitly triggered
-          if (!(window as any).__cuiAutoLayoutActive) {
+          if (!window.__cuiAutoLayoutActive) {
             console.log(`[LM] auto-sync: skipping new panel creation for session ${conv.sessionId} (auto-layout disabled)`);
             continue;
           }
@@ -1634,9 +1641,9 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail?.projectId && detail.projectId !== projectId) return;
-      (window as any).__cuiAutoLayoutActive = true;
+      window.__cuiAutoLayoutActive = true;
       syncNowRef.current?.();
-      setTimeout(() => { (window as any).__cuiAutoLayoutActive = false; }, 3000);
+      setTimeout(() => { window.__cuiAutoLayoutActive = false; }, 3000);
     };
     window.addEventListener('cui-auto-layout', handler);
     return () => window.removeEventListener('cui-auto-layout', handler);
@@ -1648,7 +1655,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       // Force FlexLayout to recalculate dimensions after display:none → display:flex transition
       // Without this, FlexLayout may render with stale 0x0 dimensions from when the tab was hidden
       const redrawTimer = setTimeout(() => {
-        const internal = (layoutRef.current as any)?.selfRef?.current;
+        const internal = (layoutRef.current as unknown as PatchableLayoutRef)?.selfRef?.current;
         if (internal?.redrawInternal) {
           internal.redrawInternal('project-switch');
         }
@@ -1742,7 +1749,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
 
   // Patch flexlayout's redrawInternal to prevent continuous render loop
   useEffect(() => {
-    if (layoutRef.current) patchLayoutRedraw(layoutRef.current);
+    if (layoutRef.current) patchLayoutRedraw(layoutRef.current as unknown as PatchableLayoutRef);
   }, [model]);
 
   // Memoize Layout element: Layout is a class component without shouldComponentUpdate.

@@ -38,7 +38,7 @@ export default function DocsTab() {
   }, []);
 
   const fetchData = async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setLoading(true);
     try {
       const res = await fetch('/api/maintenance/status', { signal: AbortSignal.timeout(15000) });

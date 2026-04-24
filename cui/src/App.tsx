@@ -22,7 +22,7 @@ async function fetchProjects(): Promise<Project[]> {
 }
 
 async function saveProject(project: Project): Promise<void> {
-  if ((window as any).__cuiServerAlive === false) return;
+  if (window.__cuiServerAlive === false) return;
   try {
     await fetch(`${API}/projects`, {
       method: 'POST',
@@ -36,7 +36,7 @@ async function saveProject(project: Project): Promise<void> {
 }
 
 async function deleteProject(id: string): Promise<void> {
-  if ((window as any).__cuiServerAlive === false) return;
+  if (window.__cuiServerAlive === false) return;
   try {
     await fetch(`${API}/projects/${id}`, { method: 'DELETE', signal: AbortSignal.timeout(20000) });
   } catch (err) {

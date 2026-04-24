@@ -48,7 +48,7 @@ export default function UsageTab({ envMode }: { envMode?: string }) {
   const [view, setView] = useState<ViewMode>('current');
 
   const fetchAll = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {
@@ -246,7 +246,7 @@ export default function UsageTab({ envMode }: { envMode?: string }) {
                     <div>
                       <button
                         onClick={async () => {
-                          if ((window as any).__cuiServerAlive === false) return;
+                          if (window.__cuiServerAlive === false) return;
                           try {
                             const res = await fetch(`/api/admin/wr/usage/activity/users?tenantId=${t.tenantId}`, { signal: AbortSignal.timeout(20000) });
                             if (!res.ok) throw new Error(`HTTP ${res.status}`);

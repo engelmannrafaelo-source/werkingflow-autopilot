@@ -34,7 +34,7 @@ export default function WerkingReportAdmin() {
   // Load current env mode from server on mount + listen for real-time changes via WebSocket
   useEffect(() => {
     const loadEnv = () => {
-      if ((window as any).__cuiServerAlive === false) return;
+      if (window.__cuiServerAlive === false) return;
       fetch('/api/admin/wr/env', { signal: AbortSignal.timeout(20000) })
         .then(r => {
           if (!r.ok) throw new Error(`[WRAdmin] loadEnv failed: HTTP ${r.status}`);
@@ -86,7 +86,7 @@ export default function WerkingReportAdmin() {
   // Poll system health for badge count every 30s
   useEffect(() => {
     const checkHealth = () => {
-      if ((window as any).__cuiServerAlive === false) return;
+      if (window.__cuiServerAlive === false) return;
       fetch('/api/admin/wr/system-health', { signal: AbortSignal.timeout(20000) })
         .then(r => {
           if (!r.ok) throw new Error(`[WRAdmin] checkHealth failed: HTTP ${r.status}`);
@@ -103,7 +103,7 @@ export default function WerkingReportAdmin() {
   }, []);
 
   const switchEnv = useCallback(async (mode: EnvMode) => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setEnvLoading(true);
     try {
       const res = await fetch('/api/admin/wr/env', {

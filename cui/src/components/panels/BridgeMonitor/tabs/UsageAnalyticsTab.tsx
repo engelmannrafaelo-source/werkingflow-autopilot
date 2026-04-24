@@ -107,7 +107,7 @@ export default function UsageAnalyticsTab() {
   const [view, setView] = useState<'apps' | 'users' | 'models' | 'flow'>('apps');
 
   const fetchData = useCallback(async () => {
-    if ((window as any).__cuiServerAlive !== true) return;
+    if (window.__cuiServerAlive !== true) return;
     setLoading(true);
     setError('');
     try {

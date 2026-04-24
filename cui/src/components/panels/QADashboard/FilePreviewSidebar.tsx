@@ -29,7 +29,7 @@ export default function FilePreviewSidebar({ filePath, onClose }: FilePreviewSid
   const [error, setError] = useState<string | null>(null);
 
   const fetchPreview = useCallback(async (path: string) => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setLoading(true);
     setError(null);
     setData(null);

@@ -26,7 +26,7 @@ export default function BusinessApprovalPanel() {
   const [processing, setProcessing] = useState<number | null>(null);
 
   const load = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const resp = await fetch(`${API}/agents/business/pending`, { signal: AbortSignal.timeout(20000) });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -56,7 +56,7 @@ export default function BusinessApprovalPanel() {
   }, [load]);
 
   async function selectEntry(entry: PendingEntry) {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setSelected(entry);
     setDiff(null);
     try {
@@ -76,7 +76,7 @@ export default function BusinessApprovalPanel() {
   }
 
   async function approve(index: number) {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setProcessing(index);
     try {
       const resp = await fetch(`${API}/agents/business/approve`, {
@@ -97,7 +97,7 @@ export default function BusinessApprovalPanel() {
   }
 
   async function reject(index: number) {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setProcessing(index);
     try {
       const resp = await fetch(`${API}/agents/business/reject`, {

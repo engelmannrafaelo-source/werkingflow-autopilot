@@ -105,7 +105,7 @@ function AgentsSection({
 
   async function handleTrigger(e: React.MouseEvent, id: string) {
     e.stopPropagation();
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setTriggering(id);
     try {
       const r = await fetch(`${API}/agents/trigger/${id}`, { method: 'POST', signal: AbortSignal.timeout(15000) });
@@ -156,7 +156,7 @@ function AgentDetailSection({ agent }: { agent: AgentStatus }) {
   const [entries, setEntries] = useState<MemoryEntry[]>([]);
 
   useEffect(() => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     fetch(`${API}/agents/memory/${agent.persona_id}?n=5`, { signal: AbortSignal.timeout(20000) })
       .then(r => {
         if (!r.ok) throw new Error(`memory fetch failed: ${r.status}`);
@@ -202,7 +202,7 @@ function BriefSection({ agentPersonaId }: { agentPersonaId: string }) {
   const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     fetch(`${API}/agents/briefs`, { signal: AbortSignal.timeout(20000) })
       .then(r => {
         if (!r.ok) throw new Error(`briefs list failed: ${r.status}`);
@@ -250,7 +250,7 @@ function InboxSection({ agents }: { agents: AgentStatus[] }) {
   const [allMessages, setAllMessages] = useState<{ persona: string; from: string; date: string }[]>([]);
 
   useEffect(() => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     const personasToCheck = ['birgit-bauer', 'vera-vertrieb', 'mira-marketing', 'max-weber', 'otto-operations'];
     Promise.all(
       personasToCheck.map(id =>
@@ -301,7 +301,7 @@ function ApprovalsSection({ approvals, onApproved }: { approvals: Approval[]; on
   const [processing, setProcessing] = useState<number | null>(null);
 
   async function handle(index: number, execute: boolean) {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setProcessing(index);
     try {
       const r = await fetch(`${API}/agents/approve`, {
@@ -428,7 +428,7 @@ function PlanReviewModal({ planFile, personaName, personaId, task, onApprove, on
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     fetch(`${API}/agents/claude/plan/${planFile}`, { signal: AbortSignal.timeout(20000) })
       .then(r => {
         if (!r.ok) throw new Error(`plan fetch failed: ${r.status}`);
@@ -474,7 +474,7 @@ function PersonaTaggingPanel() {
   }, []);
 
   async function loadStatus() {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const res = await fetch(`${API}/persona-tags/status`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`persona-tags status failed: ${res.status}`);
@@ -494,7 +494,7 @@ function PersonaTaggingPanel() {
   }
 
   async function handleUpdate() {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setStatus('updating');
     setMessage('Starte Update...');
 
@@ -508,7 +508,7 @@ function PersonaTaggingPanel() {
 
         // Poll for completion
         const pollInterval = setInterval(async () => {
-          if ((window as any).__cuiServerAlive === false) return;
+          if (window.__cuiServerAlive === false) return;
           try {
             const statusRes = await fetch(`${API}/persona-tags/status`, { signal: AbortSignal.timeout(20000) });
             if (!statusRes.ok) throw new Error(`persona-tags poll failed: ${statusRes.status}`);
@@ -604,7 +604,7 @@ function ClaudeAgentsPanel() {
   const [customTask, setCustomTask] = useState<{ id: string; text: string } | null>(null);
 
   const load = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const r = await fetch(`${API}/agents/claude/status`, { signal: AbortSignal.timeout(20000) });
       if (!r.ok) throw new Error(`claude/status failed: ${r.status}`);
@@ -630,7 +630,7 @@ function ClaudeAgentsPanel() {
   }, [load, agents.some(a => a.status === 'working')]);
 
   async function runAgent(id: string, name: string, task?: string, mode: 'plan' | 'execute' = 'plan', planId?: string) {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setTriggering(id);
     setCustomTask(null);
     try {
@@ -645,7 +645,7 @@ function ClaudeAgentsPanel() {
         // Poll log for completion to show plan review
         if (r.mode === 'plan') {
           const checkComplete = setInterval(async () => {
-            if ((window as any).__cuiServerAlive === false) return;
+            if (window.__cuiServerAlive === false) return;
             try {
               const logRes = await fetch(`${API}/agents/claude/log/${r.task_id}`, { signal: AbortSignal.timeout(20000) });
               if (!logRes.ok) throw new Error(`claude/log poll failed: ${logRes.status}`);
@@ -761,7 +761,7 @@ export default function CommandSidebar({ onPersonaAgentSelect }: CommandSidebarP
   const [businessPendingCount, setBusinessPendingCount] = useState(0);
 
   const loadStatus = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const [statusRes, approvalsRes] = await Promise.all([
         fetch(`${API}/agents/status`, { signal: AbortSignal.timeout(20000) }).then(r => {
@@ -791,7 +791,7 @@ export default function CommandSidebar({ onPersonaAgentSelect }: CommandSidebarP
   useEffect(() => {
     loadStatus();
     // Also load business pending count
-    if ((window as any).__cuiServerAlive !== false) {
+    if (window.__cuiServerAlive !== false) {
       fetch(`${API}/agents/business/pending`, { signal: AbortSignal.timeout(20000) })
         .then(r => {
           if (!r.ok) throw new Error(`business/pending failed: ${r.status}`);
@@ -801,7 +801,7 @@ export default function CommandSidebar({ onPersonaAgentSelect }: CommandSidebarP
         .catch(err => console.warn('[CommandSidebar] business/pending initial:', err));
     }
     const iv = setInterval(() => {
-      if ((window as any).__cuiServerAlive === false) return;
+      if (window.__cuiServerAlive === false) return;
       loadStatus();
       fetch(`${API}/agents/business/pending`, { signal: AbortSignal.timeout(20000) })
         .then(r => {

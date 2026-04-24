@@ -35,7 +35,7 @@ export default function PersonaChat({ personaId, personaName }: PersonaChatProps
   }, [messages]);
 
   async function loadHistory() {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const endpoint = `${API}/team/chat/${personaId}/history`;
       const response = await fetch(endpoint, { signal: AbortSignal.timeout(20000) });
@@ -62,7 +62,7 @@ export default function PersonaChat({ personaId, personaName }: PersonaChatProps
     setLoading(true);
     setError(null);
 
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const response = await fetch(`${API}/team/chat/${personaId}`, {
         method: 'POST',

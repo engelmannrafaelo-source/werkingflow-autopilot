@@ -52,7 +52,7 @@ export default function OfficePanel({ projectId, workDir }: OfficePanelProps) {
   }, []);
 
   async function loadPersonas() {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       setLoading(true);
       setError(null);

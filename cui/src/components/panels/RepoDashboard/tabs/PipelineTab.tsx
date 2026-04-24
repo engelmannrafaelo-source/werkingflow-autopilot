@@ -19,7 +19,7 @@ export default function PipelineTab() {
   }, []);
 
   const fetchPipeline = async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setLoading(true);
     try {
       const res = await fetch('/api/repo-dashboard/pipeline', { signal: AbortSignal.timeout(15000) });

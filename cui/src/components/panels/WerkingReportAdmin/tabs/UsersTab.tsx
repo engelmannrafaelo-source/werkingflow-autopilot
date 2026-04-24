@@ -43,7 +43,7 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
   const [creating, setCreating] = useState(false);
 
   const fetchUsers = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {
@@ -81,7 +81,7 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
   }, [fetchUsers, envMode]);
 
   const handleApprove = async (userId: string) => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setProcessingIds(prev => new Set(prev).add(userId));
     try {
       const res = await fetch(`/api/admin/wr/users/${userId}/approve`, { method: 'POST', signal: AbortSignal.timeout(15000) });
@@ -96,7 +96,7 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
   };
 
   const handleVerify = async (userId: string) => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setProcessingIds(prev => new Set(prev).add(userId));
     try {
       const res = await fetch(`/api/admin/wr/users/${userId}/verify`, { method: 'POST', signal: AbortSignal.timeout(15000) });
@@ -115,7 +115,7 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
       setError('Email and password are required');
       return;
     }
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setCreating(true);
     setError('');
     try {
@@ -150,7 +150,7 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
 
   const handleDelete = async (userId: string, email: string) => {
     if (!confirm(`Delete user "${email}"? This cannot be undone.`)) return;
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setProcessingIds(prev => new Set(prev).add(userId));
     try {
       const res = await fetch(`/api/admin/wr/users/${userId}`, { method: 'DELETE', signal: AbortSignal.timeout(15000) });
@@ -169,7 +169,7 @@ export default function UsersTab({ envMode }: { envMode?: string }) {
 
   const handleImpersonate = async (userId: string, email: string) => {
     if (!confirm(`Start impersonation session as "${email}"?`)) return;
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setProcessingIds(prev => new Set(prev).add(userId));
     try {
       const res = await fetch(`/api/admin/wr/users/${userId}/impersonate`, { method: 'POST', signal: AbortSignal.timeout(15000) });

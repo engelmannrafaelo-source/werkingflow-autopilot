@@ -37,7 +37,7 @@ export default function ActivityFeedTab() {
   const containerRef = useRef<HTMLDivElement>(null);
 
   const fetchData = useCallback(async () => {
-    if ((window as any).__cuiServerAlive !== true) return;
+    if (window.__cuiServerAlive !== true) return;
     setError('');
     try {
       const res = await fetch('/api/bridge/metrics/activity?limit=100', { signal: AbortSignal.timeout(10000) });

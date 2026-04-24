@@ -19,7 +19,7 @@ export default function ScanDocumentsButton() {
   const [error, setError] = useState<string | null>(null);
 
   async function triggerScan() {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setScanning(true);
     setResult(null);
     setError(null);

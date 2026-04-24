@@ -44,7 +44,7 @@ export default function TaskBoard({ personaId }: TaskBoardProps) {
   }, [personaId]);
 
   async function loadTasks() {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       setLoading(true);
 
@@ -82,7 +82,7 @@ export default function TaskBoard({ personaId }: TaskBoardProps) {
   }
 
   async function updateTaskStatus(taskId: string, status: Task['status']) {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const res = await fetch(`${API}/team/tasks/${taskId}`, {
         method: 'PATCH',
@@ -99,7 +99,7 @@ export default function TaskBoard({ personaId }: TaskBoardProps) {
 
   async function createTask() {
     if (!newTask.title.trim()) return;
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
 
     try {
       const res = await fetch(`${API}/team/tasks`, {
@@ -118,7 +118,7 @@ export default function TaskBoard({ personaId }: TaskBoardProps) {
   }
 
   async function deleteTask(taskId: string) {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const res = await fetch(`${API}/team/tasks/${taskId}`, { method: 'DELETE', signal: AbortSignal.timeout(15000) });
       if (!res.ok) throw new Error(`[TaskBoard] delete task failed: HTTP ${res.status}`);

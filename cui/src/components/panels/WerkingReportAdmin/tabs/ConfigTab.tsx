@@ -21,7 +21,7 @@ export default function ConfigTab({ envMode }: { envMode?: string }) {
   const [newValue, setNewValue] = useState('');
 
   const fetchConfig = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {
@@ -58,7 +58,7 @@ export default function ConfigTab({ envMode }: { envMode?: string }) {
   useEffect(() => { fetchConfig(); }, [fetchConfig, envMode]);
 
   const handleSave = async (key: string, value: string) => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setSaving(true);
     setError('');
     try {

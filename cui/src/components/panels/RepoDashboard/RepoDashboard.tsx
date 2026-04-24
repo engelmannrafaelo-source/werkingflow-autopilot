@@ -41,7 +41,7 @@ export default function RepoDashboard() {
   // Quick stats poll
   useEffect(() => {
     async function fetchQuick() {
-      if ((window as any).__cuiServerAlive !== true) return;
+      if (window.__cuiServerAlive !== true) return;
       setQuickError('');
       try {
         const res = await fetch('/api/repo-dashboard/repositories', { signal: AbortSignal.timeout(30000) });
@@ -70,7 +70,7 @@ export default function RepoDashboard() {
   }, []);
 
   const handleRefresh = async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setRefreshing(true);
     try {
       const refreshRes = await fetch('/api/repo-dashboard/refresh', { method: 'POST', signal: AbortSignal.timeout(15000) });

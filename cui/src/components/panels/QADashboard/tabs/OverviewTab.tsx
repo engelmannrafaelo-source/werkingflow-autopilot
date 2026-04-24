@@ -23,7 +23,7 @@ export default function OverviewTab() {
   const archRefreshDone = useRef(false);
 
   const fetchData = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       setError(null);
       const res = await resilientFetch('/api/qa/overview');

@@ -22,7 +22,7 @@ export default function ScoresTab() {
   const [loading, setLoading] = useState(true);
 
   const fetchData = async (appId: string) => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setLoading(true);
     try {
       const res = await resilientFetch(`/api/qa/app/${appId}`);
@@ -42,7 +42,7 @@ export default function ScoresTab() {
   }, [selectedApp]);
 
   const fetchReport = async (reportPath: string) => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const res = await fetch(`/api/qa/report?path=${encodeURIComponent(reportPath)}`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

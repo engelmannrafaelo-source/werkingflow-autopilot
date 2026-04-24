@@ -37,7 +37,7 @@ export default function RateLimitsTab() {
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
   const fetchData = useCallback(async () => {
-    if ((window as any).__cuiServerAlive !== true) return;
+    if (window.__cuiServerAlive !== true) return;
     setLoading(true);
     setError('');
     try {

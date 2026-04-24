@@ -24,7 +24,7 @@ export default function TeamOrgChart({ onNodeClick, selectedNode }: TeamOrgChart
   }, []);
 
   async function loadTeamStructure() {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const res = await fetch(`${API}/agents/team/structure`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`[TeamOrgChart] load team structure failed: HTTP ${res.status}`);

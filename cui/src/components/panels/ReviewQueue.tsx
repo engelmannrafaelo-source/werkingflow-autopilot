@@ -53,7 +53,7 @@ export default function ReviewQueue() {
   }
 
   async function loadReviews() {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       setLoading(true);
       const response = await fetch(`${API}/team/reviews`, { signal: AbortSignal.timeout(20000) });
@@ -68,7 +68,7 @@ export default function ReviewQueue() {
   }
 
   async function approveReview(id: string) {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     if (!confirm('Approve this document edit? This will write the file and create a git commit.')) {
       return;
     }
@@ -96,7 +96,7 @@ export default function ReviewQueue() {
   }
 
   async function rejectReview(id: string) {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     if (!confirm('Reject this document edit? This cannot be undone.')) {
       return;
     }

@@ -21,7 +21,7 @@ export default function DocumentViewerModal({ documentPath, onClose }: DocumentV
   }, [documentPath]);
 
   async function loadDocument() {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       setLoading(true);
       setError(null);

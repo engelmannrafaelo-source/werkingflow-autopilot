@@ -39,7 +39,7 @@ export default function SubSessionPanel({ workDir, isVisible = true, onOpenSessi
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchSessions = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) { setLoading(false); return; }
+    if (window.__cuiServerAlive === false) { setLoading(false); return; }
     try {
       const params = workDir ? `?workDir=${encodeURIComponent(workDir)}` : '';
       const resp = await fetch(`/api/mission/sub-sessions${params}`, { signal: AbortSignal.timeout(10000) });

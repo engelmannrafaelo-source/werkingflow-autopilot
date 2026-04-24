@@ -84,7 +84,7 @@ export default function PartnerInboxPanel({ projectId: _projectId }: PartnerInbo
 
   // --- Load messages ---
   const loadMessages = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const endpoint = `${API}/partner/messages?userId=${encodeURIComponent(userId)}`;
       const res = await fetch(endpoint, {

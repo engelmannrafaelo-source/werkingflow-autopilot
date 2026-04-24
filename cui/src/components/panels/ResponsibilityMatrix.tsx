@@ -20,7 +20,7 @@ export default function ResponsibilityMatrix() {
   }, []);
 
   async function loadMatrix() {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const res = await fetch(`${API}/agents/team/structure`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`[ResponsibilityMatrix] load matrix failed: HTTP ${res.status}`);

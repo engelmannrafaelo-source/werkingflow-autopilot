@@ -166,7 +166,7 @@ export default function PromptPerformanceTab() {
   const [timelineLoading, setTimelineLoading] = useState(false);
 
   const fetchData = useCallback(async () => {
-    if ((window as any).__cuiServerAlive !== true) return;
+    if (window.__cuiServerAlive !== true) return;
     setLoading(true);
     setError('');
     try {

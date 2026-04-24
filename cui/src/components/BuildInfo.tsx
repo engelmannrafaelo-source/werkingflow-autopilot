@@ -11,7 +11,7 @@ export function BuildInfo() {
   const [buildInfo, setBuildInfo] = useState<BuildInfoData | null>(null);
 
   useEffect(() => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     (async () => {
       try {
         const res = await fetch('/api/build-info', { signal: AbortSignal.timeout(20000) });

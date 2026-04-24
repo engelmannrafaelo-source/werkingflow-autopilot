@@ -90,7 +90,7 @@ interface PanelConfig {
 }
 
 // Map workspace workDir to default browser URL
-const CUI_APP_HOST_LB = (typeof window !== 'undefined' && (window as any).__CUI_APP_HOST__) || 'http://localhost';
+const CUI_APP_HOST_LB = (typeof window !== 'undefined' && window.__CUI_APP_HOST__) || 'http://localhost';
 const WORKSPACE_BROWSER_PORTS_LB: Record<string, number> = {
   "engelmann-ai-hub": 3009,
   "engelmann-dashboards": 3010,

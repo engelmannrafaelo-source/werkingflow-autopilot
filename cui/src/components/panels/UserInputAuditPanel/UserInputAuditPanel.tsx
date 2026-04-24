@@ -82,7 +82,7 @@ export default function UserInputAuditPanel() {
   const [total, setTotal] = useState(0);
 
   const fetchData = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setLoading(true);
     try {
       const inputsEndpoint = `/api/audit/inputs?hours=${hours}`;

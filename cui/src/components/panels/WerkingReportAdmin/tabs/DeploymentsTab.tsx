@@ -28,7 +28,7 @@ export default function DeploymentsTab({ envMode }: { envMode?: string }) {
   const [restarting, setRestarting] = useState(false);
 
   const fetchAll = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {
@@ -69,7 +69,7 @@ export default function DeploymentsTab({ envMode }: { envMode?: string }) {
 
   const handleDeploy = async (projectName: string) => {
     if (!confirm(`Trigger production deployment for "${projectName}"?`)) return;
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setDeploying(projectName);
     try {
       const res = await fetch('/api/admin/wr/deploy', {
@@ -92,7 +92,7 @@ export default function DeploymentsTab({ envMode }: { envMode?: string }) {
 
   const handleHetznerRestart = async () => {
     if (!confirm('Restart AI-Bridge containers on Hetzner?')) return;
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setRestarting(true);
     try {
       const res = await fetch('/api/admin/wr/hetzner/restart', {

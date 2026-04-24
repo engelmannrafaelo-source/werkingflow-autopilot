@@ -104,7 +104,7 @@ export default function CCUsageTab() {
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
   const fetchStats = useCallback(async (triggerScrape = false) => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setLoading(true);
     setError("");
     try {

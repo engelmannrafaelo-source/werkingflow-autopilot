@@ -71,7 +71,7 @@ export default function ImageDrop() {
 
   const upload = async () => {
     if (!images.length) return;
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setUploading(true);
     setError('');
     try {

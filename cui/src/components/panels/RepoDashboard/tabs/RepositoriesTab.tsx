@@ -57,7 +57,7 @@ export default function RepositoriesTab() {
   };
 
   const fetchRepos = async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {

@@ -159,7 +159,7 @@ function UsageBars() {
   const pollRef = useRef<ReturnType<typeof setInterval>>(null);
 
   const fetchUsage = useCallback(() => {
-    if ((window as any).__cuiServerAlive !== true) return;
+    if (window.__cuiServerAlive !== true) return;
     fetch('/api/claude-code/stats-v2', { signal: AbortSignal.timeout(12000) })
       .then(r => r.ok ? r.json() : null)
       .then(data => {
@@ -195,7 +195,7 @@ function SyncthingToggle() {
 
   const syncUnavailableRef = useRef(false);
   const fetchStatus = useCallback(() => {
-    if ((window as any).__cuiServerAlive !== true) return;
+    if (window.__cuiServerAlive !== true) return;
     if (syncUnavailableRef.current) return; // Syncthing not running — stop polling
     fetch('/api/syncthing/status', { signal: AbortSignal.timeout(10000) })
       .then(r => {
@@ -218,7 +218,7 @@ function SyncthingToggle() {
   }, [fetchStatus]);
 
   const toggle = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     if (toggling || paused === null) return;
     setToggling(true);
     try {
@@ -340,7 +340,7 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
     window.addEventListener('message', handleMessage);
     // Also check on mount (delayed to allow WS to connect first)
     setTimeout(() => {
-      if ((window as any).__cuiServerAlive === false) return;
+      if (window.__cuiServerAlive === false) return;
       fetch('/api/cui-sync/pending', { signal: AbortSignal.timeout(10000) })
         .then(r => { if (!r.ok) throw new Error(`cui-sync/pending ${r.status}`); return r.json(); })
         .then(d => { if (d?.count > 0) setPendingCount(d.count); })
@@ -350,7 +350,7 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
   }, []);
 
   const handleSync = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     if (syncState === 'syncing') return;
     setSyncState('syncing');
     setSyncDetail('Building...');
@@ -371,7 +371,7 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
   }, [syncState]);
 
   const checkPanelHealth = useCallback(async () => {
-    if ((window as any).__cuiServerAlive !== true) return;
+    if (window.__cuiServerAlive !== true) return;
     try {
       const resp = await fetch('/api/panel-health', { signal: AbortSignal.timeout(12000) });
       if (!resp.ok) return;
@@ -385,7 +385,7 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
   }, []);
 
   const handleStartPanels = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     if (syncState === 'syncing') return;
     setSyncState('syncing');
     setSyncDetail('Starting panels...');
@@ -566,7 +566,7 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
   };
 
   const handleRebuild = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     if (syncState === 'syncing') return;
     setSyncState('syncing');
     setSyncDetail('Rebuilding frontend...');

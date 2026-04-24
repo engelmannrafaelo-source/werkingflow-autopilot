@@ -40,7 +40,7 @@ export default function HierarchyTab() {
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setLoading(true);
     setError(null);
     try {

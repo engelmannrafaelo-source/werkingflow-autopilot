@@ -58,7 +58,7 @@ export default function DiskUsageTab() {
   };
 
   const fetchStructure = async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {

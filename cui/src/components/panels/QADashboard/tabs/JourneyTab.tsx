@@ -8,7 +8,7 @@ export default function JourneyTab() {
   const [selectedJourney, setSelectedJourney] = useState<Journey | null>(null);
 
   const fetchData = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const res = await resilientFetch('/api/qa/journey?latest=true');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

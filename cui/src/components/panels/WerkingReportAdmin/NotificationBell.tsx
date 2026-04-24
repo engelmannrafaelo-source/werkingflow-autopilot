@@ -42,7 +42,7 @@ export default function NotificationBell({ envMode }: NotificationBellProps) {
 
   // Fetch notifications
   const fetchNotifications = async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const res = await fetch('/api/admin/wr/notifications', { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -74,7 +74,7 @@ export default function NotificationBell({ envMode }: NotificationBellProps) {
 
   // Mark notification as read
   const markAsRead = async (id: string) => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const res = await fetch(`/api/admin/wr/notifications/${id}/read`, { method: 'POST', signal: AbortSignal.timeout(15000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -87,7 +87,7 @@ export default function NotificationBell({ envMode }: NotificationBellProps) {
 
   // Mark all as read
   const markAllAsRead = async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setLoading(true);
     try {
       const res = await fetch('/api/admin/wr/notifications/read-all', { method: 'POST', signal: AbortSignal.timeout(15000) });

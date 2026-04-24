@@ -36,7 +36,7 @@ export default function MaintenancePanel() {
   // Poll overall status
   useEffect(() => {
     async function fetchOverall() {
-      if ((window as any).__cuiServerAlive === false) return;
+      if (window.__cuiServerAlive === false) return;
       try {
         const endpoint = '/api/maintenance/status';
         const res = await fetch(endpoint, { signal: AbortSignal.timeout(15000) });
@@ -63,7 +63,7 @@ export default function MaintenancePanel() {
   }, []);
 
   const handleRefresh = async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setRefreshing(true);
     try {
       await fetch('/api/maintenance/refresh', { method: 'POST', signal: AbortSignal.timeout(5000) });

@@ -16,7 +16,7 @@ export default function PipelineTab({ envMode }: { envMode?: string }) {
   const [error, setError] = useState('');
 
   const fetchAll = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
 

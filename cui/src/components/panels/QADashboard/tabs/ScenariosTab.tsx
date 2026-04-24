@@ -8,7 +8,7 @@ export default function ScenariosTab() {
   const [filterApp, setFilterApp] = useState<string>('all');
 
   const fetchData = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const res = await resilientFetch('/api/qa/scenarios');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

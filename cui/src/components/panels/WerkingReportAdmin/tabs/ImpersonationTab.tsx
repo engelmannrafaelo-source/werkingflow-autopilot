@@ -21,7 +21,7 @@ export default function ImpersonationTab({ envMode }: { envMode?: string }) {
   const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
 
   const fetchSessions = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {
@@ -57,7 +57,7 @@ export default function ImpersonationTab({ envMode }: { envMode?: string }) {
 
   const handleEndSession = async (session: ImpersonationSession) => {
     if (!confirm(`End impersonation session for ${session.adminEmail} → ${session.targetEmail}?`)) return;
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     const sessionId = session.id;
     setProcessingIds(prev => new Set(prev).add(sessionId));
     try {

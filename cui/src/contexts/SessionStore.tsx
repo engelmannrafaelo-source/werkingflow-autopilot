@@ -92,8 +92,8 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
       ws.onerror = () => {};
 
       ws.onopen = () => {
-        const wasDown = !serverAlive && (window as any).__cuiServerAlive === false;
-        (window as any).__cuiServerAlive = true;
+        const wasDown = !serverAlive && window.__cuiServerAlive === false;
+        window.__cuiServerAlive = true;
         setServerAlive(true);
         backoff = 1000;
         console.log('[SessionStore] WS connected');
@@ -120,7 +120,7 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
       };
 
       ws.onclose = () => {
-        (window as any).__cuiServerAlive = false;
+        window.__cuiServerAlive = false;
         setServerAlive(false);
         wsRef.current = null;
         if (!disposed) {

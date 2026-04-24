@@ -67,7 +67,7 @@ export default function AgentDetailModal({ agent, onClose, onRunAgent, onOpenCha
   }, [agent.persona_id]);
 
   async function loadPersonaData() {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const res = await fetch(`${API}/agents/persona/${agent.persona_id}`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error('Failed to load persona');
@@ -80,7 +80,7 @@ export default function AgentDetailModal({ agent, onClose, onRunAgent, onOpenCha
   }
 
   async function loadMemory() {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const res = await fetch(`${API}/agents/claude/memory/${agent.persona_id}`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error('Failed to load memory');
@@ -92,7 +92,7 @@ export default function AgentDetailModal({ agent, onClose, onRunAgent, onOpenCha
   }
 
   async function loadInbox() {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const res = await fetch(`${API}/agents/inbox/${agent.persona_id}`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error('Failed to load inbox');
@@ -104,7 +104,7 @@ export default function AgentDetailModal({ agent, onClose, onRunAgent, onOpenCha
   }
 
   async function loadApprovals() {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     try {
       const res = await fetch(`${API}/agents/approvals/${agent.persona_id}`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error('Failed to load approvals');

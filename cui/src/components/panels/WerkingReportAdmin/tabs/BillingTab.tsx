@@ -114,7 +114,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
   const [downloadingInvoice, setDownloadingInvoice] = useState<string | null>(null);
 
   const fetchBilling = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setLoading(true);
     setError('');
     try {
@@ -141,7 +141,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
   }, []);
 
   const fetchInvoices = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setLoadingInvoices(true);
     try {
       const res = await fetch('/api/admin/wr/billing/invoices', { signal: AbortSignal.timeout(20000) });
@@ -167,7 +167,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
   }, []);
 
   const fetchUsageStats = useCallback(async () => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setLoadingUsage(true);
     try {
       const [statsRes, activityRes] = await Promise.all([
@@ -191,7 +191,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
   }, []);
 
   const fetchEvents = useCallback(async (tenantId: string) => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setLoadingEvents(true);
     try {
       const res = await fetch(`/api/admin/wr/billing/events/${tenantId}`, { signal: AbortSignal.timeout(20000) });
@@ -217,7 +217,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
   }, []);
 
   const downloadInvoicePDF = useCallback(async (invoice: Invoice) => {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
     setDownloadingInvoice(invoice.id);
     try {
       const res = await fetch(`/api/admin/wr/billing/invoices/${invoice.id}/pdf?tenantId=${invoice.tenantId ?? ''}`, { signal: AbortSignal.timeout(15000) });
@@ -994,7 +994,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
                 <button
                   key={amt}
                   onClick={async () => {
-                    if ((window as any).__cuiServerAlive === false) return;
+                    if (window.__cuiServerAlive === false) return;
                     try {
                       const res = await fetch('/api/admin/wr/billing/top-up', {
                         method: 'POST',

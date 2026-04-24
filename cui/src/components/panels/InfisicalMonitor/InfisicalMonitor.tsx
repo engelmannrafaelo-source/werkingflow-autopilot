@@ -38,7 +38,7 @@ export default function InfisicalMonitor() {
   }, []);
 
   async function fetchAllData() {
-    if ((window as any).__cuiServerAlive === false) return;
+    if (window.__cuiServerAlive === false) return;
 
     try {
       const [serverRes, projectsRes, syncsRes, healthRes] = await Promise.all([
