@@ -38,7 +38,9 @@ export function parseDiffs(raw: string): ParsedDiff[] {
     const file = match[1].trim();
     const body = match[2];
     const oldMatch = body.match(/^old_string:\s*\|?\s*\n([\s\S]*?)(?=^new_string:)/m);
-    const newMatch = body.match(/^new_string:\s*\|?\s*\n([\s\S]*?)$/m);
+    // NOTE: greedy [\s\S]* — outer <<<DIFF...>>> bounds `body`. With /m,
+    // `$` matches end of any line; `*?` would capture only the first line.
+    const newMatch = body.match(/^new_string:\s*\|?\s*\n([\s\S]*)$/m);
     if (oldMatch && newMatch) {
       results.push({ file, old: dedent(oldMatch[1]), newText: dedent(newMatch[1]) });
     }
@@ -46,7 +48,7 @@ export function parseDiffs(raw: string): ParsedDiff[] {
   while ((match = newBlockRe.exec(normalized)) !== null) {
     const file = match[1].trim();
     const body = match[2];
-    const contentMatch = body.match(/^content:\s*\|?\s*\n([\s\S]*?)$/m);
+    const contentMatch = body.match(/^content:\s*\|?\s*\n([\s\S]*)$/m);
     if (contentMatch) {
       results.push({ file, old: '', newText: dedent(contentMatch[1]) });
     }

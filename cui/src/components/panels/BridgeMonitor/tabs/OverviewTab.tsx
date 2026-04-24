@@ -18,6 +18,23 @@ interface GuardData {
   metrics?: { totalRequests: number; totalCompleted: number; totalPreempted: number };
 }
 
+interface Usage24h {
+  total_calls: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_tokens: number;
+  total_errors: number;
+  cost_usd: number;
+  models: number;
+  apps: number;
+}
+
+interface WorkersStatus {
+  up: number;
+  total: number;
+  status: string;
+}
+
 interface OverviewData {
   health: string;
   worker?: string;
@@ -29,6 +46,13 @@ interface OverviewData {
   success_rate?: number;
   successRate?: number;
   active_sessions?: number;
+  active_requests?: number;
+  memory_usage_percent?: number;
+  memory_used_gb?: number;
+  can_accept_requests?: boolean;
+  rate_limited?: boolean;
+  usage_24h?: Usage24h | null;
+  workers_status?: WorkersStatus | null;
   guard?: GuardData;
   timestamp: string;
   _error?: string;
@@ -229,16 +253,16 @@ export default function OverviewTab() {
       <div data-ai-id="bridge-overview-stats-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 16 }}>
         {data ? (() => {
           const health = data.health;
-          const worker = data.worker ?? '-';
-          const uptime = data.uptime_hours ?? 0;
+          const ws = data.workers_status;
           const totalReqs = data.total_requests ?? data.totalRequests ?? 0;
           const sessions = data.active_sessions ?? 0;
+          const activeReqs = data.active_requests ?? 0;
           return (<>
             {statCard('Health', health, health === 'healthy' ? 'var(--tn-green)' : 'var(--tn-red)', health === 'healthy' ? '✅' : '⚠️', 'bridge-overview-health-stat')}
-            {statCard('Worker', worker, 'var(--tn-blue)', '🔧', 'bridge-overview-worker-stat')}
-            {statCard('Uptime', `${uptime}h`, 'var(--tn-purple, #bb9af7)', '⏱️', 'bridge-overview-uptime-stat')}
-            {statCard('Total Requests', formatNumber(totalReqs), 'var(--tn-blue)', '📊', 'bridge-overview-requests-stat')}
-            {statCard('Active Sessions', String(sessions), 'var(--tn-orange)', '⚡', 'bridge-overview-sessions-stat')}
+            {statCard('Workers', ws ? `${ws.up}/${ws.total}` : '-', ws?.up === ws?.total ? 'var(--tn-green)' : 'var(--tn-orange)', '🔧', 'bridge-overview-worker-stat')}
+            {statCard('Requests (24h)', formatNumber(totalReqs), 'var(--tn-blue)', '📊', 'bridge-overview-requests-stat')}
+            {statCard('Active', `${activeReqs} req / ${sessions} sess`, activeReqs > 0 ? 'var(--tn-orange)' : 'var(--tn-text-muted)', '⚡', 'bridge-overview-sessions-stat')}
+            {statCard('Memory', data.memory_used_gb ? `${data.memory_used_gb.toFixed(1)} GB` : '-', (data.memory_usage_percent ?? 0) > 80 ? 'var(--tn-red)' : 'var(--tn-text-muted)', '💾', 'bridge-overview-memory-stat')}
           </>);
         })() : (
           <div style={{ gridColumn: '1 / -1', padding: 20, textAlign: 'center', color: 'var(--tn-text-dim)', fontSize: 12 }}>
@@ -246,6 +270,22 @@ export default function OverviewTab() {
           </div>
         )}
       </div>
+
+      {/* 24h Usage Summary */}
+      {data?.usage_24h && (
+        <div data-ai-id="bridge-usage-24h" style={{ marginBottom: 16 }}>
+          <h4 style={{ fontSize: 11, fontWeight: 600, margin: '0 0 8px', color: 'var(--tn-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Usage (24h)
+          </h4>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8 }}>
+            {statCard('Cost', `$${data.usage_24h.cost_usd.toFixed(2)}`, 'var(--tn-orange)', '💰', 'usage-cost')}
+            {statCard('Input Tokens', formatNumber(data.usage_24h.total_input_tokens), 'var(--tn-blue)', '📥', 'usage-input')}
+            {statCard('Output Tokens', formatNumber(data.usage_24h.total_output_tokens), 'var(--tn-blue)', '📤', 'usage-output')}
+            {statCard('Errors', String(data.usage_24h.total_errors), data.usage_24h.total_errors > 0 ? 'var(--tn-red)' : 'var(--tn-green)', data.usage_24h.total_errors > 0 ? '⚠️' : '✅', 'usage-errors')}
+            {statCard('Models', String(data.usage_24h.models), 'var(--tn-text-muted)', '🤖', 'usage-models')}
+          </div>
+        </div>
+      )}
 
       {/* Connected Apps */}
       {apps.length > 0 && (
@@ -471,15 +511,19 @@ export default function OverviewTab() {
 
       {/* Performance Stats */}
       {data && (() => {
-        const avgResp = data.avg_response_time ?? data.avgResponseTime ?? 0;
         const successRate = data.success_rate ?? data.successRate ?? 0;
         return (<>
-          <div data-ai-id="bridge-overview-performance-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 20 }}>
-            {statCard('Avg Response Time', `${avgResp.toFixed(2)}s`, 'var(--tn-text)', '⏱️', 'bridge-overview-response-time-stat')}
+          <div data-ai-id="bridge-overview-performance-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 20 }}>
             {statCard('Success Rate', `${successRate.toFixed(1)}%`,
               successRate >= 99 ? 'var(--tn-green)' : successRate >= 95 ? 'var(--tn-orange)' : 'var(--tn-red)',
               successRate >= 99 ? '✅' : successRate >= 95 ? '⚠️' : '❌',
               'bridge-overview-success-rate-stat')}
+            {statCard('Rate Limited', data.rate_limited ? 'Yes' : 'No',
+              data.rate_limited ? 'var(--tn-red)' : 'var(--tn-green)',
+              data.rate_limited ? '🚨' : '✅', 'bridge-overview-rate-limit-stat')}
+            {statCard('Can Accept', data.can_accept_requests ? 'Yes' : 'No',
+              data.can_accept_requests ? 'var(--tn-green)' : 'var(--tn-red)',
+              data.can_accept_requests ? '✅' : '❌', 'bridge-overview-accept-stat')}
           </div>
           <div data-ai-id="bridge-overview-timestamp" style={{ fontSize: 9, color: 'var(--tn-text-muted)', textAlign: 'right' }}>
             Last updated: {new Date(data.timestamp).toLocaleString()}

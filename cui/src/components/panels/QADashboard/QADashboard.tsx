@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import ErrorBoundary from '../../ErrorBoundary';
 import OverviewTab from './tabs/OverviewTab';
 import PyramidTab from './tabs/PyramidTab';
+import BackendTab from './tabs/BackendTab';
 import ScoresTab from './tabs/ScoresTab';
 import TestRunsTab from './tabs/TestRunsTab';
 import ScenariosTab from './tabs/ScenariosTab';
@@ -54,6 +55,12 @@ export default function QADashboard() {
       key: 'pyramid',
       label: 'Pyramid',
       component: <ErrorBoundary componentName="PyramidTab"><PyramidTab /></ErrorBoundary>,
+      group: 'quality'
+    },
+    {
+      key: 'backend',
+      label: 'Backend',
+      component: <ErrorBoundary componentName="BackendTab"><BackendTab /></ErrorBoundary>,
       group: 'quality'
     },
     {

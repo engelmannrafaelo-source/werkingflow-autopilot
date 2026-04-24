@@ -13,7 +13,12 @@ import type { ContractViolation } from '../lib/dataContracts';
 
 interface ContractBannerProps {
   violations: ContractViolation[];
-  dataQuality?: number; // 0-100
+  /**
+   * Datenqualitäts-Score 0-100, oder `null` wenn nicht beurteilbar
+   * (z.B. Bridge offline / Fallback). `null` zeigt "N/A" statt grüner 100%.
+   * `undefined` ⇒ gar kein Badge anzeigen.
+   */
+  dataQuality?: number | null;
 }
 
 export default function ContractBanner({ violations, dataQuality }: ContractBannerProps) {
@@ -52,14 +57,26 @@ export default function ContractBanner({ violations, dataQuality }: ContractBann
           {warnings.length > 0 && `${warnings.length} Warnung${warnings.length > 1 ? 'en' : ''}`}
         </span>
         {dataQuality !== undefined && (
-          <span style={{
-            fontSize: 10, padding: '1px 6px', borderRadius: 3,
-            background: dataQuality > 80 ? 'rgba(158,206,106,0.2)' : dataQuality > 50 ? 'rgba(224,175,104,0.2)' : 'rgba(247,118,142,0.2)',
-            color: dataQuality > 80 ? '#9ece6a' : dataQuality > 50 ? '#e0af68' : '#f7768e',
-            fontWeight: 700,
-          }}>
-            Datenqualität: {dataQuality}%
-          </span>
+          dataQuality === null ? (
+            // Bridge offline / Fallback / keine verwertbaren Daten — kein false-green 100%.
+            <span style={{
+              fontSize: 10, padding: '1px 6px', borderRadius: 3,
+              background: 'rgba(122,162,247,0.15)',
+              color: '#7aa2f7',
+              fontWeight: 700,
+            }}>
+              Datenqualität: N/A
+            </span>
+          ) : (
+            <span style={{
+              fontSize: 10, padding: '1px 6px', borderRadius: 3,
+              background: dataQuality > 80 ? 'rgba(158,206,106,0.2)' : dataQuality > 50 ? 'rgba(224,175,104,0.2)' : 'rgba(247,118,142,0.2)',
+              color: dataQuality > 80 ? '#9ece6a' : dataQuality > 50 ? '#e0af68' : '#f7768e',
+              fontWeight: 700,
+            }}>
+              Datenqualität: {dataQuality}%
+            </span>
+          )
         )}
         <span style={{ fontSize: 9, opacity: 0.6 }}>{expanded ? '▲' : '▼'}</span>
       </button>

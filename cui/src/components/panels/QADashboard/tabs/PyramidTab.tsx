@@ -312,7 +312,7 @@ function TestDetailSidebar({ test, onClose }: {
             </Section>
           </>
         ) : (
-          <JourneyPane scenarioId={test.id} persona={test.id.split('.').pop() ?? test.id} />
+          <JourneyPane scenarioId={test.id} persona={test.id} />
         )}
       </div>
     </div>
@@ -458,6 +458,16 @@ function JourneyStepCard({ step, isLast }: { step: JourneyStep; isLast: boolean 
             color: '#7aa2f7', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>
             {step.url}
+          </div>
+        )}
+
+        {/* AI Note */}
+        {step.note && (
+          <div style={{
+            padding: '2px 8px', fontSize: 8, color: '#565f89',
+            fontStyle: 'italic', lineHeight: 1.3,
+          }}>
+            {step.note}
           </div>
         )}
 

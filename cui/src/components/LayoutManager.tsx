@@ -65,7 +65,7 @@ import {
   ArchitectureExplorer, ReportBuilder, PromptExplorer, BusinessAngelPanel,
   MyTasksPanel, ActivityFeedPanel, PartnerInboxPanel,
   FeedbackPanel, TeamStatusPanel, BusinessDocsPanel, UploadPanel, ToolHub,
-  CalendarPanel, ErrorMonitor,
+  CalendarPanel, MailPanel, ErrorMonitor,
   PANEL_NAMES, PANEL_MENU_OPTIONS,
 } from './panelRegistry';
 // LayoutBuilder ist Desktop-only — bleibt hier
@@ -97,11 +97,14 @@ const WORKSPACE_BROWSER_URLS: Record<string, string> = Object.fromEntries(
   Object.entries(WORKSPACE_BROWSER_PORTS).map(([ws, port]) => [ws, `${CUI_APP_HOST}:${port}`])
 );
 
-function defaultLayout(_workDir: string): IJsonModel {
+function defaultLayout(workDir: string): IJsonModel {
   // Standard layout:
   //   [ Chat (top)             | Tool Hub ]
   //   [ Browser (workspace-App)|          ]
-  // Browser URL auto-fills from WORKSPACE_BROWSER_URLS via the factory (config.url empty).
+  // Browser opens the workspace app via /app-proxy/<port>/ (works on dev- and partner-server).
+  const wsId = workDir.split('/').pop() || '';
+  const port = WORKSPACE_BROWSER_PORTS[wsId];
+  const browserUrl = port ? `/app-proxy/${port}/` : '';
   return {
     global: {
       tabEnableClose: true,
@@ -135,7 +138,7 @@ function defaultLayout(_workDir: string): IJsonModel {
               type: 'tabset',
               weight: 40,
               children: [
-                { type: 'tab', name: 'Browser', component: 'browser', config: {} },
+                { type: 'tab', name: 'Browser', component: 'browser', config: { url: browserUrl } },
               ],
             },
           ],
@@ -312,16 +315,33 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     const fetchWithTimeout = (url: string, ms = 8000) =>
       fetch(url, { signal: AbortSignal.timeout(ms) }).then(r => r.ok ? r.json() : null).catch((err) => { console.warn('[LayoutManager] fetchWithTimeout failed for', url, ':', err); return null; });
 
+    // Template fetch differentiates "server says no template" from network error.
+    // Server GET /layouts/:id/template returns 200 with null body when file is missing.
+    // Sentinel { _deleted: true } means server confirmed no template → clear stale client cache.
+    const fetchTemplate = (url: string, ms = 8000): Promise<IJsonModel | { _deleted: true } | null> =>
+      fetch(url, { signal: AbortSignal.timeout(ms) })
+        .then(async r => {
+          if (r.status === 404) return { _deleted: true } as const;
+          if (!r.ok) return null;
+          const body = await r.json();
+          return body === null ? { _deleted: true } as const : body;
+        })
+        .catch((err) => { console.warn('[LayoutManager] fetchTemplate failed for', url, ':', err); return null; });
+
     Promise.all([
       fetchWithTimeout(`${API}/layouts/${projectId}`),
-      fetchWithTimeout(`${API}/layouts/${projectId}/template`),
+      fetchTemplate(`${API}/layouts/${projectId}/template`),
       fetchWithTimeout(`${API}/active-dir/${projectId}`),
-    ]).then(([layoutJson, tplJson, activeDir]) => {
+    ]).then(([layoutJson, tplResult, activeDir]) => {
       if (cancelled) return;
       if (activeDir?.path) activeDirRef.current = activeDir.path;
-      if (tplJson) {
-        templateRef.current = tplJson;
-        try { localStorage.setItem(tplCacheKey, JSON.stringify(tplJson)); } catch (e) { console.warn('[LayoutManager] Failed to cache template:', e); }
+      if (tplResult && '_deleted' in tplResult) {
+        // Server explicitly has no template — clear stale cache so reset uses defaultLayout
+        templateRef.current = null;
+        try { localStorage.removeItem(tplCacheKey); } catch (e) { console.warn('[LayoutManager] Failed to clear template cache:', e); }
+      } else if (tplResult) {
+        templateRef.current = tplResult as IJsonModel;
+        try { localStorage.setItem(tplCacheKey, JSON.stringify(tplResult)); } catch (e) { console.warn('[LayoutManager] Failed to cache template:', e); }
       }
       if (layoutJson) {
         // Cache for next load
@@ -507,6 +527,8 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         return wrapPanel('Uploads', withSuspense(<UploadPanel />));
       case 'calendar':
         return wrapPanel('Kalender', withSuspense(<CalendarPanel />));
+      case 'mail':
+        return wrapPanel('Mail', withSuspense(<MailPanel />));
       case 'tool-hub':
         return wrapPanel('ToolHub', withSuspense(<ToolHub projectId={projectId} workDir={workDir} />));
       case 'error-monitor':
@@ -590,12 +612,16 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
 
   const handleResetLayout = useCallback(() => {
     try {
-      const tpl = templateRef.current ?? defaultLayout(workDir);
-      const newModel = Model.fromJson(tpl);
+      // Reset means "back to the baked-in default", not "back to a user-saved template".
+      // Drop the template cache so a stale per-workspace template can't hijack the default
+      // (this happened when older layouts were saved without the /app-proxy browser URL).
+      templateRef.current = null;
+      try { localStorage.removeItem(`cui-template-${projectId}`); } catch (e) { console.warn('[LayoutManager] Failed to clear template cache on reset:', e); }
+      const newModel = Model.fromJson(defaultLayout(workDir));
       setModel(newModel);
       saveLayout(newModel);
     } catch (err) { console.warn('[LayoutManager] handleResetLayout Model.fromJson failed:', err); }
-  }, [workDir, saveLayout]);
+  }, [workDir, projectId, saveLayout]);
 
   // Stable refs for WS effect (prevent reconnect on model/callback changes)
   const handleResetLayoutRef = useRef(handleResetLayout);
@@ -1370,7 +1396,10 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       if (!m || disposed || (window as any).__cuiServerAlive === false) return;
 
       try {
-        const res = await fetch(`/api/mission/conversations?project=${encodeURIComponent(workDir)}`,
+        // Filter by projectId (precise — resolves multi-workspace users like David/Sahori).
+        // Server accepts either projectId or workDir for backwards compat.
+        const projFilter = projectId || workDir;
+        const res = await fetch(`/api/mission/conversations?project=${encodeURIComponent(projFilter)}`,
           { signal: AbortSignal.timeout(10000) });
         if (!res.ok || disposed) return;
         const data = await res.json();
@@ -1595,16 +1624,18 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     return () => window.removeEventListener('cui-toggle-sync-tool', handler);
   }, [modelInitialized, projectId, toggleSyncTool]);
 
-  // Manual auto-layout trigger: 'cui-auto-layout' event (dispatched by Layout button in toolbar)
+  // Manual sync trigger: 'cui-auto-layout' event (dispatched by Layout button in toolbar).
+  // Mounts all open chats into the current layout without resetting it — the
+  // __cuiAutoLayoutActive flag tells syncConversations to add unmatched chats as
+  // new tabs (the default "automatic" sync only touches chats already in the layout).
+  // Factory reset lives in the Cache button (wipes client + server layout).
   useEffect(() => {
     if (!modelInitialized) return;
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      // Only handle if this is the active project (or no projectId filter specified)
       if (detail?.projectId && detail.projectId !== projectId) return;
       (window as any).__cuiAutoLayoutActive = true;
       syncNowRef.current?.();
-      // Reset flag after short delay (one-shot)
       setTimeout(() => { (window as any).__cuiAutoLayoutActive = false; }, 3000);
     };
     window.addEventListener('cui-auto-layout', handler);

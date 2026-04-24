@@ -79,6 +79,9 @@ router.get('/me', requireAuth, (req, res) => {
 router.get('/status', (_req, res) => {
   res.json({
     authEnabled: isAuthEnabled(),
+    // Partner-CUI deployments set PARTNER_CUI=1 to hide admin/dev-only panels
+    // (Report Builder etc.) even from admin users.
+    partnerCui: process.env.PARTNER_CUI === '1',
   });
 });
 

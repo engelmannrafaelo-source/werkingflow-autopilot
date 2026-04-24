@@ -2184,6 +2184,7 @@ router.get('/api/qa/journey', (req, res) => {
         screenshotPath: s.screenshot,
         screenshotExists: existsSync(s.screenshot),
         timestamp: s.timestamp,
+        ...(s.note ? { note: (s.note as string).slice(0, 300) } : {}),
       })),
     }));
 

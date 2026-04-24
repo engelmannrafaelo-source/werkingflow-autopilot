@@ -234,6 +234,14 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
           // Only filter local vs remote: in local mode hide remote, in remote mode hide local
           if (useLocal && c.accountId !== 'local') return false;
           if (!useLocal && c.accountId === 'local') return false;
+          // Partner (non-admin): server already scoped to this user. For multi-workspace
+          // partners (David, Sahori, Kurt), sessions must be tagged with projectId —
+          // without it all workspaces would show the same list. Untagged sessions fall
+          // back to workDir path matching (legacy behaviour).
+          if (projectId && (c as any).projectId) {
+            return (c as any).projectId === projectId;
+          }
+          if (!isAdmin) return true;
           if (workDir) {
             const pp = (c.projectPath || '').replace(/\/$/, '');
             const wd = workDir.replace(/\/$/, '');
@@ -254,7 +262,7 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
         try { localStorage.setItem(`cui-convs-${workDir || 'all'}`, JSON.stringify(filtered.slice(0, 20))); } catch {}
       })
       .catch((err) => { console.warn('[QueueOverlay] fetchConversations:', err); setLoading(false); });
-  }, [workDir, useLocal]); // accountId intentionally excluded — conversations are shown for ALL accounts
+  }, [workDir, useLocal, isAdmin, projectId]); // accountId intentionally excluded — conversations are shown for ALL accounts
 
   useEffect(() => {
     fetchConversations();

@@ -1206,7 +1206,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       const resp = await fetch('/api/mission/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accountId: selectedId, sessionId, message: msg, workDir }),
+        body: JSON.stringify({ accountId: selectedId, sessionId, message: msg, workDir, projectId }),
         signal: AbortSignal.timeout(65000),
       });
       if (!resp.ok) {
@@ -1256,7 +1256,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       const resp = await fetch('/api/mission/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accountId: selectedId, sessionId, message: text, workDir }),
+        body: JSON.stringify({ accountId: selectedId, sessionId, message: text, workDir, projectId }),
         signal: AbortSignal.timeout(65000),
       });
       if (resp.ok) {
@@ -1369,7 +1369,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       const resp = await fetch('/api/mission/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accountId: 'auto', message, workDir, subject, model }),
+        body: JSON.stringify({ accountId: 'auto', message, workDir, subject, model, projectId }),
         signal: AbortSignal.timeout(65000),
       });
       if (!resp.ok) {

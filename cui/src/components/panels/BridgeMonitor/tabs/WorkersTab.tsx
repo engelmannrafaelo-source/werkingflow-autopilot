@@ -1,54 +1,66 @@
 import { useState, useEffect, useCallback } from 'react';
-import { BRIDGE_URL, bridgeJson, StatusBadge, Toolbar, ErrorBanner, LoadingSpinner, SectionFlat } from '../shared';
-import { validateApiResponse } from '../../../../lib/validateApiResponse';
+import { bridgeJson, StatCard, SectionFlat, StatusBadge, Toolbar, ErrorBanner, LoadingSpinner } from '../shared';
 
-interface WorkerHealth {
-  status: string;
-  service?: string;
-  worker_instance?: string;
+// ─── Types ──────────────────────────────────────────────────────────
+
+interface ForecastWorker {
+  arrivals: number;
+  completions: number;
+  errors: number;
+  rate_limit_hits: number;
+  arrivals_per_min: number;
+  completions_per_min: number;
+  input_tokens_per_min: number;
+  output_tokens_per_min: number;
+  avg_duration_ms: number;
+  in_flight: number;
 }
 
-interface LbStatus {
-  load_balancer: string;
-  workers: number;
-  strategy: string;
-  failover: string;
-  accounts: string[];
-  paused: string[];
-  status: string;
-}
-
-interface RateLimitsData {
-  current_worker: string;
-  current_worker_rate_limited: boolean;
-  all_rate_limits: Record<string, { reset_time?: string; retry_after_seconds?: number }>;
-  total_workers_limited: number;
-}
-
-interface LicenseHealth {
-  status: string;
-  worker_id: string;
-  token_preview?: string;
-  test_response?: string;
-  test_duration_seconds: number;
-  message: string;
-}
-
-interface WorkerInfo {
-  id: string;
+interface ForecastWorkerLimit {
   account: string;
-  health: WorkerHealth | null;
-  healthError: string | null;
-  paused: boolean;
-  rateLimited: boolean;
-  retryAfter: number | null;
+  weekly_percent: number;
+  session_percent: number;
+  active: boolean;
 }
+
+interface ForecastData {
+  window_seconds?: number;
+  workers?: Record<string, ForecastWorker>;
+  worker_limits?: Record<string, ForecastWorkerLimit>;
+  saturation?: Record<string, string>;
+  forecast?: {
+    in_flight_total: number;
+    drain_rate_per_s: number;
+    arrival_rate_per_s: number;
+    backlog_trend: string;
+    eta_empty_s: number | null;
+    active_workers: number | null;
+    rate_limit_risk: string;
+  };
+}
+
+interface LimitsData {
+  current_worker?: string;
+  current_worker_rate_limited?: boolean;
+  all_rate_limits?: Record<string, {
+    rate_limited: boolean;
+    retry_after?: number;
+    reset_time?: string;
+  }>;
+}
+
+interface HealthCheck {
+  component: string;
+  status: 'ok' | 'degraded' | 'down';
+  message?: string;
+}
+
+// ─── Component ──────────────────────────────────────────────────────
 
 export default function WorkersTab() {
-  const [workers, setWorkers] = useState<WorkerInfo[]>([]);
-  const [lbStatus, setLbStatus] = useState<LbStatus | null>(null);
-  const [licenseHealth, setLicenseHealth] = useState<LicenseHealth | null>(null);
-  const [licenseLoading, setLicenseLoading] = useState(false);
+  const [forecast, setForecast] = useState<ForecastData | null>(null);
+  const [limits, setLimits] = useState<LimitsData | null>(null);
+  const [healthChecks, setHealthChecks] = useState<HealthCheck[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
@@ -57,54 +69,49 @@ export default function WorkersTab() {
     setLoading(true);
     setError('');
     try {
-      const [lbRes, rlRes] = await Promise.allSettled([
-        bridgeJson<LbStatus>('/lb-status'),
-        bridgeJson<RateLimitsData>('/rate-limits'),
+      const [forecastRes, limitsRes, healthRes, lbRes, privRes, authRes] = await Promise.allSettled([
+        fetch('/api/bridge/metrics/queue-forecast?window=120', { signal: AbortSignal.timeout(10000) }).then(r => r.json()),
+        fetch('/api/bridge/metrics/limits', { signal: AbortSignal.timeout(8000) }).then(r => r.json()),
+        bridgeJson<{ status: string; service?: string }>('/health', { timeout: 5000 }),
+        bridgeJson<{ status: string; workers?: { up?: number; total?: number } }>('/lb-status', { timeout: 5000 }),
+        bridgeJson<{ privacy: { available: boolean } }>('/v1/privacy/status', { timeout: 5000 }),
+        bridgeJson<{ server_info: { version: string } }>('/v1/auth/status', { timeout: 5000 }),
       ]);
 
-      if (lbRes.status !== 'fulfilled') throw new Error('Load Balancer nicht erreichbar');
-      const lb = validateApiResponse<LbStatus>(lbRes.value, '/lb-status', {
-        load_balancer: 'string',
-        workers: 'number',
-        strategy: 'string',
-        failover: 'string',
-        accounts: 'array',
-        paused: 'array',
-        status: 'string',
+      if (forecastRes.status === 'fulfilled' && !forecastRes.value._error) {
+        setForecast(forecastRes.value);
+      }
+
+      if (limitsRes.status === 'fulfilled') {
+        setLimits(limitsRes.value);
+      }
+
+      // Build component health checks
+      const checks: HealthCheck[] = [];
+      checks.push({
+        component: 'Bridge Server',
+        status: healthRes.status === 'fulfilled' && healthRes.value.status === 'healthy' ? 'ok' : 'down',
+        message: healthRes.status === 'fulfilled' ? healthRes.value.service : 'Unreachable',
       });
-      setLbStatus(lb);
-
-      const rl = rlRes.status === 'fulfilled' ? rlRes.value : null;
-
-      // Fetch individual worker health (via direct proxy)
-      const workerCount = lb.workers;
-      const healthResults = await Promise.allSettled(
-        Array.from({ length: workerCount }, (_, i) =>
-          fetch(`${BRIDGE_URL}/worker${i + 1}/health`, { signal: AbortSignal.timeout(5000) })
-            .then(r => r.json())
-            .then(d => ({ data: d as WorkerHealth, error: null }))
-            .catch(e => ({ data: null, error: e.message }))
-        )
-      );
-
-      const workerInfos: WorkerInfo[] = lb.accounts.map((acc, i) => {
-        const hr = healthResults[i];
-        const healthResult = hr?.status === 'fulfilled' ? hr.value : { data: null, error: 'Fetch failed' };
-        const rlInfo = rl?.all_rate_limits?.[acc];
-        const isLimited = rlInfo?.retry_after_seconds != null && rlInfo.retry_after_seconds > 0;
-
-        return {
-          id: `worker${i + 1}`,
-          account: acc,
-          health: healthResult.data,
-          healthError: healthResult.error,
-          paused: lb.paused.includes(acc),
-          rateLimited: isLimited,
-          retryAfter: rlInfo?.retry_after_seconds ?? null,
-        };
+      checks.push({
+        component: 'Load Balancer',
+        status: lbRes.status === 'fulfilled' ? 'ok' : 'degraded',
+        message: lbRes.status === 'fulfilled'
+          ? `${lbRes.value.workers?.up ?? '?'}/${lbRes.value.workers?.total ?? '?'} workers`
+          : 'Status check failed',
       });
+      checks.push({
+        component: 'Privacy Service',
+        status: privRes.status === 'fulfilled' && privRes.value.privacy?.available ? 'ok' : 'degraded',
+        message: privRes.status === 'fulfilled' ? (privRes.value.privacy?.available ? 'Available' : 'Unavailable') : 'Not reachable',
+      });
+      checks.push({
+        component: 'Auth Service',
+        status: authRes.status === 'fulfilled' ? 'ok' : 'degraded',
+        message: authRes.status === 'fulfilled' ? `v${authRes.value.server_info?.version || '?'}` : 'Not reachable',
+      });
+      setHealthChecks(checks);
 
-      setWorkers(workerInfos);
       setLastRefresh(new Date());
     } catch (err: any) {
       setError(err.message);
@@ -115,171 +122,158 @@ export default function WorkersTab() {
 
   useEffect(() => {
     fetchAll();
-    const interval = setInterval(fetchAll, 30000);
+    const interval = setInterval(fetchAll, 15000);
     return () => clearInterval(interval);
   }, [fetchAll]);
 
-  const handleLicenseCheck = useCallback(async () => {
-    setLicenseLoading(true);
-    setLicenseHealth(null);
-    try {
-      const raw = await bridgeJson<LicenseHealth>('/license-health', { timeout: 30000 });
-      const validated = validateApiResponse<LicenseHealth>(raw, '/license-health', {
-        status: 'string',
-        worker_id: 'string',
-        test_duration_seconds: 'number',
-        message: 'string',
-      });
-      setLicenseHealth(validated);
-    } catch (err: any) {
-      setLicenseHealth({ status: 'error', worker_id: '?', token_preview: '', test_response: '', test_duration_seconds: 0, message: err.message });
-    } finally {
-      setLicenseLoading(false);
-    }
-  }, []);
-
-  function getWorkerStatus(w: WorkerInfo): 'active' | 'paused' | 'limited' | 'dead' | 'unknown' {
-    if (w.paused) return 'paused';
-    if (w.rateLimited) return 'limited';
-    if (w.health === null) return 'dead';
-    if (w.health.status === 'healthy') return 'active';
-    return 'unknown';
-  }
+  const f = forecast?.forecast;
+  const workers = forecast?.workers ?? {};
+  const workerLimits = forecast?.worker_limits ?? {};
+  const sat = forecast?.saturation ?? {};
 
   return (
-    <div style={{ padding: 12 }}>
-      <Toolbar lastRefresh={lastRefresh} loading={loading} onRefresh={fetchAll} autoRefresh={30} />
-      {error && <ErrorBanner message={error} />}
+    <div data-ai-id="workers-tab" style={{ padding: 12 }}>
+      <Toolbar lastRefresh={lastRefresh} loading={loading} onRefresh={fetchAll} autoRefresh={15} />
+      {error && <ErrorBanner message={error} onRetry={fetchAll} />}
+      {loading && !forecast && <LoadingSpinner text="Lade Worker-Status..." />}
 
-      {/* Load Balancer Summary */}
-      {lbStatus && (
-        <div style={{
-          display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap',
-        }}>
-          {[
-            { label: 'Workers', value: String(lbStatus.workers), color: 'var(--tn-blue)' },
-            { label: 'Strategie', value: lbStatus.strategy, color: 'var(--tn-text)' },
-            { label: 'Failover', value: lbStatus.failover === 'enabled' ? 'AN' : 'AUS', color: lbStatus.failover === 'enabled' ? 'var(--tn-green)' : 'var(--tn-red)' },
-            { label: 'LB Status', value: lbStatus.status === 'healthy' ? 'OK' : 'FEHLER', color: lbStatus.status === 'healthy' ? 'var(--tn-green)' : 'var(--tn-red)' },
-          ].map((card, i) => (
-            <div key={i} style={{
-              background: 'var(--tn-bg-dark)', border: '1px solid var(--tn-border)', borderRadius: 6,
-              padding: '8px 12px', flex: '1 1 0', minWidth: 80,
-            }}>
-              <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginBottom: 3 }}>{card.label}</div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: card.color, fontFamily: 'monospace' }}>{card.value}</div>
-            </div>
-          ))}
-        </div>
+      {/* ── Fleet Header / Queue Forecast ─────────────────── */}
+      {f && (
+        <SectionFlat title={`Queue Forecast (${forecast?.window_seconds ?? 120}s window)`}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+            <StatCard label="In-Flight" value={String(f.in_flight_total)}
+              color={f.in_flight_total > 5 ? 'var(--tn-orange)' : 'var(--tn-text)'} aiId="workers-inflight" />
+            <StatCard label="Drain Rate" value={`${f.drain_rate_per_s.toFixed(2)}/s`} color="var(--tn-blue)" aiId="workers-drain" />
+            <StatCard label="Arrival Rate" value={`${f.arrival_rate_per_s.toFixed(2)}/s`} color="var(--tn-blue)" aiId="workers-arrival" />
+            <StatCard label="Trend" value={f.backlog_trend}
+              color={f.backlog_trend === 'growing' ? 'var(--tn-red)' : f.backlog_trend === 'draining' ? 'var(--tn-green)' : 'var(--tn-text-muted)'}
+              aiId="workers-trend" />
+            <StatCard label="Rate-Limit Risk"
+              value={`${f.rate_limit_risk}${f.active_workers != null ? ` (${f.active_workers})` : ''}`}
+              color={f.rate_limit_risk === 'high' ? 'var(--tn-red)' : f.rate_limit_risk === 'medium' ? 'var(--tn-orange)' : 'var(--tn-green)'}
+              aiId="workers-risk" />
+            {f.eta_empty_s != null && (
+              <StatCard label="ETA Empty" value={f.eta_empty_s === 0 ? 'now' : `${f.eta_empty_s.toFixed(0)}s`} aiId="workers-eta" />
+            )}
+          </div>
+        </SectionFlat>
       )}
 
-      {/* Worker Cards */}
-      {workers.length > 0 && (
-        <SectionFlat title="Worker-Instanzen">
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {workers.map((w) => {
-              const status = getWorkerStatus(w);
-              return (
-                <div key={w.id} style={{
-                  background: 'var(--tn-bg-dark)', border: '1px solid var(--tn-border)', borderRadius: 6,
-                  padding: '10px 12px',
-                }}>
-                  {/* Worker Header */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{
-                        fontSize: 13, fontWeight: 700, color: 'var(--tn-text)',
-                        fontFamily: 'monospace',
-                      }}>
-                        {w.id}
-                      </span>
-                      <span style={{ fontSize: 10, color: 'var(--tn-text-muted)' }}>
-                        {w.account}
-                      </span>
-                    </div>
-                    <StatusBadge status={status} />
-                  </div>
+      {/* ── Worker Grid ───────────────────────────────────── */}
+      {/* Use worker_limits as source of truth — covers all 4 workers always.
+          queue-forecast.workers only contains `worker_self` (the worker that
+          answered the round-robin request), so we fall back to zero/idle for
+          the others. */}
+      {Object.keys(workerLimits).length > 0 && (() => {
+        const allNames = Array.from(new Set([...Object.keys(workerLimits), ...Object.keys(workers)])).sort();
+        return (
+        <SectionFlat title={`Workers (${allNames.length})`}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{
+              display: 'grid', gridTemplateColumns: '80px 1fr 1fr 80px 90px 70px',
+              gap: 8, padding: '4px 10px', fontSize: 9, fontWeight: 700,
+              color: 'var(--tn-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em',
+            }}>
+              <div>Worker</div><div>Account</div><div>Rates</div><div>Avg Dur.</div><div>Errors</div><div style={{ textAlign: 'right' }}>Status</div>
+            </div>
 
-                  {/* Worker Details Grid */}
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: 6 }}>
-                    <div>
-                      <div style={{ fontSize: 9, color: 'var(--tn-text-muted)' }}>Health</div>
-                      <div style={{ fontSize: 11, color: w.health ? 'var(--tn-green)' : 'var(--tn-red)', fontFamily: 'monospace' }}>
-                        {w.health ? w.health.status : (w.healthError || 'unreachable')}
-                      </div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 9, color: 'var(--tn-text-muted)' }}>Rate-Limited</div>
-                      <div style={{ fontSize: 11, color: w.rateLimited ? 'var(--tn-orange)' : 'var(--tn-green)', fontFamily: 'monospace' }}>
-                        {w.rateLimited ? `Ja (${w.retryAfter ?? 0}s)` : 'Nein'}
-                      </div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 9, color: 'var(--tn-text-muted)' }}>Paused</div>
-                      <div style={{ fontSize: 11, color: w.paused ? 'var(--tn-orange)' : 'var(--tn-text)', fontFamily: 'monospace' }}>
-                        {w.paused ? 'Ja' : 'Nein'}
-                      </div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 9, color: 'var(--tn-text-muted)' }}>Service</div>
-                      <div style={{ fontSize: 11, color: 'var(--tn-text)', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {w.health?.service ?? '–'}
-                      </div>
-                    </div>
-                  </div>
+            {allNames.map((name) => {
+              const wd = workers[name];
+              const limit = workerLimits[name];
+              const wSat = sat[name];
+              const rateLimited = limits?.all_rate_limits?.[name]?.rate_limited;
+              const retryAfter = limits?.all_rate_limits?.[name]?.retry_after;
+              const downByLimit = limit && !limit.active;
+              const hasLiveData = !!wd;
+              const satColor =
+                rateLimited ? 'var(--tn-red)' :
+                wSat === 'rate_limited' ? 'var(--tn-red)' :
+                wSat === 'saturated' || wSat === 'busy' ? 'var(--tn-orange)' :
+                wSat === 'ok' ? 'var(--tn-green)' : 'var(--tn-text-muted)';
+              const statusText =
+                downByLimit ? 'DOWN' :
+                rateLimited ? 'LIMITED' :
+                wSat ? wSat.toUpperCase() :
+                hasLiveData ? 'OK' : 'IDLE';
+
+              return (
+                <div key={name} style={{
+                  display: 'grid', gridTemplateColumns: '80px 1fr 1fr 80px 90px 70px',
+                  gap: 8, padding: '6px 10px', fontSize: 10, fontFamily: 'monospace', alignItems: 'center',
+                  background: downByLimit ? 'rgba(247,118,142,0.05)' : 'var(--tn-bg-dark)',
+                  border: `1px solid ${downByLimit ? 'rgba(247,118,142,0.3)' : 'var(--tn-border)'}`,
+                  borderLeft: `3px solid ${downByLimit ? 'var(--tn-red)' : satColor}`,
+                  borderRadius: 4,
+                  opacity: hasLiveData ? 1 : 0.75,
+                }}>
+                  <span style={{ fontWeight: 600, color: 'var(--tn-text)' }}>{name}</span>
+                  <span style={{ color: 'var(--tn-text-muted)', fontSize: 9 }}>
+                    {limit ? `${limit.account} W:${limit.weekly_percent}% S:${limit.session_percent}%` : '-'}
+                  </span>
+                  <span style={{ color: 'var(--tn-text-muted)', fontSize: 9 }}>
+                    {wd
+                      ? `in:${wd.in_flight} arr:${wd.arrivals_per_min.toFixed(1)}/m done:${wd.completions_per_min.toFixed(1)}/m`
+                      : 'no live data (not hit by LB this window)'}
+                  </span>
+                  <span style={{ color: 'var(--tn-text-muted)' }}>
+                    {wd?.avg_duration_ms ? `${(wd.avg_duration_ms / 1000).toFixed(1)}s` : '-'}
+                  </span>
+                  <span style={{ color: wd && wd.errors > 0 ? 'var(--tn-orange)' : 'var(--tn-text-muted)' }}>
+                    {wd ? `err:${wd.errors}${wd.rate_limit_hits > 0 ? ` rl:${wd.rate_limit_hits}` : ''}` : '—'}
+                    {rateLimited && retryAfter ? ` (${retryAfter}s)` : ''}
+                  </span>
+                  <span style={{ color: satColor, fontWeight: 600, textAlign: 'right' }}>
+                    {statusText}
+                  </span>
                 </div>
               );
             })}
           </div>
         </SectionFlat>
-      )}
+        );
+      })()}
 
-      {/* License Health Check */}
-      <SectionFlat title="License/Token-Validierung">
-        <div style={{ background: 'var(--tn-bg-dark)', borderRadius: 6, padding: '10px 12px' }}>
-          <div style={{ fontSize: 11, color: 'var(--tn-text-muted)', marginBottom: 8 }}>
-            Testet die OAuth-Token-Validität mit einem minimalen API-Call.
-          </div>
-          <button
-            onClick={handleLicenseCheck}
-            disabled={licenseLoading}
-            style={{
-              padding: '5px 14px', borderRadius: 4, fontSize: 11, fontWeight: 600,
-              cursor: licenseLoading ? 'not-allowed' : 'pointer',
-              background: licenseLoading ? 'var(--tn-border)' : 'var(--tn-blue)',
-              border: 'none', color: '#fff', opacity: licenseLoading ? 0.6 : 1,
-            }}
-          >
-            {licenseLoading ? 'Teste Token...' : 'License-Check starten'}
-          </button>
+      {/* ── Rate Limits Summary ───────────────────────────── */}
+      {limits?.all_rate_limits && (() => {
+        const limited = Object.entries(limits.all_rate_limits).filter(([, v]) => v.rate_limited);
+        if (limited.length === 0) return null;
+        return (
+          <SectionFlat title={`Rate-Limited Workers (${limited.length})`}>
+            <div style={{ background: 'var(--tn-bg-dark)', borderRadius: 5, overflow: 'hidden' }}>
+              {limited.map(([worker, info]) => (
+                <div key={worker} style={{
+                  display: 'flex', justifyContent: 'space-between', padding: '6px 10px',
+                  borderBottom: '1px solid var(--tn-border)', fontSize: 11,
+                }}>
+                  <span style={{ color: 'var(--tn-text)', fontFamily: 'monospace' }}>{worker}</span>
+                  <span style={{ color: 'var(--tn-orange)' }}>Retry: {info.retry_after ? `${info.retry_after}s` : '?'}</span>
+                </div>
+              ))}
+            </div>
+          </SectionFlat>
+        );
+      })()}
 
-          {licenseHealth && (
-            <div style={{
-              marginTop: 10, padding: '8px 10px', borderRadius: 5,
-              background: licenseHealth.status === 'healthy' ? 'rgba(158,206,106,0.07)' : 'rgba(247,118,142,0.07)',
-              border: `1px solid ${licenseHealth.status === 'healthy' ? 'rgba(158,206,106,0.3)' : 'rgba(247,118,142,0.3)'}`,
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                <StatusBadge status={licenseHealth.status === 'healthy' ? 'ok' : 'error'} />
-                <span style={{ fontSize: 10, color: 'var(--tn-text-muted)', fontFamily: 'monospace' }}>
-                  {licenseHealth.test_duration_seconds.toFixed(2)}s
-                </span>
-              </div>
-              <div style={{ fontSize: 10, color: 'var(--tn-text-muted)' }}>
-                <div>Worker: <span style={{ fontFamily: 'monospace', color: 'var(--tn-text)' }}>{licenseHealth.worker_id}</span></div>
-                {licenseHealth.token_preview && (
-                  <div>Token: <span style={{ fontFamily: 'monospace', color: 'var(--tn-text)' }}>{licenseHealth.token_preview}</span></div>
-                )}
-                <div style={{ marginTop: 2, color: licenseHealth.status === 'healthy' ? 'var(--tn-green)' : 'var(--tn-red)' }}>
-                  {licenseHealth.message}
+      {/* ── Component Health ──────────────────────────────── */}
+      {healthChecks.length > 0 && (
+        <SectionFlat title="Component Health">
+          <div style={{ background: 'var(--tn-bg-dark)', borderRadius: 5, overflow: 'hidden' }}>
+            {healthChecks.map((check, idx) => (
+              <div key={check.component} style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                padding: '6px 10px', fontSize: 11,
+                borderBottom: idx < healthChecks.length - 1 ? '1px solid var(--tn-border)' : 'none',
+              }}>
+                <span style={{ color: 'var(--tn-text)', fontWeight: 500 }}>{check.component}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {check.message && <span style={{ fontSize: 10, color: 'var(--tn-text-muted)' }}>{check.message}</span>}
+                  <StatusBadge status={check.status === 'ok' ? 'ok' : check.status === 'degraded' ? 'warn' : 'error'} label={check.status.toUpperCase()} />
                 </div>
               </div>
-            </div>
-          )}
-        </div>
-      </SectionFlat>
-
-      {loading && workers.length === 0 && <LoadingSpinner text="Lade Worker-Daten..." />}
+            ))}
+          </div>
+        </SectionFlat>
+      )}
     </div>
   );
 }

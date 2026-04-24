@@ -1048,6 +1048,17 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
 
       <button
         onClick={async () => {
+          // Factory reset: wipe server-saved layout + template for the active project so
+          // the next load falls back to defaultLayout() — true standard, not the user's
+          // customized layout.
+          if (activeId) {
+            try {
+              await Promise.all([
+                fetch(`/api/layouts/${activeId}`, { method: 'DELETE' }),
+                fetch(`/api/layouts/${activeId}/template`, { method: 'DELETE' }),
+              ]);
+            } catch (err) { console.warn('[Cache] server-side layout delete failed:', err); }
+          }
           if ('serviceWorker' in navigator) {
             const regs = await navigator.serviceWorker.getRegistrations();
             await Promise.all(regs.map(r => r.unregister()));
@@ -1057,6 +1068,13 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
             await Promise.all(keys.map(k => caches.delete(k)));
           }
           window.dispatchEvent(new CustomEvent('nuclear-refresh'));
+          // Drop layout + template caches too — otherwise the stale client cache
+          // would rehydrate immediately and overwrite the server delete on next save.
+          Object.keys(localStorage).forEach(k => {
+            if (k.startsWith('cui-layout-') || k.startsWith('cui-template-')) {
+              localStorage.removeItem(k);
+            }
+          });
           const keep = ['flexlayout', 'cui-workspace-'];
           Object.keys(localStorage).forEach(k => {
             if (!keep.some(prefix => k.startsWith(prefix))) localStorage.removeItem(k);
@@ -1065,7 +1083,7 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
             window.location.href = window.location.pathname + '?_cb=' + Date.now();
           }, 200);
         }}
-        title="Nuclear Refresh: Service Workers + Cache + alle Panels neu laden"
+        title="Cache leeren + Server-Layout löschen → echter Standard beim Reload"
         style={{
           background: 'none',
           border: '1px solid var(--tn-border)',
@@ -1115,16 +1133,13 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
 
       <button
         onClick={() => {
-          // Clear flexlayout cache for active project so auto-layout starts fresh
-          Object.keys(localStorage).forEach(k => {
-            if (k.startsWith('cui-layout-')) localStorage.removeItem(k);
-          });
-          // Dispatch manual auto-layout trigger to LayoutManager
+          // Sync-only: mount all open chats into the current layout. No reset.
+          // (Factory reset lives in the Cache button — it wipes client + server layout.)
           window.dispatchEvent(new CustomEvent('cui-auto-layout', { detail: { projectId: activeId } }));
         }}
         title={missingSessions > 0
-          ? `Layout anordnen — ${missingSessions} Session${missingSessions > 1 ? 's' : ''} nicht sichtbar`
-          : 'Layout automatisch anordnen (löscht Layout-Cache + ordnet Panels neu an)'}
+          ? `${missingSessions} offene Session${missingSessions > 1 ? 's' : ''} ins Layout einblenden`
+          : 'Offene Chats ins Layout einblenden'}
         style={{
           background: missingSessions > 0 ? 'rgba(224,175,104,0.15)' : 'none',
           border: `1px solid ${missingSessions > 0 ? '#e0af68' : 'var(--tn-border)'}`,

@@ -110,6 +110,11 @@ if [ "$INFISICAL_LOADED" = "true" ]; then
   # Error Webhook Secret (shared with Sentry webhook + partner-forward — same value in dev/prod)
   _inject_infisical_secret ERROR_WEBHOOK_SECRET "${INFISICAL_WS_DEV_SERVER:-}" "$_cui_infisical_env" ERROR_WEBHOOK_SECRET
 
+  # IONOS Mail (IMAP + SMTP for MailPanel — office@werking.tools)
+  _inject_infisical_secret IONOS_EMAIL     "${INFISICAL_WS_DEV_SERVER:-}" dev IONOS_EMAIL
+  _inject_infisical_secret IONOS_PASSWORD  "${INFISICAL_WS_DEV_SERVER:-}" dev IONOS_PASSWORD
+  _inject_infisical_secret IONOS_FROM_NAME "${INFISICAL_WS_DEV_SERVER:-}" dev IONOS_FROM_NAME
+
   unset _cui_infisical_env
 
   # Syncthing API Key (config.xml first, Infisical fallback)

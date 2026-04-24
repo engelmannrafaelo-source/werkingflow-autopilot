@@ -2,7 +2,7 @@
  * Business Angel Panel v2 — Full file-tree context selection, chat, diff cards.
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { diffLines } from 'diff';
@@ -77,6 +77,9 @@ interface DiffCard {
   reason?: string;
   oldExpanded?: boolean;
   newExpanded?: boolean;
+  // Index of the assistant message that produced this diff. Rendered inline
+  // under that message in the chat flow. -1 = orphan (manual paste before any msg).
+  msgIdx: number;
 }
 
 // --- Helpers ---
@@ -109,7 +112,11 @@ function parseDiffsClient(text: string): Array<{ file: string; old: string; newT
 
     // Extract old_string and new_string from YAML-like body
     const oldMatch = body.match(/^old_string:\s*\|?\s*\n([\s\S]*?)(?=^new_string:)/m);
-    const newMatch = body.match(/^new_string:\s*\|?\s*\n([\s\S]*?)$/m);
+    // NOTE: greedy [\s\S]* (not non-greedy) — the outer <<<DIFF ... >>>
+    // regex already bounds `body`. With /m, `$` matches end of any line, so
+    // non-greedy *? would stop at the first line end and capture only line 1.
+    // See rescue 2026-04-24 — this bug silently truncated apply-diff writes.
+    const newMatch = body.match(/^new_string:\s*\|?\s*\n([\s\S]*)$/m);
 
     if (oldMatch && newMatch) {
       // Remove leading 2-space indent from YAML block scalar
@@ -128,7 +135,7 @@ function parseDiffsClient(text: string): Array<{ file: string; old: string; newT
     const filePath = match[1].trim();
     const body = match[2];
 
-    const contentMatch = body.match(/^content:\s*\|?\s*\n([\s\S]*?)$/m);
+    const contentMatch = body.match(/^content:\s*\|?\s*\n([\s\S]*)$/m);
     if (contentMatch) {
       const dedent = (s: string) => s.replace(/^  /gm, '').replace(/\n+$/, '');
       results.push({
@@ -471,6 +478,9 @@ export default function BusinessAngelPanel() {
   // Selected extra files
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   const [selectedTokens, setSelectedTokens] = useState(0);
+  // Files already sent to the AI (via /load at session start OR prepended to a previous chat message).
+  // Difference to selectedFiles = pending files that will be injected on next send.
+  const [committedFiles, setCommittedFiles] = useState<Set<string>>(new Set());
 
   // File preview
   const [previewPath, setPreviewPath] = useState<string | null>(null);
@@ -500,16 +510,7 @@ export default function BusinessAngelPanel() {
   // Diffs
   const [diffCards, setDiffCards] = useState<DiffCard[]>([]);
   const [validating, setValidating] = useState(false);
-  const [applyingAll, setApplyingAll] = useState(false);
   const [applyError, setApplyError] = useState('');
-  const [pasteOpen, setPasteOpen] = useState(false);
-  const [rawPasteText, setRawPasteText] = useState('');
-  const diffRef = useRef<HTMLDivElement>(null);
-
-  // View mode + diff editing
-  const [activeView, setActiveView] = useState<'chat' | 'diffs'>('chat');
-  // Per-file edit toggle
-  const [fileEditMode, setFileEditMode] = useState<Record<string, boolean>>({});
 
   // File content cache for full-file diff view
   const [fileContents, setFileContents] = useState<Record<string, string>>({});
@@ -639,6 +640,7 @@ export default function BusinessAngelPanel() {
         files_loaded: 'number',
       });
       setSession(data);
+      setCommittedFiles(new Set(selectedFiles));
       setContextCollapsed(true);
       setActiveSessionInfo(null);
       // Load snapshot for diff baseline
@@ -649,26 +651,29 @@ export default function BusinessAngelPanel() {
         : '';
       if (restore && data.conversation && data.conversation.length > 0) {
         // Restore actual conversation history + show reload notice at bottom
-        setChatMessages([
+        const restoredMessages = [
           ...data.conversation,
           {
-            role: 'assistant',
+            role: 'assistant' as const,
             content: `_(Dokumente neu geladen · ${data.files_loaded} Dateien · ~${Math.round(data.token_count / 1000)}k Tokens${excludedNote})_`,
           },
-        ]);
-        // Re-inject diffs from the last assistant message that contains diffs
-        const assistantMsgs = data.conversation
-          .filter(m => m.role === 'assistant');
-        for (let i = assistantMsgs.length - 1; i >= 0; i--) {
-          const parsed = parseDiffsClient(assistantMsgs[i].content);
+        ];
+        setChatMessages(restoredMessages);
+        // Re-inject diffs from the last assistant message that contains diffs,
+        // tagged with that message's original index in the restored list.
+        for (let i = data.conversation.length - 1; i >= 0; i--) {
+          const msg = data.conversation[i];
+          if (msg.role !== 'assistant') continue;
+          const parsed = parseDiffsClient(msg.content);
           if (parsed.length > 0) {
             setDiffCards(parsed.map(d => ({
               id: Math.random().toString(36).slice(2),
               file: d.file, old: d.old, newText: d.newText, rawHunk: d.rawHunk,
               status: 'unchecked' as const,
               oldExpanded: false, newExpanded: false,
+              msgIdx: i,
             })));
-            break; // only inject from the most recent message that has diffs
+            break;
           }
         }
       } else {
@@ -691,6 +696,7 @@ export default function BusinessAngelPanel() {
     setActiveSessionInfo(null);
     setSnapshotFiles({});
     setSnapshotLoaded(false);
+    setCommittedFiles(new Set());
   };
 
   // --- Session Management ---
@@ -721,6 +727,7 @@ export default function BusinessAngelPanel() {
       setDiffCards([]);
       setActiveSessionInfo(null);
       setContextCollapsed(false);
+      setCommittedFiles(new Set());
       // Start fresh session with currently selected files
       await startSession(false);
     } catch (e: unknown) {
@@ -750,25 +757,82 @@ export default function BusinessAngelPanel() {
 
   // --- Chat ---
 
+  // Strip prefixes we added for the AI (diff_status, new_context) when displaying
+  // user messages — Rafael doesn't want to see those in the chat feed.
+  const stripInvisibleTags = (text: string): string => {
+    return text
+      .replace(/<diff_status>[\s\S]*?<\/diff_status>\s*/g, '')
+      .replace(/<new_context[^>]*>[\s\S]*?<\/new_context>\s*/g, '')
+      .replace(/^\s+/, '');
+  };
+
+  // Build a prefix for the next outgoing message that tells the AI:
+  //   1) which of the previously-proposed diffs Rafael applied/skipped/left pending
+  //   2) which newly-selected context files to ingest (mid-session file injection)
+  // Both blocks are invisible in the UI (stripped from display) but persisted in history.
+  const buildMessagePrefix = async (): Promise<string> => {
+    const parts: string[] = [];
+
+    if (diffCards.length > 0) {
+      const seen = <T extends { file: string }>(arr: T[]) => [...new Set(arr.map(c => c.file))];
+      const applied = seen(diffCards.filter(c => (c.status ?? 'unchecked') === 'applied'));
+      const skipped = seen(diffCards.filter(c => (c.status ?? 'unchecked') === 'skipped'));
+      const pending = seen(diffCards.filter(c => {
+        const s = c.status ?? 'unchecked';
+        return s !== 'applied' && s !== 'skipped';
+      }));
+      const lines: string[] = [];
+      if (applied.length) lines.push(`Angewendet: ${applied.join(', ')}`);
+      if (skipped.length) lines.push(`Abgelehnt (nicht übernommen): ${skipped.join(', ')}`);
+      if (pending.length) lines.push(`Noch offen: ${pending.join(', ')}`);
+      if (lines.length) parts.push(`<diff_status>\n${lines.join('\n')}\n</diff_status>`);
+    }
+
+    const pendingFiles = [...selectedFiles].filter(f => !committedFiles.has(f));
+    if (pendingFiles.length > 0) {
+      const sections: string[] = [];
+      for (const path of pendingFiles) {
+        try {
+          const r = await fetch(`/api/business-angel/file-preview?path=${encodeURIComponent(path)}`);
+          if (!r.ok) continue;
+          const data = await r.json();
+          const content = data.preview ?? data.content ?? '';
+          if (content) sections.push(`### ${path}\n\n${content}`);
+        } catch { /* skip */ }
+      }
+      if (sections.length) {
+        parts.push(`<new_context description="Zusätzliche Dokumente, die Rafael mitten in der Session hinzugefügt hat — ab jetzt verfügbar">\n${sections.join('\n\n---\n\n')}\n</new_context>`);
+      }
+    }
+
+    return parts.length > 0 ? parts.join('\n\n') + '\n\n' : '';
+  };
+
   const sendMessage = async () => {
     if (!chatInput.trim() || !session || chatSending) return;
     const userMsg = chatInput.trim();
     setChatInput('');
     setChatSending(true);
     setChatError('');
+    // Assistant msg will be appended after the user msg — predict its index now
+    // so we can tie any diffs to the correct message.
+    const assistantIdx = chatMessages.length + 1;
     setChatMessages(prev => [...prev, { role: 'user', content: userMsg }]);
     try {
+      const prefix = await buildMessagePrefix();
+      const wireMsg = prefix + userMsg;
       const resp = await fetch('/api/business-angel/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: session.session_id, message: userMsg }),
+        body: JSON.stringify({ session_id: session.session_id, message: wireMsg }),
       });
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
       setChatMessages(prev => [...prev, { role: 'assistant', content: data.response }]);
+      setCommittedFiles(new Set(selectedFiles));
       if (/^FILE:/m.test(data.response) || /^--- /m.test(data.response) || /<<<DIFF\s/m.test(data.response) || /<<<NEW\s/m.test(data.response)) {
-        injectDiffs(data.response);
-        setTimeout(() => diffRef.current?.scrollIntoView({ behavior: 'smooth' }), 300);
+        injectDiffs(data.response, assistantIdx);
+        setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 300);
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -813,21 +877,25 @@ Wichtig:
     if (!session || chatSending) return;
     setChatSending(true);
     setChatError('');
+    const assistantIdx = chatMessages.length + 1;
     setChatMessages(prev => [...prev, { role: 'user', content: '📝 Generiere Diffs' }]);
     try {
+      const prefix = await buildMessagePrefix();
+      const wireMsg = prefix + GENERATE_DIFFS_PROMPT;
       const resp = await fetch('/api/business-angel/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: session.session_id, message: GENERATE_DIFFS_PROMPT }),
+        body: JSON.stringify({ session_id: session.session_id, message: wireMsg }),
       });
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
       setChatMessages(prev => [...prev, { role: 'assistant', content: data.response }]);
+      setCommittedFiles(new Set(selectedFiles));
       // Auto-detect and inject diffs from response
       const parsed = parseDiffsClient(data.response);
       if (parsed.length > 0) {
-        injectDiffs(data.response);
-        setTimeout(() => diffRef.current?.scrollIntoView({ behavior: 'smooth' }), 300);
+        injectDiffs(data.response, assistantIdx);
+        setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 300);
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -845,7 +913,7 @@ Wichtig:
 
   // --- Diffs ---
 
-  const injectDiffs = (text: string) => {
+  const injectDiffs = (text: string, msgIdx: number) => {
     const parsed = parseDiffsClient(text);
     if (!parsed.length) return;
     setDiffCards(prev => [
@@ -855,28 +923,10 @@ Wichtig:
         file: d.file, old: d.old, newText: d.newText, rawHunk: d.rawHunk,
         status: 'unchecked' as const,
         oldExpanded: false, newExpanded: false,
+        msgIdx,
       })),
     ]);
-    setActiveView('diffs'); // auto-switch to diffs view when new diffs arrive
   };
-
-  const updateNewText = (id: string, text: string) =>
-    setDiffCards(prev => prev.map(c => (c.id) === id ? { ...c, newText: text } : c));
-
-  // startEdit/cancelEdit removed — were using undefined state (setEditingId/setEditBuffer)
-
-  const parsePasted = () => {
-    if (!rawPasteText.trim()) return;
-    injectDiffs(rawPasteText);
-    setRawPasteText(''); setPasteOpen(false);
-  };
-
-  const toggleExpand = (id: string, side: 'old' | 'new') =>
-    setDiffCards(prev => prev.map(d => (d.id) !== id ? d : {
-      ...d,
-      oldExpanded: side === 'old' ? !(d.oldExpanded ?? false) : (d.oldExpanded ?? false),
-      newExpanded: side === 'new' ? !(d.newExpanded ?? false) : (d.newExpanded ?? false),
-    }));
 
   const skipDiff  = (id: string) => setDiffCards(prev => prev.map(d => (d.id) === id ? { ...d, status: 'skipped' as const } : d));
   const removeDiff = (id: string) => setDiffCards(prev => prev.filter(d => (d.id) !== id));
@@ -922,30 +972,6 @@ Wichtig:
     }
   };
 
-  const applyAll = async () => {
-    const toApply = diffCards.filter(d => (d.status ?? 'unchecked') === 'ok');
-    if (!toApply.length) return;
-    setApplyingAll(true); setApplyError('');
-    try {
-      const resp = await fetch('/api/business-angel/apply-diffs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ diffs: toApply.map(d => ({ file: d.file, old: d.old ?? '', newText: d.newText ?? '' })) }),
-      });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
-      const okSet = new Set<string>(data.applied as string[]);
-      const failMap = new Map<string, string>((data.failed as Array<{ file: string; reason: string }>).map(f => [f.file, f.reason]));
-      setDiffCards(prev => prev.map(d => {
-        if (!toApply.find(v => (v.id) === (d.id))) return d;
-        if (okSet.has(d.file)) return { ...d, status: 'applied' as const };
-        if (failMap.has(d.file)) return { ...d, status: 'error' as const, reason: failMap.get(d.file) };
-        return d;
-      }));
-    } catch (e: unknown) { setApplyError(e instanceof Error ? e.message : String(e)); }
-    finally { setApplyingAll(false); }
-  };
-
   // --- Render ---
 
   const mdStyles = `
@@ -987,6 +1013,229 @@ Wichtig:
   const statusLabel = (s: DiffCard['status']) =>
     ({ unchecked: '⬜', ok: '✓ ok', error: '✗', applied: '✓ applied', skipped: '—' })[s ?? 'unchecked'] ?? s;
 
+  // Helper: render a single file's diff group (header + side-by-side preview).
+  // Used inline in the chat flow, one invocation per (message, file) pair.
+  const renderFileDiffGroup = (file: string, fileCards: DiffCard[], keyPrefix: string) => {
+    const snapshotContent = snapshotFiles[file];
+    const rawFileContent = fileContents[file];
+    const fullFile = snapshotContent ?? (rawFileContent && rawFileContent.length > 0 ? rawFileContent : undefined);
+    const isNewFile = !fullFile && fileCards.every(c => !(c.old ?? '').trim() && c.rawHunk?.startsWith('<<<NEW'));
+    const allDone = fileCards.every(c => (c.status ?? 'unchecked') === 'applied' || (c.status ?? 'unchecked') === 'skipped');
+    const isLoadingContent = !fullFile && !isNewFile;
+
+    // Baseline → final text after applying all hunks for this file
+    const normalize = (s: string) => s.replace(/\r\n/g, '\n').split('\n').map(l => l.trimEnd()).join('\n');
+    const leftFull = isNewFile ? '' : (fullFile ?? '');
+    const rightFull = isNewFile
+      ? fileCards.map(c => c.newText ?? '').join('\n')
+      : (() => {
+          if (!fullFile) return fileCards.map(c => c.newText ?? '').join('\n');
+          let result = normalize(fullFile);
+          for (const card of fileCards) {
+            if ((card.old ?? '').trim()) {
+              const nOld = normalize(card.old ?? '');
+              const nNew = normalize(card.newText ?? '');
+              if (result.includes(nOld)) result = result.replace(nOld, nNew);
+            } else {
+              result = result + (result.endsWith('\n') ? '' : '\n') + normalize(card.newText ?? '');
+            }
+          }
+          return result;
+        })();
+
+    // Per-line highlight sets (1-indexed)
+    const leftRemovedLines = new Set<number>();
+    const rightAddedLines = new Set<number>();
+    {
+      let leftLn = 1, rightLn = 1;
+      const chunks = diffLines(leftFull, rightFull);
+      for (const chunk of chunks) {
+        const raw = chunk.value;
+        const lineCount = raw.length === 0 ? 0 : raw.split('\n').length - (raw.endsWith('\n') ? 1 : 0);
+        if (chunk.removed) {
+          for (let i = 0; i < lineCount; i++) leftRemovedLines.add(leftLn + i);
+          leftLn += lineCount;
+        } else if (chunk.added) {
+          for (let i = 0; i < lineCount; i++) rightAddedLines.add(rightLn + i);
+          rightLn += lineCount;
+        } else {
+          leftLn += lineCount;
+          rightLn += lineCount;
+        }
+      }
+    }
+    const hasChanges = leftRemovedLines.size > 0 || rightAddedLines.size > 0;
+
+    const colHdr = (label: string, clr: string) => (
+      <div style={{ padding: '3px 8px', fontSize: '9px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' as const, color: clr, borderBottom: `1px solid ${clr}22`, display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0, position: 'sticky' as const, top: 0, zIndex: 1, background: 'var(--tn-bg,#1a1b26)' }}>
+        {label}
+      </div>
+    );
+
+    const makeHighlightedComponents = (highlightSet: Set<number>, bg: string, border: string) => {
+      const isHit = (node: any): boolean => {
+        const start = node?.position?.start?.line;
+        const end = node?.position?.end?.line ?? start;
+        if (!start) return false;
+        for (let ln = start; ln <= end; ln++) if (highlightSet.has(ln)) return true;
+        return false;
+      };
+      const hlBlock: React.CSSProperties = { background: bg, borderLeft: `3px solid ${border}`, paddingLeft: '10px', marginLeft: '-13px', borderRadius: '0 2px 2px 0' };
+      const merge = (node: any, base: React.CSSProperties): React.CSSProperties =>
+        isHit(node) ? { ...base, ...hlBlock } : base;
+      return {
+        ...markdownComponents,
+        h1: ({ node, ...props }: any) => <h1 style={merge(node, { fontSize: '20px', fontWeight: 700, color: 'var(--tn-text)', marginTop: '16px', marginBottom: '8px' })} {...props} />,
+        h2: ({ node, ...props }: any) => <h2 style={merge(node, { fontSize: '17px', fontWeight: 600, color: 'var(--tn-text)', marginTop: '12px', marginBottom: '6px' })} {...props} />,
+        h3: ({ node, ...props }: any) => <h3 style={merge(node, { fontSize: '15px', fontWeight: 600, color: 'var(--tn-blue)', marginTop: '10px', marginBottom: '5px' })} {...props} />,
+        h4: ({ node, ...props }: any) => <h4 style={merge(node, { fontSize: '14px', fontWeight: 600, color: 'var(--tn-text)', marginTop: '8px', marginBottom: '4px' })} {...props} />,
+        p: ({ node, ...props }: any) => <p style={merge(node, { marginBottom: '8px', lineHeight: '1.6' })} {...props} />,
+        li: ({ node, ...props }: any) => <li style={merge(node, { marginBottom: '3px' })} {...props} />,
+        blockquote: ({ node, ...props }: any) => <blockquote style={merge(node, { borderLeft: '3px solid var(--tn-blue)', paddingLeft: '12px', marginBottom: '8px', color: 'var(--tn-text-muted)', fontStyle: 'italic' })} {...props} />,
+        hr: ({ node, ...props }: any) => <hr style={merge(node, { border: 'none', borderTop: '1px solid var(--tn-border)', margin: '12px 0' })} {...props} />,
+        pre: ({ node, children, ...props }: any) => <pre style={merge(node, { margin: 0 })} {...props}>{children}</pre>,
+        tr: ({ node, children, ...props }: any) => (
+          <tr style={isHit(node) ? { background: bg, boxShadow: `inset 3px 0 0 ${border}` } : undefined} {...props}>{children}</tr>
+        ),
+      };
+    };
+    const leftComponents = makeHighlightedComponents(leftRemovedLines, 'rgba(247,118,142,0.18)', 'rgba(247,118,142,0.7)');
+    const rightComponents = makeHighlightedComponents(rightAddedLines, 'rgba(158,206,106,0.18)', 'rgba(158,206,106,0.7)');
+
+    const fileAppliedCount = fileCards.filter(c => (c.status ?? 'unchecked') === 'applied').length;
+    const fileOkCount = fileCards.filter(c => (c.status ?? 'unchecked') === 'ok').length;
+    const fileErrorCount = fileCards.filter(c => (c.status ?? 'unchecked') === 'error').length;
+    const filePendingCount = fileCards.filter(c => (c.status ?? 'unchecked') === 'unchecked').length;
+    const headerBorderColor = fileErrorCount > 0 ? 'rgba(247,118,142,0.35)'
+      : fileOkCount > 0 ? 'rgba(158,206,106,0.35)'
+      : allDone ? 'rgba(122,162,247,0.25)'
+      : 'rgba(255,255,255,0.08)';
+
+    return (
+      <div key={`${keyPrefix}-${file}`} style={{
+        marginTop: '10px',
+        border: `1px solid rgba(255,255,255,0.08)`,
+        borderRadius: '8px', overflow: 'hidden',
+        opacity: allDone ? 0.45 : 1,
+        transition: 'opacity 0.2s',
+      }}>
+        {/* File header + controls */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: '8px',
+          padding: '7px 12px',
+          background: 'rgba(255,255,255,0.04)',
+          borderBottom: `1px solid ${headerBorderColor}`,
+        }}>
+          <span style={{
+            fontFamily: 'monospace', fontSize: '11px', flex: 1,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
+            color: 'var(--tn-blue,#7aa2f7)',
+          }} title={file}>
+            {file}
+            {fileCards.length > 1 && (
+              <span style={{ color: 'var(--tn-text-muted)', fontSize: '10px', marginLeft: '6px' }}>
+                ({fileCards.length} Änderungen)
+              </span>
+            )}
+          </span>
+          {fileErrorCount > 0 && (
+            <span style={{ fontSize: '10px', color: 'var(--tn-red,#f7768e)', flexShrink: 0 }}>
+              ⚠ {fileErrorCount} Fehler
+            </span>
+          )}
+          {fileAppliedCount > 0 && fileAppliedCount < fileCards.length && (
+            <span style={{ fontSize: '10px', color: 'var(--tn-blue,#7aa2f7)', flexShrink: 0 }}>
+              {fileAppliedCount}/{fileCards.length} applied
+            </span>
+          )}
+          <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0 }}>
+            <button
+              title={allDone ? 'Alle angewendet' : fileOkCount > 0 ? 'Alle akzeptierten anwenden' : 'Alle prüfen'}
+              style={{
+                ...S.btn,
+                padding: '3px 12px', fontSize: '12px', borderRadius: '6px',
+                background: allDone ? 'rgba(122,162,247,0.2)' : fileOkCount > 0 ? 'rgba(158,206,106,0.2)' : 'rgba(255,255,255,0.06)',
+                color: allDone ? 'var(--tn-blue,#7aa2f7)' : fileOkCount > 0 ? 'var(--tn-green,#9ece6a)' : 'var(--tn-text-muted)',
+                border: `1px solid ${allDone ? 'rgba(122,162,247,0.3)' : fileOkCount > 0 ? 'rgba(158,206,106,0.4)' : 'rgba(255,255,255,0.12)'}`,
+              }}
+              onClick={() => {
+                if (fileOkCount > 0) fileCards.filter(c => (c.status ?? 'unchecked') === 'ok').forEach(c => applyOne(c.id));
+                else if (filePendingCount > 0 || fileErrorCount > 0) validateAll();
+              }}
+            >
+              {allDone ? '✓ Applied' : fileOkCount > 0 ? `✓ Apply${fileCards.length > 1 ? ` (${fileOkCount})` : ''}` : filePendingCount > 0 ? '⬜ Prüfen' : '✗ Fehler'}
+            </button>
+            {!allDone && (
+              <button style={{ ...S.btn, ...S.btnGhost, padding: '3px 7px', fontSize: '11px', opacity: 0.6 }}
+                title="Alle überspringen"
+                onClick={() => fileCards.forEach(c => { if ((c.status ?? 'unchecked') !== 'applied' && (c.status ?? 'unchecked') !== 'skipped') skipDiff(c.id); })}>—</button>
+            )}
+            <button style={{ ...S.btn, ...S.btnGhost, padding: '3px 7px', fontSize: '11px', color: 'rgba(247,118,142,0.6)' }}
+              title="Alle entfernen"
+              onClick={() => fileCards.forEach(c => removeDiff(c.id))}>✕</button>
+          </div>
+        </div>
+        {/* Error details */}
+        {fileCards.some(c => (c.status ?? 'unchecked') === 'error') && (
+          <div style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+            {fileCards.map((card, hunkIdx) => (card.status ?? 'unchecked') === 'error' && card.reason && (
+              <div key={card.id} style={{ padding: '4px 12px', fontSize: '10px', color: 'var(--tn-red,#f7768e)' }}>
+                Hunk {hunkIdx + 1}: ⚠ {card.reason}
+              </div>
+            ))}
+          </div>
+        )}
+        {/* Side-by-side full-file preview with line highlights */}
+        {isLoadingContent ? (
+          <div style={{ padding: '16px', fontSize: '11px', color: 'rgba(255,255,255,0.3)', fontFamily: 'monospace', textAlign: 'center' as const }}>
+            Lade Dateiinhalt…
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', height: '60vh' }}>
+            <div style={{ borderRight: '1px solid rgba(255,255,255,0.07)', overflowY: 'auto' as const, display: 'flex', flexDirection: 'column' as const, background: 'rgba(247,118,142,0.02)', minHeight: 0 }}>
+              {colHdr(snapshotContent ? 'Vorher (Snapshot)' : 'Vorher', 'rgba(247,118,142,0.55)')}
+              <div style={{ padding: '12px 18px', fontSize: '12px', lineHeight: 1.6 }}>
+                {leftFull.trim() ? (
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={leftComponents}>{leftFull}</ReactMarkdown>
+                ) : (
+                  <div style={{ color: 'var(--tn-text-muted)', fontSize: '11px', fontStyle: 'italic' }}>(neue Datei — keine Vorher-Version)</div>
+                )}
+              </div>
+            </div>
+            <div style={{ overflowY: 'auto' as const, display: 'flex', flexDirection: 'column' as const, background: 'rgba(158,206,106,0.02)', minHeight: 0 }}>
+              {colHdr(hasChanges ? 'Nachher' : 'Nachher (identisch)', 'rgba(158,206,106,0.55)')}
+              <div style={{ padding: '12px 18px', fontSize: '12px', lineHeight: 1.6 }}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={rightComponents}>{rightFull}</ReactMarkdown>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // Render all file-grouped diffs attached to a given message.
+  const renderDiffsForMessage = (msgIdx: number) => {
+    const cards = diffCards.filter(c => c.msgIdx === msgIdx);
+    if (!cards.length) return null;
+    const fileGroups = new Map<string, DiffCard[]>();
+    cards.forEach(c => {
+      const g = fileGroups.get(c.file) || [];
+      g.push(c);
+      fileGroups.set(c.file, g);
+    });
+    // Trigger lazy file-content fetch
+    fileGroups.forEach((_, file) => {
+      if (fileContents[file] === undefined) fetchFileContent(file);
+    });
+    return (
+      <div style={{ marginTop: '8px' }}>
+        {Array.from(fileGroups.entries()).map(([file, fcs]) =>
+          renderFileDiffGroup(file, fcs, `m${msgIdx}`))}
+      </div>
+    );
+  };
+
   if (ctxLoading) return (
     <div style={{ ...S.root, padding: '20px', alignItems: 'center', justifyContent: 'center' }}>
       <span style={{ color: 'var(--tn-text-muted)' }}>Lade…</span>
@@ -1007,31 +1256,24 @@ Wichtig:
       <div style={S.header}>
         <h2 style={S.h2}>🤝 Business Angel</h2>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: '4px', alignItems: 'center' }}>
-          {session && (
-            <>
-              {/* Tab: Chat */}
-              <button
-                style={{
-                  ...S.btn, padding: '3px 10px', fontSize: '11px', borderRadius: '6px',
-                  background: activeView === 'chat' ? 'var(--tn-purple, #bb9af7)' : 'transparent',
-                  color: activeView === 'chat' ? '#1a1b26' : 'var(--tn-text-muted)',
-                  border: activeView === 'chat' ? 'none' : '1px solid rgba(255,255,255,0.12)',
-                }}
-                onClick={() => setActiveView('chat')}
-              >💬 Chat</button>
-              {/* Tab: Diffs */}
-              <button
-                style={{
-                  ...S.btn, padding: '3px 10px', fontSize: '11px', borderRadius: '6px',
-                  background: activeView === 'diffs' ? 'var(--tn-cyan, #7dcfff)' : 'transparent',
-                  color: activeView === 'diffs' ? '#1a1b26' : diffCards.length > 0 ? 'var(--tn-cyan, #7dcfff)' : 'var(--tn-text-muted)',
-                  border: activeView === 'diffs' ? 'none' : '1px solid rgba(255,255,255,0.12)',
-                  fontWeight: diffCards.length > 0 ? 700 : 400,
-                }}
-                onClick={() => setActiveView('diffs')}
-              >📝 Diffs{diffCards.length > 0 ? ` (${diffCards.length})` : ''}</button>
-            </>
+          {session && diffCards.length > 0 && (
+            <span style={{ fontSize: '10px', color: 'var(--tn-cyan,#7dcfff)', padding: '2px 8px', borderRadius: '4px', background: 'rgba(125,207,255,0.1)', border: '1px solid rgba(125,207,255,0.2)' }}>
+              📝 {diffCards.length} Diff{diffCards.length !== 1 ? 's' : ''} inline
+            </span>
           )}
+          {session && (() => {
+            const pendingCount = [...selectedFiles].filter(f => !committedFiles.has(f)).length;
+            if (pendingCount === 0) return null;
+            return (
+              <span
+                onClick={() => { setChatOnly(false); setContextCollapsed(false); setTreeOpen(true); }}
+                style={{ fontSize: '10px', color: 'var(--tn-cyan,#7dcfff)', padding: '2px 8px', borderRadius: '4px', background: 'rgba(125,207,255,0.12)', border: '1px dashed rgba(125,207,255,0.45)', cursor: 'pointer', fontWeight: 600 }}
+                title="Neue Kontext-Dateien — werden mit der nächsten Nachricht gesendet. Klicken öffnet den Kontext-Bereich."
+              >
+                📎 {pendingCount} neu
+              </span>
+            );
+          })()}
           {session && (
             <button
               style={{
@@ -1048,7 +1290,7 @@ Wichtig:
               {chatOnly ? '◧ Voll' : '☷ Chat'}
             </button>
           )}
-          <span style={{ fontSize: '13px', fontWeight: 700, color: tokenColor(totalTokens) }}>
+<span style={{ fontSize: '13px', fontWeight: 700, color: tokenColor(totalTokens) }}>
             {formatTokens(totalTokens)} tokens
           </span>
           <button style={{ ...S.btn, ...S.btnGhost, padding: '3px 7px', fontSize: '11px' }} onClick={() => { fetchContext(); fetchFileTree(); }}>↻</button>
@@ -1184,30 +1426,36 @@ Wichtig:
           )}
           {selectedFiles.size > 0 && (
             <div style={{ display: 'flex', gap: '6px', marginTop: '4px', flexWrap: 'wrap' as const }}>
-              {[...selectedFiles].map(p => (
-                <span
-                  key={p}
-                  onClick={() => {
-                    // find tokens for this path in tree
-                    const findTokens = (nodes: TreeNode[]): number => {
-                      for (const n of nodes) {
-                        if (n.type === 'file' && n.path === p) return n.tokens;
-                        if (n.type === 'dir') { const t = findTokens(n.children); if (t > 0) return t; }
-                      }
-                      return 0;
-                    };
-                    toggleFile(p, findTokens(fileTree));
-                  }}
-                  style={{
-                    fontSize: '10px', padding: '2px 7px', borderRadius: '10px',
-                    background: 'rgba(187,154,247,0.12)', color: 'var(--tn-purple,#bb9af7)',
-                    cursor: 'pointer',
-                  }}
-                  title={`Klicken zum Entfernen: ${p}`}
-                >
-                  {p.split('/').pop()} ✕
-                </span>
-              ))}
+              {[...selectedFiles].map(p => {
+                const isPending = session !== null && !committedFiles.has(p);
+                return (
+                  <span
+                    key={p}
+                    onClick={() => {
+                      // find tokens for this path in tree
+                      const findTokens = (nodes: TreeNode[]): number => {
+                        for (const n of nodes) {
+                          if (n.type === 'file' && n.path === p) return n.tokens;
+                          if (n.type === 'dir') { const t = findTokens(n.children); if (t > 0) return t; }
+                        }
+                        return 0;
+                      };
+                      toggleFile(p, findTokens(fileTree));
+                    }}
+                    style={{
+                      fontSize: '10px', padding: '2px 7px', borderRadius: '10px',
+                      background: isPending ? 'rgba(125,207,255,0.16)' : 'rgba(187,154,247,0.12)',
+                      color: isPending ? 'var(--tn-cyan,#7dcfff)' : 'var(--tn-purple,#bb9af7)',
+                      border: isPending ? '1px dashed rgba(125,207,255,0.45)' : '1px solid transparent',
+                      cursor: 'pointer',
+                    }}
+                    title={isPending ? `NEU — wird mit nächster Nachricht gesendet: ${p}` : `Klicken zum Entfernen: ${p}`}
+                  >
+                    {isPending && <span style={{ marginRight: '3px', fontSize: '9px', fontWeight: 700 }}>NEU</span>}
+                    {p.split('/').pop()} ✕
+                  </span>
+                );
+              })}
             </div>
           )}
         </div>
@@ -1365,463 +1613,64 @@ Wichtig:
         </>)}
         </div>}
 
-        {/* ── Diffs Fullscreen View ── */}
-        {session && activeView === 'diffs' && (
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column' as const, minHeight: 0, overflow: 'hidden' }}>
-            {/* Sticky action bar */}
-            <div style={{
-              display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0,
-              padding: '6px 0 8px', borderBottom: '1px solid rgba(255,255,255,0.07)',
-              flexWrap: 'wrap' as const,
-            }}>
-              <span style={{ fontSize: '11px', color: 'var(--tn-text-muted)', flex: 1 }}>
-                {diffCards.filter(d => (d.status ?? 'unchecked') === 'ok').length}/{diffCards.length} bereit
-                {appliedCount > 0 && ` · ${appliedCount} applied`}
-                {pendingCount > 0 && ` · ${pendingCount} ausstehend`}
-              </span>
-              {applyError && <span style={{ color: 'var(--tn-red,#f7768e)', fontSize: '11px' }}>{applyError}</span>}
-              <button style={{ ...S.btn, ...S.btnGhost, padding: '4px 10px', fontSize: '11px' }}
-                onClick={validateAll} disabled={validating}>
-                {validating ? '…' : '✓ Alle validieren'}
-              </button>
-              {okCount > 0 && (
-                <button style={{ ...S.btn, ...S.btnGreen, padding: '4px 10px', fontSize: '11px' }}
-                  onClick={applyAll} disabled={applyingAll}>
-                  {applyingAll ? '…' : `▶ Anwenden (${okCount})`}
-                </button>
-              )}
-              {appliedCount > 0 && (
-                <button style={{ ...S.btn, ...S.btnGhost, padding: '4px 8px', fontSize: '11px', opacity: 0.6 }}
-                  onClick={() => setDiffCards(prev => prev.filter(d => (d.status ?? 'unchecked') !== 'applied' && (d.status ?? 'unchecked') !== 'skipped'))}>
-                  ✕ Erledigte entfernen
-                </button>
-              )}
-            </div>
-
-            {/* Scrollable feed — all diffs open, no inner scrollbars */}
-            <div style={{ flex: 1, overflowY: 'auto' as const, paddingBottom: '24px' }}>
-              <style>{mdStyles}</style>
-
-              {diffCards.length === 0 ? (
-                <div style={{ padding: '48px 0', textAlign: 'center' as const, color: 'var(--tn-text-muted)', fontSize: '13px' }}>
-                  Keine Diffs — im Chat den [Diffs] Button klicken oder «bau die Diffs» sagen
-                </div>
-              ) : (() => {
-                // ── Group diff cards by file for full-file preview ──
-                const fileGroups = new Map<string, DiffCard[]>();
-                diffCards.forEach(card => {
-                  const group = fileGroups.get(card.file) || [];
-                  group.push(card);
-                  fileGroups.set(card.file, group);
-                });
-
-                // Trigger file content fetch for all files that need it
-                fileGroups.forEach((_, file) => {
-                  if (fileContents[file] === undefined) fetchFileContent(file);
-                });
-
-                let groupIdx = 0;
-                return Array.from(fileGroups.entries()).map(([file, fileCards]) => {
-                  const currentGroupIdx = groupIdx++;
-                  const snapshotContent = snapshotFiles[file];
-                  const rawFileContent = fileContents[file];
-                  const fullFile = snapshotContent ?? (rawFileContent && rawFileContent.length > 0 ? rawFileContent : undefined);
-                  // A file is truly new only if it was created via <<<NEW>>> AND has no snapshot/existing content
-                  const isNewFile = !fullFile && fileCards.every(c => !(c.old ?? '').trim() && c.rawHunk?.startsWith('<<<NEW'));
-                  const allDone = fileCards.every(c => (c.status ?? 'unchecked') === 'applied' || (c.status ?? 'unchecked') === 'skipped');
-                  // Still loading if no content and not a new file — fetch is in progress
-                  const isLoadingContent = !fullFile && !isNewFile;
-
-                  // Build the full "after" content by applying all hunks to the baseline
-                  const normalize = (s: string) => s.replace(/\r\n/g, '\n').split('\n').map(l => l.trimEnd()).join('\n');
-                  const leftFull = isNewFile ? '' : (fullFile ?? '');
-                  const rightFull = isNewFile
-                    ? fileCards.map(c => c.newText ?? '').join('\n')
-                    : (() => {
-                        if (!fullFile) {
-                          // No baseline available yet — show combined new text
-                          return fileCards.map(c => c.newText ?? '').join('\n');
-                        }
-                        let result = normalize(fullFile);
-                        for (const card of fileCards) {
-                          if ((card.old ?? '').trim()) {
-                            const nOld = normalize(card.old ?? '');
-                            const nNew = normalize(card.newText ?? '');
-                            if (result.includes(nOld)) {
-                              result = result.replace(nOld, nNew);
-                            }
-                          } else {
-                            // Insert-only hunk (empty old_string) — append content
-                            result = result + (result.endsWith('\n') ? '' : '\n') + normalize(card.newText ?? '');
-                          }
-                        }
-                        return result;
-                      })();
-
-                  // Compute line-level diff
-                  type LineEntry = { text: string; type: 'removed'|'added'|'unchanged' };
-                  const allLeftLines: LineEntry[] = [];
-                  const allRightLines: LineEntry[] = [];
-                  const chunks = diffLines(leftFull, rightFull);
-                  for (const chunk of chunks) {
-                    const lines = chunk.value.replace(/\n$/, '').split('\n');
-                    if (chunk.removed) {
-                      lines.forEach(l => { allLeftLines.push({ text: l, type: 'removed' }); allRightLines.push({ text: '\u00a0', type: 'unchanged' }); });
-                    } else if (chunk.added) {
-                      lines.forEach(l => { allLeftLines.push({ text: '\u00a0', type: 'unchanged' }); allRightLines.push({ text: l, type: 'added' }); });
-                    } else {
-                      lines.forEach(l => { allLeftLines.push({ text: l, type: 'unchanged' }); allRightLines.push({ text: l, type: 'unchanged' }); });
-                    }
-                  }
-
-                  // ── Collapse unchanged regions, keep only hunks with CONTEXT_LINES context ──
-                  const CONTEXT_LINES = 4;
-                  type DiffHunk = { leftLines: LineEntry[]; rightLines: LineEntry[]; type: 'hunk' | 'separator'; hiddenCount?: number; position?: 'start' | 'end' | 'mid' };
-                  const diffHunks: DiffHunk[] = [];
-
-                  // Find all changed line indices
-                  const changedIndices: number[] = [];
-                  for (let i = 0; i < allLeftLines.length; i++) {
-                    if (allLeftLines[i].type !== 'unchanged' || allRightLines[i].type !== 'unchanged') {
-                      changedIndices.push(i);
-                    }
-                  }
-
-                  if (changedIndices.length === 0) {
-                    // No changes — show nothing
-                  } else {
-                    // Group changed lines into ranges with context
-                    type Range = { start: number; end: number };
-                    const ranges: Range[] = [];
-                    let rangeStart = Math.max(0, changedIndices[0] - CONTEXT_LINES);
-                    let rangeEnd = Math.min(allLeftLines.length - 1, changedIndices[0] + CONTEXT_LINES);
-                    for (let ci = 1; ci < changedIndices.length; ci++) {
-                      const idx = changedIndices[ci];
-                      const newStart = Math.max(0, idx - CONTEXT_LINES);
-                      const newEnd = Math.min(allLeftLines.length - 1, idx + CONTEXT_LINES);
-                      if (newStart <= rangeEnd + 1) {
-                        // Merge overlapping/adjacent ranges
-                        rangeEnd = newEnd;
-                      } else {
-                        ranges.push({ start: rangeStart, end: rangeEnd });
-                        rangeStart = newStart;
-                        rangeEnd = newEnd;
-                      }
-                    }
-                    ranges.push({ start: rangeStart, end: rangeEnd });
-
-                    // Build hunks with separators (track position: start/mid/end)
-                    let lastEnd = -1;
-                    for (const range of ranges) {
-                      if (lastEnd >= 0 && range.start > lastEnd + 1) {
-                        const hidden = range.start - lastEnd - 1;
-                        diffHunks.push({ leftLines: [], rightLines: [], type: 'separator', hiddenCount: hidden, position: 'mid' });
-                      } else if (lastEnd < 0 && range.start > 0) {
-                        diffHunks.push({ leftLines: [], rightLines: [], type: 'separator', hiddenCount: range.start, position: 'start' });
-                      }
-                      diffHunks.push({
-                        leftLines: allLeftLines.slice(range.start, range.end + 1),
-                        rightLines: allRightLines.slice(range.start, range.end + 1),
-                        type: 'hunk',
-                      });
-                      lastEnd = range.end;
-                    }
-                    if (lastEnd < allLeftLines.length - 1) {
-                      diffHunks.push({ leftLines: [], rightLines: [], type: 'separator', hiddenCount: allLeftLines.length - 1 - lastEnd, position: 'end' });
-                    }
-                  }
-
-                  const colHdr = (label: string, clr: string) => (
-                    <div style={{ padding: '3px 8px', fontSize: '9px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' as const, color: clr, borderBottom: `1px solid ${clr}22`, display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0, position: 'sticky' as const, top: 0, zIndex: 1, background: 'var(--tn-bg,#1a1b26)' }}>
-                      {label}
-                    </div>
-                  );
-                  const separatorStyle: React.CSSProperties = {
-                    padding: '2px 8px', fontSize: '10px', color: 'rgba(255,255,255,0.25)',
-                    fontFamily: 'monospace', background: 'rgba(255,255,255,0.02)',
-                    borderTop: '1px solid rgba(255,255,255,0.06)',
-                    borderBottom: '1px solid rgba(255,255,255,0.06)',
-                    textAlign: 'center' as const,
-                  };
-
-                  // Group consecutive lines by type, render each group as markdown
-                  const renderHunkLines = (lines: LineEntry[]) => {
-                    if (!lines.length) return null;
-                    // Build groups of consecutive same-type lines
-                    type LineGroup = { type: LineEntry['type']; lines: string[] };
-                    const groups: LineGroup[] = [];
-                    for (const l of lines) {
-                      const last = groups[groups.length - 1];
-                      if (last && last.type === l.type) {
-                        last.lines.push(l.text);
-                      } else {
-                        groups.push({ type: l.type, lines: [l.text] });
-                      }
-                    }
-                    return groups.map((g, gi) => {
-                      const bgColor = g.type === 'removed' ? 'rgba(247,118,142,0.12)'
-                        : g.type === 'added' ? 'rgba(158,206,106,0.12)' : 'transparent';
-                      const borderLeft = g.type === 'removed' ? '3px solid rgba(247,118,142,0.5)'
-                        : g.type === 'added' ? '3px solid rgba(158,206,106,0.5)' : '3px solid transparent';
-                      // Filter out placeholder lines (nbsp spacers from diff alignment)
-                      const text = g.lines.filter(l => l.trim() !== '\u00a0' && l !== '\u00a0').join('\n');
-                      if (!text.trim()) {
-                        // Empty placeholder block — render minimal spacer to keep alignment
-                        return <div key={gi} style={{ minHeight: `${g.lines.length * 1.55}em` }} />;
-                      }
-                      return (
-                        <div key={gi} style={{
-                          background: bgColor, borderLeft, padding: '4px 12px',
-                          fontSize: '12px', lineHeight: 1.6, marginBottom: '2px',
-                        }}>
-                          <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{text}</ReactMarkdown>
-                        </div>
-                      );
-                    });
-                  };
-
-                  return (
-                    <div key={file} style={{
-                      marginTop: currentGroupIdx === 0 ? '12px' : '20px',
-                      border: `1px solid rgba(255,255,255,0.08)`,
-                      borderRadius: '8px', overflow: 'hidden',
-                      opacity: allDone ? 0.45 : 1,
-                      transition: 'opacity 0.2s',
-                    }}>
-                      {/* ── Single file header with aggregated controls ── */}
-                      {(() => {
-                        const appliedCount = fileCards.filter(c => (c.status ?? 'unchecked') === 'applied').length;
-                        const okCount = fileCards.filter(c => (c.status ?? 'unchecked') === 'ok').length;
-                        const errorCount = fileCards.filter(c => (c.status ?? 'unchecked') === 'error').length;
-                        const pendingCount = fileCards.filter(c => (c.status ?? 'unchecked') === 'unchecked').length;
-                        const headerBorderColor = errorCount > 0 ? 'rgba(247,118,142,0.35)'
-                          : okCount > 0 ? 'rgba(158,206,106,0.35)'
-                          : allDone ? 'rgba(122,162,247,0.25)'
-                          : 'rgba(255,255,255,0.08)';
-                        return (
-                          <div style={{
-                            display: 'flex', alignItems: 'center', gap: '8px',
-                            padding: '7px 12px',
-                            background: 'rgba(255,255,255,0.04)',
-                            borderBottom: `1px solid ${headerBorderColor}`,
-                          }}>
-                            <span style={{
-                              fontFamily: 'monospace', fontSize: '11px', flex: 1,
-                              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
-                              color: 'var(--tn-blue,#7aa2f7)',
-                            }} title={file}>
-                              {file}
-                              {fileCards.length > 1 && (
-                                <span style={{ color: 'var(--tn-text-muted)', fontSize: '10px', marginLeft: '6px' }}>
-                                  ({fileCards.length} Änderungen)
-                                </span>
-                              )}
-                            </span>
-
-                            {errorCount > 0 && (
-                              <span style={{ fontSize: '10px', color: 'var(--tn-red,#f7768e)', flexShrink: 0 }}>
-                                ⚠ {errorCount} Fehler
-                              </span>
-                            )}
-                            {appliedCount > 0 && appliedCount < fileCards.length && (
-                              <span style={{ fontSize: '10px', color: 'var(--tn-blue,#7aa2f7)', flexShrink: 0 }}>
-                                {appliedCount}/{fileCards.length} applied
-                              </span>
-                            )}
-
-                            <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0 }}>
-                              {/* Validate / Apply all hunks for this file */}
-                              <button
-                                title={allDone ? 'Alle angewendet' : okCount > 0 ? 'Alle akzeptierten anwenden' : 'Alle prüfen'}
-                                style={{
-                                  ...S.btn,
-                                  padding: '3px 12px', fontSize: '12px', borderRadius: '6px',
-                                  background: allDone ? 'rgba(122,162,247,0.2)' : okCount > 0 ? 'rgba(158,206,106,0.2)' : 'rgba(255,255,255,0.06)',
-                                  color: allDone ? 'var(--tn-blue,#7aa2f7)' : okCount > 0 ? 'var(--tn-green,#9ece6a)' : 'var(--tn-text-muted)',
-                                  border: `1px solid ${allDone ? 'rgba(122,162,247,0.3)' : okCount > 0 ? 'rgba(158,206,106,0.4)' : 'rgba(255,255,255,0.12)'}`,
-                                }}
-                                onClick={() => {
-                                  if (okCount > 0) {
-                                    // Apply all OK hunks for this file
-                                    fileCards.filter(c => (c.status ?? 'unchecked') === 'ok').forEach(c => applyOne(c.id));
-                                  } else if (pendingCount > 0 || errorCount > 0) {
-                                    validateAll();
-                                  }
-                                }}
-                              >
-                                {allDone ? '✓ Applied' : okCount > 0 ? `✓ Apply${fileCards.length > 1 ? ` (${okCount})` : ''}` : pendingCount > 0 ? '⬜ Prüfen' : '✗ Fehler'}
-                              </button>
-                              {!allDone && (
-                                <button style={{ ...S.btn, ...S.btnGhost, padding: '3px 7px', fontSize: '11px', opacity: 0.6 }}
-                                  title="Alle überspringen" onClick={() => fileCards.forEach(c => { if ((c.status ?? 'unchecked') !== 'applied' && (c.status ?? 'unchecked') !== 'skipped') skipDiff(c.id); })}>—</button>
-                              )}
-                              <button style={{ ...S.btn, ...S.btnGhost, padding: '3px 7px', fontSize: '11px', color: 'rgba(247,118,142,0.6)' }}
-                                title="Alle entfernen" onClick={() => fileCards.forEach(c => removeDiff(c.id))}>✕</button>
-                              {!allDone && (
-                                <button style={{ marginLeft: '2px', fontSize: '9px', opacity: 0.45, background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', padding: '0 2px' }}
-                                  onClick={() => setFileEditMode(p => ({ ...p, [file]: !p[file] }))}
-                                  title="Bearbeiten">✎</button>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })()}
-                      {/* ── Error details for failed hunks ── */}
-                      {fileCards.some(c => (c.status ?? 'unchecked') === 'error') && (
-                        <div style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-                          {fileCards.map((card, hunkIdx) => (card.status ?? 'unchecked') === 'error' && card.reason && (
-                            <div key={card.id} style={{ padding: '4px 12px', fontSize: '10px', color: 'var(--tn-red,#f7768e)' }}>
-                              Hunk {hunkIdx + 1}: ⚠ {card.reason}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* ── Collapsed side-by-side diff: synced hunks with context + edit toggle ── */}
-                      {isLoadingContent ? (
-                        <div style={{ padding: '16px', fontSize: '11px', color: 'rgba(255,255,255,0.3)', fontFamily: 'monospace', textAlign: 'center' as const }}>
-                          Lade Dateiinhalt…
-                        </div>
-                      ) : fileEditMode[file] ? (
-                        /* Edit mode: left = diff, right = textarea */
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', maxHeight: '50vh' }}>
-                          <div style={{ borderRight: '1px solid rgba(255,255,255,0.07)', overflowY: 'auto' as const, maxHeight: '50vh', display: 'flex', flexDirection: 'column' as const }}>
-                            {colHdr(snapshotContent ? 'Vorher (Snapshot)' : 'Vorher', 'rgba(247,118,142,0.55)')}
-                            <div style={{ padding: '8px 10px', fontSize: '12px', lineHeight: 1.6 }}>
-                              <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{leftFull}</ReactMarkdown>
-                            </div>
-                          </div>
-                          <div style={{ overflowY: 'auto' as const, maxHeight: '50vh', display: 'flex', flexDirection: 'column' as const }}>
-                            {colHdr('Nachher (bearbeitbar)', 'rgba(158,206,106,0.55)')}
-                            <div style={{ padding: '4px', flex: 1 }}>
-                              <textarea
-                                value={rightFull}
-                                onChange={e => { if (fileCards.length === 1) updateNewText(fileCards[0].id, e.target.value); }}
-                                style={{
-                                  display: 'block', width: '100%', minHeight: '200px', resize: 'vertical' as const,
-                                  background: 'transparent', border: '1px solid rgba(255,255,255,0.1)',
-                                  borderRadius: '4px', outline: 'none', color: '#c0caf5',
-                                  fontFamily: 'monospace', fontSize: '11px', lineHeight: 1.55,
-                                  padding: '8px', boxSizing: 'border-box' as const,
-                                }}
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      ) : diffHunks.length === 0 ? (
-                        <div style={{ padding: '6px 8px' }}>
-                          {rightFull.split('\n').slice(0, 3).map((l, i) => (
-                            <div key={i} style={{ fontFamily: 'monospace', fontSize: '11px', lineHeight: 1.55, padding: '0 8px', color: 'var(--tn-text-muted)', opacity: 0.5 }}>{l || '\u00a0'}</div>
-                          ))}
-                          <div style={{ ...separatorStyle, marginTop: '2px' }}>Keine Unterschiede</div>
-                        </div>
-                      ) : (
-                        /* Synced collapsed diff view */
-                        <div style={{ maxHeight: '50vh', overflowY: 'auto' as const }}>
-                          {/* Column headers */}
-                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', position: 'sticky' as const, top: 0, zIndex: 2 }}>
-                            <div style={{ borderRight: '1px solid rgba(255,255,255,0.07)' }}>
-                              {colHdr(snapshotContent ? 'Vorher (Snapshot)' : 'Vorher', 'rgba(247,118,142,0.55)')}
-                            </div>
-                            {colHdr('Nachher', 'rgba(158,206,106,0.55)')}
-                          </div>
-                          {/* Hunks with separators */}
-                          {diffHunks.map((hunk, hi) => hunk.type === 'separator' ? (
-                            <div key={`sep-${hi}`} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
-                              {(() => {
-                                const label = hunk.position === 'start'
-                                  ? `▼ Dateianfang ··· ${hunk.hiddenCount} Zeilen ···`
-                                  : hunk.position === 'end'
-                                  ? `··· ${hunk.hiddenCount} Zeilen ··· Dateiende ▲`
-                                  : `··· ${hunk.hiddenCount} Zeilen ···`;
-                                return (
-                                  <>
-                                    <div style={{ ...separatorStyle, borderRight: '1px solid rgba(255,255,255,0.07)' }}>{label}</div>
-                                    <div style={separatorStyle}>{label}</div>
-                                  </>
-                                );
-                              })()}
-                            </div>
-                          ) : (
-                            <div key={`hunk-${hi}`} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
-                              <div style={{ borderRight: '1px solid rgba(255,255,255,0.07)', background: 'rgba(247,118,142,0.02)', padding: '6px 4px' }}>
-                                {renderHunkLines(hunk.leftLines)}
-                              </div>
-                              <div style={{ background: 'rgba(158,206,106,0.02)', padding: '6px 4px' }}>
-                                {renderHunkLines(hunk.rightLines)}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                });
-              })()}
-
-              {/* Diffs manuell einfügen */}
-              <div style={{ marginTop: '24px', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '12px' }}>
-                <div style={{ ...S.secLabel, cursor: 'pointer' }} onClick={() => setPasteOpen(v => !v)}>
-                  <span style={{ fontSize: '9px', width: '10px' }}>{pasteOpen ? '▾' : '▸'}</span>
-                  Diffs manuell einfügen
-                </div>
-                {pasteOpen && (
-                  <div style={{ marginTop: '6px' }}>
-                    <textarea
-                      style={{
-                        width: '100%', minHeight: '80px', resize: 'vertical' as const,
-                        background: 'var(--tn-surface,#1e2030)',
-                        border: '1px solid rgba(255,255,255,0.1)',
-                        borderRadius: '4px', color: 'var(--tn-text)',
-                        fontFamily: 'monospace', fontSize: '11px', padding: '6px',
-                        boxSizing: 'border-box' as const,
-                      }}
-                      value={rawPasteText}
-                      onChange={e => setRawPasteText(e.target.value)}
-                    />
-                    <button style={{ ...S.btn, ...S.btnGhost, padding: '3px 8px', fontSize: '11px', marginTop: '4px' }}
-                      onClick={parsePasted} disabled={!rawPasteText.trim()}>Parsen & hinzufügen</button>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* ── Chat ── */}
-        {session && activeView === 'chat' && (
+        {session && (
           <div style={{ ...S.section, flex: 1, display: 'flex', flexDirection: 'column' as const, minHeight: 0 }}>
             {!chatOnly && <div style={S.divider} />}
-            <div style={{ display: 'flex', alignItems: 'center', marginBottom: '6px' }}>
-              {!chatOnly && <span style={{ fontSize: '11px', fontWeight: 600 }}>Chat</span>}
-              {diffCards.length > 0 && (
-                <span
-                  style={{ ...S.badge('var(--tn-cyan,#7dcfff)'), marginLeft: '8px', cursor: 'pointer' }}
-                  onClick={() => setActiveView('diffs')}
-                >
-                  {diffCards.length} Diff{diffCards.length !== 1 ? 's' : ''} → ansehen
-                </span>
-              )}
-            </div>
+            {!chatOnly && (
+              <div style={{ display: 'flex', alignItems: 'center', marginBottom: '6px' }}>
+                <span style={{ fontSize: '11px', fontWeight: 600 }}>Chat</span>
+              </div>
+            )}
             <div style={S.chatBox}>
               {chatMessages.length === 0 && (
                 <div style={{ color: 'var(--tn-text-muted)', fontSize: '11px', textAlign: 'center' as const, padding: '16px 0' }}>
                   Business Angel bereit
                 </div>
               )}
-              {chatMessages.map((msg, i) => (
-                <div key={i} style={(msg.role) === 'user' ? S.msgUser : S.msgAssistant}>
-                  {(msg.role) === 'assistant' ? (
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{msg.content}</ReactMarkdown>
-                  ) : (msg.content)}
-                </div>
-              ))}
+              {chatMessages.map((msg, i) => {
+                const displayContent = (msg.role) === 'user' ? stripInvisibleTags(msg.content) : msg.content;
+                return (
+                  <Fragment key={i}>
+                    <div style={(msg.role) === 'user' ? S.msgUser : S.msgAssistant}>
+                      {(msg.role) === 'assistant' ? (
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{displayContent}</ReactMarkdown>
+                      ) : (displayContent)}
+                    </div>
+                    {(msg.role) === 'assistant' && renderDiffsForMessage(i)}
+                  </Fragment>
+                );
+              })}
               {chatSending && (
                 <div style={{ ...S.msgAssistant, color: 'var(--tn-text-muted)', fontStyle: 'italic' }}>Denkt nach…</div>
               )}
               <div ref={chatEndRef} />
             </div>
             <div style={S.chatInputRow}>
+              {(() => {
+                const pendingCount = [...selectedFiles].filter(f => !committedFiles.has(f)).length;
+                return (
+                  <button
+                    style={{
+                      ...S.btn,
+                      padding: '6px 9px', fontSize: '13px',
+                      background: pendingCount > 0 ? 'rgba(125,207,255,0.15)' : 'transparent',
+                      border: pendingCount > 0 ? '1px dashed rgba(125,207,255,0.5)' : '1px solid var(--tn-border, rgba(255,255,255,0.15))',
+                      color: pendingCount > 0 ? 'var(--tn-cyan,#7dcfff)' : 'var(--tn-text-muted)',
+                      position: 'relative',
+                      fontWeight: 600,
+                    }}
+                    onClick={() => { setChatOnly(false); setContextCollapsed(false); setTreeOpen(true); }}
+                    disabled={chatSending}
+                    title={pendingCount > 0
+                      ? `${pendingCount} neue Datei${pendingCount !== 1 ? 'en' : ''} vorbereitet — werden mit nächster Nachricht gesendet. Klicken öffnet Kontext-Panel.`
+                      : 'Dokument zum Kontext hinzufügen'}
+                  >
+                    📎{pendingCount > 0 && <span style={{ marginLeft: '4px', fontSize: '10px', fontWeight: 700 }}>{pendingCount}</span>}
+                  </button>
+                );
+              })()}
               <input
                 style={S.chatInput}
                 placeholder="Nachricht…"

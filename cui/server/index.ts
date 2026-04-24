@@ -93,6 +93,7 @@ import createAutoInjectRouter, { startAutoInjectTimer, stopAutoInjectTimer } fro
 import agentsRouter from './routes/agents.js';
 import bridgeRouter from './routes/bridge.js';
 import qaRouter from './routes/qa.js';
+import qaBackendRouter from './routes/qa-backend.js';
 import repoDashboardRouter from './routes/repo-dashboard.js';
 import maintenanceRouter from './routes/maintenance.js';
 import panelsInspectRouter from './routes/panels-inspect.js';
@@ -140,6 +141,9 @@ import partnerMessagesRouter from './routes/partner-messages.js';
 
 // Calendar (private event storage — /root/projekte/local-storage/privat/calendar.json)
 import { createCalendarRouter } from './routes/calendar.js';
+
+// Mail (IONOS IMAP read + SMTP send + local draft queue with approve-before-send)
+import { createMailRouter } from './routes/mail.js';
 
 // Partner Feedback (structured feedback form for partners)
 import createPartnerFeedbackRouter from './routes/partner-feedback.js';
@@ -280,6 +284,7 @@ app.use(autoInjectRouter);                               // /api/auto-inject (GE
 app.use(agentsRouter);                               // /api/agents/* (full paths in module)
 app.use(bridgeRouter);                               // /api/claude-code/*, /api/bridge/* (full paths in module)
 app.use(qaRouter);                                   // /api/qa/* (QA Dashboard - Unified-Tester integration)
+app.use(qaBackendRouter);                            // /api/qa/backend-pyramid (Backend-Pyramide: Manifest + pytest)
 app.use('/api/repo-dashboard', repoDashboardRouter);  // /api/repo-dashboard/repositories, /pipeline, /structure, /hierarchy
 app.use('/api/maintenance', maintenanceRouter);       // /api/maintenance/status, /refresh, /run
 app.use(panelsInspectRouter);                         // /api/panels/inspect (meta: probes each panel's GET endpoints)
@@ -330,6 +335,9 @@ app.use('/api/partner', createPartnerTeamStatusRouter());   // /api/partner/team
 
 // --- Calendar API ---
 app.use(createCalendarRouter());                            // /api/calendar/events (GET/POST/PUT/DELETE)
+
+// --- Mail API (IONOS IMAP + SMTP + draft queue) ---
+app.use(createMailRouter());                                // /api/mail/*
 
 // --- Error Monitor API (protected — Sentry webhook is public above) ---
 app.use('/api/errors', createErrorsRouter());               // /api/errors (GET), /stream, /:id, spawn-fix, etc.

@@ -270,6 +270,21 @@ function StepCard({ step, isLast }: { step: JourneyStep; isLast: boolean }) {
           </div>
         )}
 
+        {/* AI Note */}
+        {step.note && (
+          <div style={{
+            padding: '4px 12px',
+            fontSize: 10,
+            color: 'var(--tn-text-muted)',
+            borderBottom: '1px solid var(--tn-border)',
+            fontStyle: 'italic',
+            lineHeight: 1.4,
+            background: 'rgba(122,162,247,0.05)',
+          }}>
+            {step.note}
+          </div>
+        )}
+
         {/* Screenshot */}
         <div style={{ padding: 8 }}>
           {!step.screenshotExists && (

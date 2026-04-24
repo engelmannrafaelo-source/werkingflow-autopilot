@@ -197,6 +197,30 @@ const PIPELINE_CONFIGS: PipelineConfig[] = [
     promptPattern: 'phases/**/prompts/*.py',
     annotationFile: 'pipeline.annotations.yaml',
   },
+  {
+    id: 'engelmann-energie',
+    name: 'Engelmann: Energie-Analyse',
+    basePath: `${PATHS.projectsRoot}/workflows/partners/engelmann/energie-analyse/pipeline`,
+    type: 'phase-step',
+    promptPattern: 'phases/**/prompts/*.py',
+    annotationFile: 'pipeline.annotations.yaml',
+  },
+  {
+    id: 'engelmann-warmwasser',
+    name: 'Engelmann: Warmwasser-Dimensionierung',
+    basePath: `${PATHS.projectsRoot}/workflows/partners/engelmann/warmwasser-dimensionierung/pipeline`,
+    type: 'phase-step',
+    promptPattern: 'phases/**/prompts/*.py',
+    annotationFile: 'pipeline.annotations.yaml',
+  },
+  {
+    id: 'engelmann-test',
+    name: 'Engelmann: Test-Workflow',
+    basePath: `${PATHS.projectsRoot}/workflows/partners/engelmann/test-workflow/pipeline`,
+    type: 'phase-step',
+    promptPattern: 'phases/**/prompts/*.py',
+    annotationFile: 'pipeline.annotations.yaml',
+  },
 ];
 
 // ─── Python AST-like Parsing (regex-based, no external deps) ─────────────────

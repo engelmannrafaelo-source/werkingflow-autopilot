@@ -81,21 +81,24 @@ export default function ActivityFeedTab() {
   };
 
   // Contract violations: server-side + client-side checks
+  const serverViolations = useMemo(() => extractViolations(rawResponse), [rawResponse]);
   const violations = useMemo(() => {
-    const serverV = extractViolations(rawResponse);
-    const clientV = data ? BridgeContracts.dataQuality(data.requests) : { violations: [], score: 100 };
+    const clientV = data
+      ? BridgeContracts.dataQuality(data.requests, serverViolations)
+      : { violations: [], score: null as number | null };
     const seen = new Set<string>();
-    return [...serverV, ...clientV.violations].filter(v => {
+    return [...serverViolations, ...clientV.violations].filter(v => {
       if (seen.has(v.code)) return false;
       seen.add(v.code);
       return true;
     });
-  }, [rawResponse, data]);
+  }, [serverViolations, data]);
 
-  const dataQuality = useMemo(() => {
-    if (!data) return 100;
-    return BridgeContracts.dataQuality(data.requests).score;
-  }, [data]);
+  // score === null ⇒ Banner zeigt "N/A" statt grüner 100% bei kaputter Bridge.
+  const dataQuality = useMemo<number | null>(() => {
+    if (!data) return null;
+    return BridgeContracts.dataQuality(data.requests, serverViolations).score;
+  }, [data, serverViolations]);
 
   return (
     <div data-ai-id="bridge-activity-tab" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>

@@ -1104,6 +1104,27 @@ router.post('/apply-diffs', (req, res) => {
     for (const diff of resolvedDiffs) {
       const absPath = join(BUSINESS_DIR, diff.file);
 
+      // DEFENSIVE GUARD (rescue 2026-04-24):
+      // Catch the specific signature of parser corruption — multi-line `old`
+      // being replaced by a one-line `new` that is a tiny fraction of the old.
+      // With the regex bug, new_string got truncated to its first line; the
+      // resulting replace would erase the whole section. Legitimate "delete"
+      // uses empty new_string (handled by the NEW-file branch below) or a
+      // meaningfully shorter replacement — never a single line that is <10%
+      // of the old block. Refuse and let the operator investigate.
+      if (
+        diff.old.includes('\n') &&
+        !diff.newText.includes('\n') &&
+        diff.newText.trim().length > 0 &&
+        diff.newText.length < diff.old.length * 0.1
+      ) {
+        failed.push({
+          file: diff.file,
+          reason: `Refused: suspicious shrink (old=${diff.old.length} chars, new=${diff.newText.length} chars, single line). Likely parser corruption — inspect raw diff.`,
+        });
+        continue;
+      }
+
       // New file: OLD is empty → create file with NEW content
       if (!diff.old.trim()) {
         if (existsSync(absPath)) {

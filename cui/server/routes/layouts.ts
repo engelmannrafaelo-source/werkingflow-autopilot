@@ -181,7 +181,7 @@ export default function createLayoutsRouter(deps: LayoutsDeps): Router {
   // ============================================================================
   // Projects API
   // ============================================================================
-  router.get('/projects', (_req: Request, res: Response) => {
+  router.get('/projects', (req: Request, res: Response) => {
     const explicitProjects = readdirSync(PROJECTS_DIR)
       .filter((f) => f.endsWith('.json'))
       .map((f) => {
@@ -210,7 +210,28 @@ export default function createLayoutsRouter(deps: LayoutsDeps): Router {
       } catch { /* non-critical */ }
     }
 
-    res.json([...explicitProjects, ...autoProjects]);
+    const allProjects = [...explicitProjects, ...autoProjects];
+
+    // Partner-CUI: restrict to user's allowedWorkspaces. Admins and dev-server
+    // (auth disabled) see everything. Without this filter, fachpartner land in
+    // the first alphabetical project instead of their own workspace.
+    const userId = (req as any).user?.sub;
+    if (userId) {
+      try {
+        const usersPath = join(DATA_DIR, 'users.json');
+        if (existsSync(usersPath)) {
+          const usersData = JSON.parse(readFileSync(usersPath, 'utf8'));
+          const cuiUser = usersData.users?.find((u: any) => u.id === userId);
+          if (cuiUser && cuiUser.allowedWorkspaces !== '*' && Array.isArray(cuiUser.allowedWorkspaces)) {
+            const allowed = new Set(cuiUser.allowedWorkspaces);
+            res.json(allProjects.filter((p: any) => allowed.has(p.id)));
+            return;
+          }
+        }
+      } catch { /* fall through to unfiltered */ }
+    }
+
+    res.json(allProjects);
   });
 
   router.post('/projects', async (req: Request, res: Response) => {
@@ -641,6 +662,38 @@ export default function createLayoutsRouter(deps: LayoutsDeps): Router {
       return;
     }
     writeFileSync(join(LAYOUTS_DIR, `${req.params.projectId}_template.json`), JSON.stringify(req.body, null, 2));
+    res.json({ ok: true });
+  });
+
+  // Delete layout + template — used by Cache-reset button to return to factory default.
+  // Client loader falls back to defaultLayout() when both are missing.
+  router.delete('/layouts/:projectId', (req: Request, res: Response) => {
+    if (!isValidId(req.params.projectId)) {
+      res.status(400).json({ error: 'invalid projectId' });
+      return;
+    }
+    const layoutPath = join(LAYOUTS_DIR, `${req.params.projectId}.json`);
+    if (existsSync(layoutPath)) {
+      try { unlinkSync(layoutPath); } catch (e: any) {
+        res.status(500).json({ error: 'unlink failed: ' + e.message });
+        return;
+      }
+    }
+    res.json({ ok: true });
+  });
+
+  router.delete('/layouts/:projectId/template', (req: Request, res: Response) => {
+    if (!isValidId(req.params.projectId)) {
+      res.status(400).json({ error: 'invalid projectId' });
+      return;
+    }
+    const tplPath = join(LAYOUTS_DIR, `${req.params.projectId}_template.json`);
+    if (existsSync(tplPath)) {
+      try { unlinkSync(tplPath); } catch (e: any) {
+        res.status(500).json({ error: 'unlink failed: ' + e.message });
+        return;
+      }
+    }
     res.json({ ok: true });
   });
 
