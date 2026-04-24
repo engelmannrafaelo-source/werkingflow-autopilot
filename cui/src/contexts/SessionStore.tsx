@@ -13,14 +13,14 @@
 import { createContext, useContext, useEffect, useRef, useState, useCallback, type ReactNode } from 'react';
 import type { CuiStates } from '../types';
 
-export interface ToolInfo {
+interface ToolInfo {
   toolName: string;
   toolDetail?: string;
   startedAt: number;
   elapsedMs?: number;
 }
 
-export interface SessionStateEntry {
+interface SessionStateEntry {
   state: 'idle' | 'working' | 'needs_attention';
   reason?: string;
   toolInfo?: ToolInfo;

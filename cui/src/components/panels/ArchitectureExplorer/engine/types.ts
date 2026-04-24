@@ -4,7 +4,7 @@
 // Ported from RLB Mermaid Tool (EnergyMermaidTool.py)
 // Adapted for WerkIngFlow city metaphor architecture visualization.
 
-export interface NodeMetadata {
+interface NodeMetadata {
   metaphor?: string;
   description?: string;
   port?: number;
@@ -77,7 +77,7 @@ export interface FilterResult {
   matchedNodeIds: Set<string>;
 }
 
-export interface MergeChanges {
+interface MergeChanges {
   added_nodes: string[];
   modified_nodes: string[];
   deleted_nodes: string[];
@@ -86,7 +86,7 @@ export interface MergeChanges {
   deleted_edges: [string, string][];
 }
 
-export interface MergeResult {
+interface MergeResult {
   graph: Graph;
   summary: string;
   changes: MergeChanges;

@@ -15,7 +15,7 @@ export interface Action {
 }
 
 // Props for execution handlers
-export interface QuickActionsProps {
+interface QuickActionsProps {
   onExecute?: (actionId: string) => void | Promise<void>;
   onNavigate?: (path: string) => void;
 }

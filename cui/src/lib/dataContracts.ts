@@ -8,7 +8,7 @@
  * Violations werden nicht verschluckt, sondern als Banner im Panel angezeigt.
  */
 
-export type ViolationSeverity = 'error' | 'warning';
+type ViolationSeverity = 'error' | 'warning';
 
 export interface ContractViolation {
   code: string;           // z.B. "BRIDGE_NO_ATTRIBUTION"
@@ -87,9 +87,18 @@ export const BridgeContracts = {
     return [];
   },
 
-  /** Zusammenfassung: Datenqualität in Prozent */
-  dataQuality(requests: Array<{ user: string; app: string; tokens: number; status: string }>): {
-    score: number; // 0-100
+  /** Zusammenfassung: Datenqualität in Prozent
+   *
+   * score === null ⇒ Datenqualität nicht beurteilbar (z.B. Bridge offline / Fallback).
+   * Wichtig: Bei serverseitigen BRIDGE_* Violations (OFFLINE/FALLBACK/UNAVAILABLE)
+   * liefert der Score `null`, niemals 100 — grüne 100% bei kaputter Bridge sind
+   * irreführend und wurden historisch falsch angezeigt.
+   */
+  dataQuality(
+    requests: Array<{ user: string; app: string; tokens: number; status: string }>,
+    serverViolations: ContractViolation[] = [],
+  ): {
+    score: number | null; // 0-100, oder null wenn nicht beurteilbar
     violations: ContractViolation[];
   } {
     const all = [
@@ -97,7 +106,20 @@ export const BridgeContracts = {
       ...this.checkTokenTracking(requests),
     ];
 
-    if (requests.length === 0) return { score: 100, violations: all };
+    // Kritische Bridge-Outage-Codes: Score ist nicht beurteilbar.
+    // BRIDGE_FALLBACK/OFFLINE/UNAVAILABLE bedeutet: die Daten fehlen oder sind
+    // veraltet — ein "Score" auf unzuverlässigen Daten wäre Kosmetik.
+    const outageCodes = ['BRIDGE_FALLBACK', 'BRIDGE_OFFLINE', 'BRIDGE_UNAVAILABLE'];
+    const hasOutage = serverViolations.some(v => outageCodes.includes(v.code));
+    if (hasOutage) {
+      return { score: null, violations: all };
+    }
+
+    // Bei echten 0-Request-Zustand (Bridge live aber Fenster leer):
+    // ebenfalls null — kein "100% OK" auf Luft.
+    if (requests.length === 0) {
+      return { score: null, violations: all };
+    }
 
     // Score: gewichteter Durchschnitt der OK-Rate über alle Checks
     let totalChecked = 0;

@@ -6,7 +6,7 @@
 
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 
-export interface AuthUser {
+interface AuthUser {
   id: string;
   name: string;
   email: string;
@@ -25,6 +25,8 @@ interface AuthState {
   user: AuthUser | null;
   /** Is auth enabled on the server? */
   authEnabled: boolean | null;
+  /** Partner-CUI deployment (scoped UI — hides admin/dev-only panels) */
+  partnerCui: boolean;
   /** Login with email/password */
   login: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
   /** Logout */
@@ -35,10 +37,16 @@ interface AuthState {
   canAccessWorkspace: (workspaceId: string) => boolean;
 }
 
+// Panels that are hidden on Partner-CUI deployments even from admin users.
+const PARTNER_HIDDEN_PANELS = new Set<string>([
+  'report-builder',
+]);
+
 const AuthContext = createContext<AuthState>({
   authenticated: null,
   user: null,
   authEnabled: null,
+  partnerCui: false,
   login: async () => ({ ok: false, error: 'Not initialized' }),
   logout: async () => {},
   canAccessPanel: () => true,
@@ -49,6 +57,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [authEnabled, setAuthEnabled] = useState<boolean | null>(null);
+  const [partnerCui, setPartnerCui] = useState<boolean>(false);
 
   // Check auth status on mount
   useEffect(() => {
@@ -62,6 +71,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (statusRes.ok) {
         const status = await statusRes.json();
         setAuthEnabled(status.authEnabled);
+        setPartnerCui(status.partnerCui === true);
 
         if (!status.authEnabled) {
           // Auth disabled — everyone is authenticated
@@ -120,11 +130,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const canAccessPanel = useCallback((panelId: string): boolean => {
+    if (partnerCui && PARTNER_HIDDEN_PANELS.has(panelId)) return false;
     if (!authEnabled) return true;
     if (!user) return false;
     if (user.allowedPanels === '*') return true;
     return user.allowedPanels.includes(panelId);
-  }, [authEnabled, user]);
+  }, [authEnabled, user, partnerCui]);
 
   const canAccessWorkspace = useCallback((workspaceId: string): boolean => {
     if (!authEnabled) return true;
@@ -134,7 +145,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [authEnabled, user]);
 
   return (
-    <AuthContext.Provider value={{ authenticated, user, authEnabled, login, logout, canAccessPanel, canAccessWorkspace }}>
+    <AuthContext.Provider value={{ authenticated, user, authEnabled, partnerCui, login, logout, canAccessPanel, canAccessWorkspace }}>
       {children}
     </AuthContext.Provider>
   );

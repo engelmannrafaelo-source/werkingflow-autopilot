@@ -50,7 +50,7 @@ export async function safeFetch<T>(
  * Safe number formatter - never crashes on undefined/null.
  * Formats large numbers with K/M suffixes.
  */
-export function safeFormatNumber(num: number | undefined | null): string {
+function safeFormatNumber(num: number | undefined | null): string {
   if (num === undefined || num === null || isNaN(num)) return '0';
   if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
   if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
@@ -61,7 +61,7 @@ export function safeFormatNumber(num: number | undefined | null): string {
  * Safe currency formatter.
  * @param symbol - Currency symbol, defaults to EUR.
  */
-export function safeFormatCurrency(
+function safeFormatCurrency(
   num: number | undefined | null,
   symbol: string = '\u20AC'
 ): string {
@@ -72,7 +72,7 @@ export function safeFormatCurrency(
 /**
  * Safe percentage formatter.
  */
-export function safeFormatPercent(num: number | undefined | null): string {
+function safeFormatPercent(num: number | undefined | null): string {
   if (num === undefined || num === null || isNaN(num)) return '0%';
   return `${num.toFixed(1)}%`;
 }
@@ -84,7 +84,7 @@ export function safeFormatPercent(num: number | undefined | null): string {
 /**
  * Safe date formatter - returns locale string or 'N/A'.
  */
-export function safeFormatDate(date: string | Date | undefined | null): string {
+function safeFormatDate(date: string | Date | undefined | null): string {
   if (!date) return 'N/A';
   try {
     return new Date(date).toLocaleString();
@@ -100,14 +100,14 @@ export function safeFormatDate(date: string | Date | undefined | null): string {
 /**
  * Safe array accessor - always returns an array.
  */
-export function safeArray<T>(value: T[] | undefined | null): T[] {
+function safeArray<T>(value: T[] | undefined | null): T[] {
   return Array.isArray(value) ? value : [];
 }
 
 /**
  * Safe deep-object accessor - returns defaultValue if any segment is missing.
  */
-export function safeGet<T>(
+function safeGet<T>(
   obj: any,
   path: string,
   defaultValue: T

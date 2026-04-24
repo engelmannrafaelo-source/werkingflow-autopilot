@@ -3,7 +3,7 @@
  * Source of Truth: scenario_registry.json + Pyramid Layer Data
  */
 
-export interface LayerSummary {
+interface LayerSummary {
   id: number;
   name: string;
   passed: number;
@@ -35,7 +35,7 @@ export interface OverviewData {
   };
 }
 
-export interface ScenarioDetail {
+interface ScenarioDetail {
   id: string;
   name: string;
   layer: number;
@@ -64,7 +64,7 @@ export interface AppDetailData {
   }>;
 }
 
-export interface RunningTest {
+interface RunningTest {
   scenario: string;
   pid: number;
   startedAt: string;
@@ -77,7 +77,7 @@ export interface Checkpoint {
   turnNumber: number;
 }
 
-export interface RecentRun {
+interface RecentRun {
   file: string;
   persona: string;
   app: string;
@@ -111,7 +111,7 @@ export interface ReportData {
   reasoning: string | null;
 }
 
-export interface GroupSummary {
+interface GroupSummary {
   passed: number;
   failed: number;
   pending: number;
@@ -127,6 +127,7 @@ export interface JourneyStep {
   screenshotPath: string;
   screenshotExists: boolean;
   timestamp: string;
+  note?: string;
 }
 
 export interface Journey {

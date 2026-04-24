@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 
-export interface FilterOption {
+interface FilterOption {
   label: string;
   value: string;
 }
@@ -12,7 +12,7 @@ export interface FilterConfig {
   placeholder?: string;
 }
 
-export interface TableSearchProps {
+interface TableSearchProps {
   onSearch: (query: string, filters: Record<string, string>) => void;
   placeholder?: string;
   filters?: FilterConfig[];
