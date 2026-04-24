@@ -7,7 +7,7 @@ import { promisify } from 'util';
 
 import { PATHS, BRIDGE_URL } from '../config/paths.js';
 import { bridgeChat } from '../lib/bridge-fetch.js';
-import { isAuthEnabled } from '../auth/users.js';
+import { isAuthEnabled, getUsers } from '../auth/users.js';
 import type { AttentionReason, ConvAttentionState, SessionState, PanelVisibility } from './shared/types.js';
 import { logUserInput as sharedLogUserInput, atomicWriteFileSync } from './shared/utils.js';
 import { findJsonlPath, findJsonlPathAllAccounts, ensureJsonlForAccount, readJsonlMetadata, clearMetaCache, readConversationMessages, getOriginalCwd, extractConversationContext, unstickConversation, deepRepairJsonl, compactJsonlForResume, diagnoseSessionHealth, purgeSubSessionReminders } from './shared/jsonl.js';
@@ -20,7 +20,31 @@ function isValidWorkDir(d: string): boolean {
   if (!d) return false;
   if (IS_LOCAL_MODE) return d.startsWith("/Users/") || d.startsWith("/tmp/");
   if (d === '/root/projekte' || d === '/root/projekte/') return false; // Guard: no bare root-projekte
-  return d.startsWith("/root/projekte/") || d.startsWith("/root/orchestrator/") || d.startsWith("/home/claude-user") || d.startsWith("/opt/");
+  return d.startsWith("/root/projekte/") || d.startsWith("/root/orchestrator/") || d.startsWith("/home/") || d.startsWith("/opt/");
+}
+
+const IS_PARTNER = process.env.PARTNER_MODE === '1';
+
+/** On Partner: maps workspace workDirs (/opt/cui-workspace/data/workspaces/<ws>)
+ *  to the user's actual project directory under /home/{userId}/projekte/.
+ *  Dev-server (no req.user / PARTNER_MODE off): returns workDir unchanged. */
+function resolveUserWorkDir(workDir: string | undefined, userId: string | undefined): string | undefined {
+  if (!IS_PARTNER || !workDir || !userId) return workDir;
+  const wsPrefix = join(PATHS.dataDir, 'workspaces');
+  if (workDir.startsWith(wsPrefix + '/')) {
+    const wsName = workDir.slice(wsPrefix.length + 1).split('/')[0];
+    if (wsName === 'engelmann-dashboards') {
+      const dashDir = `/home/${userId}/projekte/dashboard-mockup`;
+      if (existsSync(dashDir)) return dashDir;
+    }
+    if (wsName === 'engelmann-developer') {
+      const workflowDir = `/home/${userId}/projekte/workflows`;
+      if (existsSync(workflowDir)) return workflowDir;
+    }
+    const userProjDir = `/home/${userId}/projekte/werkingflow-production`;
+    if (existsSync(userProjDir)) return userProjDir;
+  }
+  return workDir;
 }
 import { IS_LOCAL_MODE, onSessionStateChange, setSessionState } from './state.js';
 import * as claudeCli from './claude-cli.js';
@@ -637,6 +661,27 @@ export function initMissionRouter(deps: MissionDeps) {
 let _sessionProjectMap: Record<string, { projectName: string; projectPath: string }> = {};
 let _sessionMapBuiltAt = 0;
 
+/**
+ * Partner multi-tenant: on partner servers, each user has their own home dir
+ * like /home/herbert-teufel/projekte/werkingflow-production. Sessions started
+ * there encode as dirname "-home-herbert-teufel-projekte-*". Match against
+ * known user IDs from users.json and resolve to their allowed workspace.
+ */
+function resolvePartnerOwnership(dirname: string): { userId: string; allowedWorkspaces: string[] | '*' } | null {
+  if (!dirname.startsWith('-home-')) return null;
+  try {
+    const users = getUsers();
+    // Longer IDs first (david-steiner beats david)
+    const sorted = [...users].sort((a, b) => b.id.length - a.id.length);
+    for (const u of sorted) {
+      if (dirname.startsWith('-home-' + u.id + '-') || dirname === '-home-' + u.id) {
+        return { userId: u.id, allowedWorkspaces: u.allowedWorkspaces };
+      }
+    }
+  } catch { /* auth disabled or load failure */ }
+  return null;
+}
+
 function buildSessionProjectMap(): void {
   const map: typeof _sessionProjectMap = {};
   const projectConfigs: Array<{ id: string; name: string; workDir: string; encoded: string }> = [];
@@ -665,6 +710,15 @@ function buildSessionProjectMap(): void {
         if (dirname === pc.encoded) { projName = pc.name; projPath = pc.workDir; break; }
       }
       if (!projName && extraPaths[dirname]) { projName = extraPaths[dirname].name; projPath = extraPaths[dirname].path; }
+      // Partner multi-tenant: /home/<userId>/... → map to user's primary allowed workspace
+      if (!projName) {
+        const owner = resolvePartnerOwnership(dirname);
+        if (owner && Array.isArray(owner.allowedWorkspaces) && owner.allowedWorkspaces.length >= 1) {
+          const primaryWs = owner.allowedWorkspaces[0];
+          const pc = projectConfigs.find(p => p.id === primaryWs);
+          if (pc) { projName = pc.name; projPath = pc.workDir; }
+        }
+      }
       // Suffix-based match: try to match dirname tail against configured project workspace slugs
       if (!projName) {
         for (const pc of projectConfigs) {
@@ -699,6 +753,34 @@ function buildSessionProjectMap(): void {
 function getSessionProject(sessionId: string): { projectName: string; projectPath: string } | null {
   if (Date.now() - _sessionMapBuiltAt > 60000) buildSessionProjectMap();
   return _sessionProjectMap[sessionId] || null;
+}
+
+/**
+ * Derive a projectId from a workDir by matching against registered project configs.
+ * Resolves multi-workspace ambiguity: if a session's cwd is a home dir that feeds
+ * several workspaces (David → energy+report, Sahori → 3 workspaces), the caller
+ * should pass the active workspace's projectId explicitly. This helper is the
+ * fallback when the caller already points at a workspace-specific workDir.
+ *
+ * Returns '' if no match.
+ */
+function deriveProjectIdFromWorkDir(workDir: string): string {
+  if (!workDir) return '';
+  try {
+    const files = readdirSync(PROJECTS_DIR).filter(f => f.endsWith('.json'));
+    const projects = files
+      .map(f => { try { return JSON.parse(readFileSync(join(PROJECTS_DIR, f), 'utf8')); } catch { return null; } })
+      .filter(Boolean) as Array<{ id: string; name: string; workDir?: string }>;
+    // Prefer exact match, then prefix-match (longest wins — nested workspaces)
+    const exact = projects.find(p => p.workDir === workDir);
+    if (exact) return exact.id;
+    const prefixed = projects
+      .filter(p => p.workDir && (workDir === p.workDir || workDir.startsWith(p.workDir + '/')))
+      .sort((a, b) => (b.workDir || '').length - (a.workDir || '').length);
+    return prefixed[0]?.id || '';
+  } catch {
+    return '';
+  }
 }
 
 
@@ -922,13 +1004,17 @@ async function fetchConvList() {
         const _sp = getSessionProject(sessionId);
         const isRunning = claudeCli.isActive(sessionId);
         const decodedPath = '/' + dirname.replace(/^-/, '').replace(/-/g, '/');
-        // Determine account from active process, default to first scanned account
+        // Partner multi-tenant: infer owning user from dirname (e.g. -home-herbert-teufel-...)
+        const _partnerOwner = resolvePartnerOwnership(dirname);
+        // Determine account: active process > stored assignment > scanning dir
         const activeAcctId = claudeCli.getActiveAccountId(sessionId);
         const storedAcctId = convMeta.getAssignment(sessionId);
         // Migrate old account IDs from pre-April-2026 rename
         const ACCT_MIGRATION: Record<string, string> = { rafael: "engelmann", engelmann: "gmail" };
         const migratedAcctId = storedAcctId ? (ACCT_MIGRATION[storedAcctId] ?? storedAcctId) : "";
-        const resolvedAcctId = activeAcctId || migratedAcctId;
+        // Fallback to the account whose dir this session lives in (e.g. cui-account4 -> werking).
+        // This surfaces legacy/partner-user sessions that lack an explicit assignment.
+        const resolvedAcctId = activeAcctId || migratedAcctId || account.id;
         const effectiveAccount = resolvedAcctId
           ? claudeCli.ACCOUNT_CONFIG.find(a => a.id === resolvedAcctId)
           : undefined;
@@ -950,6 +1036,7 @@ async function fetchConvList() {
           updatedAt: meta.updatedAt || '',
           createdAt: meta.createdAt || '',
           _lastRole: meta.lastRole || '',
+          _ownerUser: _partnerOwner?.userId || '',
         });
       }
     }
@@ -958,9 +1045,11 @@ async function fetchConvList() {
 
   const promptTimes = convMeta.getAllLastPrompts();
   const assignedModels = convMeta.getAllModels();
+  const projectIds = convMeta.getAllProjectIds();
   for (const r of results) {
     r.lastPromptAt = promptTimes[r.sessionId] || '';
     r.assignedModel = assignedModels[r.sessionId] || '';
+    r.projectId = projectIds[r.sessionId] || '';
   }
 
   results.sort((a, b) => {
@@ -1081,25 +1170,35 @@ router.get('/conversations', async (req, res) => {
   const convIsAdmin = convUserRole === 'admin';
   if (!convIsAdmin && convUserId && data) {
     const allUsers = convMeta.getAllUsers();
+    // Fallback: for sessions started outside /api/mission/start (direct Claude CLI),
+    // users[] mapping is missing. Infer from dirname (/home/<userId>/... via _ownerUser).
     data = {
       ...data,
       conversations: data.conversations.filter((c: any) => {
-        const sessionOwner = allUsers[c.sessionId];
-        // Show conversations owned by this user, or unowned (legacy/admin sessions are hidden)
+        const sessionOwner = allUsers[c.sessionId] || c._ownerUser;
         return sessionOwner === convUserId;
       }),
     };
     data.total = data.conversations.length;
   }
 
-  // Apply project filter AFTER cache and user isolation
+  // Apply project filter AFTER cache and user isolation.
+  // filterProject can be either a projectId (new client, e.g. "werking-energy") or a
+  // workDir/path substring (legacy client). Match by projectId tag first (precise,
+  // resolves multi-workspace users), fall back to path heuristic for untagged sessions.
   if (filterProject && data) {
     const isSubSessionsWorkspace = filterProject.includes('sub-sessions');
+    // Resolve whether filterProject is an id or a path: if it matches a project config
+    // workDir, derive the id; if it's already an id, use it directly.
+    const filterAsId = deriveProjectIdFromWorkDir(filterProject) || filterProject;
     const filtered = { ...data, conversations: data.conversations.filter((c: any) => {
-      // Sub-sessions workspace: show all sub-sessions regardless of projectPath
       if (isSubSessionsWorkspace) return !!c.isSubSession;
-      // Normal workspace: match by projectPath, exclude sub-sessions
-      return (c.projectPath || '').includes(filterProject) && !c.isSubSession;
+      if (c.isSubSession) return false;
+      // Primary: explicit projectId tag (set at session-start time)
+      if (c.projectId && c.projectId === filterAsId) return true;
+      // Fallback: legacy path-based heuristic for untagged sessions
+      if (!c.projectId && (c.projectPath || '').includes(filterProject)) return true;
+      return false;
     }), total: 0 };
     filtered.total = filtered.conversations.length;
     return res.json(filtered);
@@ -1297,7 +1396,7 @@ router.get('/conversation/:accountId/:sessionId', async (req, res) => {
 // 3. Send message to existing conversation (via claude-cli direct spawn)
 router.post('/send', async (req, res) => {
   try {
-  let { accountId, sessionId, message, workDir } = req.body;
+  let { accountId, sessionId, message, workDir, projectId } = req.body;
   if (!accountId || !sessionId || !message || (typeof message === 'string' && !message.trim())) {
     res.status(400).json({ error: 'accountId, sessionId, message required' });
     return;
@@ -1330,7 +1429,9 @@ router.post('/send', async (req, res) => {
 
   // Resolve workDir: validate explicit > persisted > default (no fallback to bare /root/projekte)
   const defaultWorkDir = IS_LOCAL_MODE ? '/Users/rafael/Documents/GitHub' : null;
-  const resolvedWorkDir = (isValidWorkDir(workDir) ? workDir : null) || convMeta.getWorkDir(sessionId) || defaultWorkDir || '/root/projekte';
+  const userWorkDir = resolveUserWorkDir(workDir, (req as any).user?.sub);
+  const persistedWorkDir = resolveUserWorkDir(convMeta.getWorkDir(sessionId), (req as any).user?.sub);
+  const resolvedWorkDir = (isValidWorkDir(userWorkDir) ? userWorkDir : null) || (isValidWorkDir(persistedWorkDir) ? persistedWorkDir : null) || defaultWorkDir || '/root/projekte';
   if (workDir) convMeta.saveWorkDir(sessionId, workDir);
 
   // Block if session has active tool executions (prevents API 400 concurrency error)
@@ -1372,6 +1473,10 @@ router.post('/send', async (req, res) => {
         convMeta.setLastPrompt(sessionId);
         convMeta.setFinished(sessionId, false); // Auto-unfinish when message sent
         convMeta.saveAssignment(sessionId, accountId);
+        // Tag session with workspace projectId if caller passed one and we don't have one yet
+        if (typeof projectId === 'string' && projectId && !convMeta.getProjectId(sessionId)) {
+          convMeta.saveProjectId(sessionId, projectId);
+        }
         setSessionState(sessionId, accountId, 'working', undefined, sessionId); // Clear idle/done → working
         invalidateConvCache();
         res.json({ ok: true, sessionId, piped: true });
@@ -1397,7 +1502,7 @@ router.post('/send', async (req, res) => {
   }
 
   // Use original CWD from JSONL for resume (fixes CWD mismatch)
-  const resumeWorkDir = jsonlExists ? (getOriginalCwd(sessionId) || resolvedWorkDir) : resolvedWorkDir;
+  const resumeWorkDir = jsonlExists ? (resolveUserWorkDir(getOriginalCwd(sessionId), (req as any).user?.sub) || resolvedWorkDir) : resolvedWorkDir;
   if (jsonlExists && resumeWorkDir !== resolvedWorkDir) {
     console.log(`[Send] CWD override for resume: ${resolvedWorkDir} → ${resumeWorkDir}`);
   }
@@ -1480,6 +1585,14 @@ router.post('/send', async (req, res) => {
   convMeta.saveAssignment(finalSessionId, accountId);
   setSessionState(finalSessionId, accountId, 'working', undefined, finalSessionId); // Clear idle/done → working
   convMeta.saveWorkDir(finalSessionId, resolvedWorkDir);
+  // Persist projectId if caller passed one, or if none is stored yet (derive from workDir).
+  // Never overwrite an existing tag — multi-workspace users keep the original workspace.
+  const sendProjectId = (typeof projectId === 'string' && projectId)
+    ? projectId
+    : (convMeta.getProjectId(finalSessionId) || deriveProjectIdFromWorkDir(resolvedWorkDir));
+  if (sendProjectId && sendProjectId !== convMeta.getProjectId(finalSessionId)) {
+    convMeta.saveProjectId(finalSessionId, sendProjectId);
+  }
   convMeta.setLastPrompt(finalSessionId);
   // Ensure userId is set for partner isolation (covers resumed sessions)
   const sendUserId = (req as any).user?.sub || (req as any).user?.id;
@@ -1994,7 +2107,7 @@ Gueltige Modelle: opus, sonnet. Nur auf Opus eskalieren wenn Sonnet nicht ausrei
 
 router.post('/start', async (req, res) => {
   try {
-  let { accountId, workDir, subject, message, model, parentSessionId } = req.body;
+  let { accountId, workDir, subject, message, model, parentSessionId, projectId } = req.body;
   const VALID_MODELS = ['opus', 'sonnet', 'haiku'];
   // Partners (non-admin) are restricted to sonnet — opus is reserved for admin/dev-server
   // Dev-server has no auth (isAuthEnabled() = false) — treat as admin so opus remains default
@@ -2038,10 +2151,12 @@ router.post('/start', async (req, res) => {
 
   // No default to /root/projekte — sessions must declare a registered workspace
   const defaultWorkDir = IS_LOCAL_MODE ? '/Users/rafael/Documents/GitHub' : null;
-  const resolvedWorkDir = (isValidWorkDir(workDir) ? workDir : null) || defaultWorkDir;
+  const userWorkDir_start = resolveUserWorkDir(workDir, (req as any).user?.sub);
+  const resolvedWorkDir = (isValidWorkDir(userWorkDir_start) ? userWorkDir_start : null) || defaultWorkDir;
+  const isUserHome = IS_PARTNER && resolvedWorkDir?.startsWith('/home/') && existsSync(resolvedWorkDir);
 
   // Workspace-gate: require a registered workDir on remote (no fallback to root)
-  if (!IS_LOCAL_MODE && (!resolvedWorkDir || !isRegisteredWorkspace(resolvedWorkDir))) {
+  if (!IS_LOCAL_MODE && !isUserHome && (!resolvedWorkDir || !isRegisteredWorkspace(resolvedWorkDir))) {
     const registered = getRegisteredWorkspaces();
     console.warn(`[Start] REJECTED: workDir "${workDir || ''}" is not a registered workspace.`);
     res.status(400).json({
@@ -2104,6 +2219,11 @@ router.post('/start', async (req, res) => {
   convMeta.saveAssignment(sessionId, accountId);
   convMeta.saveWorkDir(sessionId, resolvedWorkDir);
   convMeta.saveModel(sessionId, resolvedModel);
+  // Tag session with its workspace projectId — resolves multi-workspace ambiguity for
+  // users whose home dir feeds multiple workspaces (e.g. David → energy + report).
+  // Prefer explicit projectId from client; fall back to workDir-based derivation.
+  const resolvedProjectId = (typeof projectId === 'string' && projectId) ? projectId : deriveProjectIdFromWorkDir(resolvedWorkDir);
+  if (resolvedProjectId) convMeta.saveProjectId(sessionId, resolvedProjectId);
   // Save userId for partner isolation (non-admin users only see their own conversations)
   const startUserId = (req as any).user?.sub || (req as any).user?.id;
   if (startUserId) convMeta.saveUser(sessionId, startUserId);
