@@ -1052,6 +1052,16 @@ function readLastLines(path: string, maxBytes: number): string[] {
   return lines.filter(Boolean);
 }
 
+// Scale the JSONL read-buffer to the requested time window.
+// Primary emits ~3-5 MB/hour of nginx JSONL at peak — 10 MB/hour gives headroom.
+// Floor keeps short windows usable; cap prevents reading absurd amounts.
+function bytesForHours(hours: number): number {
+  const perHour = 10 * 1024 * 1024;
+  const minBytes = 20 * 1024 * 1024;
+  const maxBytes = 500 * 1024 * 1024;
+  return Math.min(maxBytes, Math.max(minBytes, Math.ceil(hours * perHour)));
+}
+
 router.get('/api/bridge/errors', async (req: any, res: any) => {
   try {
     const hours = parseFloat(req.query.hours || '24');
@@ -1060,8 +1070,8 @@ router.get('/api/bridge/errors', async (req: any, res: any) => {
     const endpoint = (req.query.endpoint || '').toLowerCase();
     const app = (req.query.app || '').toLowerCase();
     const bridgeFilter = (req.query.bridge || 'all').toLowerCase() as 'all' | 'dev' | 'prod';
-    // Read last 10 MB per source — more than enough for 24h of errors
-    const READ_BYTES = 10 * 1024 * 1024;
+    // Read buffer sized to the requested window — ~10 MB/hour with 20 MB floor / 500 MB cap.
+    const READ_BYTES = bytesForHours(hours);
     const cutoff = Date.now() / 1000 - hours * 3600;
 
     const allSources: Array<{ label: 'dev' | 'prod'; path: string }> = [
@@ -1516,7 +1526,7 @@ router.get('/api/bridge/stability', async (_req: any, res: any) => {
 router.get('/api/bridge/events', async (req: any, res: any) => {
   try {
     const hours = parseFloat(req.query.hours || '1');
-    const READ_BYTES = 20 * 1024 * 1024;
+    const READ_BYTES = bytesForHours(hours);
     const cutoff = Date.now() / 1000 - hours * 3600;
 
     const sources: Array<{ label: 'dev' | 'prod'; path: string }> = [
