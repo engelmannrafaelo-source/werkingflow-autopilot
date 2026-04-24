@@ -87,7 +87,7 @@ const PANELS: PanelDefinition[] = [
   },
   {
     name: 'virtual-office',
-    component: 'components/VirtualOffice.tsx',
+    component: 'components/panels/VirtualOffice.tsx',
     coverage: 'partial',
     probes: [
       { method: 'GET', path: '/api/agents/status' },
@@ -130,7 +130,7 @@ const PANELS: PanelDefinition[] = [
   },
   {
     name: 'background-ops',
-    component: 'components/BackgroundOpsPanel.tsx',
+    component: 'components/panels/BackgroundOpsPanel.tsx',
     coverage: 'read-only',
     probes: [
       { method: 'GET', path: '/api/background-ops' },
@@ -200,7 +200,7 @@ const PANELS: PanelDefinition[] = [
   },
   {
     name: 'calendar',
-    component: 'components/Calendar*.tsx',
+    component: 'components/panels/Calendar*.tsx',
     coverage: 'full',
     probes: [
       { method: 'GET', path: '/api/calendar/events' },
@@ -213,7 +213,7 @@ const PANELS: PanelDefinition[] = [
   },
   {
     name: 'mail',
-    component: 'components/Mail*.tsx',
+    component: 'components/panels/Mail*.tsx',
     coverage: 'full',
     probes: [
       { method: 'GET', path: '/api/mail/config' },
@@ -224,18 +224,6 @@ const PANELS: PanelDefinition[] = [
       'POST /api/mail/drafts',
       'POST /api/mail/drafts/:id/send',
       'DELETE /api/mail/drafts/:id',
-    ],
-  },
-  {
-    name: 'auto-inject',
-    component: 'components/AutoInject*.tsx',
-    coverage: 'full',
-    probes: [
-      { method: 'GET', path: '/api/auto-inject' },
-    ],
-    mutations: [
-      'POST /api/auto-inject',
-      'DELETE /api/auto-inject/session/:id',
     ],
   },
   {
@@ -267,14 +255,14 @@ const PANELS: PanelDefinition[] = [
   },
   {
     name: 'activity-feed',
-    component: 'components/ActivityFeedPanel.tsx',
+    component: 'components/panels/ActivityFeedPanel.tsx',
     coverage: 'read-only',
     probes: [],
     notes: 'Rein client-side (Git-basiert, keine Backend-API)',
   },
   {
     name: 'conversation-queue',
-    component: 'components/ConversationQueuePanel.tsx',
+    component: 'components/panels/ConversationQueuePanel.tsx',
     coverage: 'full',
     probes: [
       { method: 'GET', path: '/api/mission/conversations' },
@@ -287,21 +275,8 @@ const PANELS: PanelDefinition[] = [
     ],
   },
   {
-    name: 'prompt-templates',
-    component: 'components/PromptTemplates*.tsx',
-    coverage: 'full',
-    probes: [
-      { method: 'GET', path: '/api/prompt-templates' },
-    ],
-    mutations: [
-      'POST /api/prompt-templates',
-      'PUT /api/prompt-templates/:id',
-      'DELETE /api/prompt-templates/:id',
-    ],
-  },
-  {
     name: 'team',
-    component: 'components/Team*.tsx',
+    component: 'components/panels/Team*.tsx',
     coverage: 'full',
     probes: [
       { method: 'GET', path: '/api/team/personas' },
@@ -317,16 +292,8 @@ const PANELS: PanelDefinition[] = [
       'POST /api/team/chat/:personaId',
     ],
   },
-  {
-    name: 'panel-health',
-    component: 'components/PanelHealth*.tsx',
-    coverage: 'read-only',
-    probes: [
-      { method: 'GET', path: '/api/panel-health' },
-      { method: 'GET', path: '/api/control/health' },
-    ],
-  },
 ];
+
 
 const TIMEOUT_MS = 15000;
 const SELF_BASE = 'http://localhost:4005';
