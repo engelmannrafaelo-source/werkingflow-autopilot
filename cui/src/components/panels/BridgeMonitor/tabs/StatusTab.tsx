@@ -14,7 +14,9 @@ interface PoolSummary {
   p95_ms: number;
   avg_ms: number;
   rescued: number;
-  lost: number;
+  lost: number;             // total (user + monitoring)
+  lost_user: number;        // real user-visible 5xx
+  lost_monitoring: number;  // internal polling 5xx (cui/unified-tester/no app_id)
   retry_count: number;
   present: boolean;
 }
@@ -127,7 +129,9 @@ function formatDurationLong(sec: number): string {
 
 function poolStatus(p: PoolSummary): { color: string; label: string; border: string } {
   if (!p.present) return { color: 'var(--tn-text-muted)', label: 'NO DATA', border: 'var(--tn-border)' };
-  if (p.lost > 0) return { color: 'var(--tn-red)', label: 'AUSFALL', border: 'var(--tn-red)' };
+  // AUSFALL only when real user traffic hit 5xx. Monitoring-only noise → SERVER-FEHLER.
+  if (p.lost_user > 0) return { color: 'var(--tn-red)', label: 'AUSFALL', border: 'var(--tn-red)' };
+  if (p.lost_monitoring > 0) return { color: 'var(--tn-orange)', label: 'MONITORING-LOSS', border: 'var(--tn-orange)' };
   if (p.server_errors > 0) return { color: 'var(--tn-orange)', label: 'SERVER-FEHLER', border: 'var(--tn-orange)' };
   return { color: 'var(--tn-green)', label: 'OPERATIONAL', border: 'var(--tn-green)' };
 }
@@ -160,7 +164,7 @@ function PoolCard({ label, pool, workers, isReserve, hours }: {
   hours: number;
 }) {
   const s = poolStatus(pool);
-  const isCritical = pool.lost > 0;
+  const isCritical = pool.lost_user > 0;
 
   return (
     <div
@@ -196,10 +200,21 @@ function PoolCard({ label, pool, workers, isReserve, hours }: {
 
       <div style={{ marginBottom: 12 }}>
         <div style={{ fontSize: 24, fontWeight: 700, color: s.color, fontFamily: 'monospace', lineHeight: 1 }}>
-          {pool.lost > 0 ? `${pool.lost} verloren` : pool.server_errors > 0 ? `${pool.server_errors} 5xx` : '0 Ausfälle'}
+          {pool.lost_user > 0
+            ? `${pool.lost_user} User verloren`
+            : pool.lost_monitoring > 0
+              ? `${pool.lost_monitoring} Monitoring 5xx`
+              : pool.server_errors > 0
+                ? `${pool.server_errors} 5xx`
+                : '0 Ausfälle'}
         </div>
         <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginTop: 2 }}>
           {pool.requests.toLocaleString('de-AT')} Requests ({hours}h)
+          {pool.lost_user > 0 && pool.lost_monitoring > 0 && (
+            <span style={{ marginLeft: 6, color: 'var(--tn-orange)' }}>
+              · +{pool.lost_monitoring} Polling
+            </span>
+          )}
           {pool.client_errors > 0 && (
             <span style={{ marginLeft: 6, color: 'var(--tn-text-muted)' }}>
               · {pool.client_errors} 4xx (Client)
@@ -235,16 +250,21 @@ function PoolCard({ label, pool, workers, isReserve, hours }: {
       {(pool.rescued > 0 || pool.lost > 0) && (
         <div style={{
           marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--tn-border)',
-          display: 'flex', gap: 12, fontSize: 10, fontFamily: 'monospace',
+          display: 'flex', gap: 12, fontSize: 10, fontFamily: 'monospace', flexWrap: 'wrap',
         }}>
           {pool.rescued > 0 && (
             <span style={{ color: 'var(--tn-green)' }}>
               ✓ {pool.rescued} gerettet
             </span>
           )}
-          {pool.lost > 0 && (
+          {pool.lost_user > 0 && (
             <span style={{ color: 'var(--tn-red)' }}>
-              ✗ {pool.lost} verloren
+              ✗ {pool.lost_user} User
+            </span>
+          )}
+          {pool.lost_monitoring > 0 && (
+            <span style={{ color: 'var(--tn-orange)' }} title="Internes Polling (cui, unified-tester) — kein User-Impact">
+              ⚠ {pool.lost_monitoring} Polling
             </span>
           )}
           {pool.retry_count > 0 && (
@@ -426,11 +446,13 @@ function StabilityCard({ stability }: { stability: StabilityData }) {
         <div style={{ fontSize: 28 }}>✓</div>
       </div>
 
-      {/* Uptime windows */}
+      {/* Uptime windows — PROD primary, DEV secondary. Both visible so DEV
+          outages can't hide behind a clean PROD number. */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
         {(['24h', '7d', '30d'] as const).map(key => {
           const w = stability.windows[key];
-          const pct = w.uptime_prod_pct;
+          const prodPct = w.uptime_prod_pct;
+          const devPct = w.uptime_dev_pct;
           const hasData = w.hours_covered > 0;
           return (
             <div key={key} style={{
@@ -442,11 +464,23 @@ function StabilityCard({ stability }: { stability: StabilityData }) {
               <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', fontWeight: 600, marginBottom: 2, textTransform: 'uppercase' }}>
                 {key === '24h' ? '24 Std' : key === '7d' ? '7 Tage' : '30 Tage'}
               </div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: uptimeColor(pct), fontFamily: 'monospace' }}>
-                {pct !== null ? `${pct.toFixed(pct >= 99 ? 2 : 1)}%` : '—'}
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                <span style={{ fontSize: 9, color: 'var(--tn-text-muted)', fontWeight: 600 }}>PROD</span>
+                <span style={{ fontSize: 15, fontWeight: 700, color: uptimeColor(prodPct), fontFamily: 'monospace' }}>
+                  {prodPct !== null ? `${prodPct.toFixed(prodPct >= 99 ? 2 : 1)}%` : '—'}
+                </span>
               </div>
-              <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginTop: 2 }}>
+              <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginTop: 1 }}>
                 {hasData ? `${w.prod.lost} lost · ${w.prod.outage_minutes}m down` : 'noch keine Daten'}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginTop: 6, borderTop: '1px dashed var(--tn-border)', paddingTop: 4 }}>
+                <span style={{ fontSize: 9, color: 'var(--tn-text-muted)', fontWeight: 600 }}>DEV</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: uptimeColor(devPct), fontFamily: 'monospace' }}>
+                  {devPct !== null ? `${devPct.toFixed(devPct >= 99 ? 2 : 1)}%` : '—'}
+                </span>
+              </div>
+              <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginTop: 1 }}>
+                {hasData ? `${w.dev.lost} lost · ${w.dev.outage_minutes}m down` : ''}
               </div>
             </div>
           );
@@ -580,7 +614,9 @@ export default function StatusTab() {
   }
 
   const prodServerErrors = events?.pools.prod.server_errors ?? 0;
-  const prodLost = events?.pools.prod.lost ?? 0;
+  const prodLostUser = events?.pools.prod.lost_user ?? 0;
+  const devLostUser = events?.pools.dev.lost_user ?? 0;
+  const devPresent = events?.pools.dev.present ?? true;
   const overall = events?.overall_status ?? 'healthy';
   const overallColor =
     overall === 'critical' ? 'var(--tn-red)' :
@@ -590,9 +626,19 @@ export default function StatusTab() {
     overall === 'critical' ? 'KRITISCH' :
     overall === 'degraded' ? 'DEGRADIERT' :
     'ALLES OK';
+  // Build an honest subtitle that names the driver — critical/degraded must
+  // explain *why*, otherwise the top status looks fake against the incident list.
+  const degradedReason: string = (() => {
+    if (devLostUser > 0) return `${devLostUser} Dev-User-Requests verloren`;
+    if (prodServerErrors > 0 && (events?.pools.prod.server_error_rate ?? 0) >= 0.5) {
+      return `${prodServerErrors} Prod 5xx-Fehler (${(events!.pools.prod.server_error_rate).toFixed(1)}%)`;
+    }
+    if (!devPresent) return 'Dev-Daten nicht verfügbar';
+    return 'Monitoring-Fehler aktiv';
+  })();
   const overallSubtitle =
-    overall === 'critical' ? `${prodLost > 0 ? `${prodLost} Prod-Requests verloren` : 'Prod-Server-Fehler aktiv'}` :
-    overall === 'degraded' ? `${prodServerErrors} Prod 5xx-Fehler` :
+    overall === 'critical' ? (prodLostUser > 0 ? `${prodLostUser} Prod-User-Requests verloren` : 'Prod-Server-Fehler aktiv') :
+    overall === 'degraded' ? degradedReason :
     'Keine Kundenimpact-Fehler';
 
   return (
