@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, Suspense, useRef } from 'react';
 import { PANEL_MENU_OPTIONS, PANEL_NAMES } from '../panelConstants';
 import ErrorBoundary from '../ErrorBoundary';
 import { useAuth } from '../../contexts/AuthContext';
+import PanelLoader from './shared/PanelLoader';
 
 // --- Lazy panel imports from panelLazy (avoids circular dep with panelRegistry) ---
 import ImageDrop from './ImageDrop';
@@ -20,12 +21,6 @@ import {
 } from '../panelLazy';
 
 const API = '/api';
-
-const PanelLoader = () => (
-  <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--tn-text-muted)', fontSize: 11 }}>
-    Loading...
-  </div>
-);
 
 // Tool-specific icons — compact, recognizable
 const TOOL_ICONS: Record<string, string> = {

@@ -5,6 +5,7 @@ import FilterBar from './components/FilterBar';
 import Breadcrumb from './components/Breadcrumb';
 import type { Subfig, ArchNode } from './engine/types';
 import { getPathConfig } from '../../../utils/paths';
+import PanelLoader from '../shared/PanelLoader';
 
 export default function ArchitectureExplorer() {
   const {
@@ -30,11 +31,7 @@ export default function ArchitectureExplorer() {
   const { status, loading: statusLoading } = useArchStatus(30000);
 
   if (loading) {
-    return (
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--tn-text-muted)', fontSize: 11 }}>
-        Loading architecture graph...
-      </div>
-    );
+    return <PanelLoader message="Loading architecture graph..." />;
   }
 
   if (error) {
