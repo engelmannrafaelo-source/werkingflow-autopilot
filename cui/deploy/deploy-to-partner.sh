@@ -1,113 +1,73 @@
 #!/bin/bash
 # ============================================================================
-# Deploy CUI to Partner Server
+# Deploy CUI to Partner Server — Git Push-based
 # ============================================================================
-# Run from the DEV SERVER. Syncs CUI code to a partner server via rsync/scp.
+# Run from the DEV SERVER. Splits the autopilot/cui subtree into standalone
+# commits and pushes to Partner's bare receive repo. The post-receive hook
+# on Partner checks out files, runs npm install + vite build, restarts service.
 #
 # USAGE:
-#   ./deploy-to-partner.sh <tailscale-ip-or-hostname>
-#   ./deploy-to-partner.sh 100.x.x.x
-#   ./deploy-to-partner.sh partner-server
+#   ./deploy-to-partner.sh [tailscale-ip]            # default: 100.119.199.86
+#   DRY_RUN=1 ./deploy-to-partner.sh                 # skip push, validate only
 #
-# What this does:
-#   1. Builds the CUI frontend (vite build)
-#   2. Syncs the built CUI to the partner server
-#   3. Installs npm dependencies on the partner server
-#   4. Installs/updates the systemd service
-#   5. Restarts the CUI workspace service
+# Prerequisites (one-time):
+#   ./deploy/setup-partner-git.sh [ip]               # sets up bare repo + hook
 #
-# Prerequisites:
-#   - Partner server has been provisioned with setup-partner-server.sh
-#   - SSH access to partner server as root (via Tailscale)
-#   - Claude OAuth tokens already set up on partner server
+# Architecture:
+#   Dev-server:
+#     /root/projekte/werkingflow/autopilot/ (git, branch: develop)
+#       cui/                               CUI code subdirectory
+#
+#   Partner-server:
+#     /opt/cui-workspace-bare.git/         bare receive repo + post-receive hook
+#     /opt/cui-workspace/                  live checkout (work tree)
 # ============================================================================
 set -euo pipefail
 
-TARGET="${1:-}"
-CUI_DIR="/root/projekte/werkingflow/autopilot/cui"
-REMOTE_CUI_DIR="/opt/cui-workspace"
+TARGET="${1:-100.119.199.86}"
+DRY_RUN="${DRY_RUN:-0}"
+AUTOPILOT_DIR="/root/projekte/werkingflow/autopilot"
+PARTNER_BARE="root@$TARGET:/opt/cui-workspace-bare.git"
+BRANCH="develop"
 
-if [ -z "$TARGET" ]; then
-  echo "Usage: $0 <tailscale-ip-or-hostname>"
-  echo ""
-  echo "Example: $0 100.x.x.x"
+echo "========================================"
+echo "  Deploy CUI → $TARGET  (git push)"
+[ "$DRY_RUN" = "1" ] && echo "  DRY RUN — push skipped"
+echo "========================================"
+
+# ── 1. Verify Partner bare repo exists ──────────────────────────────────
+if ! ssh "root@$TARGET" "[ -d /opt/cui-workspace-bare.git/.git ] || [ -f /opt/cui-workspace-bare.git/HEAD ]" 2>/dev/null; then
+  echo "ERROR: Partner bare repo not found at /opt/cui-workspace-bare.git"
+  echo "Run: ./deploy/setup-partner-git.sh $TARGET"
   exit 1
 fi
 
-echo "========================================"
-echo "  Deploy CUI → $TARGET"
-echo "========================================"
+# ── 2. Subtree split: extract cui/ as standalone commits ─────────────────
+echo "[1/3] Splitting autopilot/cui subtree..."
+cd "$AUTOPILOT_DIR"
+SPLIT_COMMIT=$(git subtree split --prefix=cui -b _cui-split-tmp 2>/dev/null)
+echo "  Split commit: ${SPLIT_COMMIT:0:12}"
 
-# ── 1. Build frontend ────────────────────────────────────────────────────
-echo "[1/5] Building CUI frontend..."
-cd "$CUI_DIR"
-npx vite build
-echo "  Build complete"
+# ── 3. Push to Partner (triggers post-receive: checkout + npm + build + restart)
+if [ "$DRY_RUN" = "1" ]; then
+  git branch -D _cui-split-tmp 2>/dev/null || true
+  echo ""
+  echo "  DRY RUN: would git push --force $PARTNER_BARE _cui-split-tmp:$BRANCH"
+  echo "  Post-receive hook would: git checkout → npm install → vite build → systemctl restart"
+  echo ""
+  echo "  Dry run complete. Remove DRY_RUN=1 to deploy."
+  exit 0
+fi
 
-# ── 2. Sync CUI code to partner ─────────────────────────────────────────
-echo "[2/5] Syncing CUI to $TARGET:$REMOTE_CUI_DIR ..."
+echo "[2/3] Pushing to Partner (triggers: checkout + npm install + build + restart)..."
+git push --force "$PARTNER_BARE" "_cui-split-tmp:$BRANCH"
+git branch -D _cui-split-tmp 2>/dev/null || true
+echo "  Push complete — waiting for Partner post-receive hook..."
+sleep 30  # Hook runs npm install + vite build (takes ~20-30s)
 
-# Create target directory
-ssh "root@$TARGET" "mkdir -p $REMOTE_CUI_DIR"
+# ── 4. Sync orchestrator/bin + verify ───────────────────────────────────
+echo "[3/3] Syncing orchestrator/bin + verifying..."
 
-rsync -avz --delete \
-  --exclude 'node_modules' \
-  --exclude '.git' \
-  --exclude 'data/users.json' \
-  --exclude '.env' \
-  --exclude 'data/layouts' \
-  --exclude 'data/projects' \
-  --exclude '*.log' \
-  "$CUI_DIR/" "root@$TARGET:$REMOTE_CUI_DIR/"
-
-echo "  Sync complete"
-
-# ── 3. Install dependencies on partner ───────────────────────────────────
-echo "[3/5] Installing npm dependencies on partner..."
-ssh "root@$TARGET" "cd $REMOTE_CUI_DIR && npm install --production"
-echo "  Dependencies installed"
-
-# ── 4. Install/update systemd service ────────────────────────────────────
-echo "[4/5] Installing systemd service..."
-ssh "root@$TARGET" bash <<'REMOTE_SCRIPT'
-cat > /etc/systemd/system/cui-workspace.service <<'SVC'
-[Unit]
-Description=CUI Workspace Server (Partner)
-After=network.target tailscaled.service
-
-[Service]
-Type=simple
-User=claude-user
-Group=claude-user
-WorkingDirectory=/opt/cui-workspace
-
-ExecStartPre=+/bin/bash -c "fuser -k 4005/tcp 2>/dev/null || true; sleep 1"
-ExecStart=/bin/bash scripts/start-local.sh
-
-Environment=HOME=/home/claude-user
-Environment=NODE_ENV=production
-Environment=PORT=4005
-
-KillMode=process
-KillSignal=SIGTERM
-TimeoutStopSec=15
-Restart=always
-RestartSec=10
-
-StandardOutput=append:/var/log/cui-workspace.log
-StandardError=append:/var/log/cui-workspace.log
-
-[Install]
-WantedBy=multi-user.target
-SVC
-
-systemctl daemon-reload
-systemctl enable cui-workspace
-REMOTE_SCRIPT
-echo "  Service installed"
-
-# ── 5. Sync orchestrator/bin scripts ────────────────────────────────────
-echo "[5/7] Syncing orchestrator/bin scripts to partner..."
 ORCH_BIN="/root/projekte/orchestrator/bin"
 if [ -d "$ORCH_BIN" ]; then
   ssh "root@$TARGET" "mkdir -p /root/projekte/orchestrator/bin"
@@ -115,44 +75,24 @@ if [ -d "$ORCH_BIN" ]; then
     "$ORCH_BIN/" "root@$TARGET:/root/projekte/orchestrator/bin/"
   ssh "root@$TARGET" "chmod +x /root/projekte/orchestrator/bin/*"
   echo "  orchestrator/bin synced"
-else
-  echo "  WARNING: $ORCH_BIN not found, skipping"
 fi
 
-# ── 6. Install git hooks ─────────────────────────────────────────────────
-echo "[6/7] Installing git hooks on partner..."
-HOOK_SRC="$CUI_DIR/deploy/hooks/pre-push"
-if [ -f "$HOOK_SRC" ]; then
-  scp "$HOOK_SRC" "root@$TARGET:/tmp/pre-push-hook"
-  ssh "root@$TARGET" bash <<'HOOKSCRIPT'
-chmod +x /tmp/pre-push-hook
-for gitdir in /opt/cui-workspace/.git /home/claude-user/projects/*/.git; do
-  if [ -d "$gitdir" ]; then
-    cp /tmp/pre-push-hook "$gitdir/hooks/pre-push"
-    chmod +x "$gitdir/hooks/pre-push"
-    echo "  Hook installed: $gitdir/hooks/pre-push"
-  fi
-done
-rm -f /tmp/pre-push-hook
-HOOKSCRIPT
-fi
-
-# ── 7. Restart service ──────────────────────────────────────────────────
-echo "[7/7] Restarting CUI workspace..."
-ssh "root@$TARGET" "systemctl restart cui-workspace"
-
-# Wait for startup
-sleep 3
 STATUS=$(ssh "root@$TARGET" "systemctl is-active cui-workspace" 2>/dev/null || echo "failed")
+AUTH_CHECK=$(ssh "root@$TARGET" "curl -sf http://localhost:4005/api/auth/status 2>/dev/null || echo 'unreachable'")
 
 echo ""
 echo "========================================"
 if [ "$STATUS" = "active" ]; then
-  PARTNER_IP=$(ssh "root@$TARGET" "tailscale ip -4" 2>/dev/null || echo "$TARGET")
   echo "  DEPLOY SUCCESS"
-  echo "  CUI running at: http://$PARTNER_IP:4005"
+  echo "  CUI at: http://$TARGET:4005"
+  echo "  Auth:   $AUTH_CHECK"
+  if echo "$AUTH_CHECK" | grep -q '"partnerCui":true'; then
+    echo "  PARTNER_MODE: ACTIVE ✓"
+  else
+    echo "  WARNING: partnerCui not true — check PARTNER_MODE env var on Partner"
+  fi
 else
-  echo "  DEPLOY WARNING: Service status = $STATUS"
-  echo "  Check logs: ssh root@$TARGET journalctl -u cui-workspace -n 50"
+  echo "  DEPLOY FAILED: service status = $STATUS"
+  echo "  Logs: ssh root@$TARGET journalctl -u cui-workspace -n 50"
 fi
 echo "========================================"
