@@ -23,7 +23,7 @@ function isValidWorkDir(d: string): boolean {
   return d.startsWith("/root/projekte/") || d.startsWith("/root/orchestrator/") || d.startsWith("/home/") || d.startsWith("/opt/");
 }
 
-const IS_PARTNER = process.env.PARTNER_MODE === '1';
+const IS_PARTNER = process.env.PARTNER_MODE === '1' || process.env.PARTNER_CUI === '1';
 
 /** On Partner: maps workspace workDirs (/opt/cui-workspace/data/workspaces/<ws>)
  *  to the user's actual project directory under /home/{userId}/projekte/.
