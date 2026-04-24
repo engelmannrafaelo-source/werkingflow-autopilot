@@ -101,11 +101,11 @@ export function shortenPath(absolutePath: string): string {
 }
 
 /** Get the .claude directory for a specific account home */
-export function claudeDir(accountHome: string): string {
+function claudeDir(accountHome: string): string {
   return join(accountHome, '.claude');
 }
 
 /** Get the projects directory for a specific account home */
-export function claudeProjectsDir(accountHome: string): string {
+function claudeProjectsDir(accountHome: string): string {
   return join(accountHome, '.claude', 'projects');
 }

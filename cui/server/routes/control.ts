@@ -64,7 +64,7 @@ export function getCpuProfileResolver(): ((result: unknown) => void) | null {
   return pendingProfileResolve;
 }
 
-export function resolveCpuProfile(result: unknown): void {
+function resolveCpuProfile(result: unknown): void {
   if (pendingProfileResolve) {
     pendingProfileResolve(result);
   }

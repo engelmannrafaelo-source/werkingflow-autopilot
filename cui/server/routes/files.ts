@@ -619,4 +619,3 @@ export default function createFilesRouter(deps: FilesDeps): Router {
   return router;
 }
 
-export { resolvePath };

@@ -391,7 +391,7 @@ function updateTickMeta(active: number, recent: number) {
 }
 
 // Force immediate update (for API endpoint)
-export async function triggerPeerAwarenessUpdate(): Promise<void> {
+async function triggerPeerAwarenessUpdate(): Promise<void> {
   await peerAwarenessTick();
 }
 

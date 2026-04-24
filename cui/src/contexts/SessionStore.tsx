@@ -49,12 +49,12 @@ export function useSessionStore(): SessionStoreValue {
 }
 
 /** Convenience: get cuiStates only */
-export function useCuiStates(): CuiStates {
+function useCuiStates(): CuiStates {
   return useSessionStore().cuiStates;
 }
 
 /** Convenience: get a single session's state */
-export function useSessionState(sessionId: string | null): SessionStateEntry | undefined {
+function useSessionState(sessionId: string | null): SessionStateEntry | undefined {
   const { sessionStates } = useSessionStore();
   return sessionId ? sessionStates.get(sessionId) : undefined;
 }

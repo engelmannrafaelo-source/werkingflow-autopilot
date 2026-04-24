@@ -53,7 +53,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
  * Optional auth — attaches user if token present, but doesn't block.
  * Useful for routes that behave differently for authenticated users.
  */
-export function optionalAuth(req: Request, _res: Response, next: NextFunction): void {
+function optionalAuth(req: Request, _res: Response, next: NextFunction): void {
   if (!isAuthEnabled()) {
     next();
     return;
@@ -98,7 +98,7 @@ export function requireRole(...roles: string[]) {
  * Panel access check — verifies user can access the given panel.
  * Returns true if allowed, false if denied.
  */
-export function canAccessPanel(req: Request, panelId: string): boolean {
+function canAccessPanel(req: Request, panelId: string): boolean {
   if (!isAuthEnabled()) return true;
   if (!req.user) return false;
 

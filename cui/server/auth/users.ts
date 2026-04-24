@@ -28,7 +28,7 @@ export function getUsers(): CuiUser[] {
 }
 
 /** Force-reload users from disk */
-export function reloadUsers(): CuiUser[] {
+function reloadUsers(): CuiUser[] {
   const path = getUsersPath();
 
   if (!existsSync(path)) {

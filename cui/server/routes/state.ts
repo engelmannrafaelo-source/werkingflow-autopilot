@@ -41,7 +41,7 @@ export type PanelVisibility = _PanelVisibility;
 
 export const visibilityRegistry = new Map<string, PanelVisibility>();
 
-export function updatePanelVisibility(data: { panelId: string; projectId: string; accountId: string; sessionId: string; route: string }): void {
+function updatePanelVisibility(data: { panelId: string; projectId: string; accountId: string; sessionId: string; route: string }): void {
   const key = `${data.projectId}:${data.panelId}`;
   const prev = visibilityRegistry.get(key);
   visibilityRegistry.set(key, { ...data, updatedAt: Date.now() });
@@ -67,7 +67,7 @@ export function updatePanelVisibility(data: { panelId: string; projectId: string
   }
 }
 
-export function removePanelVisibility(projectId: string, panelId: string): void {
+function removePanelVisibility(projectId: string, panelId: string): void {
   visibilityRegistry.delete(`${projectId}:${panelId}`);
   broadcast({ type: 'visibility-update', visibleSessionIds: [...getVisibleSessionIds()] });
 }
@@ -112,7 +112,7 @@ export const NOTES_DIR = join(DATA_DIR, 'notes');
 export const LAYOUTS_DIR = join(DATA_DIR, 'layouts');
 export const UPLOADS_DIR = join(DATA_DIR, 'uploads');
 export const ACTIVE_DIR = join(DATA_DIR, 'active');
-export const SESSION_STATES_FILE = join(DATA_DIR, "session-states.json");
+const SESSION_STATES_FILE = join(DATA_DIR, "session-states.json");
 
 // Ensure dirs exist
 for (const dir of [PROJECTS_DIR, NOTES_DIR, LAYOUTS_DIR, UPLOADS_DIR, ACTIVE_DIR]) {
@@ -121,7 +121,7 @@ for (const dir of [PROJECTS_DIR, NOTES_DIR, LAYOUTS_DIR, UPLOADS_DIR, ACTIVE_DIR
 
 export const sessionStates = new Map<string, SessionState>();
 
-export function persistSessionStates() {
+function persistSessionStates() {
   try {
     const out: Record<string, SessionState> = {};
     for (const [k, v] of sessionStates) out[k] = v;
@@ -136,7 +136,7 @@ export function getRestoredWorkingSessions(): Array<{ sessionId: string; account
   return [..._restoredWorkingSessions];
 }
 
-export function restoreSessionStates() {
+function restoreSessionStates() {
   if (!existsSync(SESSION_STATES_FILE)) return;
   try {
     const data = JSON.parse(readFileSync(SESSION_STATES_FILE, "utf8")) as Record<string, SessionState>;
@@ -214,7 +214,7 @@ _intervals.push(setInterval(() => {
 const watchers = new Map<string, ReturnType<typeof watch>>();
 export const clients = new Set<WsType>();
 
-export function cleanupOldWatchers() {
+function cleanupOldWatchers() {
   // Limit to 10 active watchers max to prevent resource exhaustion
   if (watchers.size <= 10) return;
   const entries = [...watchers.entries()];
@@ -226,7 +226,7 @@ export function cleanupOldWatchers() {
   }
 }
 
-export function startWatching(dirPath: string) {
+function startWatching(dirPath: string) {
 
   const resolved = resolve(dirPath);
   if (watchers.has(resolved)) return;
@@ -284,7 +284,7 @@ _intervals.push(setInterval(() => {
 // Reference to _pendingChanges — set by caller via setPendingChangesRef()
 let _pendingChangesRef: { length: number } = { length: 0 };
 
-export function setPendingChangesRef(ref: { length: number }) {
+function setPendingChangesRef(ref: { length: number }) {
   _pendingChangesRef = ref;
 }
 
@@ -366,11 +366,11 @@ let _wsInitialized = false;
 // Layout snapshots from LayoutManagers (updated on reportPanels)
 const layoutSnapshots = new Map<string, { panels: Array<{ id: string; component: string; config: Record<string, unknown>; name: string }>; updatedAt: number }>();
 
-export function getLayoutSnapshot(projectId: string) {
+function getLayoutSnapshot(projectId: string) {
   return layoutSnapshots.get(projectId);
 }
 
-export function getAllLayoutSnapshots() {
+function getAllLayoutSnapshots() {
   const result: Record<string, any> = {};
   for (const [k, v] of layoutSnapshots) result[k] = v;
   return result;

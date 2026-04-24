@@ -311,5 +311,5 @@ export default function createAutoInjectRouter(injectedDeps: AutoInjectDeps): Ro
   return router;
 }
 
-export { startAutoInjectTimer, stopAutoInjectTimer, logUserInput, updateAutoInjectSession, disableAutoInject };
+export { startAutoInjectTimer, stopAutoInjectTimer, updateAutoInjectSession, disableAutoInject };
 export type { AutoInjectConfig, AutoInjectState };

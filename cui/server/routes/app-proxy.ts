@@ -192,4 +192,3 @@ export default function createAppProxyRouter(): Router {
   return router;
 }
 
-export { ALLOWED_PORTS };

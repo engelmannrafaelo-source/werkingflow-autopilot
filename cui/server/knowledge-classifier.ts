@@ -9,7 +9,7 @@ import type {
 
 import { bridgeChat } from './lib/bridge-fetch.js';
 
-export async function classifyDocument(
+async function classifyDocument(
   req: ClassificationRequest
 ): Promise<ClassificationResponse> {
   const systemPrompt = buildClassificationSystemPrompt();

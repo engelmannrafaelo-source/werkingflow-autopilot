@@ -80,7 +80,7 @@ export function validateApiResponse<T>(
  * and [null, errorMessage] on failure. For cases where you want to
  * handle the error without try/catch.
  */
-export function tryValidateApiResponse<T>(
+function tryValidateApiResponse<T>(
   data: unknown,
   endpoint: string,
   schema: Record<string, FieldSpec>,

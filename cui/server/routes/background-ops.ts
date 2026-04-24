@@ -40,7 +40,7 @@ export function logBackgroundEvent(
   if (events.length > MAX_EVENTS) events.shift();
 }
 
-export function getBackgroundEvents(): BgEvent[] {
+function getBackgroundEvents(): BgEvent[] {
   return [...events];
 }
 

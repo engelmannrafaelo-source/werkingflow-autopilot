@@ -494,4 +494,3 @@ export default function createInfrastructureRouter(deps: InfrastructureDeps): Ro
   return router;
 }
 
-export { restartCuiServer, triggerWatchdogCheck, PANEL_CONFIGS, WATCHDOG_HOST, WATCHDOG_PORT, WATCHDOG_BASE };

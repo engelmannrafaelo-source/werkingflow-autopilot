@@ -358,7 +358,7 @@ function extractSmartSummary(content: string): string {
   return cutoff > maxLength * 0.8 ? truncated.slice(0, cutoff + 1) : truncated + '...';
 }
 
-export async function loadPersonaProfiles(): Promise<PersonaProfile[]> {
+async function loadPersonaProfiles(): Promise<PersonaProfile[]> {
   const files = await fs.readdir(PERSONAS_PATH);
   const profiles: PersonaProfile[] = [];
 

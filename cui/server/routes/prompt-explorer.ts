@@ -71,4 +71,3 @@ export function createPromptExplorerRouter(): Router {
   return router;
 }
 
-export default createPromptExplorerRouter();

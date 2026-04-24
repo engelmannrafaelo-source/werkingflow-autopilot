@@ -37,7 +37,7 @@ export const markdownComponents = {
 };
 
 // --- Tool Use Block (interactive) ---
-export function ToolUseBlock({ block, onRespond, workDir, serverPlanText, sessionCwd }: { block: ContentBlock; onRespond?: (text: string) => void; workDir?: string; serverPlanText?: string; sessionCwd?: string }) {
+function ToolUseBlock({ block, onRespond, workDir, serverPlanText, sessionCwd }: { block: ContentBlock; onRespond?: (text: string) => void; workDir?: string; serverPlanText?: string; sessionCwd?: string }) {
   const [planText, setPlanText] = useState<string | null>(null);
   const [planLoading, setPlanLoading] = useState(false);
   const [responded, setResponded] = useState(false);
@@ -236,7 +236,7 @@ export function ToolUseBlock({ block, onRespond, workDir, serverPlanText, sessio
 }
 
 // --- Message Row (memoized) ---
-export const MessageRow = memo(function MessageRow({ msg, onRespond, isLast, workDir, selectedId, serverPlanText, sessionCwd }: { msg: Message; onRespond?: (text: string) => void; isLast: boolean; workDir?: string; selectedId?: string; serverPlanText?: string; sessionCwd?: string }) {
+const MessageRow = memo(function MessageRow({ msg, onRespond, isLast, workDir, selectedId, serverPlanText, sessionCwd }: { msg: Message; onRespond?: (text: string) => void; isLast: boolean; workDir?: string; selectedId?: string; serverPlanText?: string; sessionCwd?: string }) {
   const blocks: ContentBlock[] = typeof msg.content === 'string'
     ? [{ type: 'text', text: msg.content }]
     : Array.isArray(msg.content) ? msg.content : [];
@@ -326,7 +326,7 @@ export const MessageRow = memo(function MessageRow({ msg, onRespond, isLast, wor
 });
 
 // --- Loading state with timeout + retry ---
-export function LoadingConversation({ sessionId, onBack, onRetry, onLoadFailed }: { sessionId: string | null; onBack: () => void; onRetry: () => void; onLoadFailed?: (sessionId: string) => void }) {
+function LoadingConversation({ sessionId, onBack, onRetry, onLoadFailed }: { sessionId: string | null; onBack: () => void; onRetry: () => void; onLoadFailed?: (sessionId: string) => void }) {
   const [elapsed, setElapsed] = useState(0);
   const failedRef = useRef(false);
   const retriedOnReconnectRef = useRef(false);
@@ -395,7 +395,7 @@ interface ChatMessagesProps {
   sessionCwd?: string;
 }
 
-export default function ChatMessages({
+function ChatMessages({
   messages, showAllMessages, onShowAll, onRespond,
   workDir, selectedId, sessionId, onBack, onRetry, onLoadFailed,
   scrollContainerRef, messagesEndRef, userScrolledUpRef,

@@ -33,9 +33,11 @@ interface ConvMetadata {
   users: Record<string, string>;
   /** subSessionId → timestamp (ms) of first successful inject into parent — prevents re-inject loop */
   injectedAt: Record<string, number>;
+  /** sessionId → projectId (workspace the session was started in — resolves multi-workspace ambiguity) */
+  projectIds: Record<string, string>;
 }
 
-const EMPTY: ConvMetadata = { titles: {}, accounts: {}, workdirs: {}, finished: {}, lastPrompt: {}, models: {}, paused: {}, reviews: {}, subSessions: {}, parentSessions: {}, users: {}, injectedAt: {} };
+const EMPTY: ConvMetadata = { titles: {}, accounts: {}, workdirs: {}, finished: {}, lastPrompt: {}, models: {}, paused: {}, reviews: {}, subSessions: {}, parentSessions: {}, users: {}, injectedAt: {}, projectIds: {} };
 
 let _data: ConvMetadata | null = null;
 let _filePath: string = '';
@@ -180,7 +182,7 @@ export function getWorkDir(sessionId: string): string {
   return _load().workdirs[sessionId] || '';
 }
 
-export function getAllWorkDirs(): Record<string, string> {
+function getAllWorkDirs(): Record<string, string> {
   return { ..._load().workdirs };
 }
 
@@ -214,7 +216,7 @@ export function setFinished(sessionId: string, finished: boolean) {
 // Last Prompt
 // ---------------------------------------------------------------------------
 
-export function getLastPrompt(sessionId: string): string {
+function getLastPrompt(sessionId: string): string {
   return _load().lastPrompt[sessionId] || '';
 }
 
@@ -350,6 +352,28 @@ export function saveUser(sessionId: string, userId: string) {
   const data = _load();
   if (!data.users) data.users = {};
   data.users[sessionId] = userId;
+  _scheduleSave();
+}
+
+// ---------------------------------------------------------------------------
+// ProjectIds (sessionId → workspace projectId — resolves multi-workspace ambiguity
+// when one user home dir feeds multiple workspaces, e.g. David → energy + report)
+// ---------------------------------------------------------------------------
+
+export function getProjectId(sessionId: string): string {
+  return _load().projectIds?.[sessionId] || '';
+}
+
+export function getAllProjectIds(): Record<string, string> {
+  return { ...(_load().projectIds ?? {}) };
+}
+
+export function saveProjectId(sessionId: string, projectId: string) {
+  if (!projectId) return;
+  const data = _load();
+  if (!data.projectIds) data.projectIds = {};
+  if (data.projectIds[sessionId] === projectId) return;
+  data.projectIds[sessionId] = projectId;
   _scheduleSave();
 }
 

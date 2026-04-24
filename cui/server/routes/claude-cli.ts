@@ -184,7 +184,7 @@ export function getAccountConfig(accountId: string): AccountConfig | undefined {
   return ACCOUNT_CONFIG.find(a => a.id === accountId);
 }
 
-export function getAccountHome(accountId: string): string | null {
+function getAccountHome(accountId: string): string | null {
   return getAccountConfig(accountId)?.home ?? null;
 }
 
@@ -900,7 +900,34 @@ function startStaleStateReconciliation() {
         try {
           process.kill(entry.claudePid, 0);
         } catch {
-          console.log(`[StaleCheck] ${key.slice(0, 8)}: working but PID ${entry.claudePid} dead -> idle/done`);
+          // PID is dead while state was 'working' — claude crashed mid-turn.
+          // Try to auto-respawn via --resume before giving up (up to AUTO_CONTINUE_MAX_RETRIES).
+          // This handles OOM kills, transient API failures, systemd restarts that
+          // killed claude but left the session otherwise recoverable.
+          const sid = state.sessionId || key;
+          const autoCount = _autoContinueCount.get(sid) || 0;
+          if (autoCount < AUTO_CONTINUE_MAX_RETRIES) {
+            const nextCount = autoCount + 1;
+            _autoContinueCount.set(sid, nextCount);
+            const workDir = getOriginalCwd(sid) || '/root/orchestrator/workspaces/diverse';
+            console.log(`[StaleCheck] ${key.slice(0, 8)}: PID ${entry.claudePid} dead mid-turn -> auto-respawn via --resume (attempt ${nextCount}/${AUTO_CONTINUE_MAX_RETRIES})`);
+            activeProcesses.delete(key);
+            startConversation(state.accountId, '', workDir, sid).then((res) => {
+              if (!res.ok) {
+                console.error(`[StaleCheck] ${key.slice(0, 8)}: respawn failed: ${res.error} — marking idle/done`);
+                _setSessionState(key, state.accountId, 'idle', 'done', sid);
+                _broadcast({ type: 'cui-state', cuiId: state.accountId, sessionId: sid, state: 'done' });
+              } else {
+                console.log(`[StaleCheck] ${key.slice(0, 8)}: respawn ok`);
+              }
+            }).catch((err) => {
+              console.error(`[StaleCheck] ${key.slice(0, 8)}: respawn error: ${err instanceof Error ? err.message : err}`);
+              _setSessionState(key, state.accountId, 'idle', 'done', sid);
+              _broadcast({ type: 'cui-state', cuiId: state.accountId, sessionId: sid, state: 'done' });
+            });
+            continue;
+          }
+          console.log(`[StaleCheck] ${key.slice(0, 8)}: working but PID ${entry.claudePid} dead -> idle/done (max respawns exceeded: ${autoCount})`);
           _setSessionState(key, state.accountId, 'idle', 'done', state.sessionId || key);
           _broadcast({ type: 'cui-state', cuiId: state.accountId, sessionId: state.sessionId || key, state: 'done' });
           // Cleanup the dead entry
@@ -1469,7 +1496,7 @@ export async function stopConversation(sessionId: string): Promise<boolean> {
   return true;
 }
 
-export async function stopAccountProcesses(accountId: string): Promise<number> {
+async function stopAccountProcesses(accountId: string): Promise<number> {
   const sessions = getActiveSessionsForAccount(accountId);
   await Promise.allSettled(sessions.map(sid => stopConversation(sid)));
   return sessions.length;
@@ -1488,7 +1515,7 @@ export function getActiveAccountId(sessionId: string): string | null {
   return entry ? entry.accountId : null;
 }
 
-export function getActiveSessionsForAccount(accountId: string): string[] {
+function getActiveSessionsForAccount(accountId: string): string[] {
   return [...activeProcesses.entries()]
     .filter(([_, e]) => e.accountId === accountId)
     .map(([sid]) => sid);
