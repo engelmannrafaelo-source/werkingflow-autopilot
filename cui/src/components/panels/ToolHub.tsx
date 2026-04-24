@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, Suspense, useRef } from 'react';
-import { PANEL_MENU_OPTIONS, PANEL_NAMES } from '../panelRegistry';
+import { PANEL_MENU_OPTIONS, PANEL_NAMES } from '../panelConstants';
 import ErrorBoundary from '../ErrorBoundary';
 import { useAuth } from '../../contexts/AuthContext';
 
-// --- Lazy panel imports (same as LayoutManager) ---
+// --- Lazy panel imports from panelLazy (avoids circular dep with panelRegistry) ---
 import ImageDrop from './ImageDrop';
 import BrowserPanel from './BrowserPanel';
 import FilePreview from './FilePreview';
@@ -16,8 +16,8 @@ import {
   ArchitectureExplorer, ReportBuilder, PromptExplorer, BusinessAngelPanel,
   MyTasksPanel, ActivityFeedPanel, PartnerInboxPanel,
   FeedbackPanel, TeamStatusPanel, BusinessDocsPanel, UploadPanel,
-  CalendarPanel,
-} from '../panelRegistry';
+  CalendarPanel, MailPanel, ErrorMonitor,
+} from '../panelLazy';
 
 const API = '/api';
 
@@ -40,7 +40,7 @@ const TOOL_ICONS: Record<string, string> = {
   maintenance: '🔨', 'input-audit': '📥', linkedin: '💼',
   'business-docs': '📂', 'my-tasks': '✏️', 'activity-feed': '📰',
   'partner-inbox': '📬', feedback: '💡', 'team-status': '👥', uploads: '📤',
-  calendar: '📅',
+  calendar: '📅', mail: '✉️', 'error-monitor': '🚨',
 };
 
 // Short labels for the icon bar (max ~8 chars)
@@ -56,7 +56,7 @@ const SHORT_LABELS: Record<string, string> = {
   maintenance: 'Maint', 'input-audit': 'Audit', linkedin: 'LinkedIn',
   'business-docs': 'BizDocs', 'my-tasks': 'Tasks', 'activity-feed': 'Feed',
   'partner-inbox': 'Inbox', feedback: 'Fdbk', 'team-status': 'Team', uploads: 'Upload',
-  calendar: 'Kalender',
+  calendar: 'Kalender', mail: 'Mail', 'error-monitor': 'Errors',
 };
 
 const EXCLUDED_TOOLS = new Set(['cui', 'cui-lite']);
@@ -182,6 +182,8 @@ export default function ToolHub({ projectId, workDir }: ToolHubProps) {
       case 'business-docs': return withSuspense(<BusinessDocsPanel />);
       case 'uploads': return withSuspense(<UploadPanel />);
       case 'calendar': return withSuspense(<CalendarPanel />);
+      case 'mail': return withSuspense(<MailPanel />);
+      case 'error-monitor': return withSuspense(<ErrorMonitor />);
       default: return <div style={{ padding: 20, color: 'var(--tn-text-muted)' }}>Unknown: {activeTool}</div>;
     }
   };
