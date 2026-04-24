@@ -5,6 +5,62 @@
 import { useState, type FormEvent } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 
+interface LoginInputProps {
+  label: string;
+  type: string;
+  value: string;
+  onChange: (val: string) => void;
+  autoFocus?: boolean;
+  placeholder?: string;
+  marginBottom?: number;
+}
+
+function LoginInput({ label, type, value, onChange, autoFocus, placeholder, marginBottom = 20 }: LoginInputProps) {
+  return (
+    <div style={{ marginBottom }}>
+      <label style={{
+        display: 'block',
+        fontSize: 13,
+        fontWeight: 500,
+        color: 'rgba(255,255,255,0.6)',
+        marginBottom: 8,
+      }}>
+        {label}
+      </label>
+      <input
+        type={type}
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        required
+        autoFocus={autoFocus}
+        placeholder={placeholder}
+        style={{
+          width: '100%',
+          padding: '14px 16px',
+          background: 'rgba(255,255,255,0.03)',
+          border: '1px solid rgba(255,255,255,0.1)',
+          borderRadius: 12,
+          color: '#ffffff',
+          fontSize: 15,
+          outline: 'none',
+          boxSizing: 'border-box',
+          transition: 'all 0.2s',
+        }}
+        onFocus={e => {
+          e.target.style.borderColor = 'rgba(222,193,94,0.5)';
+          e.target.style.boxShadow = '0 0 0 3px rgba(222,193,94,0.15)';
+          e.target.style.background = 'rgba(255,255,255,0.06)';
+        }}
+        onBlur={e => {
+          e.target.style.borderColor = 'rgba(255,255,255,0.1)';
+          e.target.style.boxShadow = 'none';
+          e.target.style.background = 'rgba(255,255,255,0.03)';
+        }}
+      />
+    </div>
+  );
+}
+
 export default function LoginPage() {
   const { login } = useAuth();
   const [user, setUser] = useState('');
@@ -125,89 +181,23 @@ export default function LoginPage() {
             </div>
           )}
 
-          {/* User Field */}
-          <div style={{ marginBottom: 20 }}>
-            <label style={{
-              display: 'block',
-              fontSize: 13,
-              fontWeight: 500,
-              color: 'rgba(255,255,255,0.6)',
-              marginBottom: 8,
-            }}>
-              Benutzer
-            </label>
-            <input
-              type="text"
-              value={user}
-              onChange={e => setUser(e.target.value)}
-              required
-              autoFocus
-              placeholder="user-id"
-              style={{
-                width: '100%',
-                padding: '14px 16px',
-                background: 'rgba(255,255,255,0.03)',
-                border: '1px solid rgba(255,255,255,0.1)',
-                borderRadius: 12,
-                color: '#ffffff',
-                fontSize: 15,
-                outline: 'none',
-                boxSizing: 'border-box',
-                transition: 'all 0.2s',
-              }}
-              onFocus={e => {
-                e.target.style.borderColor = 'rgba(222,193,94,0.5)';
-                e.target.style.boxShadow = '0 0 0 3px rgba(222,193,94,0.15)';
-                e.target.style.background = 'rgba(255,255,255,0.06)';
-              }}
-              onBlur={e => {
-                e.target.style.borderColor = 'rgba(255,255,255,0.1)';
-                e.target.style.boxShadow = 'none';
-                e.target.style.background = 'rgba(255,255,255,0.03)';
-              }}
-            />
-          </div>
+          <LoginInput
+            label="Benutzer"
+            type="text"
+            value={user}
+            onChange={setUser}
+            autoFocus
+            placeholder="user-id"
+            marginBottom={20}
+          />
 
-          {/* Password Field */}
-          <div style={{ marginBottom: 28 }}>
-            <label style={{
-              display: 'block',
-              fontSize: 13,
-              fontWeight: 500,
-              color: 'rgba(255,255,255,0.6)',
-              marginBottom: 8,
-            }}>
-              Passwort
-            </label>
-            <input
-              type="password"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              required
-              style={{
-                width: '100%',
-                padding: '14px 16px',
-                background: 'rgba(255,255,255,0.03)',
-                border: '1px solid rgba(255,255,255,0.1)',
-                borderRadius: 12,
-                color: '#ffffff',
-                fontSize: 15,
-                outline: 'none',
-                boxSizing: 'border-box',
-                transition: 'all 0.2s',
-              }}
-              onFocus={e => {
-                e.target.style.borderColor = 'rgba(222,193,94,0.5)';
-                e.target.style.boxShadow = '0 0 0 3px rgba(222,193,94,0.15)';
-                e.target.style.background = 'rgba(255,255,255,0.06)';
-              }}
-              onBlur={e => {
-                e.target.style.borderColor = 'rgba(255,255,255,0.1)';
-                e.target.style.boxShadow = 'none';
-                e.target.style.background = 'rgba(255,255,255,0.03)';
-              }}
-            />
-          </div>
+          <LoginInput
+            label="Passwort"
+            type="password"
+            value={password}
+            onChange={setPassword}
+            marginBottom={28}
+          />
 
           {/* Submit Button */}
           <button
