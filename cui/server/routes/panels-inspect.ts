@@ -91,10 +91,8 @@ const PANELS: PanelDefinition[] = [
       { method: 'GET', path: '/api/qa/arch-test/freshness' },
       { method: 'GET', path: '/api/qa/product-docs' },
       { method: 'GET', path: '/api/qa/backend-pyramid' },
-      { method: 'GET', path: '/api/qa/app', query: ':appId' },
-      { method: 'GET', path: '/api/qa/file-preview', query: 'path=...' },
-      { method: 'GET', path: '/api/qa/pyramid', query: ':appId' },
-      { method: 'GET', path: '/api/qa/report', query: 'path=...' },
+      { method: 'GET', path: '/api/qa/app/cui' },
+      { method: 'GET', path: '/api/qa/pyramid/cui' },
     ],
     mutations: [
       'POST /api/qa/staleness/:appId/retest',
@@ -102,6 +100,8 @@ const PANELS: PanelDefinition[] = [
       'POST /api/qa/coverage-gaps/:appId/refresh',
       'POST /api/qa/product-docs/:appId/regenerate',
       'POST /api/qa/arch-test/:appId/refresh',
+      'GET /api/qa/file-preview',
+      'GET /api/qa/report',
     ],
   },
   {
@@ -201,9 +201,6 @@ const PANELS: PanelDefinition[] = [
       { method: 'GET', path: '/api/admin/wr/users', query: 'limit=10' },
       { method: 'GET', path: '/api/admin/wr/notifications' },
       { method: 'GET', path: '/api/admin/wr/developer-tokens' },
-      { method: 'GET', path: '/api/admin/wr/activity-stream' },
-      { method: 'GET', path: '/api/admin/wr/audit', query: 'limit=50' },
-      { method: 'GET', path: '/api/admin/wr/billing/events', query: ':tenantId' },
       { method: 'GET', path: '/api/admin/wr/billing/invoices' },
       { method: 'GET', path: '/api/admin/wr/config' },
       { method: 'GET', path: '/api/admin/wr/env' },
@@ -225,6 +222,9 @@ const PANELS: PanelDefinition[] = [
       'POST /api/admin/wr/deploy',
       'POST /api/admin/wr/hetzner/restart',
       'DELETE /api/admin/wr/impersonation/:id/end',
+      'GET /api/admin/wr/activity-stream',
+      'GET /api/admin/wr/audit',
+      'GET /api/admin/wr/billing/events/:tenantId',
     ],
   },
   {
@@ -408,7 +408,6 @@ const PANELS: PanelDefinition[] = [
       { method: 'GET', path: '/api/report-builder/sessions' },
       { method: 'GET', path: '/api/report-builder/business-tree' },
       { method: 'GET', path: '/api/report-builder/templates' },
-      { method: 'GET', path: '/api/report-builder/template-section', query: ':id/html' },
     ],
     mutations: [
       'POST /api/report-builder/sessions',
@@ -417,11 +416,12 @@ const PANELS: PanelDefinition[] = [
       'POST /api/report-builder/extract',
       'POST /api/report-builder/generate',
       'POST /api/report-builder/save',
+      'GET /api/report-builder/template-section/:id/html',
     ],
   },
   {
     name: 'user-input-audit',
-    component: 'components/panels/UserInputAuditPanel.tsx',
+    component: 'components/panels/UserInputAuditPanel/UserInputAuditPanel.tsx',
     coverage: 'read-only',
     probes: [
       { method: 'GET', path: '/api/audit/inputs', query: 'hours=24' },

@@ -201,7 +201,7 @@ export default function BillingTab({ envMode }: { envMode?: string }) {
         events: 'array',
       });
       validated.events.forEach((ev, i) => {
-        validateApiResponse<BillingEvent>(ev, `/api/admin/wr/billing/events[${i}]`, {
+        validateApiResponse<BillingEvent>(ev, `/api/admin/wr/billing/events/${tenantId} (item ${i})`, {
           id: 'string',
           type: 'string',
           amountEur: 'number',
