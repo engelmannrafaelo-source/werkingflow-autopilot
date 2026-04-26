@@ -9,8 +9,8 @@
 // =============================================================================
 
 import { Router } from 'express';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'fs';
-import { randomUUID } from 'crypto';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, renameSync } from 'fs';
+import { randomUUID, createHash } from 'crypto';
 import { join, basename, dirname, relative } from 'path';
 import { load as yamlLoad } from 'js-yaml';
 import { PATHS } from '../config/paths.js';
@@ -1080,95 +1080,97 @@ router.post('/chat', async (req, res) => {
 // --- POST /apply-diffs ---
 router.post('/apply-diffs', (req, res) => {
   try {
-    const { diffs, raw_text, dry_run = false } = req.body as {
+    const { diffs, raw_text, dry_run = false, session_id } = req.body as {
       diffs?: Array<{ file: string; old: string; newText: string }>;
       raw_text?: string;
       dry_run?: boolean;
+      session_id?: string;
     };
 
-    // Accept either pre-parsed diffs or raw AI text to parse
     const resolvedDiffs = diffs || (raw_text ? parseDiffs(raw_text) : []);
-
     if (!resolvedDiffs.length) {
       res.status(400).json({ error: 'No diffs provided. Pass diffs[] or raw_text.' });
       return;
     }
 
-    if (!dry_run) ensureDir(BACKUP_DIR);
+    const datePrefix = new Date().toISOString().slice(0, 10);
+    const normalizeWs = (s: string) =>
+      s.replace(/\r\n/g, '\n').split('\n').map(l => l.trimEnd()).join('\n');
 
-    const applied: string[] = [];
-    const failed: Array<{ file: string; reason: string }> = [];
+    // ── Phase 1: Simulate all diffs (no disk writes) ──────────────────────
+    // workingVersions tracks in-progress content for sequential multi-diff on
+    // the same file; originalContents holds the pristine disk content for backup.
+    const workingVersions = new Map<string, string>();
+    const originalContents = new Map<string, string>();
 
-    const datePrefix = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    interface SimResult {
+      diff: (typeof resolvedDiffs)[0];
+      absPath: string;
+      status: 'ok' | 'already_applied' | 'failed';
+      reason?: string;
+    }
+    const simResults: SimResult[] = [];
 
     for (const diff of resolvedDiffs) {
       const absPath = join(BUSINESS_DIR, diff.file);
 
-      // DEFENSIVE GUARD (rescue 2026-04-24):
-      // Catch the specific signature of parser corruption — multi-line `old`
-      // being replaced by a one-line `new` that is a tiny fraction of the old.
-      // With the regex bug, new_string got truncated to its first line; the
-      // resulting replace would erase the whole section. Legitimate "delete"
-      // uses empty new_string (handled by the NEW-file branch below) or a
-      // meaningfully shorter replacement — never a single line that is <10%
-      // of the old block. Refuse and let the operator investigate.
+      // DEFENSIVE GUARD (rescue 2026-04-24): reject parser-corruption signature.
       if (
         diff.old.includes('\n') &&
         !diff.newText.includes('\n') &&
         diff.newText.trim().length > 0 &&
         diff.newText.length < diff.old.length * 0.1
       ) {
-        failed.push({
-          file: diff.file,
+        simResults.push({
+          diff, absPath, status: 'failed',
           reason: `Refused: suspicious shrink (old=${diff.old.length} chars, new=${diff.newText.length} chars, single line). Likely parser corruption — inspect raw diff.`,
         });
         continue;
       }
 
-      // New file: OLD is empty → create file with NEW content
+      // New file: OLD is empty → create
       if (!diff.old.trim()) {
         if (existsSync(absPath)) {
-          failed.push({ file: diff.file, reason: 'NEW FILE: file already exists (use OLD/NEW diff to modify)' });
+          simResults.push({ diff, absPath, status: 'failed', reason: 'NEW FILE: file already exists (use OLD/NEW diff to modify)' });
           continue;
         }
-        if (dry_run) { applied.push(diff.file); continue; }
-        ensureDir(dirname(absPath));
-        writeFileSync(absPath, diff.newText, 'utf-8');
-        applied.push(diff.file);
+        workingVersions.set(absPath, diff.newText);
+        simResults.push({ diff, absPath, status: 'ok' });
         continue;
       }
 
-      // Existing file: validate it exists
       if (!existsSync(absPath)) {
-        failed.push({ file: diff.file, reason: 'File not found' });
+        simResults.push({ diff, absPath, status: 'failed', reason: 'File not found' });
         continue;
       }
 
-      const current = readFileSync(absPath, 'utf-8');
+      // Load: use working version for multi-diff on same file, else read disk once
+      if (!workingVersions.has(absPath)) {
+        const diskContent = readFileSync(absPath, 'utf-8');
+        workingVersions.set(absPath, diskContent);
+        originalContents.set(absPath, diskContent);
+      }
+      const current = workingVersions.get(absPath)!;
 
-      // Normalize: trim trailing spaces per line (AI often produces slightly different whitespace in tables)
-      const normalizeWs = (s: string) =>
-        s.replace(/\r\n/g, '\n').split('\n').map(l => l.trimEnd()).join('\n');
+      // Idempotency: new text already present and old text gone → already applied
+      if (diff.newText.length > 0 && current.includes(diff.newText) && !current.includes(diff.old)) {
+        simResults.push({ diff, absPath, status: 'already_applied' });
+        continue;
+      }
 
-      // Try to build the replacement — prefer exact match, fall back to normalized match, then section-level
+      // Try replace: exact → normalized → section-level
       let updated: string | null = null;
-
       if (current.includes(diff.old)) {
-        // 1. Exact match: straight replace (first occurrence)
         updated = current.replace(diff.old, diff.newText);
       } else {
-        // 2. Normalized match: trim trailing whitespace from each line before comparing
         const normCurrent = normalizeWs(current);
         const normOld = normalizeWs(diff.old);
         if (normCurrent.includes(normOld)) {
           updated = normCurrent.replace(normOld, normalizeWs(diff.newText));
         } else {
-          // 3. Section-level replace: if OLD is a bare ## heading, replace from that heading
-          // to the next heading of same or higher level
           const headingMatch = diff.old.trim().match(/^(#{1,6})\s+(.+)$/);
           if (headingMatch) {
             const level = headingMatch[1].length;
-            // Regex: from this heading to next heading of same/higher level (or EOF)
             const escapedHeading = diff.old.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             const sectionRe = new RegExp(
               `(${escapedHeading}[\\s\\S]*?)(?=\\n#{1,${level}} |\\n#{1,${level}}\\t|$)`,
@@ -1181,35 +1183,162 @@ router.post('/apply-diffs', (req, res) => {
       }
 
       if (updated === null) {
-        failed.push({ file: diff.file, reason: 'OLD text not found in file (exact match and section-level both failed)' });
+        simResults.push({ diff, absPath, status: 'failed', reason: 'OLD text not found in file (exact match and section-level both failed)' });
         continue;
       }
 
-      if (dry_run) {
-        // Validation only — don't write anything
-        applied.push(diff.file);
-        continue;
+      workingVersions.set(absPath, updated);
+      simResults.push({ diff, absPath, status: 'ok' });
+    }
+
+    const failedSims  = simResults.filter(r => r.status === 'failed');
+    const okSims      = simResults.filter(r => r.status === 'ok');
+    const alreadySims = simResults.filter(r => r.status === 'already_applied');
+
+    if (dry_run) {
+      res.json({
+        ok: true, dry_run: true,
+        applied:          okSims.map(r => r.diff.file),
+        already_applied:  alreadySims.map(r => r.diff.file),
+        failed:           failedSims.map(r => ({ file: r.diff.file, reason: r.reason! })),
+        backup_dir: null,
+      });
+      return;
+    }
+
+    // ── Multi-diff atomicity: if ANY sim failed, abort ALL writes ────────
+    if (failedSims.length > 0) {
+      const failedSimSet = new Set(failedSims); // identity comparison, not file name
+      res.json({
+        ok: true, dry_run: false,
+        applied: [],
+        already_applied: alreadySims.map(r => r.diff.file),
+        failed: simResults
+          .filter(r => r.status !== 'already_applied')
+          .map(r => ({
+            file: r.diff.file,
+            reason: failedSimSet.has(r) ? r.reason! : 'blocked: other diffs in batch failed',
+          })),
+        backup_dir: null, aborted: true,
+      });
+      return;
+    }
+
+    // ── Phase 2: Commit all writes atomically ─────────────────────────────
+    ensureDir(BACKUP_DIR);
+
+    // Only write files whose content actually changed
+    const filesToWrite = new Map<string, { content: string; isNew: boolean; relPath: string }>();
+    for (const [absPath, finalContent] of workingVersions) {
+      const orig = originalContents.get(absPath);
+      if (orig === undefined || finalContent !== orig) {
+        filesToWrite.set(absPath, {
+          content: finalContent,
+          isNew: orig === undefined,
+          relPath: relative(BUSINESS_DIR, absPath),
+        });
       }
+    }
 
-      // Backup
-      const backupName = `${datePrefix}_${basename(diff.file)}`;
-      const backupPath = join(BACKUP_DIR, backupName);
-      const finalBackupPath = existsSync(backupPath)
-        ? `${backupPath}.${Date.now()}`
-        : backupPath;
-      writeFileSync(finalBackupPath, current, 'utf-8');
+    // Backup all existing files before any writes
+    const backupMap = new Map<string, string>();
+    for (const [absPath, { isNew }] of filesToWrite) {
+      if (!isNew) {
+        const backupName = `${datePrefix}_${basename(relative(BUSINESS_DIR, absPath))}`;
+        const bp = join(BACKUP_DIR, backupName);
+        const finalBp = existsSync(bp) ? `${bp}.${Date.now()}` : bp;
+        writeFileSync(finalBp, originalContents.get(absPath)!, 'utf-8');
+        backupMap.set(absPath, finalBp);
+      }
+    }
 
-      writeFileSync(absPath, updated, 'utf-8');
+    // Atomic write (tmp + POSIX rename) + post-write SHA256 verify
+    const sha256 = (s: string) => createHash('sha256').update(s, 'utf-8').digest('hex');
+    const writtenPaths: string[] = [];
+    let rollbackCause: { file: string; reason: string; expected_hash?: string; actual_hash?: string } | null = null;
 
-      applied.push(diff.file);
+    for (const [absPath, { content, isNew }] of filesToWrite) {
+      if (rollbackCause) break;
+      const tmpPath = absPath + '.tmp';
+      const relPath = relative(BUSINESS_DIR, absPath);
+      try {
+        if (isNew) ensureDir(dirname(absPath));
+        writeFileSync(tmpPath, content, 'utf-8');
+        renameSync(tmpPath, absPath); // POSIX atomic rename — no half-written files on crash
+        // Post-write verify: SHA256 expected vs actual
+        const actual = readFileSync(absPath, 'utf-8');
+        const expectedHash = sha256(content);
+        const actualHash   = sha256(actual);
+        if (expectedHash !== actualHash) {
+          rollbackCause = { file: relPath, reason: 'write-verify mismatch', expected_hash: expectedHash, actual_hash: actualHash };
+          break;
+        }
+        writtenPaths.push(absPath);
+      } catch (e: any) {
+        if (existsSync(tmpPath)) {
+          try { renameSync(tmpPath, `${tmpPath}.failed`); } catch { /* best effort */ }
+        }
+        rollbackCause = { file: relPath, reason: e.message };
+        break;
+      }
+    }
+
+    // Rollback all written files on failure
+    if (rollbackCause) {
+      for (const absPath of writtenPaths) {
+        const bp = backupMap.get(absPath);
+        try {
+          if (bp && existsSync(bp)) {
+            writeFileSync(absPath, readFileSync(bp, 'utf-8'), 'utf-8');
+          } else {
+            // Was a new file — remove it
+            if (existsSync(absPath)) renameSync(absPath, `${absPath}.rolled_back`);
+          }
+        } catch { /* best effort */ }
+      }
+      const writtenRelSet = new Set(writtenPaths.map(a => relative(BUSINESS_DIR, a)));
+      const unreachedRel  = Array.from(filesToWrite.values())
+        .map(v => v.relPath)
+        .filter(p => p !== rollbackCause!.file && !writtenRelSet.has(p));
+
+      res.json({
+        ok: false, dry_run: false,
+        applied: [],
+        already_applied: alreadySims.map(r => r.diff.file),
+        failed: [
+          rollbackCause,
+          ...writtenPaths.map(a => ({ file: relative(BUSINESS_DIR, a), reason: 'rolled back' })),
+          ...unreachedRel.map(p => ({ file: p, reason: 'not reached due to earlier failure' })),
+        ],
+        backup_dir: BACKUP_DIR, rollback: true,
+      });
+      return;
+    }
+
+    // ── Phase 3: Refresh snapshot so next generate round uses updated baseline ──
+    const finalRelPaths = Array.from(filesToWrite.values()).map(v => v.relPath);
+    let snapshotRefreshed = false;
+    if (session_id && finalRelPaths.length > 0) {
+      const snap = readSnapshot(session_id);
+      if (snap) {
+        for (const relPath of finalRelPaths) {
+          const absPath = join(BUSINESS_DIR, relPath);
+          if (existsSync(absPath)) snap.files[relPath] = readFileSync(absPath, 'utf-8');
+        }
+        writeSnapshot(snap);
+        snapshotRefreshed = true;
+        console.log(`[BusinessAngel] Snapshot refreshed for session ${session_id}: ${finalRelPaths.join(', ')}`);
+      }
     }
 
     res.json({
-      ok: true,
-      dry_run,
-      applied,
-      failed,
-      backup_dir: dry_run ? null : BACKUP_DIR,
+      ok: true, dry_run: false,
+      applied:           finalRelPaths,
+      already_applied:   alreadySims.map(r => r.diff.file),
+      failed:            [],
+      write_verified:    true,
+      backup_dir:        BACKUP_DIR,
+      snapshot_refreshed: snapshotRefreshed,
     });
   } catch (err: any) {
     console.error('[BusinessAngel] /apply-diffs error:', err.message);

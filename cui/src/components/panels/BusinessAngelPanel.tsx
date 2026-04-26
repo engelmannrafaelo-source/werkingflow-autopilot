@@ -73,7 +73,7 @@ interface DiffCard {
   old?: string;
   newText?: string;
   rawHunk?: string;
-  status?: 'unchecked' | 'ok' | 'error' | 'applied' | 'skipped';
+  status?: 'unchecked' | 'ok' | 'error' | 'applied' | 'already_applied' | 'skipped';
   reason?: string;
   oldExpanded?: boolean;
   newExpanded?: boolean;
@@ -943,12 +943,14 @@ Wichtig:
       });
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
-      const okSet = new Set<string>(data.applied as string[]);
-      const failMap = new Map<string, string>((data.failed as Array<{ file: string; reason: string }>).map(f => [f.file, f.reason]));
+      const okSet      = new Set<string>(data.applied as string[]);
+      const alreadySet = new Set<string>((data.already_applied ?? []) as string[]);
+      const failMap    = new Map<string, string>((data.failed as Array<{ file: string; reason: string }>).map(f => [f.file, f.reason]));
       setDiffCards(prev => prev.map(d => {
         if (!toCheck.find(v => (v.id) === (d.id))) return d;
-        if (okSet.has(d.file)) return { ...d, status: 'ok' as const, reason: undefined };
-        if (failMap.has(d.file)) return { ...d, status: 'error' as const, reason: failMap.get(d.file) };
+        if (okSet.has(d.file))      return { ...d, status: 'ok' as const, reason: undefined };
+        if (alreadySet.has(d.file)) return { ...d, status: 'already_applied' as const, reason: undefined };
+        if (failMap.has(d.file))    return { ...d, status: 'error' as const, reason: failMap.get(d.file) };
         return d;
       }));
     } catch (e: unknown) { setApplyError(e instanceof Error ? e.message : String(e)); }
@@ -961,13 +963,24 @@ Wichtig:
     const resp = await fetch('/api/business-angel/apply-diffs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ diffs: [{ file: card.file, old: card.old ?? '', newText: card.newText ?? '' }] }),
+      body: JSON.stringify({
+        diffs: [{ file: card.file, old: card.old ?? '', newText: card.newText ?? '' }],
+        ...(session?.session_id ? { session_id: session.session_id } : {}),
+      }),
     });
     const data = await resp.json();
-    if ((data.applied as string[]).includes(card.file)) {
+    const appliedList      = (data.applied ?? []) as string[];
+    const alreadyList      = (data.already_applied ?? []) as string[];
+    const failedList       = (data.failed ?? []) as Array<{ file: string; reason: string }>;
+
+    if (appliedList.includes(card.file)) {
       setDiffCards(prev => prev.map(d => (d.id) === id ? { ...d, status: 'applied' as const } : d));
+      // Refresh snapshot so the next generate round uses the updated file as baseline
+      if (session?.session_id) fetchSnapshot(session.session_id);
+    } else if (alreadyList.includes(card.file)) {
+      setDiffCards(prev => prev.map(d => (d.id) === id ? { ...d, status: 'already_applied' as const, reason: undefined } : d));
     } else {
-      const reason = (data.failed as Array<{ file: string; reason: string }>).find(f => f.file === card.file)?.reason ?? 'Unknown';
+      const reason = failedList.find(f => f.file === card.file)?.reason ?? 'Unknown';
       setDiffCards(prev => prev.map(d => (d.id) === id ? { ...d, status: 'error' as const, reason } : d));
     }
   };
@@ -1011,7 +1024,7 @@ Wichtig:
   const appliedCount = diffCards.filter(d => (d.status ?? 'unchecked') === 'applied').length;
 
   const statusLabel = (s: DiffCard['status']) =>
-    ({ unchecked: '⬜', ok: '✓ ok', error: '✗', applied: '✓ applied', skipped: '—' })[s ?? 'unchecked'] ?? s;
+    ({ unchecked: '⬜', ok: '✓ ok', error: '✗', applied: '✓ applied', already_applied: '↩ bereits applied', skipped: '—' })[s ?? 'unchecked'] ?? s;
 
   // Helper: render a single file's diff group (header + side-by-side preview).
   // Used inline in the chat flow, one invocation per (message, file) pair.
@@ -1020,7 +1033,7 @@ Wichtig:
     const rawFileContent = fileContents[file];
     const fullFile = snapshotContent ?? (rawFileContent && rawFileContent.length > 0 ? rawFileContent : undefined);
     const isNewFile = !fullFile && fileCards.every(c => !(c.old ?? '').trim() && c.rawHunk?.startsWith('<<<NEW'));
-    const allDone = fileCards.every(c => (c.status ?? 'unchecked') === 'applied' || (c.status ?? 'unchecked') === 'skipped');
+    const allDone = fileCards.every(c => (c.status ?? 'unchecked') === 'applied' || (c.status ?? 'unchecked') === 'already_applied' || (c.status ?? 'unchecked') === 'skipped');
     const isLoadingContent = !fullFile && !isNewFile;
 
     // Baseline → final text after applying all hunks for this file
@@ -1102,10 +1115,11 @@ Wichtig:
     const leftComponents = makeHighlightedComponents(leftRemovedLines, 'rgba(247,118,142,0.18)', 'rgba(247,118,142,0.7)');
     const rightComponents = makeHighlightedComponents(rightAddedLines, 'rgba(158,206,106,0.18)', 'rgba(158,206,106,0.7)');
 
-    const fileAppliedCount = fileCards.filter(c => (c.status ?? 'unchecked') === 'applied').length;
-    const fileOkCount = fileCards.filter(c => (c.status ?? 'unchecked') === 'ok').length;
-    const fileErrorCount = fileCards.filter(c => (c.status ?? 'unchecked') === 'error').length;
-    const filePendingCount = fileCards.filter(c => (c.status ?? 'unchecked') === 'unchecked').length;
+    const fileAppliedCount      = fileCards.filter(c => (c.status ?? 'unchecked') === 'applied').length;
+    const fileAlreadyCount      = fileCards.filter(c => (c.status ?? 'unchecked') === 'already_applied').length;
+    const fileOkCount           = fileCards.filter(c => (c.status ?? 'unchecked') === 'ok').length;
+    const fileErrorCount        = fileCards.filter(c => (c.status ?? 'unchecked') === 'error').length;
+    const filePendingCount      = fileCards.filter(c => (c.status ?? 'unchecked') === 'unchecked').length;
     const headerBorderColor = fileErrorCount > 0 ? 'rgba(247,118,142,0.35)'
       : fileOkCount > 0 ? 'rgba(158,206,106,0.35)'
       : allDone ? 'rgba(122,162,247,0.25)'
@@ -1143,6 +1157,11 @@ Wichtig:
               ⚠ {fileErrorCount} Fehler
             </span>
           )}
+          {fileAlreadyCount > 0 && fileAlreadyCount < fileCards.length && (
+            <span style={{ fontSize: '10px', color: 'rgba(122,162,247,0.7)', flexShrink: 0 }}>
+              ↩ {fileAlreadyCount} bereits applied
+            </span>
+          )}
           {fileAppliedCount > 0 && fileAppliedCount < fileCards.length && (
             <span style={{ fontSize: '10px', color: 'var(--tn-blue,#7aa2f7)', flexShrink: 0 }}>
               {fileAppliedCount}/{fileCards.length} applied
@@ -1176,13 +1195,24 @@ Wichtig:
           </div>
         </div>
         {/* Error details */}
-        {fileCards.some(c => (c.status ?? 'unchecked') === 'error') && (
+        {fileCards.some(c => (c.status ?? 'unchecked') === 'error' || (c.status ?? 'unchecked') === 'already_applied') && (
           <div style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-            {fileCards.map((card, hunkIdx) => (card.status ?? 'unchecked') === 'error' && card.reason && (
-              <div key={card.id} style={{ padding: '4px 12px', fontSize: '10px', color: 'var(--tn-red,#f7768e)' }}>
-                Hunk {hunkIdx + 1}: ⚠ {card.reason}
-              </div>
-            ))}
+            {fileCards.map((card, hunkIdx) => {
+              const s = card.status ?? 'unchecked';
+              if (s === 'error' && card.reason)
+                return (
+                  <div key={card.id} style={{ padding: '4px 12px', fontSize: '10px', color: 'var(--tn-red,#f7768e)' }}>
+                    Hunk {hunkIdx + 1}: ⚠ {card.reason}
+                  </div>
+                );
+              if (s === 'already_applied')
+                return (
+                  <div key={card.id} style={{ padding: '4px 12px', fontSize: '10px', color: 'rgba(122,162,247,0.8)', background: 'rgba(122,162,247,0.06)' }}>
+                    Hunk {hunkIdx + 1}: ↩ Bereits applied — Änderung ist schon in der Datei, kein Schreibvorgang nötig.
+                  </div>
+                );
+              return null;
+            })}
           </div>
         )}
         {/* Side-by-side full-file preview with line highlights */}
