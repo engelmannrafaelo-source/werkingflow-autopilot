@@ -275,6 +275,10 @@ app.use('/api', createPublicErrorsRouter());  // POST /api/errors/sentry-webhook
 // --- Auth routes (public — must be BEFORE requireAuth middleware) ---
 app.use('/api/auth', authRouter);
 
+// --- Partner-Server (BEFORE /api auth — self-authenticates via adminOrInternal,
+//     supports both JWT cookie and x-cui-internal-token for dev→partner forward) ---
+app.use('/api/partner-server', createPartnerServerRoutes());
+
 // --- Auth middleware (no-op when users.json doesn't exist) ---
 app.use('/api', requireAuth);
 
@@ -283,7 +287,6 @@ app.use(filesRouter);                               // /api/health, /api/version
 app.use('/api', layoutsRouter);                      // /api/projects, /api/notes, /api/layouts, /api/upload, /api/images, /api/uploads
 app.use('/api/mission', missionRouter);              // /api/mission/conversations, /send, /states, /unstick, /start, etc.
 app.use('/api', screenshotsRouter);                  // /api/screenshot/*, /api/capture/*, /api/panels, /api/control/screenshot/*
-app.use('/api/partner-server', createPartnerServerRoutes());  // /api/partner-server/matrix, /capture, /screenshot
 app.use('/api/prompt-templates', templatesRouter);   // /api/prompt-templates (GET/POST/PUT/DELETE)
 app.use(autoInjectRouter);                               // /api/auto-inject (GET/POST/DELETE) — full paths in module
 app.use(agentsRouter);                               // /api/agents/* (full paths in module)
