@@ -254,7 +254,7 @@ export default function createPartnerServerRoutes() {
         upstream,
       });
     });
-    router.all('*', forwardToPartner);
+    router.use(forwardToPartner);
     return router;
   }
 
