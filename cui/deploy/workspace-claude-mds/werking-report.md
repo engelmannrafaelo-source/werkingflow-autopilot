@@ -5,7 +5,7 @@
 WerkING Report ist eine KI-gestützte Gutachten-App für technische Sachverständige.
 Fokus: Druckbelüftungsanlagen, TRVB-Konformität, strukturierte Gutachtenerstellung.
 
-**Die App läuft auf Port 3008** — im Browser-Panel: `/app-proxy/3008`
+**Die App läuft auf Port 3008** — erreichbar unter `https://3008.partner.werking.tools/`
 
 ---
 
@@ -29,7 +29,7 @@ Kein Code-Zugriff nötig.
 ## Die App — Wie sie funktioniert
 
 **Gutachten-Workflow:**
-1. **Login** — `https://partner.werking.tools` → `/app-proxy/3008`
+1. **Login** — `https://partner.werking.tools` → App unter `https://3008.partner.werking.tools/`
 2. **Neues Gutachten** — Projekt/Objekt anlegen
 3. **Dokumentation** — TipTap-Editor mit strukturierten Abschnitten (TRVB-Vorlage)
 4. **KI-Analyse** — Normen-Suche, Gefährdungscheck, Textvorschläge

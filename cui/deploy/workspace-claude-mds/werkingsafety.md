@@ -5,7 +5,7 @@
 WerkING Safety ist eine KI-gestützte Risikoanalyse-App für technische Anlagen.
 Kern: PDF-Pläne hochladen → KI analysiert → strukturierte Gefährdungsbeurteilung + PAAG/HAZOP-Export.
 
-**Die App läuft auf Port 3006** — im Browser-Panel: `/app-proxy/3006`
+**Die App läuft auf Port 3006** — erreichbar unter `https://3006.partner.werking.tools/`
 
 ---
 
@@ -24,7 +24,7 @@ DI, PhD. Geschäftsführer TECC (ZT für Automatisierte Anlagen- und Prozesstech
 ## Die App — Wie sie funktioniert
 
 **Analyse-Workflow:**
-1. **Login** — `https://partner.werking.tools` → `/app-proxy/3006`
+1. **Login** — `https://partner.werking.tools` → App unter `https://3006.partner.werking.tools/`
 2. **Projekt anlegen** — Anlage, Kunde, Norm-Framework wählen
 3. **Dokumente hochladen** — P&ID-Pläne, Verfahrensbeschreibungen als PDF
 4. **KI-Analyse** — Vision-basierte Erkennung: Equipment, Gefahrenstellen, Prozessparameter

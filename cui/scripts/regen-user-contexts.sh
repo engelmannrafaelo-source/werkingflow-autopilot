@@ -85,7 +85,7 @@ jq -r '.users[] | [
 - **Shared Infra Ports** (für alle User): 3006 (Safety), 3007 (Energy), 3008 (Report), 3009 (Engelmann)
 
 → Wenn Du eigene Mockups/Dev-Server startest, nutze **immer** Deinen Range.
-→ Der CUI App-Proxy erlaubt Dir nur Deine eigenen Ports + Shared Ports — alles andere wird mit HTTP 403 abgewiesen.
+→ Außerhalb Deines Range + Shared Ports gibt es **HTTP 403**.
 
 ## Deine Workspaces
 
@@ -98,7 +98,10 @@ $workspaces
 
 ---
 
-## Beim Starten eines Mockups
+## Wie Du eine App startest und siehst
+
+Apps laufen **unverändert auf ihrem Port** — kein basePath, kein Asset-Rewrite,
+kein Build-Trick. Wie Remote-Desktop: starten, anschauen, fertig.
 
 \`\`\`bash
 # Im Projekt-Verzeichnis:
@@ -107,8 +110,14 @@ npm run dev   # Port via package.json scripts.dev festgelegt
 PORT=$(echo "$range" | cut -d- -f1) npm run dev
 \`\`\`
 
-Browser-Panel in CUI öffnet automatisch \`/app-proxy/<port>/\` — Du musst nichts manuell tippen,
-sobald der Workspace-Default-Port korrekt gesetzt ist.
+**Erreichbar unter:** \`https://<port>.partner.werking.tools/\`
+(Wildcard-Subdomain proxy → \`localhost:<port>\` mit Auth-Gate.)
+
+Beispiel: \`PORT=$(echo "$range" | cut -d- -f1) npm run dev\` → Browser öffnet
+\`https://$(echo "$range" | cut -d- -f1).partner.werking.tools/\`.
+
+Browser-Panel in CUI nutzt automatisch dieses Pattern — sobald der Workspace-Default-Port
+korrekt gesetzt ist musst Du nichts manuell tippen.
 EOF
 
   chown "$id:$id" "$TARGET" 2>/dev/null || true

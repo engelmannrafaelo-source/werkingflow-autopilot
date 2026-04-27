@@ -5,7 +5,7 @@
 Der Engelmann AI Hub ist ein KI-Workflow-Cockpit UND ERP-Ersatz fuer Engelmann Energiesysteme GmbH.
 Das System ersetzt schrittweise die WIKO Bausoftware durch moderne, KI-gestuetzte Module.
 
-**Die App laeuft auf Port 3009** — im Browser-Panel: `/app-proxy/3009`
+**Die App laeuft auf Port 3009** — erreichbar unter `https://3009.partner.werking.tools/`
 
 ---
 

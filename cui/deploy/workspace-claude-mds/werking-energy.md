@@ -5,7 +5,7 @@
 WerkING Energy erstellt automatisierte Energieoptimierungsberichte für Gebäude und Anlagen.
 Der Kern: Messdaten rein → KI-Pipeline → professioneller Bericht raus (30–40 Minuten).
 
-**Die App läuft auf Port 3007** — im Browser-Panel: `/app-proxy/3007`
+**Die App läuft auf Port 3007** — erreichbar unter `https://3007.partner.werking.tools/`
 
 ---
 
