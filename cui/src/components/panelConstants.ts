@@ -55,6 +55,7 @@ export const PANEL_MENU_OPTIONS: PanelMenuGroup[] = [
     items: [
       { value: 'cui', label: 'Chat' },
       { value: 'browser', label: 'Browser' },
+      { value: 'tool-hub', label: 'Tool Hub' },
       { value: 'preview', label: 'File Preview' },
       { value: 'notes', label: 'Notes' },
       { value: 'images', label: 'Images' },

@@ -55,7 +55,7 @@ const SHORT_LABELS: Record<string, string> = {
   calendar: 'Kalender', mail: 'Mail', 'error-monitor': 'Errors', 'partner-server': 'Partner H.',
 };
 
-const EXCLUDED_TOOLS = new Set(['cui', 'cui-lite']);
+const EXCLUDED_TOOLS = new Set(['cui', 'cui-lite', 'tool-hub']);
 
 interface ToolHubProps {
   projectId: string;

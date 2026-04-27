@@ -199,9 +199,10 @@ async function forwardToPartner(req: Request, res: Response): Promise<void> {
     }
     res.end();
   } catch (err: any) {
-    console.error('[partner-server] forward failed:', err.message, 'target=', target);
+    const cause = err?.cause?.message || err?.cause?.code || '';
+    console.error('[partner-server] forward failed:', err.message, cause ? `cause=${cause}` : '', 'target=', target);
     if (!res.headersSent) {
-      res.status(502).json({ error: `Forward to partner failed: ${err.message}`, target });
+      res.status(502).json({ error: `Forward to partner failed: ${err.message}${cause ? ` (${cause})` : ''}`, target });
     } else {
       res.end();
     }
