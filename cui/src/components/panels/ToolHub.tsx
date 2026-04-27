@@ -17,7 +17,7 @@ import {
   ArchitectureExplorer, ReportBuilder, PromptExplorer, BusinessAngelPanel, PrivatAngelPanel,
   MyTasksPanel, ActivityFeedPanel, PartnerInboxPanel,
   FeedbackPanel, TeamStatusPanel, BusinessDocsPanel, UploadPanel,
-  CalendarPanel, MailPanel, ErrorMonitor,
+  CalendarPanel, MailPanel, ErrorMonitor, PartnerServerPanel,
 } from '../panelLazy';
 
 const API = '/api';
@@ -35,7 +35,7 @@ const TOOL_ICONS: Record<string, string> = {
   maintenance: '🔨', 'input-audit': '📥', linkedin: '💼',
   'business-docs': '📂', 'my-tasks': '✏️', 'activity-feed': '📰',
   'partner-inbox': '📬', feedback: '💡', 'team-status': '👥', uploads: '📤',
-  calendar: '📅', mail: '✉️', 'error-monitor': '🚨',
+  calendar: '📅', mail: '✉️', 'error-monitor': '🚨', 'partner-server': '🩺',
 };
 
 // Short labels for the icon bar (max ~8 chars)
@@ -51,7 +51,7 @@ const SHORT_LABELS: Record<string, string> = {
   maintenance: 'Maint', 'input-audit': 'Audit', linkedin: 'LinkedIn',
   'business-docs': 'BizDocs', 'my-tasks': 'Tasks', 'activity-feed': 'Feed',
   'partner-inbox': 'Inbox', feedback: 'Fdbk', 'team-status': 'Team', uploads: 'Upload',
-  calendar: 'Kalender', mail: 'Mail', 'error-monitor': 'Errors',
+  calendar: 'Kalender', mail: 'Mail', 'error-monitor': 'Errors', 'partner-server': 'Partner H.',
 };
 
 const EXCLUDED_TOOLS = new Set(['cui', 'cui-lite']);
@@ -180,6 +180,7 @@ export default function ToolHub({ projectId, workDir }: ToolHubProps) {
       case 'calendar': return withSuspense(<CalendarPanel />);
       case 'mail': return withSuspense(<MailPanel />);
       case 'error-monitor': return withSuspense(<ErrorMonitor />);
+      case 'partner-server': return withSuspense(<PartnerServerPanel />);
       default: return <div style={{ padding: 20, color: 'var(--tn-text-muted)' }}>Unknown: {activeTool}</div>;
     }
   };
