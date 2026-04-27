@@ -473,14 +473,17 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     if (initialSessionId) return initialSessionId;
     try { return localStorage.getItem(getSessionKey(initialAccount)); } catch { return null; }
   });
+  const hadCachedMessagesRef = useRef(false);
   const [messages, setMessages] = useState<Message[]>(() => {
     if (initialSessionId || !sessionId) return [];
     try {
       const cached = localStorage.getItem(`cui-msgs-${sessionId}`);
-      if (cached) return JSON.parse(cached);
+      if (cached) { const parsed = JSON.parse(cached); if (parsed.length > 0) { hadCachedMessagesRef.current = true; return parsed; } }
     } catch {} // silent-ok: cached messages load failure; fresh poll renders messages
     return [];
   });
+  const [isMountSyncing, setIsMountSyncing] = useState(() => hadCachedMessagesRef.current);
+  const mountSyncDoneRef = useRef(false);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [convStatus, setConvStatus] = useState<'ongoing' | 'completed'>('completed');
@@ -627,6 +630,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         }
         pollFailCountRef.current = 0;
         circuitOpenRef.current = false;
+        if (!mountSyncDoneRef.current) { mountSyncDoneRef.current = true; setIsMountSyncing(false); }
       } else {
         // HTTP errors (502, 503, etc.) — count as failures
         pollFailCountRef.current++;
@@ -1581,6 +1585,11 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         )}
 
 
+
+        {/* Mount-sync indicator: shown until first poll clears stale cache */}
+        {isMountSyncing && sessionId && (
+          <span style={{ fontSize: 9, color: '#7aa2f7', fontWeight: 600, opacity: 0.75 }}>syncing…</span>
+        )}
 
         {/* Spacer - title moved below header */}
         <span style={{ flex: 1 }} />
