@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, Suspense, useRef } from 'react';
+import { useState, useEffect, useCallback, Suspense } from 'react';
 import { PANEL_MENU_OPTIONS, PANEL_NAMES } from '../panelConstants';
 import ErrorBoundary from '../ErrorBoundary';
 import { useAuth } from '../../contexts/AuthContext';
@@ -65,18 +65,12 @@ interface ToolHubProps {
 export default function ToolHub({ projectId, workDir }: ToolHubProps) {
   const [activeTool, setActiveTool] = useState<string | null>(null);
   const [syncedComponents, setSyncedComponents] = useState<Set<string>>(new Set());
-  const loadedRef = useRef(false);
   const { canAccessPanel } = useAuth();
 
-  // Load persisted selection on mount
-  useEffect(() => {
-    if (loadedRef.current) return;
-    loadedRef.current = true;
-    fetch(`${API}/toolhub/active`)
-      .then(r => r.ok ? r.json() : null)
-      .then(data => { if (data?.activeTool) setActiveTool(data.activeTool); })
-      .catch(() => {}); // silent-ok: active tool load failure; default tool used
-  }, []);
+  // Tool Hub always opens with the Welcome view. Persisted activeTool is
+  // intentionally NOT auto-restored — Welcome is the always-default landing.
+  // Selection is still persisted (POST below) so future server-driven views
+  // can read the last choice if needed, but on mount we start fresh.
 
   // Collect components from layout tree that are synced (have _synced: true config)
   const collectSyncedComponents = (node: any, acc: Set<string>) => {
