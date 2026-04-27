@@ -34,6 +34,7 @@ export const PANEL_NAMES: Record<string, string> = {
   'report-builder': 'Report Builder',
   'prompt-explorer': 'Workflow Explorer',
   'business-angel': 'Business Angel',
+  'privat-angel': 'Privat Angel',
   'business-docs': 'Business Docs',
   'my-tasks': 'My Tasks',
   'activity-feed': 'Activity Feed',
@@ -92,6 +93,7 @@ export const PANEL_MENU_OPTIONS: PanelMenuGroup[] = [
     items: [
       { value: 'admin-wr', label: 'Werking Report Admin' },
       { value: 'business-angel', label: 'Business Angel' },
+      { value: 'privat-angel', label: 'Privat Angel' },
       { value: 'background-ops', label: 'Background Ops' },
       { value: 'maintenance', label: 'Maintenance' },
       { value: 'input-audit', label: 'Input Audit' },

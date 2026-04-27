@@ -21,6 +21,7 @@ export const ArchitectureExplorer = lazy(() => import('./panels/ArchitectureExpl
 export const ReportBuilder = lazy(() => import('./panels/ReportBuilder/ReportBuilder'));
 export const PromptExplorer = lazy(() => import('./panels/PromptExplorer/PromptExplorer'));
 export const BusinessAngelPanel = lazy(() => import('./panels/BusinessAngelPanel'));
+export const PrivatAngelPanel = lazy(() => import('./panels/PrivatAngelPanel'));
 export const BusinessDocsPanel = lazy(() => import('./panels/BusinessDocsPanel'));
 export const MyTasksPanel = lazy(() => import('./panels/MyTasksPanel/MyTasksPanel'));
 export const ActivityFeedPanel = lazy(() => import('./panels/ActivityFeedPanel'));

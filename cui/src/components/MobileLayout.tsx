@@ -14,7 +14,7 @@ import {
   LinkedInPanel, BridgeMonitor, InfisicalMonitor, QADashboard, RepoDashboard,
   WatchdogPanel, BackgroundOpsPanel,
   ConversationQueuePanel, MaintenancePanel, UserInputAuditPanel,
-  ArchitectureExplorer, ReportBuilder, PromptExplorer, BusinessAngelPanel,
+  ArchitectureExplorer, ReportBuilder, PromptExplorer, BusinessAngelPanel, PrivatAngelPanel,
   MyTasksPanel, ActivityFeedPanel, PartnerInboxPanel,
   FeedbackPanel, TeamStatusPanel, BusinessDocsPanel, UploadPanel,
   CalendarPanel, MailPanel,
@@ -167,6 +167,8 @@ export default function MobileLayout({ projectId, workDir }: MobileLayoutProps) 
         return wrapPanel('ReportBuilder', S(<ReportBuilder />));
       case 'business-angel':
         return wrapPanel('Business Angel', S(<BusinessAngelPanel />));
+      case 'privat-angel':
+        return wrapPanel('Privat Angel', S(<PrivatAngelPanel />));
       case 'prompt-explorer':
         return wrapPanel('PromptExplorer', S(<PromptExplorer />));
       case 'my-tasks':

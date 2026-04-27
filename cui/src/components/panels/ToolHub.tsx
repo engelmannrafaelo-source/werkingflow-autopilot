@@ -14,7 +14,7 @@ import {
   LinkedInPanel, BridgeMonitor, InfisicalMonitor, QADashboard, RepoDashboard,
   WatchdogPanel, BackgroundOpsPanel,
   ConversationQueuePanel, MaintenancePanel, UserInputAuditPanel,
-  ArchitectureExplorer, ReportBuilder, PromptExplorer, BusinessAngelPanel,
+  ArchitectureExplorer, ReportBuilder, PromptExplorer, BusinessAngelPanel, PrivatAngelPanel,
   MyTasksPanel, ActivityFeedPanel, PartnerInboxPanel,
   FeedbackPanel, TeamStatusPanel, BusinessDocsPanel, UploadPanel,
   CalendarPanel, MailPanel, ErrorMonitor,
@@ -31,7 +31,7 @@ const TOOL_ICONS: Record<string, string> = {
   'report-builder': '📑', 'prompt-explorer': '🧪',
   'bridge-monitor': '🌉', 'repo-dashboard': '🔧',
   'infisical-monitor': '🔐', watchdog: '🐕',
-  'admin-wr': '📊', 'business-angel': '😇', 'background-ops': '⏳',
+  'admin-wr': '📊', 'business-angel': '😇', 'privat-angel': '🪞', 'background-ops': '⏳',
   maintenance: '🔨', 'input-audit': '📥', linkedin: '💼',
   'business-docs': '📂', 'my-tasks': '✏️', 'activity-feed': '📰',
   'partner-inbox': '📬', feedback: '💡', 'team-status': '👥', uploads: '📤',
@@ -47,7 +47,7 @@ const SHORT_LABELS: Record<string, string> = {
   'report-builder': 'Report', 'prompt-explorer': 'Prompts',
   'bridge-monitor': 'Bridge', 'repo-dashboard': 'Repos',
   'infisical-monitor': 'Secrets', watchdog: 'Watch',
-  'admin-wr': 'WR Admin', 'business-angel': 'Angel', 'background-ops': 'BgOps',
+  'admin-wr': 'WR Admin', 'business-angel': 'Angel', 'privat-angel': 'Privat', 'background-ops': 'BgOps',
   maintenance: 'Maint', 'input-audit': 'Audit', linkedin: 'LinkedIn',
   'business-docs': 'BizDocs', 'my-tasks': 'Tasks', 'activity-feed': 'Feed',
   'partner-inbox': 'Inbox', feedback: 'Fdbk', 'team-status': 'Team', uploads: 'Upload',
@@ -169,6 +169,7 @@ export default function ToolHub({ projectId, workDir }: ToolHubProps) {
       case 'report-builder': return withSuspense(<ReportBuilder />);
       case 'prompt-explorer': return withSuspense(<PromptExplorer />);
       case 'business-angel': return withSuspense(<BusinessAngelPanel />);
+      case 'privat-angel': return withSuspense(<PrivatAngelPanel />);
       case 'my-tasks': return withSuspense(<MyTasksPanel />);
       case 'activity-feed': return withSuspense(<ActivityFeedPanel />);
       case 'partner-inbox': return withSuspense(<PartnerInboxPanel projectId={projectId} />);

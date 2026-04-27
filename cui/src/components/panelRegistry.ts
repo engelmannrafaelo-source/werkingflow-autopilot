@@ -17,7 +17,7 @@ export {
   LinkedInPanel, BridgeMonitor, InfisicalMonitor, QADashboard, RepoDashboard,
   WatchdogPanel, BackgroundOpsPanel, ConversationQueuePanel, MaintenancePanel,
   UserInputAuditPanel, ArchitectureExplorer, ReportBuilder, PromptExplorer,
-  BusinessAngelPanel, BusinessDocsPanel, MyTasksPanel, ActivityFeedPanel,
+  BusinessAngelPanel, PrivatAngelPanel, BusinessDocsPanel, MyTasksPanel, ActivityFeedPanel,
   PartnerInboxPanel, FeedbackPanel, TeamStatusPanel, UploadPanel,
   CalendarPanel, MailPanel, ErrorMonitor,
 } from './panelLazy';

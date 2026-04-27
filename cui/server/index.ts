@@ -106,6 +106,7 @@ import architectureRouter from './routes/architecture.js';
 import architectureStatusRouter from './routes/architecture-status.js';
 import reportBuilderRouter, { initReportBuilder } from './routes/report-builder.js';
 import businessAngelRouter from './routes/business-angel.js';
+import privatAngelRouter from './routes/privat-angel.js';
 
 // External route modules (pre-existing, not part of the extraction)
 import knowledgeRegistryRouter from './knowledge-registry.js';
@@ -313,6 +314,9 @@ app.use('/api/report-builder', reportBuilderRouter); // /api/report-builder/sess
 
 // --- Business Angel API ---
 app.use('/api/business-angel', businessAngelRouter); // /api/business-angel/context, /load, /apply-diffs
+
+// --- Privat Angel API (personal coach, clone of business-angel for privat workspace) ---
+app.use('/api/privat-angel', privatAngelRouter);     // /api/privat-angel/context, /load, /apply-diffs
 
 // --- Prompt Explorer API ---
 app.use('/api/prompt-explorer', createPromptExplorerRouter()); // /api/prompt-explorer/pipelines, /scan, /prompt
