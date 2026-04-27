@@ -66,9 +66,14 @@ const _subSessionsInjectInProgress = new Set<string>();
 // Used to dedupe: only fire a new reminder AFTER the parent has completed at least
 // one turn since the previous reminder (prevents stacking reminders in FIFO queue).
 const _lastReminderSentAt = new Map<string, number>();
+// Track silent-exit retries per session — auto-continue first 2 times,
+// then fall back to parent-reminder.
+const _silentExitAttempts = new Map<string, number>();
+const MAX_SILENT_EXIT_AUTO_CONTINUE = 2;
 
 function cleanupSubSession(sessionId: string) {
   _subSessionsInjectInProgress.delete(sessionId);
+  _silentExitAttempts.delete(sessionId);
   convMeta.setFinished(sessionId, true);
   convMeta.deleteInjectedAt(sessionId);
   const parentSessionId = convMeta.getParentSessionId(sessionId);
@@ -489,7 +494,32 @@ export function initMissionRouter(deps: MissionDeps) {
       const parentSessionId = convMeta.getParentSessionId(sessionId);
       if (!parentSessionId) continue; // handled later in Phase 3 (orphans)
       const title = convMeta.getTitle(sessionId) || sessionId.slice(0, 8);
-      console.log(`[SubSession] Silently-exited sub-session "${title}" (${sessionId.slice(0, 8)}) — routing through injectSubSessionResult so parent can review/finish`);
+      const attempts = (_silentExitAttempts.get(sessionId) || 0) + 1;
+
+      if (attempts <= MAX_SILENT_EXIT_AUTO_CONTINUE) {
+        // Auto-Continue: re-spawn Sub with a continue-nudge message before reporting to parent.
+        // SDK silently exits mid-tool-use when stuck in long Read/Grep cycles — give it a kick.
+        _silentExitAttempts.set(sessionId, attempts);
+        const accountId = convMeta.getAssignment(sessionId) || 'gmail';
+        const workDir = convMeta.getWorkDir(sessionId) || '';
+        const model = convMeta.getModel(sessionId) || '';
+        const nudge = `Du wurdest mid-tool-use vom SDK abgebrochen (silently-exited, attempt ${attempts}/${MAX_SILENT_EXIT_AUTO_CONTINUE}). ` +
+                      `Continue mit dem naechsten konkreten Edit. Keine weitere Discovery — du hast den Code schon genug gelesen. ` +
+                      `Wenn du fertig bist: commit + push + ende explizit.`;
+        console.log(`[SubSession] Silently-exited "${title}" (${sessionId.slice(0, 8)}) — auto-continue attempt ${attempts}/${MAX_SILENT_EXIT_AUTO_CONTINUE}`);
+        claudeCli.startConversation(accountId, nudge, workDir, sessionId, model).then(res => {
+          if (!res.ok) {
+            console.warn(`[SubSession] Auto-continue failed for ${sessionId.slice(0, 8)}: ${res.error || 'unknown'}`);
+          }
+        }).catch(err => {
+          console.warn(`[SubSession] Auto-continue error for ${sessionId.slice(0, 8)}: ${(err as Error).message}`);
+        });
+        continue;
+      }
+
+      // Exhausted auto-continue — give up and report to parent
+      console.log(`[SubSession] Silently-exited "${title}" (${sessionId.slice(0, 8)}) — ${attempts}x silent exits, giving up, routing to parent`);
+      _silentExitAttempts.delete(sessionId);
       injectSubSessionResult(sessionId, parentSessionId).catch(err => {
         console.warn(`[SubSession] injectSubSessionResult failed for silently-exited ${sessionId.slice(0, 8)}: ${(err as Error).message}`);
       });
