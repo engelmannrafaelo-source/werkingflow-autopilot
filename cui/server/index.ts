@@ -121,6 +121,7 @@ import { initPeerAwareness, startPeerAwarenessTimer, stopPeerAwarenessTimer, cre
 
 // App Proxy (reverse proxy for localhost app ports — enables browser panel on remote servers)
 import createAppProxyRouter from './routes/app-proxy.js';
+import createAuthPortRouter from './routes/auth-port.js';
 
 // Background Ops (event buffer for system monitoring panel)
 import { createBackgroundOpsRouter } from './routes/background-ops.js';
@@ -265,6 +266,7 @@ app.get('/api/config/paths', (_req, res) => {
 
 // --- App Proxy (BEFORE /api auth — has its own requireAuth per-route) ---
 app.use(createAppProxyRouter());
+app.use(createAuthPortRouter());  // /internal/auth-port — nginx auth_request gate for subdomain-proxy
 
 // --- Error Webhooks (BEFORE /api auth — protected via ERROR_WEBHOOK_SECRET) ---
 app.use('/api', createPublicErrorsRouter());  // POST /api/errors/sentry-webhook, /api/errors/report

@@ -30,7 +30,7 @@ const SHARED_PORTS = new Set([
 ]);
 
 /** Per-user range check: shared ports always OK, otherwise must be in user's devPortRange. */
-function isPortAllowed(port: number, userId?: string): boolean {
+export function isPortAllowed(port: number, userId?: string): boolean {
   if (SHARED_PORTS.has(port)) return true;
   if (!isAuthEnabled()) return true;
   if (!userId) return false;

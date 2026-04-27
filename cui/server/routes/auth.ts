@@ -40,11 +40,15 @@ router.post('/login', (req, res) => {
   });
 
   // Set as httpOnly cookie (7 days)
+  // COOKIE_DOMAIN env: set to ".partner.werking.tools" on partner-server so
+  // the cookie is sent to subdomains (used by <port>.partner.werking.tools proxy).
+  // Unset on dev/localhost → host-only cookie (default, correct for dev).
   res.cookie('cui-token', token, {
     httpOnly: true,
     sameSite: 'lax',
     maxAge: 7 * 24 * 60 * 60 * 1000,
     path: '/',
+    ...(process.env.COOKIE_DOMAIN ? { domain: process.env.COOKIE_DOMAIN } : {}),
   });
 
   res.json({
@@ -55,7 +59,10 @@ router.post('/login', (req, res) => {
 
 /** POST /api/auth/logout — Clear auth cookie */
 router.post('/logout', (_req, res) => {
-  res.clearCookie('cui-token', { path: '/' });
+  res.clearCookie('cui-token', {
+    path: '/',
+    ...(process.env.COOKIE_DOMAIN ? { domain: process.env.COOKIE_DOMAIN } : {}),
+  });
   res.json({ ok: true });
 });
 
