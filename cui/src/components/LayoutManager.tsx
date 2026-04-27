@@ -89,9 +89,10 @@ const PanelLoader = () => (
 
 const API = '/api';
 
-// Map workspace to default browser URL for new panels
-// Host comes from env (partner=Tailscale IP, dev=localhost)
-const CUI_APP_HOST = (typeof window !== 'undefined' && window.__CUI_APP_HOST__) || 'http://localhost';
+// Map workspace to default browser URL for new panels.
+// URLs go through the CUI app-proxy (/app-proxy/<port>/) so they work both on
+// dev-server and partner-server — no host knowledge needed in the frontend.
+// The proxy enforces per-user devPortRange (see server/routes/app-proxy.ts).
 const WORKSPACE_BROWSER_PORTS: Record<string, number> = {
   "engelmann-ai-hub": 3009,
   "engelmann-dashboards": 4800,
@@ -101,7 +102,7 @@ const WORKSPACE_BROWSER_PORTS: Record<string, number> = {
   "werkingsafety": 3006,
 };
 const WORKSPACE_BROWSER_URLS: Record<string, string> = Object.fromEntries(
-  Object.entries(WORKSPACE_BROWSER_PORTS).map(([ws, port]) => [ws, `${CUI_APP_HOST}:${port}`])
+  Object.entries(WORKSPACE_BROWSER_PORTS).map(([ws, port]) => [ws, `/app-proxy/${port}/`])
 );
 
 function defaultLayout(workDir: string): IJsonModel {

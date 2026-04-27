@@ -89,8 +89,7 @@ interface PanelConfig {
   config: Record<string, string>;
 }
 
-// Map workspace workDir to default browser URL
-const CUI_APP_HOST_LB = (typeof window !== 'undefined' && window.__CUI_APP_HOST__) || 'http://localhost';
+// Map workspace workDir to default browser URL via app-proxy.
 const WORKSPACE_BROWSER_PORTS_LB: Record<string, number> = {
   "engelmann-ai-hub": 3009,
   "engelmann-dashboards": 4800,
@@ -101,7 +100,7 @@ const WORKSPACE_BROWSER_PORTS_LB: Record<string, number> = {
 function browserUrlFromWorkDir(workDir: string): string {
   const wsId = workDir.split("/").pop() || "";
   const port = WORKSPACE_BROWSER_PORTS_LB[wsId];
-  return port ? `${CUI_APP_HOST_LB}:${port}` : "";
+  return port ? `/app-proxy/${port}/` : "";
 }
 
 function panelFromValue(value: string, workDir: string): PanelConfig {

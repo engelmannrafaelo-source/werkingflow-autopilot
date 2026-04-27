@@ -47,7 +47,16 @@ export default function BrowserPanel({ initialUrl = '', panelId, onUrlChange }: 
   function navigate() {
     let target = inputValue.trim();
     if (!target) return;
-    if (!target.startsWith('http')) {
+    // Auto-correct localhost/127.0.0.1 → /app-proxy/<port>/.
+    // The browser panel runs in the user's browser (e.g. Mac); 'localhost' there
+    // points to the user's machine, not the server. The CUI app-proxy routes the
+    // request server-side and enforces per-user devPortRange.
+    const lhMatch = target.match(/^(?:https?:\/\/)?(?:localhost|127\.0\.0\.1)(?::(\d+))?(\/.*)?$/i);
+    if (lhMatch) {
+      const port = lhMatch[1] || '80';
+      const path = lhMatch[2] || '/';
+      target = `/app-proxy/${port}${path}`;
+    } else if (!target.startsWith('http') && !target.startsWith('/')) {
       if (!target.includes('.') || target.includes(' ')) {
         target = `https://www.google.com/search?q=${encodeURIComponent(target)}`;
       } else {
@@ -55,6 +64,7 @@ export default function BrowserPanel({ initialUrl = '', panelId, onUrlChange }: 
       }
     }
     setUrl(target);
+    setInputValue(target);
     if (storageKey) localStorage.setItem(storageKey, target);
     onUrlChange?.(target);
   }
