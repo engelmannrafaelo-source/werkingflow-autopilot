@@ -69,7 +69,7 @@ import {
   LinkedInPanel, BridgeMonitor, InfisicalMonitor, QADashboard, RepoDashboard,
   WatchdogPanel, BackgroundOpsPanel,
   ConversationQueuePanel, MaintenancePanel, UserInputAuditPanel,
-  ArchitectureExplorer, ReportBuilder, PromptExplorer, BusinessAngelPanel,
+  ArchitectureExplorer, ReportBuilder, PromptExplorer, BusinessAngelPanel, PrivatAngelPanel,
   MyTasksPanel, ActivityFeedPanel, PartnerInboxPanel,
   FeedbackPanel, TeamStatusPanel, BusinessDocsPanel, UploadPanel, ToolHub,
   CalendarPanel, MailPanel, ErrorMonitor,
@@ -94,7 +94,7 @@ const API = '/api';
 const CUI_APP_HOST = (typeof window !== 'undefined' && window.__CUI_APP_HOST__) || 'http://localhost';
 const WORKSPACE_BROWSER_PORTS: Record<string, number> = {
   "engelmann-ai-hub": 3009,
-  "engelmann-dashboards": 3010,
+  "engelmann-dashboards": 4800,
   "engelmann-developer": 3009,
   "werking-energy": 3007,
   "werking-report": 3008,
@@ -516,6 +516,8 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         return wrapPanel('ReportBuilder', withSuspense(<ReportBuilder />));
       case 'business-angel':
         return wrapPanel('Business Angel', withSuspense(<BusinessAngelPanel />));
+      case 'privat-angel':
+        return wrapPanel('Privat Angel', withSuspense(<PrivatAngelPanel />));
       case 'prompt-explorer':
         return wrapPanel('PromptExplorer', withSuspense(<PromptExplorer />));
       case 'my-tasks':

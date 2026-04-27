@@ -15,9 +15,10 @@
 import { Router, Request, Response } from 'express';
 import { request as httpRequest } from 'http';
 import { requireAuth } from '../auth/middleware.js';
+import { findUser, isAuthEnabled } from '../auth/users.js';
 
-// Only allow known app ports — NEVER expose infrastructure ports
-const ALLOWED_PORTS = new Set([
+// Shared infrastructure ports — accessible to any authenticated user
+const SHARED_PORTS = new Set([
   3004,  // Platform
   3005,  // WerkING Noise
   3006,  // WerkING Safety
@@ -27,6 +28,19 @@ const ALLOWED_PORTS = new Set([
   3011,  // Acro Community
   3012,  // Acroyoga
 ]);
+
+/** Per-user range check: shared ports always OK, otherwise must be in user's devPortRange. */
+function isPortAllowed(port: number, userId?: string): boolean {
+  if (SHARED_PORTS.has(port)) return true;
+  if (!isAuthEnabled()) return true;
+  if (!userId) return false;
+  const user = findUser(userId);
+  if (!user) return false;
+  if (user.devPortRange === '*') return true;
+  if (!Array.isArray(user.devPortRange)) return false;
+  const [lo, hi] = user.devPortRange;
+  return Number.isFinite(lo) && Number.isFinite(hi) && port >= lo && port <= hi;
+}
 
 /**
  * Build the JavaScript interceptor that gets injected into proxied HTML pages.
@@ -96,10 +110,12 @@ export default function createAppProxyRouter(): Router {
   router.use('/app-proxy/:port', requireAuth, (req: Request, res: Response) => {
     const port = parseInt(req.params.port as string, 10);
 
-    if (isNaN(port) || !ALLOWED_PORTS.has(port)) {
+    if (isNaN(port) || !isPortAllowed(port, req.user?.sub)) {
+      const user = req.user?.sub ? findUser(req.user.sub) : undefined;
       res.status(403).json({
-        error: `Port ${port} is not allowed`,
-        allowed: Array.from(ALLOWED_PORTS).sort(),
+        error: `Port ${port} is not allowed for this user`,
+        sharedPorts: Array.from(SHARED_PORTS).sort(),
+        yourDevRange: user?.devPortRange ?? null,
       });
       return;
     }

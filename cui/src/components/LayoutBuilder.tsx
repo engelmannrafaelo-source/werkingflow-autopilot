@@ -93,7 +93,7 @@ interface PanelConfig {
 const CUI_APP_HOST_LB = (typeof window !== 'undefined' && window.__CUI_APP_HOST__) || 'http://localhost';
 const WORKSPACE_BROWSER_PORTS_LB: Record<string, number> = {
   "engelmann-ai-hub": 3009,
-  "engelmann-dashboards": 3010,
+  "engelmann-dashboards": 4800,
   "werking-energy": 3007,
   "werking-report": 3008,
   "werkingsafety": 3006,

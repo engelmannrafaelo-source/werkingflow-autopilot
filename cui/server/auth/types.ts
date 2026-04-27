@@ -39,6 +39,10 @@ export interface CuiUser {
   canApproveEdits: boolean;
   /** Is this user active? */
   active: boolean;
+  /** Personal dev port range [lo, hi] for user-owned mockups/dev servers.
+   *  app-proxy enforces: a user may proxy only ports in their own range
+   *  (plus shared infra ports). '*' means unrestricted (admin only). */
+  devPortRange?: [number, number] | '*';
 }
 
 /** JWT payload embedded in the token */
