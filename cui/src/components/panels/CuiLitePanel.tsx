@@ -548,6 +548,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const userScrolledUpRef = useRef(false);
+  const [unreadCount, setUnreadCount] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const pasteZoneRef = useRef<HTMLDivElement>(null);
   const [pasteUploading, setPasteUploading] = useState(false);
@@ -589,8 +590,10 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         const newName = data.customName || data.summary || '';
         const newDone = !!data.isAgentDone;
         // Fast hash: skip redundant setState when nothing changed
+        // Include content-length of last 3 messages to detect streaming appends within existing blocks
         const lastTs = newMsgs[newMsgs.length - 1]?.timestamp || '';
-        const hash = `${newMsgs.length}|${lastTs}|${newStatus}|${newPerms.length}|${newName}|${newDone}|${data.rateLimited || ''}`;
+        const tailLens = newMsgs.slice(-3).map(m => (m.content || '').length).join(',');
+        const hash = `${newMsgs.length}|${lastTs}|${newStatus}|${newPerms.length}|${newName}|${newDone}|${data.rateLimited || ''}|${tailLens}`;
         if (hash !== lastPollHashRef.current) {
           lastPollHashRef.current = hash;
           // Append any pending system messages (errors, warnings) that were added between polls
@@ -992,6 +995,9 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   useEffect(() => {
     if (!userScrolledUpRef.current) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      setUnreadCount(0);
+    } else {
+      setUnreadCount(c => c + 1);
     }
   }, [messages]);
 
@@ -1205,6 +1211,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     setMessages(prev => [...prev, { role: 'user', content: msg, timestamp: new Date().toISOString() }]);
     // User action → always scroll to bottom
     userScrolledUpRef.current = false;
+    setUnreadCount(0);
     setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
     setIsAgentDone(false);
     setAttentionReason(undefined);
@@ -1789,7 +1796,9 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
               const el = scrollContainerRef.current;
               if (!el) return;
               // "Near bottom" = within 150px of the end (80px was too tight, missed scroll)
-              userScrolledUpRef.current = el.scrollTop + el.clientHeight < el.scrollHeight - 150;
+              const isScrolledUp = el.scrollTop + el.clientHeight < el.scrollHeight - 150;
+              userScrolledUpRef.current = isScrolledUp;
+              if (!isScrolledUp) setUnreadCount(0);
             }}
             style={{ flex: 1, overflow: 'auto', minHeight: 0 }}
           >
@@ -1809,6 +1818,28 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
             ))}
             <div ref={messagesEndRef} />
           </div>
+
+          {/* New-messages indicator — shown when user scrolled up and new messages arrived */}
+          {unreadCount > 0 && (
+            <div style={{ position: 'relative', flexShrink: 0, height: 0 }}>
+              <button
+                onClick={() => {
+                  messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+                  userScrolledUpRef.current = false;
+                  setUnreadCount(0);
+                }}
+                style={{
+                  position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)',
+                  background: 'var(--tn-blue, #3B82F6)', color: '#fff',
+                  border: 'none', borderRadius: 16, padding: '5px 14px',
+                  fontSize: 12, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap',
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.35)', zIndex: 10,
+                }}
+              >
+                ↓ {unreadCount} neue Nachricht{unreadCount !== 1 ? 'en' : ''}
+              </button>
+            </div>
+          )}
 
           {/* Input Bar */}
           <div style={{
