@@ -4,9 +4,19 @@
  * Renders the CUI as each user with each of their workspaces selected,
  * captures a full screenshot, and returns the result. Admin can verify at a
  * glance whether every partner sees a working setup on login.
+ *
+ * Two operating modes (mutually exclusive):
+ *   1. NATIVE  — runs Playwright locally. Used on partner-server.
+ *   2. FORWARD — proxies all requests to a remote NATIVE instance via
+ *      `CUI_PARTNER_FORWARD_URL` + `CUI_PARTNER_INTERNAL_TOKEN`. Used on
+ *      dev-server so the panel works while partner does the actual work.
+ *
+ * Internal-token auth: when `x-cui-internal-token` matches the env var,
+ * a synthetic admin user is attached and JWT auth is bypassed. This is what
+ * lets a forwarded request from dev hit partner without needing a per-user JWT.
  */
 
-import { Router } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { existsSync, readFileSync, mkdirSync, readdirSync } from 'fs';
 import { join, basename } from 'path';
 import { signJwt } from '../auth/jwt.js';
@@ -60,6 +70,10 @@ function getBaseUrl(): string {
 function getCookieDomain(): string | null {
   if (process.env.COOKIE_DOMAIN) return process.env.COOKIE_DOMAIN;
   return null;
+}
+
+function isForwardMode(): boolean {
+  return Boolean(process.env.CUI_PARTNER_FORWARD_URL && process.env.CUI_PARTNER_INTERNAL_TOKEN);
 }
 
 async function capturePlaywright(
@@ -118,7 +132,6 @@ async function capturePlaywright(
       // Layout never rendered — likely auth or load error. Capture anyway.
     }
 
-    // Click on the workspace button if not already active
     await page.evaluate((ws) => {
       const buttons = Array.from(document.querySelectorAll('button'));
       for (const btn of buttons) {
@@ -132,7 +145,6 @@ async function capturePlaywright(
       return false;
     }, workspace);
 
-    // Allow layout, iframes, panels to settle
     await page.waitForTimeout(8000);
 
     await page.screenshot({ path: outFile, type: 'png', fullPage: false });
@@ -143,12 +155,123 @@ async function capturePlaywright(
   }
 }
 
+async function forwardToPartner(req: Request, res: Response): Promise<void> {
+  const target = process.env.CUI_PARTNER_FORWARD_URL!.replace(/\/$/, '') + req.originalUrl;
+  const token = process.env.CUI_PARTNER_INTERNAL_TOKEN!;
+
+  const headers: Record<string, string> = {
+    'x-cui-internal-token': token,
+    accept: req.headers.accept || '*/*',
+  };
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    headers['content-type'] = (req.headers['content-type'] as string) || 'application/json';
+  }
+
+  const body = (req.method !== 'GET' && req.method !== 'HEAD')
+    ? (typeof req.body === 'string' ? req.body : JSON.stringify(req.body || {}))
+    : undefined;
+
+  try {
+    const r = await fetch(target, { method: req.method, headers, body });
+    const buf = Buffer.from(await r.arrayBuffer());
+    res.status(r.status);
+    const ct = r.headers.get('content-type');
+    if (ct) res.setHeader('Content-Type', ct);
+    const cc = r.headers.get('cache-control');
+    if (cc) res.setHeader('Cache-Control', cc);
+    res.send(buf);
+  } catch (err: any) {
+    console.error('[partner-server] forward failed:', err.message);
+    res.status(502).json({ error: `Forward to partner failed: ${err.message}`, target });
+  }
+}
+
+/**
+ * Auth middleware: accepts EITHER a valid admin JWT OR the shared
+ * internal-token header (used by the dev forward-proxy).
+ */
+function adminOrInternal(req: Request, res: Response, next: NextFunction): void {
+  const internalToken = process.env.CUI_PARTNER_INTERNAL_TOKEN;
+  const headerToken = req.header('x-cui-internal-token');
+  if (internalToken && headerToken && headerToken === internalToken) {
+    (req as any).user = { sub: '__internal__', name: 'Internal', role: 'admin', claudeAccountId: 'internal' };
+    next();
+    return;
+  }
+  requireAuth(req, res, () => requireRole('admin')(req, res, next));
+}
+
+async function runCapture(userId: string, workspace: string): Promise<CaptureMeta> {
+  const user = findUser(userId);
+  if (!user) throw new Error(`User not found: ${userId}`);
+
+  const key = cellKey(userId, workspace);
+  if (inFlight.has(key)) throw new Error('Capture already in progress for this cell');
+
+  inFlight.add(key);
+  const filePath = join(SCREENSHOT_DIR, `${userId}__${workspace}.png`);
+
+  try {
+    const { durationMs } = await capturePlaywright(user, workspace, filePath);
+    const meta: CaptureMeta = {
+      userId, workspace,
+      capturedAt: new Date().toISOString(),
+      filePath, status: 'success', durationMs,
+    };
+    captures.set(key, meta);
+    return meta;
+  } catch (err: any) {
+    const meta: CaptureMeta = {
+      userId, workspace,
+      capturedAt: new Date().toISOString(),
+      filePath: '', status: 'error',
+      error: err?.message || String(err),
+    };
+    captures.set(key, meta);
+    throw err;
+  } finally {
+    inFlight.delete(key);
+  }
+}
+
 export default function createPartnerServerRoutes() {
   const router = Router();
 
-  router.use(requireAuth);
+  if (isForwardMode()) {
+    router.use(adminOrInternal);
+    router.get('/health', async (_req, res) => {
+      const target = process.env.CUI_PARTNER_FORWARD_URL!.replace(/\/$/, '') + '/api/partner-server/health';
+      let upstream: any = null;
+      try {
+        const r = await fetch(target, { headers: { 'x-cui-internal-token': process.env.CUI_PARTNER_INTERNAL_TOKEN! } });
+        upstream = r.ok ? await r.json() : { error: `upstream ${r.status}` };
+      } catch (err: any) {
+        upstream = { error: err.message };
+      }
+      res.json({
+        mode: 'forward',
+        forwardUrl: process.env.CUI_PARTNER_FORWARD_URL,
+        upstream,
+      });
+    });
+    router.all('*', forwardToPartner);
+    return router;
+  }
 
-  router.get('/matrix', requireRole('admin'), (_req, res) => {
+  router.use(adminOrInternal);
+
+  router.get('/health', (_req, res) => {
+    res.json({
+      mode: 'native',
+      baseUrl: getBaseUrl(),
+      cookieDomain: getCookieDomain(),
+      screenshotDir: SCREENSHOT_DIR,
+      captureCount: captures.size,
+      inFlight: Array.from(inFlight),
+    });
+  });
+
+  router.get('/matrix', (_req, res) => {
     const users = getUsers();
     const cells: Array<any> = [];
     for (const u of users) {
@@ -183,64 +306,78 @@ export default function createPartnerServerRoutes() {
     });
   });
 
-  router.post('/capture', requireRole('admin'), async (req, res) => {
+  router.post('/capture', async (req, res) => {
     const { userId, workspace } = req.body as { userId?: string; workspace?: string };
     if (!userId || !workspace) {
       res.status(400).json({ error: 'userId and workspace required' });
       return;
     }
-    const user = findUser(userId);
-    if (!user) {
-      res.status(404).json({ error: `User not found: ${userId}` });
-      return;
-    }
-
-    const key = cellKey(userId, workspace);
-    if (inFlight.has(key)) {
-      res.status(409).json({ error: 'Capture already in progress for this cell' });
-      return;
-    }
-
-    inFlight.add(key);
-    const filePath = join(SCREENSHOT_DIR, `${userId}__${workspace}.png`);
-
     try {
-      const { durationMs } = await capturePlaywright(user, workspace, filePath);
-      const meta: CaptureMeta = {
-        userId, workspace,
-        capturedAt: new Date().toISOString(),
-        filePath, status: 'success', durationMs,
-      };
-      captures.set(key, meta);
+      const meta = await runCapture(userId, workspace);
       res.json({
         ok: true,
-        userId, workspace,
+        userId: meta.userId, workspace: meta.workspace,
         capturedAt: meta.capturedAt,
-        durationMs,
-        screenshotUrl: `/api/partner-server/screenshot?u=${encodeURIComponent(userId)}&w=${encodeURIComponent(workspace)}&_=${meta.capturedAt}`,
+        durationMs: meta.durationMs,
+        screenshotUrl: `/api/partner-server/screenshot?u=${encodeURIComponent(meta.userId)}&w=${encodeURIComponent(meta.workspace)}&_=${meta.capturedAt}`,
       });
     } catch (err: any) {
-      const meta: CaptureMeta = {
-        userId, workspace,
-        capturedAt: new Date().toISOString(),
-        filePath: '', status: 'error',
-        error: err?.message || String(err),
-      };
-      captures.set(key, meta);
-      console.error(`[partner-server] capture failed for ${userId}/${workspace}:`, err);
-      res.status(500).json({ error: meta.error });
-    } finally {
-      inFlight.delete(key);
+      const msg = err?.message || String(err);
+      console.error(`[partner-server] capture failed for ${userId}/${workspace}:`, msg);
+      const status = msg.includes('already in progress') ? 409
+        : msg.includes('not found') ? 404 : 500;
+      res.status(status).json({ error: msg });
     }
   });
 
-  router.get('/screenshot', requireRole('admin'), (req, res) => {
+  router.post('/capture-all', async (req, res) => {
+    const { onlyMissing } = (req.body || {}) as { onlyMissing?: boolean };
+    const users = getUsers();
+    const results: Array<{ userId: string; workspace: string; status: 'success' | 'error'; durationMs?: number; error?: string }> = [];
+
+    res.setHeader('Content-Type', 'application/x-ndjson');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.flushHeaders?.();
+
+    for (const u of users) {
+      for (const ws of expandWorkspaces(u)) {
+        const key = cellKey(u.id, ws);
+        if (onlyMissing && captures.get(key)?.status === 'success') {
+          const skip = { userId: u.id, workspace: ws, status: 'success' as const, skipped: true };
+          results.push(skip as any);
+          res.write(JSON.stringify(skip) + '\n');
+          continue;
+        }
+        try {
+          const meta = await runCapture(u.id, ws);
+          const r = { userId: u.id, workspace: ws, status: 'success' as const, durationMs: meta.durationMs };
+          results.push(r);
+          res.write(JSON.stringify(r) + '\n');
+        } catch (err: any) {
+          const r = { userId: u.id, workspace: ws, status: 'error' as const, error: err?.message || String(err) };
+          results.push(r);
+          res.write(JSON.stringify(r) + '\n');
+        }
+      }
+    }
+
+    res.write(JSON.stringify({ done: true, total: results.length, success: results.filter(r => r.status === 'success').length }) + '\n');
+    res.end();
+  });
+
+  router.delete('/capture/:userId/:workspace', (req, res) => {
+    const { userId, workspace } = req.params;
+    const key = cellKey(userId, workspace);
+    const had = captures.delete(key);
+    res.json({ ok: true, removed: had });
+  });
+
+  router.get('/screenshot', (req, res) => {
     const userId = String(req.query.u || '');
     const workspace = String(req.query.w || '');
     if (!userId || !workspace) { res.status(400).send('u and w required'); return; }
     const meta = captures.get(cellKey(userId, workspace));
     if (!meta || !existsSync(meta.filePath)) {
-      // Fallback: construct from disk if server restarted
       const fallbackPath = join(SCREENSHOT_DIR, `${userId}__${workspace}.png`);
       if (existsSync(fallbackPath)) {
         res.setHeader('Content-Type', 'image/png');

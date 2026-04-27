@@ -20,10 +20,20 @@ interface MatrixResponse {
   cells: Cell[];
 }
 
+interface HealthResponse {
+  mode: 'native' | 'forward';
+  baseUrl: string;
+  forwardUrl?: string;
+  cookieDomain?: string | null;
+  captureCount?: number;
+  inFlight?: string[];
+}
+
 const API = '/api/partner-server';
 
 export default function PartnerServerPanel() {
   const [data, setData] = useState<MatrixResponse | null>(null);
+  const [health, setHealth] = useState<HealthResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<Set<string>>(new Set());
@@ -32,10 +42,12 @@ export default function PartnerServerPanel() {
 
   const fetchMatrix = useCallback(async () => {
     try {
-      const r = await fetch(`${API}/matrix`);
-      if (!r.ok) throw new Error(`matrix ${r.status}`);
-      const d = await r.json();
-      setData(d);
+      const [m, h] = await Promise.all([
+        fetch(`${API}/matrix`).then(r => { if (!r.ok) throw new Error(`matrix ${r.status}`); return r.json(); }),
+        fetch(`${API}/health`).then(r => r.ok ? r.json() : null).catch(() => null),
+      ]);
+      setData(m);
+      setHealth(h);
       setError(null);
     } catch (e: any) {
       setError(e.message);
@@ -69,14 +81,38 @@ export default function PartnerServerPanel() {
     }
   }, [fetchMatrix]);
 
-  const runAll = useCallback(async () => {
+  const runAll = useCallback(async (onlyMissing = false) => {
     if (!data) return;
     setBulkRunning(true);
-    for (const cell of data.cells) {
-      await triggerCapture(cell);
+    try {
+      const r = await fetch(`${API}/capture-all`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ onlyMissing }),
+      });
+      if (!r.ok || !r.body) throw new Error(`capture-all ${r.status}`);
+      const reader = r.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() || '';
+        for (const ln of lines) {
+          if (!ln.trim()) continue;
+          // Refresh matrix after each completion to show progress
+          await fetchMatrix();
+        }
+      }
+    } catch (e: any) {
+      console.error('[PartnerServer] capture-all failed:', e);
+    } finally {
+      setBulkRunning(false);
+      await fetchMatrix();
     }
-    setBulkRunning(false);
-  }, [data, triggerCapture]);
+  }, [data, fetchMatrix]);
 
   const grouped = useMemo(() => {
     if (!data) return new Map<string, Cell[]>();
@@ -105,10 +141,22 @@ export default function PartnerServerPanel() {
     <div style={{ height: '100%', overflow: 'auto', background: 'var(--tn-bg, #1a1b26)', color: 'var(--tn-text, #c0caf5)', padding: 16 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
         <h2 style={{ margin: 0, fontSize: 16 }}>Partner-Server Health</h2>
+        {health?.mode === 'forward' ? (
+          <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 3, background: 'var(--tn-yellow, #e0af68)', color: '#1a1b26' }}>
+            FORWARD → {health.forwardUrl}
+          </span>
+        ) : health?.mode === 'native' ? (
+          <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 3, background: 'var(--tn-green, #9ece6a)', color: '#1a1b26' }}>
+            NATIVE
+          </span>
+        ) : null}
         <span style={{ fontSize: 11, color: 'var(--tn-text-muted, #a9b1d6)' }}>{data.baseUrl}</span>
         <span style={{ flex: 1 }} />
         <button onClick={fetchMatrix} style={btnStyle} disabled={bulkRunning}>↻ Refresh</button>
-        <button onClick={runAll} style={{ ...btnStyle, background: 'var(--tn-blue, #7aa2f7)', color: '#1a1b26' }} disabled={bulkRunning}>
+        <button onClick={() => runAll(true)} style={btnStyle} disabled={bulkRunning} title="Nur Cells ohne erfolgreichen Screenshot">
+          {bulkRunning ? '...' : '▶ Capture Missing'}
+        </button>
+        <button onClick={() => runAll(false)} style={{ ...btnStyle, background: 'var(--tn-blue, #7aa2f7)', color: '#1a1b26' }} disabled={bulkRunning}>
           {bulkRunning ? '... Running' : '▶ Capture All'}
         </button>
       </div>

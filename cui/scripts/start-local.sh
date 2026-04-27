@@ -110,6 +110,12 @@ if [ "$INFISICAL_LOADED" = "true" ]; then
   # Error Webhook Secret (shared with Sentry webhook + partner-forward — same value in dev/prod)
   _inject_infisical_secret ERROR_WEBHOOK_SECRET "${INFISICAL_WS_DEV_SERVER:-}" "$_cui_infisical_env" ERROR_WEBHOOK_SECRET
 
+  # Partner-Server Health Forward (dev panel proxies to partner)
+  # CUI_PARTNER_INTERNAL_TOKEN: shared secret between dev + partner for inter-server admin auth
+  # CUI_PARTNER_FORWARD_URL: only set on dev — partner stays NATIVE
+  _inject_infisical_secret CUI_PARTNER_INTERNAL_TOKEN "${INFISICAL_WS_DEV_SERVER:-}" "$_cui_infisical_env" CUI_PARTNER_INTERNAL_TOKEN
+  _inject_infisical_secret CUI_PARTNER_FORWARD_URL    "${INFISICAL_WS_DEV_SERVER:-}" "$_cui_infisical_env" CUI_PARTNER_FORWARD_URL
+
   # IONOS Mail (IMAP + SMTP for MailPanel — office@werking.tools)
   _inject_infisical_secret IONOS_EMAIL     "${INFISICAL_WS_DEV_SERVER:-}" dev IONOS_EMAIL
   _inject_infisical_secret IONOS_PASSWORD  "${INFISICAL_WS_DEV_SERVER:-}" dev IONOS_PASSWORD
