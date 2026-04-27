@@ -171,18 +171,38 @@ async function forwardToPartner(req: Request, res: Response): Promise<void> {
     ? (typeof req.body === 'string' ? req.body : JSON.stringify(req.body || {}))
     : undefined;
 
+  const ac = new AbortController();
+  req.on('close', () => ac.abort());
+
   try {
-    const r = await fetch(target, { method: req.method, headers, body });
-    const buf = Buffer.from(await r.arrayBuffer());
+    const r = await fetch(target, {
+      method: req.method,
+      headers,
+      body,
+      signal: ac.signal,
+      // @ts-ignore — undici extension: keep connection open for long-running streams
+      duplex: 'half',
+    });
     res.status(r.status);
     const ct = r.headers.get('content-type');
     if (ct) res.setHeader('Content-Type', ct);
     const cc = r.headers.get('cache-control');
     if (cc) res.setHeader('Cache-Control', cc);
-    res.send(buf);
+    if (!r.body) { res.end(); return; }
+    const reader = r.body.getReader();
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value) res.write(Buffer.from(value));
+    }
+    res.end();
   } catch (err: any) {
-    console.error('[partner-server] forward failed:', err.message);
-    res.status(502).json({ error: `Forward to partner failed: ${err.message}`, target });
+    console.error('[partner-server] forward failed:', err.message, 'target=', target);
+    if (!res.headersSent) {
+      res.status(502).json({ error: `Forward to partner failed: ${err.message}`, target });
+    } else {
+      res.end();
+    }
   }
 }
 
