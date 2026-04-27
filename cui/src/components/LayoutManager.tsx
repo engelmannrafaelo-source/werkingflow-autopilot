@@ -2,6 +2,7 @@ import { useCallback, useRef, useState, useEffect, useMemo, lazy, Suspense } fro
 import { Layout, Model, TabNode, TabSetNode, BorderNode, IJsonModel, ITabSetRenderValues, ITabRenderValues, Actions, DockLocation, Rect, Action } from 'flexlayout-react';
 import type { CuiStates } from '../types';
 import { copyToClipboard } from '../utils/clipboard';
+import { devPortUrl } from '../lib/devPortUrl';
 import { useAuth } from '../contexts/AuthContext';
 import { ACCOUNTS } from '../types';
 const ACCOUNT_LABELS: Record<string, string> = Object.fromEntries(ACCOUNTS.map(a => [a.id, a.label]));
@@ -90,9 +91,7 @@ const PanelLoader = () => (
 const API = '/api';
 
 // Map workspace to default browser URL for new panels.
-// URLs go through the CUI app-proxy (/app-proxy/<port>/) so they work both on
-// dev-server and partner-server — no host knowledge needed in the frontend.
-// The proxy enforces per-user devPortRange (see server/routes/app-proxy.ts).
+// devPortUrl picks subdomain proxy on partner / app-proxy on dev — see lib/devPortUrl.ts.
 const WORKSPACE_BROWSER_PORTS: Record<string, number> = {
   "engelmann-ai-hub": 3009,
   "engelmann-dashboards": 4800,
@@ -102,17 +101,16 @@ const WORKSPACE_BROWSER_PORTS: Record<string, number> = {
   "werkingsafety": 3006,
 };
 const WORKSPACE_BROWSER_URLS: Record<string, string> = Object.fromEntries(
-  Object.entries(WORKSPACE_BROWSER_PORTS).map(([ws, port]) => [ws, `/app-proxy/${port}/`])
+  Object.entries(WORKSPACE_BROWSER_PORTS).map(([ws, port]) => [ws, devPortUrl(port)])
 );
 
 function defaultLayout(workDir: string): IJsonModel {
   // Standard layout:
   //   [ Chat (top)             | Tool Hub ]
   //   [ Browser (workspace-App)|          ]
-  // Browser opens the workspace app via /app-proxy/<port>/ (works on dev- and partner-server).
   const wsId = workDir.split('/').pop() || '';
   const port = WORKSPACE_BROWSER_PORTS[wsId];
-  const browserUrl = port ? `/app-proxy/${port}/` : '';
+  const browserUrl = port ? devPortUrl(port) : '';
   return {
     global: {
       tabEnableClose: true,

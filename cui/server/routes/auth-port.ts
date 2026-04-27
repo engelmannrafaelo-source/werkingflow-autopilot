@@ -2,7 +2,7 @@
  * Auth-Port — nginx auth_request endpoint for subdomain-based dev-port proxy.
  *
  * Used by `<port>.partner.werking.tools` nginx server block: nginx subrequests
- * GET /internal/auth-port?port=4800 with the original Cookie header. We
+ * GET /internal/auth-port?port=<dev-port> with the original Cookie header. We
  * validate the JWT and the per-user devPortRange. 200 = allow, 401 = no auth,
  * 403 = port not in user's range. nginx maps these to redirect/forbidden pages.
  */

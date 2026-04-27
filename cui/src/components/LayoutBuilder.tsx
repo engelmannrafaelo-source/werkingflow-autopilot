@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback, type JSX } from 'react';
 import type { IJsonModel } from 'flexlayout-react';
 import { useAuth } from '../contexts/AuthContext';
 import { ACCOUNTS } from '../types';
+import { devPortUrl } from '../lib/devPortUrl';
 const ACCOUNT_LABELS: Record<string, string> = Object.fromEntries(ACCOUNTS.map(a => [a.id, a.label]));
 
 // --- Panel options for cell assignment ---
@@ -89,7 +90,8 @@ interface PanelConfig {
   config: Record<string, string>;
 }
 
-// Map workspace workDir to default browser URL via app-proxy.
+// Map workspace workDir to default browser URL.
+// devPortUrl picks subdomain proxy on partner / app-proxy on dev — see lib/devPortUrl.ts.
 const WORKSPACE_BROWSER_PORTS_LB: Record<string, number> = {
   "engelmann-ai-hub": 3009,
   "engelmann-dashboards": 4800,
@@ -100,7 +102,7 @@ const WORKSPACE_BROWSER_PORTS_LB: Record<string, number> = {
 function browserUrlFromWorkDir(workDir: string): string {
   const wsId = workDir.split("/").pop() || "";
   const port = WORKSPACE_BROWSER_PORTS_LB[wsId];
-  return port ? `/app-proxy/${port}/` : "";
+  return port ? devPortUrl(port) : "";
 }
 
 function panelFromValue(value: string, workDir: string): PanelConfig {
