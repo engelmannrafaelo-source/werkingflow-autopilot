@@ -172,7 +172,9 @@ async function forwardToPartner(req: Request, res: Response): Promise<void> {
     : undefined;
 
   const ac = new AbortController();
-  req.on('close', () => ac.abort());
+  // Only abort upstream when the *client response* closes — using req.on('close')
+  // fires as soon as body-parser finishes reading, killing every forward instantly.
+  res.on('close', () => { if (!res.writableEnded) ac.abort(); });
 
   try {
     const r = await fetch(target, {
