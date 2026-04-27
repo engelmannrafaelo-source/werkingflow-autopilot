@@ -9,6 +9,7 @@ import ImageDrop from './ImageDrop';
 import BrowserPanel from './BrowserPanel';
 import FilePreview from './FilePreview';
 import NotesPanel from './NotesPanel';
+import ToolHubWelcome from './ToolHubWelcome';
 import {
   MissionControl, OfficePanel, KnowledgeFullscreen, WerkingReportAdmin,
   LinkedInPanel, BridgeMonitor, InfisicalMonitor, QADashboard, RepoDashboard,
@@ -138,11 +139,9 @@ export default function ToolHub({ projectId, workDir }: ToolHubProps) {
 
   // Render the active tool
   const renderTool = () => {
-    if (!activeTool) return (
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--tn-text-muted)', fontSize: 12, textAlign: 'center', padding: 20 }}>
-        Tool oben anklicken
-      </div>
-    );
+    // Default view + fallback when the persisted active tool isn't accessible
+    // (e.g., admin-only panel persisted globally, partner has no permission).
+    if (!activeTool || !canAccessPanel(activeTool)) return <ToolHubWelcome />;
 
     const withSuspense = (el: React.ReactNode) => <Suspense fallback={<PanelLoader />}>{el}</Suspense>;
 
