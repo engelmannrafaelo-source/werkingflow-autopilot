@@ -19,7 +19,7 @@ export {
   UserInputAuditPanel, ArchitectureExplorer, ReportBuilder, PromptExplorer,
   BusinessAngelPanel, PrivatAngelPanel, BusinessDocsPanel, MyTasksPanel, ActivityFeedPanel,
   PartnerInboxPanel, FeedbackPanel, TeamStatusPanel, UploadPanel,
-  CalendarPanel, MailPanel, ErrorMonitor,
+  CalendarPanel, MailPanel, ErrorMonitor, PartnerServerPanel,
 } from './panelLazy';
 
 // ToolHub is defined here (not in panelLazy) to avoid circular dependency:

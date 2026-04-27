@@ -88,6 +88,7 @@ import type { MissionDeps } from './routes/mission.js';
 import createFilesRouter from './routes/files.js';
 import createLayoutsRouter from './routes/layouts.js';
 import createScreenshotRoutes from './routes/screenshots.js';
+import createPartnerServerRoutes from './routes/partner-server.js';
 import templatesRouter, { initTemplatesRouter } from './routes/templates.js';
 import createAutoInjectRouter, { startAutoInjectTimer, stopAutoInjectTimer } from './routes/autoinject.js';
 import agentsRouter from './routes/agents.js';
@@ -282,6 +283,7 @@ app.use(filesRouter);                               // /api/health, /api/version
 app.use('/api', layoutsRouter);                      // /api/projects, /api/notes, /api/layouts, /api/upload, /api/images, /api/uploads
 app.use('/api/mission', missionRouter);              // /api/mission/conversations, /send, /states, /unstick, /start, etc.
 app.use('/api', screenshotsRouter);                  // /api/screenshot/*, /api/capture/*, /api/panels, /api/control/screenshot/*
+app.use('/api/partner-server', createPartnerServerRoutes());  // /api/partner-server/matrix, /capture, /screenshot
 app.use('/api/prompt-templates', templatesRouter);   // /api/prompt-templates (GET/POST/PUT/DELETE)
 app.use(autoInjectRouter);                               // /api/auto-inject (GET/POST/DELETE) — full paths in module
 app.use(agentsRouter);                               // /api/agents/* (full paths in module)

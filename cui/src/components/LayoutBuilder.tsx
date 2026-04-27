@@ -124,6 +124,7 @@ function panelFromValue(value: string, workDir: string): PanelConfig {
     case 'administration':          return { component: 'administration', name: 'Administration 🔧', config: {} };
     case 'architecture':            return { component: 'architecture', name: 'Architecture Explorer', config: {} };
     case 'report-builder':          return { component: 'report-builder', name: 'Report Builder', config: {} };
+    case 'partner-server':          return { component: 'partner-server', name: 'Partner Server Health', config: {} };
     default:                        throw new Error(`Unknown panel type: ${value}`);
   }
 }

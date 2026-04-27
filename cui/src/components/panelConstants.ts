@@ -46,6 +46,7 @@ export const PANEL_NAMES: Record<string, string> = {
   'mail': 'Mail',
   'tool-hub': 'Tool Hub',
   'error-monitor': 'Error Monitor',
+  'partner-server': 'Partner Server Health',
 };
 
 export const PANEL_MENU_OPTIONS: PanelMenuGroup[] = [
@@ -98,6 +99,7 @@ export const PANEL_MENU_OPTIONS: PanelMenuGroup[] = [
       { value: 'maintenance', label: 'Maintenance' },
       { value: 'input-audit', label: 'Input Audit' },
       { value: 'linkedin', label: 'LinkedIn Marketing' },
+      { value: 'partner-server', label: 'Partner Server Health' },
     ],
   },
   {
