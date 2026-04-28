@@ -1430,6 +1430,52 @@ export function getToolInfo(sessionId: string): ToolExecutionInfo | undefined {
   return activeProcesses.get(sessionId)?._currentToolInfo;
 }
 
+/**
+ * Returns currently-executing tool info enriched with subprocess liveness.
+ * - childAlive=true:  claude-cli has at least one live child process (Bash subprocess running)
+ * - childAlive=false: claude-cli has NO live children but tool_use is unmatched (likely stuck)
+ * - childAlive=null:  cannot determine (no claudePid, or pgrep not available, or non-Bash tool)
+ *
+ * Caller should treat null as "unknown" — only false is a definite "hang" signal.
+ */
+export function getToolHealthInfo(sessionId: string): {
+  toolName: string;
+  toolDetail?: string;
+  startedAt: number;
+  childAlive: boolean | null;
+} | undefined {
+  const entry = activeProcesses.get(sessionId);
+  if (!entry?._currentToolInfo) return undefined;
+
+  let childAlive: boolean | null = null;
+  // Only persistent processes track claudePid; direct mode doesn't.
+  if (entry.mode === 'persistent' && entry.claudePid) {
+    try {
+      const out = execSync(`pgrep -P ${entry.claudePid}`, {
+        encoding: 'utf8',
+        timeout: 1000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+      childAlive = out.length > 0;
+    } catch (err: any) {
+      // pgrep status 1 = "no match" → definitively no child alive.
+      // Other errors (timeout, command not found, permission denied) → unknown.
+      if (err?.status === 1) {
+        childAlive = false;
+      } else {
+        childAlive = null;
+      }
+    }
+  }
+
+  return {
+    toolName: entry._currentToolInfo.toolName,
+    toolDetail: entry._currentToolInfo.toolDetail,
+    startedAt: entry._currentToolInfo.startedAt,
+    childAlive,
+  };
+}
+
 export async function stopConversation(sessionId: string): Promise<boolean> {
   const entry = activeProcesses.get(sessionId);
   if (!entry) {

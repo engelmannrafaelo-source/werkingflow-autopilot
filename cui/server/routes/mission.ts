@@ -1151,6 +1151,7 @@ async function fetchConvList() {
           ? claudeCli.ACCOUNT_CONFIG.find(a => a.id === resolvedAcctId)
           : undefined;
         if (!effectiveAccount) continue; // skip unassigned — no silent fallback
+        const currentTool = isRunning ? (claudeCli.getToolHealthInfo(sessionId) || null) : null;
         results.push({
           sessionId,
           accountId: effectiveAccount.id,
@@ -1169,6 +1170,7 @@ async function fetchConvList() {
           createdAt: meta.createdAt || '',
           _lastRole: meta.lastRole || '',
           _ownerUser: _partnerOwner?.userId || '',
+          currentTool,
         });
       }
     }
