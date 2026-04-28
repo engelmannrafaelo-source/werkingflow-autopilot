@@ -1019,16 +1019,37 @@ function getPyramidData(appId: string) {
         const ssotPass = ssotLayer.pass ?? layer.passed;
         const ssotStale = ssotLayer.stale ?? 0;
         const ssotPending = ssotLayer.pending ?? layer.pending;
+        const ssotFail = ssotLayer.fail ?? layer.failed;
+        const total = ssotLayer.total ?? layer.totalTests;
         // stale PASS → not verified for current scenario version → bucket as pending
         const verifiedPass = Math.max(0, ssotPass - ssotStale);
-        (layer as any).totalTests = ssotLayer.total ?? layer.totalTests;
+        const reBucketedPending = ssotPending + ssotStale;
+        // Recompute layer status from re-bucketed counts. The CLI's PARTIAL
+        // bubbles up whenever pending > 0, but after subtracting stale from
+        // pass we may now have 0 passed AND 0 failed — that is PENDING (or
+        // STALE if everything is unverified due to drift), not PARTIAL.
+        let recomputedStatus: string;
+        if (total === 0) recomputedStatus = 'pending';
+        else if (ssotFail > 0) recomputedStatus = 'failed';
+        else if (verifiedPass === 0 && reBucketedPending === total) {
+          // Nothing verified for current version. If everything is stale
+          // (i.e. there are reports but they all drifted), call it stale;
+          // otherwise it is purely pending.
+          recomputedStatus = ssotStale === total ? 'stale'
+            : ssotStale > 0 ? 'stale'
+            : 'pending';
+        } else if (verifiedPass === total) recomputedStatus = 'passed';
+        else if (verifiedPass > 0 && reBucketedPending > 0) recomputedStatus = 'partial';
+        else recomputedStatus = STATUS_MAP[ssotLayer.status] ?? layer.status;
+
+        (layer as any).totalTests = total;
         (layer as any).passed = verifiedPass;
-        (layer as any).failed = ssotLayer.fail ?? layer.failed;
-        (layer as any).pending = ssotPending + ssotStale;
+        (layer as any).failed = ssotFail;
+        (layer as any).pending = reBucketedPending;
         (layer as any).stale = ssotStale;
         (layer as any).bridgeFailure = ssotLayer.bridge_failures ?? (layer as any).bridgeFailure ?? 0;
         (layer as any).avgScore = ssotLayer.avg_score ?? layer.avgScore;
-        (layer as any).status = STATUS_MAP[ssotLayer.status] ?? layer.status;
+        (layer as any).status = recomputedStatus;
       }
     }
   }
