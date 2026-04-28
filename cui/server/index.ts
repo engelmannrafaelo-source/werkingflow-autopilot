@@ -276,6 +276,35 @@ app.use('/api', createPublicErrorsRouter());  // POST /api/errors/sentry-webhook
 // --- Auth routes (public — must be BEFORE requireAuth middleware) ---
 app.use('/api/auth', authRouter);
 
+// --- Desktop-App Downloads (public) ---
+// Login-Seite zeigt Download-Buttons; Bundles liegen unter PATHS.downloadsDir
+// (per default /opt/cui-workspace-data/downloads/ auf Partner).
+{
+  const downloadsDir = PATHS.downloadsDir;
+  if (existsSync(downloadsDir)) {
+    app.use('/downloads', express.static(downloadsDir, {
+      maxAge: '1h',
+      setHeaders: (res) => {
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+      },
+    }));
+  }
+  app.get('/api/downloads/manifest', (_req, res) => {
+    if (!existsSync(downloadsDir)) {
+      res.json({ available: false, reason: 'no downloads dir', files: [] });
+      return;
+    }
+    const items = readdirSync(downloadsDir)
+      .filter(f => /\.(zip|AppImage|dmg|exe)$/i.test(f))
+      .map(f => {
+        const full = join(downloadsDir, f);
+        const st = statSync(full);
+        return { name: f, size: st.size, mtime: st.mtime.toISOString() };
+      });
+    res.json({ available: true, files: items });
+  });
+}
+
 // --- Partner-Server (BEFORE /api auth — self-authenticates via adminOrInternal,
 //     supports both JWT cookie and x-cui-internal-token for dev→partner forward) ---
 app.use('/api/partner-server', createPartnerServerRoutes());

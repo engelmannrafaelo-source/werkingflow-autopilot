@@ -2,8 +2,71 @@
  * Login Page — shown when auth is enabled and user is not authenticated.
  */
 
-import { useState, type FormEvent } from 'react';
+import { useState, useEffect, type FormEvent } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+
+interface DownloadFile { name: string; size: number; mtime: string; }
+
+function pickByPlatform(files: DownloadFile[]): { mac?: DownloadFile; win?: DownloadFile; linux?: DownloadFile } {
+  const mac = files.find(f => /arm64.*mac\.zip$/i.test(f.name)) || files.find(f => /mac\.zip$/i.test(f.name));
+  const win = files.find(f => /win\.zip$/i.test(f.name) || /\.exe$/i.test(f.name));
+  const linux = files.find(f => /\.appimage$/i.test(f.name));
+  return { mac, win, linux };
+}
+
+function fmtSize(bytes: number): string {
+  return (bytes / (1024 * 1024)).toFixed(0) + ' MB';
+}
+
+function DownloadButton({ label, file, accent }: { label: string; file: DownloadFile | undefined; accent?: boolean }) {
+  if (!file) {
+    return (
+      <div style={{
+        flex: 1,
+        padding: '10px 12px',
+        background: 'rgba(255,255,255,0.02)',
+        border: '1px dashed rgba(255,255,255,0.08)',
+        borderRadius: 10,
+        color: 'rgba(255,255,255,0.25)',
+        fontSize: 12,
+        textAlign: 'center',
+      }}>
+        {label}<br/><span style={{ fontSize: 10 }}>nicht verfügbar</span>
+      </div>
+    );
+  }
+  return (
+    <a
+      href={`/downloads/${encodeURIComponent(file.name)}`}
+      style={{
+        flex: 1,
+        padding: '10px 12px',
+        background: accent ? 'rgba(222,193,94,0.08)' : 'rgba(255,255,255,0.04)',
+        border: `1px solid ${accent ? 'rgba(222,193,94,0.3)' : 'rgba(255,255,255,0.1)'}`,
+        borderRadius: 10,
+        color: '#ffffff',
+        fontSize: 13,
+        fontWeight: 500,
+        textAlign: 'center',
+        textDecoration: 'none',
+        transition: 'all 0.15s',
+      }}
+      onMouseEnter={e => {
+        e.currentTarget.style.background = accent ? 'rgba(222,193,94,0.15)' : 'rgba(255,255,255,0.08)';
+        e.currentTarget.style.borderColor = accent ? 'rgba(222,193,94,0.5)' : 'rgba(255,255,255,0.2)';
+      }}
+      onMouseLeave={e => {
+        e.currentTarget.style.background = accent ? 'rgba(222,193,94,0.08)' : 'rgba(255,255,255,0.04)';
+        e.currentTarget.style.borderColor = accent ? 'rgba(222,193,94,0.3)' : 'rgba(255,255,255,0.1)';
+      }}
+    >
+      {label}
+      <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', marginTop: 2 }}>
+        {fmtSize(file.size)}
+      </div>
+    </a>
+  );
+}
 
 interface LoginInputProps {
   label: string;
@@ -67,6 +130,14 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [downloads, setDownloads] = useState<DownloadFile[]>([]);
+
+  useEffect(() => {
+    fetch('/api/downloads/manifest')
+      .then(r => r.ok ? r.json() : null)
+      .then(j => { if (j?.available && Array.isArray(j.files)) setDownloads(j.files); })
+      .catch(() => {});
+  }, []);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -237,6 +308,44 @@ export default function LoginPage() {
             {loading ? 'Anmeldung...' : 'Anmelden'}
           </button>
         </form>
+
+        {/* Desktop Download Card */}
+        {downloads.length > 0 && (() => {
+          const picks = pickByPlatform(downloads);
+          const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+          const isMac = /Mac/i.test(ua);
+          const isWin = /Win/i.test(ua);
+          return (
+            <div style={{
+              marginTop: 24,
+              padding: 20,
+              background: 'rgba(255,255,255,0.02)',
+              border: '1px solid rgba(255,255,255,0.06)',
+              borderRadius: 16,
+            }}>
+              <div style={{
+                fontSize: 13,
+                fontWeight: 600,
+                color: 'rgba(255,255,255,0.7)',
+                marginBottom: 4,
+              }}>
+                Lieber als Desktop-App?
+              </div>
+              <div style={{
+                fontSize: 12,
+                color: 'rgba(255,255,255,0.4)',
+                marginBottom: 14,
+              }}>
+                Eine eigene Anwendung statt Browser-Tab. Auto-Reconnect, kein Tab-Throttling.
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <DownloadButton label="macOS" file={picks.mac} accent={isMac} />
+                <DownloadButton label="Windows" file={picks.win} accent={isWin} />
+                <DownloadButton label="Linux" file={picks.linux} accent={!isMac && !isWin} />
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Footer */}
         <p style={{

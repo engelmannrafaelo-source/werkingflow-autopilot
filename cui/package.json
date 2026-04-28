@@ -17,6 +17,7 @@
     "preview": "vite preview",
     "electron": "NODE_ENV=production vite build && electron .",
     "electron:dev": "NODE_ENV=development electron . --dev",
+    "electron:partner:build": "NODE_ENV=production vite build && electron-builder --config electron-builder.partner.json --mac --win --linux",
     "aggregate:credentials": "tsx scripts/aggregate-credentials.ts",
     "generate:shared-notes": "tsx scripts/generate-shared-notes-simple.ts",
     "start:staging": "bash scripts/start-staging.sh",

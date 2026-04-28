@@ -11,31 +11,33 @@
     "node_modules/electron/**/*"
   ],
   "extraMetadata": {
-    "main": "electron/main.cjs"
+    "main": "electron/main-partner.cjs"
   },
   "mac": {
     "category": "public.app-category.developer-tools",
     "target": [
       {
-        "target": "dmg",
+        "target": "zip",
         "arch": ["arm64", "x64"]
       }
     ],
     "icon": null,
-    "darkModeSupport": true
+    "darkModeSupport": true,
+    "identity": null
   },
-  "dmg": {
-    "title": "WerkING CUI",
-    "contents": [
-      { "x": 130, "y": 220 },
-      { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
-    ]
+  "win": {
+    "target": [
+      { "target": "zip", "arch": ["x64"] }
+    ],
+    "icon": null,
+    "signAndEditExecutable": false
   },
-  "extraResources": [
-    {
-      "from": "electron/",
-      "to": "electron/",
-      "filter": ["*.cjs"]
-    }
-  ]
+  "linux": {
+    "category": "Development",
+    "target": [
+      { "target": "AppImage", "arch": ["x64"] }
+    ],
+    "icon": null
+  },
+  "asarUnpack": []
 }
