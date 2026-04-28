@@ -5,55 +5,40 @@
       "title": "Vision 2026",
       "category": "Strategie",
       "path": "/root/projekte/werkingflow-business/shared/strategy/VISION.md",
-      "published": true,
-      "publishedAt": "2026-04-16T00:00:00.000Z",
-      "workspaces": [
-        "*"
-      ]
+      "published": false,
+      "workspaces": ["*"]
     },
     {
       "id": "roadmap",
       "title": "Roadmap",
       "category": "Strategie",
       "path": "/root/projekte/werkingflow-business/shared/strategy/ROADMAP.md",
-      "published": true,
-      "publishedAt": "2026-04-16T00:00:00.000Z",
-      "workspaces": [
-        "*"
-      ]
+      "published": false,
+      "workspaces": ["*"]
     },
     {
       "id": "goals",
       "title": "Goals 2026",
       "category": "Strategie",
       "path": "/root/projekte/werkingflow-business/shared/strategy/GOALS.md",
-      "published": true,
-      "publishedAt": "2026-04-16T00:00:00.000Z",
-      "workspaces": [
-        "*"
-      ]
+      "published": false,
+      "workspaces": ["*"]
     },
     {
       "id": "partner-roadmap",
       "title": "Partner Roadmap",
       "category": "Strategie",
       "path": "/root/projekte/werkingflow-business/shared/partnerships/PARTNER-ROADMAP.md",
-      "published": true,
-      "publishedAt": "2026-04-16T00:00:00.000Z",
-      "workspaces": [
-        "*"
-      ]
+      "published": false,
+      "workspaces": ["*"]
     },
     {
       "id": "features",
       "title": "Feature Overview",
       "category": "Produkt",
       "path": "/root/projekte/werkingflow-business/shared/FEATURES.md",
-      "published": true,
-      "publishedAt": "2026-04-16T00:00:00.000Z",
-      "workspaces": [
-        "*"
-      ]
+      "published": false,
+      "workspaces": ["*"]
     },
     {
       "id": "energy-report-spec",
@@ -61,10 +46,7 @@
       "category": "Produkt",
       "path": "/root/projekte/werkingflow-business/shared/product-specs/ENERGY-REPORT-SPEC.md",
       "published": false,
-      "workspaces": [
-        "werking-energy",
-        "werking-report"
-      ]
+      "workspaces": ["werking-energy", "werking-report"]
     },
     {
       "id": "werking-check-spec",
@@ -72,20 +54,15 @@
       "category": "Produkt",
       "path": "/root/projekte/werkingflow-business/shared/product-specs/WERKING-CHECK-SPEC.md",
       "published": false,
-      "workspaces": [
-        "werking-report"
-      ]
+      "workspaces": ["werking-report"]
     },
     {
       "id": "partner-cui-plan",
       "title": "Partner CUI Plan",
       "category": "Technik",
       "path": "/root/projekte/werkingflow-business/shared/partnerships/PARTNER-CUI-PLAN.md",
-      "published": true,
-      "publishedAt": "2026-04-16T00:00:00.000Z",
-      "workspaces": [
-        "*"
-      ]
+      "published": false,
+      "workspaces": ["*"]
     }
   ]
 }

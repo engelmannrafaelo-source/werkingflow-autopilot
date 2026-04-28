@@ -182,10 +182,11 @@ export default function ToolHub({ projectId, workDir }: ToolHubProps) {
     .map(g => ({ ...g, items: g.items.filter(i => !EXCLUDED_TOOLS.has(i.value) && canAccessPanel(i.value)) }))
     .filter(g => g.items.length > 0);
 
-  const renderToolButton = (item: { value: string; label: string }, color: string) => {
+  const renderToolButton = (item: { value: string; label: string; description?: string }, color: string) => {
     const isActive = activeTool === item.value;
     const isSynced = syncedComponents.has(item.value);
     const displayName = PANEL_NAMES[item.value] || item.label;
+    const tooltip = item.description ? `${displayName}\n\n${item.description}` : displayName;
     return (
       <div
         key={item.value}
@@ -199,7 +200,7 @@ export default function ToolHub({ projectId, workDir }: ToolHubProps) {
       >
         <button
           onClick={() => selectTool(item.value)}
-          title={displayName}
+          title={tooltip}
           style={{
             display: 'flex', flexDirection: 'column', alignItems: 'center',
             justifyContent: 'center', gap: 0,

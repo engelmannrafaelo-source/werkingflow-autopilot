@@ -9,6 +9,7 @@ import ScenariosTab from './tabs/ScenariosTab';
 import CoverageTab from './tabs/CoverageTab';
 import DependenciesTab from './tabs/DependenciesTab';
 import ProductTab from './tabs/ProductTab';
+import KnowledgeTab from './tabs/KnowledgeTab';
 import { resilientFetch } from '../../../utils/resilientFetch';
 
 interface Tab {
@@ -45,6 +46,12 @@ export default function QADashboard() {
   }, [fetchRunningCount]);
 
   const tabs: Tab[] = [
+    {
+      key: 'knowledge',
+      label: 'Wissen',
+      component: <ErrorBoundary componentName="KnowledgeTab"><KnowledgeTab /></ErrorBoundary>,
+      group: 'monitoring'
+    },
     {
       key: 'overview',
       label: 'Overview',

@@ -42,6 +42,29 @@ const PARTNER_HIDDEN_PANELS = new Set<string>([
   'report-builder',
 ]);
 
+// API paths that may legitimately return 401 without meaning the session expired.
+// The login endpoint returns 401 for wrong password — that's not session-stale.
+// /auth/me + /auth/status are read by AuthContext itself; they manage their own state.
+const UNAUTH_OK_PATHS = ['/api/auth/login', '/api/auth/me', '/api/auth/status', '/api/auth/logout'];
+
+let interceptorInstalled = false;
+function install401Interceptor(onUnauthorized: () => void) {
+  if (interceptorInstalled) return;
+  interceptorInstalled = true;
+  const origFetch = window.fetch.bind(window);
+  window.fetch = async (...args: Parameters<typeof fetch>) => {
+    const res = await origFetch(...args);
+    if (res.status === 401) {
+      const url = typeof args[0] === 'string' ? args[0] : args[0] instanceof URL ? args[0].href : (args[0] as Request).url;
+      const path = (() => { try { return new URL(url, window.location.href).pathname; } catch { return url; } })();
+      const isApi = path.startsWith('/api/');
+      const isExempt = UNAUTH_OK_PATHS.some(p => path.startsWith(p));
+      if (isApi && !isExempt) onUnauthorized();
+    }
+    return res;
+  };
+}
+
 const AuthContext = createContext<AuthState>({
   authenticated: null,
   user: null,
@@ -59,9 +82,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [authEnabled, setAuthEnabled] = useState<boolean | null>(null);
   const [partnerCui, setPartnerCui] = useState<boolean>(false);
 
-  // Check auth status on mount
+  // Check auth status on mount + install global 401 interceptor for stale cookies.
   useEffect(() => {
     checkAuth();
+    install401Interceptor(() => {
+      // Stale cookie / session expired during use — drop client state so
+      // LoginPage shows on next render. Don't re-call /logout (cookie already
+      // invalid, would just 401 again).
+      setUser(null);
+      setAuthenticated(false);
+    });
   }, []);
 
   async function checkAuth() {

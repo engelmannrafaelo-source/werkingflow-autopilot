@@ -2231,4 +2231,57 @@ router.post('/api/qa/arch-test/:appId/refresh', (req, res) => {
   res.json({ queued: true, app: appId, pid: child.pid });
 });
 
+// ========================================
+// Knowledge / Wissen — curated test-system docs
+// ========================================
+// Renders the markdown documentation that ships with the unified-tester so
+// product owners and developers can understand the test system without diving
+// into the framework code itself.
+
+interface KnowledgeDoc {
+  id: string;
+  title: string;
+  category: 'Einstieg' | 'Layer-Modell' | 'Tests schreiben' | 'Status';
+  description: string;
+  /** filename inside UNIFIED_TESTER_ROOT */
+  file: string;
+}
+
+const KNOWLEDGE_DOCS: KnowledgeDoc[] = [
+  { id: 'readme', title: 'Überblick', category: 'Einstieg', description: 'Was ist der Unified Tester? Erste Orientierung.', file: 'README.md' },
+  { id: 'strategy', title: 'Test-Strategie', category: 'Einstieg', description: 'Welche Tests laufen wann, warum, und wie hängen sie zusammen.', file: 'TEST_STRATEGY.md' },
+  { id: 'background', title: 'Hintergrund-Tests', category: 'Einstieg', description: 'Wie laufen Tests im Hintergrund — automatisch, beim Push, geplant.', file: 'BACKGROUND-TESTING.md' },
+  { id: 'arch-cascading', title: 'Layer-0 Architektur', category: 'Layer-Modell', description: 'Architektur-Tests (Schema, API, Frontend) als Pre-Flight-Check vor jedem Run.', file: 'ARCH-TEST-CASCADING.md' },
+  { id: 'scenarios-overview', title: 'Szenarien-Übersicht', category: 'Layer-Modell', description: 'Welche Szenarien es gibt, was sie testen, wie sie strukturiert sind.', file: 'SCENARIO_OVERVIEW.md' },
+  { id: 'scenarios-list', title: 'Szenarien (deutsch)', category: 'Layer-Modell', description: 'Alle Szenarien in deutscher Sprache erklärt.', file: 'SZENARIEN.md' },
+  { id: 'schema', title: 'Szenario-Schema', category: 'Tests schreiben', description: 'Felder eines Test-Szenarios: Persona, Auftrag, Ziele, Qualitätsfrage.', file: 'SCENARIO_SCHEMA.md' },
+  { id: 'personas', title: 'Test-Personas', category: 'Tests schreiben', description: 'Welche Perspektiven testen — vom Power-User bis zum Erstnutzer.', file: 'PERSONA_OVERVIEW.md' },
+  { id: 'kunden-matrix', title: 'Kunden-Test-Matrix', category: 'Tests schreiben', description: 'Welche Test-Daten + Kunden-Szenarien wir verwenden.', file: 'KUNDEN-TEST-MATRIX.md' },
+  { id: 'test-status', title: 'Aktueller Test-Status', category: 'Status', description: 'Welche Tests gerade grün sind, welche rot, welche fehlen.', file: 'TEST_STATUS.md' },
+];
+
+router.get('/api/qa/knowledge', (_req, res) => {
+  // Filter to docs whose file actually exists on this server.
+  const available = KNOWLEDGE_DOCS.filter(d => existsSync(join(UNIFIED_TESTER_ROOT, d.file)));
+  res.json({
+    available: available.length > 0,
+    docs: available.map(({ id, title, category, description }) => ({ id, title, category, description })),
+  });
+});
+
+router.get('/api/qa/knowledge/:id', (req, res) => {
+  const doc = KNOWLEDGE_DOCS.find(d => d.id === req.params.id);
+  if (!doc) {
+    res.status(404).json({ error: 'Unknown doc' });
+    return;
+  }
+  const path = join(UNIFIED_TESTER_ROOT, doc.file);
+  if (!existsSync(path)) {
+    res.status(404).json({ error: `File not found: ${doc.file}` });
+    return;
+  }
+  const content = readFileSync(path, 'utf-8');
+  res.json({ id: doc.id, title: doc.title, category: doc.category, description: doc.description, content });
+});
+
 export default router;

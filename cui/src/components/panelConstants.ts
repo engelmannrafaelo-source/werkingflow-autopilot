@@ -1,8 +1,8 @@
 // Panel metadata — separated from lazy imports to avoid circular dependencies with ToolHub.
 // ToolHub imports from here; panelRegistry re-exports from here.
 
-export interface PanelMenuOption { value: string; label: string }
-export interface PanelMenuGroup { category: string; items: PanelMenuOption[] }
+export interface PanelMenuOption { value: string; label: string; description?: string }
+export interface PanelMenuGroup { category: string; color: string; items: PanelMenuOption[] }
 
 export const PANEL_NAMES: Record<string, string> = {
   cui: 'Chat',
@@ -52,69 +52,74 @@ export const PANEL_NAMES: Record<string, string> = {
 export const PANEL_MENU_OPTIONS: PanelMenuGroup[] = [
   {
     category: 'Workspace',
+    color: '#7aa2f7',
     items: [
-      { value: 'cui', label: 'Chat' },
-      { value: 'browser', label: 'Browser' },
-      { value: 'tool-hub', label: 'Tool Hub' },
-      { value: 'preview', label: 'File Preview' },
-      { value: 'notes', label: 'Notes' },
-      { value: 'images', label: 'Images' },
+      { value: 'cui', label: 'Chat', description: 'Konversation mit der KI — Aufträge stellen, Sub-Sessions starten, Antworten lesen.' },
+      { value: 'browser', label: 'Browser', description: 'Eingebetteter Browser für Apps und Tools — direkt im Layout, ohne Tab-Wechsel.' },
+      { value: 'tool-hub', label: 'Tool Hub', description: 'Übersicht aller verfügbaren Panels — schneller Einstieg per Klick.' },
+      { value: 'preview', label: 'File Preview', description: 'Markdown- und Dokument-Vorschau — Strategien, Specs, Notizen rendern.' },
+      { value: 'notes', label: 'Notes', description: 'Persönliche und geteilte Notizen — pro Workspace abgelegt.' },
+      { value: 'images', label: 'Images', description: 'Bild-Galerie für Screenshots und Uploads des aktuellen Workspaces.' },
     ],
   },
   {
     category: 'Übersicht',
+    color: '#bb9af7',
     items: [
-      { value: 'mission', label: 'Mission Control' },
-      { value: 'mission-chat', label: 'Mission Chat' },
-      { value: 'conversation-queue', label: 'Conversation Queue' },
-      { value: 'office', label: 'Virtual Office' },
+      { value: 'mission', label: 'Mission Control', description: 'Steuerzentrale für alle Sessions — starten, beenden, Layouts setzen.' },
+      { value: 'mission-chat', label: 'Mission Chat', description: 'Quer-Chat über alle Sessions hinweg — analysiert, synchronisiert, fragt nach.' },
+      { value: 'conversation-queue', label: 'Conversation Queue', description: 'Warteschlange laufender und geplanter KI-Konversationen.' },
+      { value: 'office', label: 'Virtual Office', description: 'Visualisierung wer woran arbeitet — Sessions, Tasks, Status auf einen Blick.' },
     ],
   },
   {
     category: 'Analyse',
+    color: '#7dcfff',
     items: [
-      { value: 'qa-dashboard', label: 'QA Dashboard' },
-      { value: 'architecture', label: 'Architecture Explorer' },
-      { value: 'knowledge', label: 'Knowledge' },
-      { value: 'report-builder', label: 'Report Builder' },
-      { value: 'prompt-explorer', label: 'Workflow Explorer' },
+      { value: 'qa-dashboard', label: 'QA Dashboard', description: 'Test-System: Szenarien, Reports, Pyramide, Coverage. Beschreibungen + Wissensbasis inklusive.' },
+      { value: 'architecture', label: 'Architecture Explorer', description: 'Repo- und Modul-Architektur visualisieren — Abhängigkeiten und Schichten.' },
+      { value: 'knowledge', label: 'Knowledge', description: 'Wissensbasis: gesammelte Erkenntnisse aus Sessions, Memory und Docs.' },
+      { value: 'report-builder', label: 'Report Builder', description: 'Berichte zusammenstellen aus Daten und Texten — fürs Management.' },
+      { value: 'prompt-explorer', label: 'Workflow Explorer', description: 'Workflow-Manifeste durchsuchen und prüfen — Energy, Safety, Report.' },
     ],
   },
   {
     category: 'Monitoring',
+    color: '#ff9e64',
     items: [
-      { value: 'error-monitor', label: 'Error Monitor' },
-      { value: 'bridge-monitor', label: 'Bridge Monitor' },
-      { value: 'repo-dashboard', label: 'Git & Pipeline Monitor' },
-      { value: 'infisical-monitor', label: 'Infisical Monitor' },
-      { value: 'watchdog', label: 'Dev Server Watchdog' },
+      { value: 'error-monitor', label: 'Error Monitor', description: 'Aktuelle Fehler aus allen Apps — Stack-Traces, Häufungen, Triage.' },
+      { value: 'bridge-monitor', label: 'Bridge Monitor', description: 'AI-Bridge-Status: Modelle, Quoten, laufende Anfragen, Fehlerquote.' },
+      { value: 'repo-dashboard', label: 'Git & Pipeline Monitor', description: 'Status aller Repos: Branches, offene PRs, Build-Status, Deploy-Stand.' },
+      { value: 'infisical-monitor', label: 'Infisical Monitor', description: 'Secret-Stand pro Projekt — Drift zwischen dev/prod erkennen.' },
+      { value: 'watchdog', label: 'Dev Server Watchdog', description: 'Laufende Prozesse, Ports, Speicher und CPU des Dev-Servers.' },
     ],
   },
   {
     category: 'Admin',
+    color: '#f7768e',
     items: [
-      { value: 'admin-wr', label: 'Werking Report Admin' },
-      { value: 'business-angel', label: 'Business Angel' },
-      { value: 'privat-angel', label: 'Privat Angel' },
-      { value: 'background-ops', label: 'Background Ops' },
-      { value: 'maintenance', label: 'Maintenance' },
-      { value: 'input-audit', label: 'Input Audit' },
-      { value: 'linkedin', label: 'LinkedIn Marketing' },
-      { value: 'partner-server', label: 'Partner Server Health' },
+      { value: 'admin-wr', label: 'Werking Report Admin', description: 'WerkING-Report Daten verwalten: User, Reports, Stammdaten.' },
+      { value: 'business-angel', label: 'Business Angel', description: 'Geschäftliche Anfragen und To-Dos automatisch beantworten lassen.' },
+      { value: 'privat-angel', label: 'Privat Angel', description: 'Privater Assistent für persönliche Aufgaben und Korrespondenz.' },
+      { value: 'background-ops', label: 'Background Ops', description: 'Hintergrund-Jobs anschauen: Cron, Sync-Bots, periodische Tasks.' },
+      { value: 'maintenance', label: 'Maintenance', description: 'Wartungs-Routinen ausführen: Dokumente, Caches, Aufräum-Skripte.' },
+      { value: 'input-audit', label: 'Input Audit', description: 'Alle eigenen Eingaben über alle Sessions — Volltext-Suche, Zeitfilter.' },
+      { value: 'linkedin', label: 'LinkedIn Marketing', description: 'LinkedIn-Posts planen, schreiben und veröffentlichen.' },
+      { value: 'partner-server', label: 'Partner Server Health', description: 'Status des Partner-Servers: Services, Sync-Stand, Logs.' },
     ],
   },
   {
     category: 'Partner',
+    color: '#e0af68',
     items: [
-      { value: 'business-docs', label: 'Business Docs' },
-      { value: 'my-tasks', label: 'My Tasks' },
-      { value: 'activity-feed', label: 'Activity Feed' },
-      { value: 'partner-inbox', label: 'Partner Inbox' },
-      { value: 'feedback', label: 'Feedback' },
-      { value: 'team-status', label: 'Team Status' },
-      { value: 'uploads', label: 'Uploads' },
-      { value: 'calendar', label: 'Kalender' },
-      { value: 'mail', label: 'Mail' },
+      { value: 'business-docs', label: 'Business Docs', description: 'Strategie- und Produkt-Dokumente lesen — Vision, Roadmap, Specs.' },
+      { value: 'my-tasks', label: 'My Tasks', description: 'Eigene Aufgaben aus den Worklists — was als Nächstes ansteht.' },
+      { value: 'activity-feed', label: 'Activity Feed', description: 'Was hat das System zuletzt gemacht — Sessions, Commits, Deploys.' },
+      { value: 'partner-inbox', label: 'Partner Inbox', description: 'Eingehende Nachrichten und Anfragen vom Team und externen Partnern.' },
+      { value: 'feedback', label: 'Feedback', description: 'Verbesserungsvorschläge und Bugs einreichen — geht an Rafael.' },
+      { value: 'uploads', label: 'Uploads', description: 'Dateien hochladen für Workflows, Tests oder Reports.' },
+      { value: 'calendar', label: 'Kalender', description: 'Termine und Deadlines — synchronisiert mit dem Konto-Kalender.' },
+      { value: 'mail', label: 'Mail', description: 'E-Mail-Postfach — lesen, beantworten, Drafts vorbereiten.' },
     ],
   },
 ];
