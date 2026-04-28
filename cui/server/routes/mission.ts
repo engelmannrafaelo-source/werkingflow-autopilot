@@ -71,6 +71,89 @@ const _lastReminderSentAt = new Map<string, number>();
 const _silentExitAttempts = new Map<string, number>();
 const MAX_SILENT_EXIT_AUTO_CONTINUE = 2;
 
+/**
+ * Heuristic classification of a sub-session's current state for the parent reminder.
+ * Best-effort, fail-soft: never throws — returns 'progress' on any read/parse error.
+ *
+ * - 'ready': stdout has a terminal_reason:"completed" result line → parent should /finish
+ * - 'stalled': long-running with no commits and mostly read-only tool calls → parent should intervene
+ * - 'progress': default — still working
+ */
+function classifySubStatus(sid: string): { status: 'ready' | 'stalled' | 'progress'; signals: string[] } {
+  const signals: string[] = [];
+  try {
+    // 1. Check stdout file for terminal_reason: completed
+    const stdoutPath = `/run/cui-sessions/${sid}.stdout`;
+    if (existsSync(stdoutPath)) {
+      try {
+        const raw = readFileSync(stdoutPath, 'utf8');
+        const tail = raw.split('\n').filter(Boolean).slice(-5);
+        for (const line of tail) {
+          if (line.includes('"type":"result"') && line.includes('"terminal_reason":"completed"')) {
+            return { status: 'ready', signals: ['terminal_reason=completed'] };
+          }
+        }
+      } catch { /* fail-soft */ }
+    }
+
+    // 2. STALLED heuristic: read JSONL last ~30 entries, count tool patterns
+    const found = findJsonlPathAllAccounts(sid);
+    if (!found) return { status: 'progress', signals };
+
+    let lines: string[] = [];
+    try {
+      lines = readFileSync(found.path, 'utf8').split('\n').filter(Boolean);
+    } catch { return { status: 'progress', signals }; }
+
+    const turns = lines.length;
+    if (turns <= 50) return { status: 'progress', signals: [`${turns} turns`] };
+
+    let toolCalls = 0;
+    let readOnlyCalls = 0; // Read, Glob, Grep, Bash-non-commit
+    let editWriteCalls = 0;
+    let gitCommitCalls = 0;
+
+    for (const line of lines.slice(-30)) {
+      try {
+        const obj = JSON.parse(line);
+        if (obj.type !== 'assistant' || !obj.message?.content) continue;
+        const parts = Array.isArray(obj.message.content) ? obj.message.content : [];
+        for (const b of parts) {
+          if (b.type !== 'tool_use') continue;
+          toolCalls++;
+          const name = b.name as string;
+          if (name === 'Edit' || name === 'Write' || name === 'NotebookEdit') {
+            editWriteCalls++;
+          } else if (name === 'Bash') {
+            const cmd = (b.input?.command as string) || '';
+            if (/\bgit\s+commit\b/.test(cmd)) {
+              gitCommitCalls++;
+            } else {
+              readOnlyCalls++;
+            }
+          } else if (name === 'Read' || name === 'Glob' || name === 'Grep') {
+            readOnlyCalls++;
+          }
+        }
+      } catch { /* skip malformed line */ }
+    }
+
+    if (toolCalls === 0) return { status: 'progress', signals: [`${turns} turns / no tool-calls in last 30`] };
+
+    const readOnlyPct = readOnlyCalls / toolCalls;
+    if (gitCommitCalls === 0 && readOnlyPct > 0.7) {
+      return {
+        status: 'stalled',
+        signals: [`${turns} turns / 0 commits / ${Math.round(readOnlyPct * 100)}% explore-only`],
+      };
+    }
+
+    return { status: 'progress', signals: [`${turns} turns / ${gitCommitCalls} commits / ${editWriteCalls} edits`] };
+  } catch {
+    return { status: 'progress', signals };
+  }
+}
+
 function cleanupSubSession(sessionId: string) {
   _subSessionsInjectInProgress.delete(sessionId);
   _silentExitAttempts.delete(sessionId);
@@ -592,6 +675,10 @@ export function initMissionRouter(deps: MissionDeps) {
     }
 
     for (const [parentSessionId, subs] of byParent) {
+      // Patch C: parent already finished → skip. Master /finish wins, never spam a closed parent.
+      // Must be FIRST check, before any state lookup, dedupe, or message build.
+      if (convMeta.isFinished(parentSessionId)) continue;
+
       // Only remind if parent is idle (receptive to messages)
       const parentState = states[parentSessionId];
       if (!parentState || parentState.state !== 'idle') continue;
@@ -612,15 +699,30 @@ export function initMissionRouter(deps: MissionDeps) {
         const finishCmds: string[] = [];
         const killCmds: string[] = [];
         for (const { sessionId, isCompleted } of subs) {
+          // Patch C defensive: race-window between Phase 2 setup and message build.
+          if (convMeta.isFinished(sessionId)) continue;
+
           const title = convMeta.getTitle(sessionId) || sessionId.slice(0, 8);
-          if (isCompleted) {
-            lines.push(`- "${title}" — ist FERTIG. Bitte Ergebnis pruefen und finishen.`);
+          const sid8 = sessionId.slice(0, 8);
+
+          // Patch B: classify sub state for actionable reminders
+          const cls = classifySubStatus(sessionId);
+          const sigStr = cls.signals.length > 0 ? ` (${cls.signals.join(', ')})` : '';
+
+          if (cls.status === 'ready' || isCompleted) {
+            lines.push(`- ${sid8} [READY TO FINISH] "${title}"${sigStr} — → review + /finish`);
+          } else if (cls.status === 'stalled') {
+            lines.push(`- ${sid8} [STALLED] "${title}"${sigStr} — → anstupsen / kill+respawn / selbst uebernehmen`);
+            killCmds.push(`curl -s -X POST http://localhost:${PORT}/api/mission/conversation/${sessionId}/kill`);
           } else {
-            lines.push(`- "${title}" — arbeitet noch. Wenn fertig: finishen, sonst bleibt die Session offen.`);
+            lines.push(`- ${sid8} [IN PROGRESS] "${title}"${sigStr} — → noch arbeiten lassen`);
             killCmds.push(`curl -s -X POST http://localhost:${PORT}/api/mission/conversation/${sessionId}/kill`);
           }
           finishCmds.push(`curl -s -X POST http://localhost:${PORT}/api/mission/conversation/${sessionId}/finish -H 'Content-Type: application/json' -d '{"finished":true,"confirm":true}'`);
         }
+
+        // Patch C: if all subs were filtered out (race: all finished mid-tick), skip reminder.
+        if (lines.length === 0) continue;
 
         const finishBlock = finishCmds.length > 0 ? `\n\nZum Finishen (nachdem du das Ergebnis geprueft hast):\n${finishCmds.join('\n')}` : '';
         const killBlock = killCmds.length > 0 ? `\n\nFalls eine Sub haengt und du den Prozess stoppen willst (Sub bleibt offen, nur der CLI-Prozess wird gekillt — du musst trotzdem /finish aufrufen wenn du das Ergebnis geprueft hast):\n${killCmds.join('\n')}` : '';
@@ -2150,6 +2252,24 @@ router.post('/start', async (req, res) => {
   if (!message) {
     res.status(400).json({ error: 'message required' });
     return;
+  }
+
+  // Sub-session safety guard: if the caller is itself an active session (signals via X-Session-Id),
+  // parentSessionId is mandatory. Without it the spawn would have no parent-link → no auto-inject,
+  // no reminders → master polls blind, sub runs forever. Bare CLI/script callers (no header) are
+  // unchanged: parentSessionId stays optional for backwards compatibility.
+  const callerSessionId_raw = req.headers['x-session-id'];
+  const callerSessionId = typeof callerSessionId_raw === 'string' ? callerSessionId_raw.trim() : '';
+  if (callerSessionId) {
+    const hasParent = typeof parentSessionId === 'string' && parentSessionId.trim().length > 0;
+    if (!hasParent) {
+      res.status(400).json({
+        error: 'parentSessionId required when spawning from an active session',
+        callerSessionId,
+        hint: 'Pass parentSessionId in body, typically your own sessionId',
+      });
+      return;
+    }
   }
 
   // Auto account selection: pick least-loaded account
