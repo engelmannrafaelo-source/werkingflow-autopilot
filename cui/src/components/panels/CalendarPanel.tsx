@@ -13,6 +13,14 @@ interface CalendarEvent {
 
 type ViewMode = 'list' | 'week' | 'month' | 'year';
 
+interface PopoverState {
+  type: 'day' | 'event';
+  dateStr?: string;
+  singleEvent?: CalendarEvent;
+  x: number;
+  y: number;
+}
+
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const TYPE_COLOR: Record<string, string> = {
@@ -71,6 +79,11 @@ function formatDateRange(date: string, endDate: string): string {
   return `${day}. ${month} – ${e.getDate()}. ${MONTH_NAMES[e.getMonth()]}`;
 }
 
+function formatDayTitle(dateStr: string): string {
+  const d = new Date(dateStr + 'T00:00:00');
+  return `${d.getDate()}. ${MONTH_NAMES_FULL[d.getMonth()]}`;
+}
+
 function groupByMonth(events: CalendarEvent[]): Map<string, CalendarEvent[]> {
   const groups = new Map<string, CalendarEvent[]>();
   for (const ev of events) {
@@ -96,14 +109,18 @@ function eventTouchesDate(ev: CalendarEvent, dateStr: string): boolean {
   return ev.date <= dateStr && (ev.endDate || ev.date) >= dateStr;
 }
 
-function getEventsForDate(events: CalendarEvent[], dateStr: string): CalendarEvent[] {
-  return events.filter(ev => eventTouchesDate(ev, dateStr));
+function getEventsForDate(evs: CalendarEvent[], dateStr: string): CalendarEvent[] {
+  return evs.filter(ev => eventTouchesDate(ev, dateStr));
+}
+
+function isMultiDay(ev: CalendarEvent): boolean {
+  return !!(ev.endDate && ev.endDate !== '' && ev.endDate > ev.date);
 }
 
 // European Mon-first: returns the 7 days of the week containing `date`
 function getWeekDays(date: Date): Date[] {
   const d = new Date(date);
-  const day = d.getDay(); // 0=Sun
+  const day = d.getDay();
   const mondayOffset = day === 0 ? -6 : 1 - day;
   d.setDate(d.getDate() + mondayOffset);
   return Array.from({ length: 7 }, (_, i) => {
@@ -116,7 +133,7 @@ function getWeekDays(date: Date): Date[] {
 // Returns 42 days (6 weeks) for a month grid, European Mon-first
 function getMonthGridDays(year: number, month: number): Date[] {
   const firstDay = new Date(year, month, 1);
-  const startDay = firstDay.getDay(); // 0=Sun
+  const startDay = firstDay.getDay();
   const mondayOffset = startDay === 0 ? 6 : startDay - 1;
   const gridStart = new Date(firstDay);
   gridStart.setDate(gridStart.getDate() - mondayOffset);
@@ -159,6 +176,7 @@ export default function CalendarPanel() {
   const [saving, setSaving] = useState(false);
   const [view, setView] = useState<ViewMode>('list');
   const [navDate, setNavDate] = useState<Date>(() => new Date());
+  const [popover, setPopover] = useState<PopoverState | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -176,17 +194,31 @@ export default function CalendarPanel() {
 
   useEffect(() => { load(); }, [load]);
 
+  const closePopover = () => setPopover(null);
+
+  const openDayPopover = (dateStr: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setPopover({ type: 'day', dateStr, x: e.clientX, y: e.clientY });
+  };
+
+  const openEventPopover = (ev: CalendarEvent, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setPopover({ type: 'event', singleEvent: ev, x: e.clientX, y: e.clientY });
+  };
+
   const openCreate = () => {
-    const today = new Date().toISOString().slice(0, 10);
-    setForm({ ...EMPTY_FORM, date: today, endDate: today });
+    const todayStr = new Date().toISOString().slice(0, 10);
+    setForm({ ...EMPTY_FORM, date: todayStr, endDate: todayStr });
     setCreating(true);
     setEditing(null);
+    closePopover();
   };
 
   const openEdit = (ev: CalendarEvent) => {
     setForm({ date: ev.date, endDate: ev.endDate, title: ev.title, type: ev.type, notes: ev.notes });
     setEditing(ev);
     setCreating(false);
+    closePopover();
   };
 
   const cancel = () => { setEditing(null); setCreating(false); };
@@ -236,7 +268,85 @@ export default function CalendarPanel() {
 
   const today = toDateStr(new Date());
 
-  // ── Render: Form ────────────────────────────────────────────────────────────
+  const isTodayVisible = (): boolean => {
+    const todayD = new Date();
+    if (view === 'week') return getWeekDays(navDate).some(d => toDateStr(d) === today);
+    if (view === 'month') return navDate.getFullYear() === todayD.getFullYear() && navDate.getMonth() === todayD.getMonth();
+    if (view === 'year') return navDate.getFullYear() === todayD.getFullYear();
+    return true;
+  };
+
+  // ── Render: Popover ──────────────────────────────────────────────────────────
+
+  const renderPopover = () => {
+    if (!popover) return null;
+    const popEvents = popover.type === 'day'
+      ? getEventsForDate(events, popover.dateStr!)
+      : [popover.singleEvent!];
+
+    const px = Math.min(popover.x + 12, (typeof window !== 'undefined' ? window.innerWidth : 800) - 295);
+    const py = Math.min(popover.y - 8, (typeof window !== 'undefined' ? window.innerHeight : 600) - 320);
+
+    return (
+      <>
+        <div style={{ position: 'fixed', inset: 0, zIndex: 9998 }} onClick={closePopover} />
+        <div style={{
+          position: 'fixed', left: px, top: Math.max(8, py),
+          zIndex: 9999,
+          background: 'var(--tn-bg-dark, #1a1b26)',
+          border: '1px solid var(--tn-border, #414868)',
+          borderRadius: 6,
+          padding: 10,
+          minWidth: 205, maxWidth: 280,
+          boxShadow: '0 4px 20px rgba(0,0,0,0.6)',
+          fontSize: 12,
+          color: 'var(--tn-text)',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--tn-text)' }}>
+              {popover.type === 'day'
+                ? formatDayTitle(popover.dateStr!)
+                : popover.singleEvent!.title}
+            </div>
+            <button onClick={closePopover} style={{ ...btnIcon, fontSize: 15, color: 'var(--tn-text-muted)' }}>×</button>
+          </div>
+
+          {popEvents.length === 0 && (
+            <div style={{ color: 'var(--tn-text-muted)', fontSize: 11 }}>Keine Termine.</div>
+          )}
+
+          {popEvents.map((ev, idx) => {
+            const color = TYPE_COLOR[ev.type] || '#565f89';
+            return (
+              <div key={ev.id} style={{
+                paddingBottom: idx < popEvents.length - 1 ? 8 : 0,
+                marginBottom: idx < popEvents.length - 1 ? 8 : 0,
+                borderBottom: idx < popEvents.length - 1 ? '1px solid var(--tn-border)' : 'none',
+              }}>
+                {popover.type === 'day' && (
+                  <div style={{ fontWeight: 600, color: 'var(--tn-text)', marginBottom: 2, fontSize: 12 }}>{ev.title}</div>
+                )}
+                <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 4 }}>
+                  {formatDateRange(ev.date, ev.endDate)}
+                </div>
+                <div style={{
+                  display: 'inline-block', padding: '1px 5px', borderRadius: 3,
+                  background: color + '22', fontSize: 9, color, fontWeight: 600, letterSpacing: '0.04em',
+                }}>
+                  {TYPE_LABEL[ev.type] || ev.type}
+                </div>
+                {ev.notes && (
+                  <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginTop: 4 }}>{ev.notes}</div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </>
+    );
+  };
+
+  // ── Render: Form ─────────────────────────────────────────────────────────────
 
   const renderForm = () => (
     <div style={{
@@ -304,9 +414,7 @@ export default function CalendarPanel() {
     return (
       <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
         {loading && (
-          <div style={{ padding: 16, color: 'var(--tn-text-muted)', fontSize: 12, textAlign: 'center' }}>
-            Lade...
-          </div>
+          <div style={{ padding: 16, color: 'var(--tn-text-muted)', fontSize: 12, textAlign: 'center' }}>Lade...</div>
         )}
         {!loading && filtered.length === 0 && (
           <div style={{ padding: 16, color: 'var(--tn-text-muted)', fontSize: 12, textAlign: 'center' }}>
@@ -330,19 +438,16 @@ export default function CalendarPanel() {
             {evs.map(ev => {
               const color = TYPE_COLOR[ev.type] || '#565f89';
               const isPast = (ev.endDate || ev.date) < today;
-              const isEditing = editing?.id === ev.id;
+              const isEditingThis = editing?.id === ev.id;
 
               return (
-                <div
-                  key={ev.id}
-                  style={{
-                    display: 'flex', alignItems: 'flex-start', gap: 8,
-                    padding: '5px 10px',
-                    opacity: isPast ? 0.55 : 1,
-                    borderBottom: '1px solid rgba(255,255,255,0.04)',
-                    background: isEditing ? 'rgba(122,162,247,0.08)' : 'transparent',
-                  }}
-                >
+                <div key={ev.id} style={{
+                  display: 'flex', alignItems: 'flex-start', gap: 8,
+                  padding: '5px 10px',
+                  opacity: isPast ? 0.55 : 1,
+                  borderBottom: '1px solid rgba(255,255,255,0.04)',
+                  background: isEditingThis ? 'rgba(122,162,247,0.08)' : 'transparent',
+                }}>
                   <div style={{ width: 3, alignSelf: 'stretch', borderRadius: 2, background: color, flexShrink: 0, marginTop: 2 }} />
                   <div style={{ minWidth: 64, fontSize: 11, color: 'var(--tn-text-muted)', paddingTop: 1, flexShrink: 0 }}>
                     {formatDateRange(ev.date, ev.endDate)}
@@ -392,36 +497,36 @@ export default function CalendarPanel() {
           {startStr} – {endStr}
         </CalendarViewNav>
 
-        {/* Day columns */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 2, padding: '6px 4px' }}>
-          {/* Day name headers */}
-          {DAY_NAMES_SHORT.map(n => (
-            <div key={n} style={{ textAlign: 'center', fontSize: 9, fontWeight: 700, color: 'var(--tn-text-muted)', paddingBottom: 3 }}>
+          {DAY_NAMES_SHORT.map((n, i) => (
+            <div key={n} style={{
+              textAlign: 'center', fontSize: 9, fontWeight: 700,
+              color: i >= 5 ? 'rgba(187,154,247,0.8)' : 'var(--tn-text-muted)',
+              paddingBottom: 3,
+            }}>
               {n}
             </div>
           ))}
 
-          {/* Day cells */}
           {weekDays.map((day, i) => {
             const dateStr = toDateStr(day);
             const isToday = dateStr === today;
+            const isWeekend = i >= 5;
             const dayEvents = getEventsForDate(events, dateStr);
 
             return (
               <div key={i} style={{
-                minHeight: 80,
-                minWidth: 0,
-                overflow: 'hidden',
-                padding: 3,
+                minHeight: 80, minWidth: 0, overflow: 'hidden', padding: 3,
                 borderRadius: 4,
-                background: isToday ? 'rgba(122,162,247,0.1)' : 'rgba(255,255,255,0.02)',
+                background: isToday
+                  ? 'rgba(122,162,247,0.1)'
+                  : isWeekend ? 'rgba(255,255,255,0.018)' : 'rgba(255,255,255,0.02)',
                 border: isToday ? '1px solid rgba(122,162,247,0.4)' : '1px solid var(--tn-border)',
               }}>
                 <div style={{
                   fontSize: 11, fontWeight: isToday ? 700 : 400,
                   color: isToday ? '#7aa2f7' : 'var(--tn-text)',
-                  textAlign: 'center',
-                  marginBottom: 3,
+                  textAlign: 'center', marginBottom: 3,
                 }}>
                   {day.getDate()}
                 </div>
@@ -431,15 +536,11 @@ export default function CalendarPanel() {
                     onClick={() => openEdit(ev)}
                     title={ev.title}
                     style={{
-                      fontSize: 9,
-                      padding: '1px 3px',
-                      borderRadius: 2,
+                      fontSize: 9, padding: '1px 3px', borderRadius: 2,
                       background: (TYPE_COLOR[ev.type] || '#565f89') + '33',
                       color: TYPE_COLOR[ev.type] || '#565f89',
-                      marginBottom: 1,
-                      overflow: 'hidden',
-                      whiteSpace: 'nowrap',
-                      textOverflow: 'ellipsis',
+                      marginBottom: 1, overflow: 'hidden',
+                      whiteSpace: 'nowrap', textOverflow: 'ellipsis',
                       cursor: 'pointer',
                       borderLeft: `2px solid ${TYPE_COLOR[ev.type] || '#565f89'}`,
                     }}
@@ -461,12 +562,16 @@ export default function CalendarPanel() {
     const year = navDate.getFullYear();
     const month = navDate.getMonth();
     const gridDays = getMonthGridDays(year, month);
+    const weeks = Array.from({ length: 6 }, (_, w) => gridDays.slice(w * 7, w * 7 + 7));
+
     const monthStart = toDateStr(new Date(year, month, 1));
     const monthEnd = toDateStr(new Date(year, month + 1, 0));
-
     const monthEvents = events.filter(ev =>
       ev.date <= monthEnd && (ev.endDate || ev.date) >= monthStart
     );
+
+    const BAR_H = 13;
+    const DATE_H = 16;
 
     return (
       <div style={{ flex: 1, overflowY: 'auto' }}>
@@ -478,59 +583,158 @@ export default function CalendarPanel() {
           {MONTH_NAMES_FULL[month]} {year}
         </CalendarViewNav>
 
-        {/* Calendar grid */}
         <div style={{ padding: '4px 6px' }}>
           {/* Day headers */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 1, marginBottom: 1 }}>
-            {DAY_NAMES_SHORT.map(n => (
-              <div key={n} style={{ textAlign: 'center', fontSize: 9, fontWeight: 700, color: 'var(--tn-text-muted)', padding: '2px 0' }}>
+            {DAY_NAMES_SHORT.map((n, i) => (
+              <div key={n} style={{
+                textAlign: 'center', fontSize: 9, fontWeight: 700,
+                color: i >= 5 ? 'rgba(187,154,247,0.8)' : 'var(--tn-text-muted)',
+                padding: '2px 0',
+              }}>
                 {n}
               </div>
             ))}
           </div>
 
-          {/* Day cells */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 1 }}>
-            {gridDays.map((day, i) => {
-              const dateStr = toDateStr(day);
-              const isCurrentMonth = day.getMonth() === month;
-              const isToday = dateStr === today;
-              const dayEvents = getEventsForDate(events, dateStr);
+          {/* Week rows */}
+          {weeks.map((weekDays, wi) => {
+            const weekStartStr = toDateStr(weekDays[0]);
+            const weekEndStr = toDateStr(weekDays[6]);
 
-              return (
-                <div key={i} style={{
-                  minHeight: 34,
-                  padding: '2px 1px',
-                  borderRadius: 3,
-                  background: isToday ? 'rgba(122,162,247,0.15)' : 'transparent',
-                  border: isToday ? '1px solid rgba(122,162,247,0.5)' : '1px solid transparent',
-                  opacity: isCurrentMonth ? 1 : 0.25,
-                }}>
-                  <div style={{
-                    fontSize: 10,
-                    fontWeight: isToday ? 700 : 400,
-                    color: isToday ? '#7aa2f7' : 'var(--tn-text)',
-                    textAlign: 'center',
-                    marginBottom: 2,
-                  }}>
-                    {day.getDate()}
-                  </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 1, justifyContent: 'center' }}>
-                    {dayEvents.slice(0, 3).map(ev => (
-                      <div key={ev.id} style={{
-                        width: 5, height: 5, borderRadius: '50%',
-                        background: TYPE_COLOR[ev.type] || '#565f89',
-                        flexShrink: 0,
-                      }} title={ev.title} />
-                    ))}
-                    {dayEvents.length > 3 && (
-                      <div style={{ fontSize: 7, color: 'var(--tn-text-muted)', lineHeight: '5px' }}>+{dayEvents.length - 3}</div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+            const weekBars = monthEvents
+              .filter(ev => isMultiDay(ev) && ev.date <= weekEndStr && (ev.endDate || ev.date) >= weekStartStr)
+              .map(ev => {
+                const clampedStart = ev.date > weekStartStr ? ev.date : weekStartStr;
+                const clampedEnd = (ev.endDate || ev.date) < weekEndStr ? (ev.endDate || ev.date) : weekEndStr;
+                const startIdx = weekDays.findIndex(d => toDateStr(d) === clampedStart);
+                const endIdx = weekDays.findIndex(d => toDateStr(d) === clampedEnd);
+                return {
+                  ev,
+                  startIdx: startIdx >= 0 ? startIdx : 0,
+                  endIdx: endIdx >= 0 ? endIdx : 6,
+                  continuesLeft: ev.date < weekStartStr,
+                  continuesRight: (ev.endDate || ev.date) > weekEndStr,
+                };
+              });
+
+            const barAreaH = weekBars.length > 0 ? weekBars.length * (BAR_H + 2) + 2 : 0;
+            const cellMinH = DATE_H + barAreaH + 22;
+
+            return (
+              <div key={wi} style={{
+                display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)',
+                gap: 1, position: 'relative', marginBottom: 1,
+              }}>
+                {weekDays.map((day, di) => {
+                  const dateStr = toDateStr(day);
+                  const isCurrentMonth = day.getMonth() === month;
+                  const isToday = dateStr === today;
+                  const isWeekend = di >= 5;
+                  const singleEvs = isCurrentMonth
+                    ? getEventsForDate(events, dateStr).filter(ev => !isMultiDay(ev))
+                    : [];
+
+                  return (
+                    <div
+                      key={di}
+                      onClick={e => { if (isCurrentMonth) openDayPopover(dateStr, e); }}
+                      style={{
+                        minHeight: cellMinH,
+                        padding: '2px 1px',
+                        borderRadius: 3,
+                        background: isToday
+                          ? 'rgba(122,162,247,0.15)'
+                          : isWeekend && isCurrentMonth ? 'rgba(255,255,255,0.018)' : 'transparent',
+                        border: isToday ? '1px solid rgba(122,162,247,0.5)' : '1px solid transparent',
+                        opacity: isCurrentMonth ? 1 : 0.2,
+                        cursor: isCurrentMonth ? 'pointer' : 'default',
+                      }}
+                    >
+                      <div style={{
+                        fontSize: 10, fontWeight: isToday ? 700 : 400,
+                        color: isToday ? '#7aa2f7' : 'var(--tn-text)',
+                        textAlign: 'center',
+                        marginBottom: barAreaH > 0 ? barAreaH + 4 : 2,
+                      }}>
+                        {day.getDate()}
+                      </div>
+
+                      {singleEvs.slice(0, 3).map(ev => {
+                        const color = TYPE_COLOR[ev.type] || '#565f89';
+                        return (
+                          <div
+                            key={ev.id}
+                            onClick={e => { e.stopPropagation(); openEventPopover(ev, e); }}
+                            title={ev.title}
+                            style={{
+                              fontSize: 9, padding: '1px 3px', borderRadius: 3,
+                              background: color + '33', color,
+                              marginBottom: 1, overflow: 'hidden',
+                              whiteSpace: 'nowrap', textOverflow: 'ellipsis',
+                              cursor: 'pointer',
+                              borderLeft: `2px solid ${color}`,
+                            }}
+                          >
+                            {ev.title}
+                          </div>
+                        );
+                      })}
+                      {singleEvs.length > 3 && (
+                        <div style={{ fontSize: 8, color: 'var(--tn-text-muted)', paddingLeft: 2 }}>
+                          +{singleEvs.length - 3}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {/* Multi-day bars — absolutely positioned over the week row */}
+                {weekBars.map((bar, bi) => {
+                  const color = TYPE_COLOR[bar.ev.type] || '#565f89';
+                  const colW = 100 / 7;
+                  const left = `calc(${bar.startIdx * colW}% + 1px)`;
+                  const width = `calc(${(bar.endIdx - bar.startIdx + 1) * colW}% - 2px)`;
+                  const top = DATE_H + bi * (BAR_H + 2);
+
+                  return (
+                    <div
+                      key={bar.ev.id}
+                      onClick={e => { e.stopPropagation(); openEventPopover(bar.ev, e); }}
+                      title={bar.ev.title}
+                      style={{
+                        position: 'absolute',
+                        left, width, top,
+                        height: BAR_H,
+                        background: color + '44',
+                        borderLeft: bar.continuesLeft ? 'none' : `2px solid ${color}`,
+                        borderRadius: bar.continuesLeft && bar.continuesRight ? 0
+                          : bar.continuesLeft ? '0 3px 3px 0'
+                          : bar.continuesRight ? '3px 0 0 3px'
+                          : 3,
+                        display: 'flex', alignItems: 'center',
+                        paddingLeft: bar.continuesLeft ? 3 : 5,
+                        paddingRight: 3,
+                        overflow: 'hidden',
+                        cursor: 'pointer',
+                        zIndex: 1,
+                        pointerEvents: 'all',
+                      }}
+                    >
+                      {!bar.continuesLeft && (
+                        <span style={{
+                          fontSize: 8, color, fontWeight: 600,
+                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                        }}>
+                          {bar.ev.title}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
         </div>
 
         {/* Event list for this month */}
@@ -585,7 +789,6 @@ export default function CalendarPanel() {
           {year}
         </CalendarViewNav>
 
-        {/* 12 mini calendars */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, padding: '6px 4px' }}>
           {Array.from({ length: 12 }, (_, m) => {
             const gridDays = getMonthGridDays(year, m);
@@ -597,16 +800,12 @@ export default function CalendarPanel() {
                 onClick={() => { setNavDate(new Date(year, m, 1)); setView('month'); }}
                 style={{
                   border: isCurrentMonth ? '1px solid rgba(122,162,247,0.5)' : '1px solid var(--tn-border)',
-                  borderRadius: 4,
-                  padding: 4,
-                  cursor: 'pointer',
+                  borderRadius: 4, padding: 4, cursor: 'pointer',
                   background: isCurrentMonth ? 'rgba(122,162,247,0.04)' : 'transparent',
                 }}
               >
                 <div style={{
-                  textAlign: 'center',
-                  fontSize: 9,
-                  fontWeight: 700,
+                  textAlign: 'center', fontSize: 9, fontWeight: 700,
                   color: isCurrentMonth ? '#7aa2f7' : 'var(--tn-text-muted)',
                   marginBottom: 2,
                 }}>
@@ -614,7 +813,6 @@ export default function CalendarPanel() {
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 0 }}>
-                  {/* Day name headers (single char) */}
                   {DAY_NAMES_SHORT.map(n => (
                     <div key={n} style={{ fontSize: 5.5, textAlign: 'center', color: 'var(--tn-text-muted)', fontWeight: 700 }}>
                       {n[0]}
@@ -630,33 +828,29 @@ export default function CalendarPanel() {
                     const mainColor = hasEvents ? (TYPE_COLOR[dayEvents[0].type] || '#565f89') : null;
 
                     return (
-                      <div key={i} style={{
-                        aspectRatio: '1',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: 6,
-                        borderRadius: 1.5,
-                        background: isToday
-                          ? '#7aa2f7'
-                          : (hasEvents && mainColor ? mainColor + '2a' : 'transparent'),
-                        color: isToday ? '#fff' : (isThisMonth ? 'var(--tn-text)' : 'transparent'),
-                        fontWeight: isToday ? 700 : 400,
-                        position: 'relative',
-                      }}>
+                      <div
+                        key={i}
+                        onClick={e => {
+                          if (!isThisMonth) return;
+                          e.stopPropagation();
+                          setNavDate(new Date(year, m, day.getDate()));
+                          setView('month');
+                          setPopover({ type: 'day', dateStr, x: e.clientX, y: e.clientY });
+                        }}
+                        style={{
+                          aspectRatio: '1',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontSize: 6,
+                          borderRadius: 1.5,
+                          background: isToday
+                            ? '#7aa2f7'
+                            : (hasEvents && mainColor ? mainColor + '3a' : 'transparent'),
+                          color: isToday ? '#fff' : (isThisMonth ? 'var(--tn-text)' : 'transparent'),
+                          fontWeight: isToday ? 700 : 400,
+                          cursor: isThisMonth ? 'pointer' : 'default',
+                        }}
+                      >
                         {isThisMonth ? day.getDate() : ''}
-                        {hasEvents && !isToday && mainColor && (
-                          <div style={{
-                            position: 'absolute',
-                            bottom: 0.5,
-                            left: '50%',
-                            transform: 'translateX(-50%)',
-                            width: 2,
-                            height: 1.5,
-                            background: mainColor,
-                            borderRadius: 1,
-                          }} />
-                        )}
                       </div>
                     );
                   })}
@@ -671,12 +865,16 @@ export default function CalendarPanel() {
 
   // ── Render: Main ─────────────────────────────────────────────────────────────
 
+  const navMonth = `${navDate.getFullYear()}-${String(navDate.getMonth() + 1).padStart(2, '0')}`;
+  const todayAlreadyVisible = isTodayVisible();
+
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--tn-surface)' }}>
       {/* Header */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 6, padding: '6px 8px',
         borderBottom: '1px solid var(--tn-border)', background: 'var(--tn-bg-dark)', flexShrink: 0,
+        flexWrap: 'wrap',
       }}>
         <span style={{ fontSize: 14 }}>📅</span>
         <span style={{ fontWeight: 600, fontSize: 12, color: 'var(--tn-text)' }}>Kalender</span>
@@ -695,6 +893,44 @@ export default function CalendarPanel() {
             </button>
           ))}
         </div>
+
+        {/* Heute button — only in navigable views */}
+        {view !== 'list' && (
+          <button
+            onClick={() => setNavDate(new Date())}
+            disabled={todayAlreadyVisible}
+            style={{
+              ...btnSecondary,
+              opacity: todayAlreadyVisible ? 0.4 : 1,
+              cursor: todayAlreadyVisible ? 'default' : 'pointer',
+            }}
+          >
+            Heute
+          </button>
+        )}
+
+        {/* Month/year quick-jump */}
+        {view !== 'list' && (
+          <input
+            type="month"
+            value={navMonth}
+            onChange={e => {
+              const parts = e.target.value.split('-');
+              if (parts.length !== 2) return;
+              const y = parseInt(parts[0], 10);
+              const mo = parseInt(parts[1], 10) - 1;
+              if (isNaN(y) || isNaN(mo)) return;
+              setNavDate(new Date(y, mo, 1));
+            }}
+            style={{
+              background: 'var(--tn-bg-dark, #1a1b26)',
+              border: '1px solid var(--tn-border)',
+              color: 'var(--tn-text)',
+              borderRadius: 4, padding: '2px 4px',
+              fontSize: 10, width: 108,
+            }}
+          />
+        )}
 
         <div style={{ flex: 1 }} />
 
@@ -728,6 +964,9 @@ export default function CalendarPanel() {
       {!loading && view === 'week' && renderWeekView()}
       {!loading && view === 'month' && renderMonthView()}
       {!loading && view === 'year' && renderYearView()}
+
+      {/* Popover — position:fixed, not clipped by overflow:hidden */}
+      {renderPopover()}
     </div>
   );
 }
