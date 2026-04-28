@@ -135,7 +135,7 @@ export default function ToolHub({ projectId, workDir }: ToolHubProps) {
   const renderTool = () => {
     // Default view + fallback when the persisted active tool isn't accessible
     // (e.g., admin-only panel persisted globally, partner has no permission).
-    if (!activeTool || !canAccessPanel(activeTool)) return <ToolHubWelcome />;
+    if (!activeTool || !canAccessPanel(activeTool)) return <ToolHubWelcome workspace={projectId} />;
 
     const withSuspense = (el: React.ReactNode) => <Suspense fallback={<PanelLoader />}>{el}</Suspense>;
 

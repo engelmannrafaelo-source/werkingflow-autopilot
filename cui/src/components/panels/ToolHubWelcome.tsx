@@ -1,4 +1,5 @@
 import { useAuth } from '../../contexts/AuthContext';
+import CodeMgmt from './CodeMgmt';
 
 const ROLE_LABEL: Record<string, string> = {
   admin: 'Admin',
@@ -6,7 +7,7 @@ const ROLE_LABEL: Record<string, string> = {
   fachpartner: 'Fachpartner',
 };
 
-export default function ToolHubWelcome() {
+export default function ToolHubWelcome({ workspace }: { workspace?: string } = {}) {
   const { user } = useAuth();
   const role = user?.role ?? 'admin';
   const name = user?.name ?? 'Partner';
@@ -29,6 +30,8 @@ export default function ToolHubWelcome() {
         <div style={{ fontSize: 12, color: 'var(--tn-text-muted, #a9b1d6)', marginBottom: 24 }}>
           Du bist als <b>{ROLE_LABEL[role] ?? role}</b> auf der WerkING Partner-Plattform angemeldet.
         </div>
+
+        {workspace && <CodeMgmt workspace={workspace} />}
 
         <Section title="Was ist das hier?">
           Die <b>WerkING Partner-Plattform</b> ist die gemeinsame Entwicklungsumgebung für

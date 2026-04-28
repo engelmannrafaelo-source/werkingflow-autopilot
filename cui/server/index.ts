@@ -89,6 +89,7 @@ import createFilesRouter from './routes/files.js';
 import createLayoutsRouter from './routes/layouts.js';
 import createScreenshotRoutes from './routes/screenshots.js';
 import createPartnerServerRoutes from './routes/partner-server.js';
+import createCodeMgmtRoutes from './routes/code-mgmt.js';
 import templatesRouter, { initTemplatesRouter } from './routes/templates.js';
 import createAutoInjectRouter, { startAutoInjectTimer, stopAutoInjectTimer } from './routes/autoinject.js';
 import agentsRouter from './routes/agents.js';
@@ -278,6 +279,10 @@ app.use('/api/auth', authRouter);
 // --- Partner-Server (BEFORE /api auth — self-authenticates via adminOrInternal,
 //     supports both JWT cookie and x-cui-internal-token for dev→partner forward) ---
 app.use('/api/partner-server', createPartnerServerRoutes());
+
+// --- Code-Management (BEFORE /api auth — self-authenticates via authOrInternal,
+//     supports JWT cookie and x-cui-internal-token + x-cui-forward-user for dev→partner forward) ---
+app.use('/api/code-mgmt', createCodeMgmtRoutes());
 
 // --- Auth middleware (no-op when users.json doesn't exist) ---
 app.use('/api', requireAuth);
