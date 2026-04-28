@@ -493,11 +493,56 @@ function scanReportsForApp(appId: string): Record<string, ScannedReport> {
 /**
  * Resolve scenario status from scanned reports.
  * Falls back to 'PENDING' if no report exists.
+ *
+ * SHA-drift aware: when a scenario file is provided and its current
+ * generator SHAs (auftrag_sha / product_sha / prompt_template_sha)
+ * disagree with what the report tested against, the report is treated
+ * as stale and the per-test status is downgraded to 'STALE'. This
+ * mirrors the layer-level logic in pyramid_status.py so the dashboard
+ * never shows a green PASS for a scenario that has been regenerated
+ * since the last test run.
  */
-function resolveStatusFromReports(scenarioId: string, reports: Record<string, ScannedReport>): string {
+function resolveStatusFromReports(
+  scenarioId: string,
+  reports: Record<string, ScannedReport>,
+  scenarioFile?: string,
+): string {
   const report = reports[scenarioId];
   if (!report) return 'PENDING';
-  return report.status;
+  const baseStatus = report.status;
+  // Only PASS / PARTIAL can be stale — FAIL / NOT_TESTED / BRIDGE_FAILURE
+  // are not "verified for any version" and are returned as-is.
+  if (baseStatus !== 'PASS' && baseStatus !== 'PARTIAL') return baseStatus;
+  if (!scenarioFile) return baseStatus;
+  if (isScenarioStale(scenarioFile)) return 'STALE';
+  return baseStatus;
+}
+
+/**
+ * Check whether the scenario at the given JSON path has been regenerated
+ * since its last recorded test run. Reads meta.last_run.tested_against_sha
+ * from the scenario file and compares it with generated.auftrag_sha. A
+ * mismatch means the report no longer reflects the current scenario.
+ *
+ * Returns false when there is not enough information to decide (no
+ * meta.last_run, no SHA on either side) — the layer-level CLI handles
+ * the date-based fallback for those cases.
+ */
+function isScenarioStale(scenarioFile: string): boolean {
+  try {
+    const data = readJSON(scenarioFile);
+    if (!data) return false;
+    const lastRun = data?.meta?.last_run;
+    const generated = data?.generated;
+    if (!lastRun || !generated) return false;
+    const testedAuftrag = lastRun.tested_against_sha;
+    const currentAuftrag = generated.auftrag_sha;
+    if (currentAuftrag && testedAuftrag && currentAuftrag !== testedAuftrag) return true;
+    if (currentAuftrag && !testedAuftrag) return true;
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -765,11 +810,11 @@ function getPyramidData(appId: string) {
         const scenarios = scanLayerScenarios(layerDir);
         for (const s of scenarios) {
           const report = scannedReports[s.id];
-          const status = resolveStatusFromReports(s.id, scannedReports);
+          const status = resolveStatusFromReports(s.id, scannedReports, s.file);
           const score = report?.score ?? null;
           if (status === 'PASS') sPassed++;
           else if (status === 'FAIL' || status === 'ERROR') sFailed++;
-          else if (status === 'PENDING' || status === 'BRIDGE_FAILURE' || status === 'NOT_TESTED') sPending++;
+          else if (status === 'PENDING' || status === 'BRIDGE_FAILURE' || status === 'NOT_TESTED' || status === 'STALE') sPending++;
           else sFailed++; // PARTIAL without threshold pass = fail
           if (score != null && score > 0) sScores.push(score);
           const summary = getScenarioSummary(s.file, report?.reportPath ?? null);
@@ -862,7 +907,7 @@ function getPyramidData(appId: string) {
 
     const tests = scenarios.map(s => {
       const report = scannedReports[s.id];
-      const status = resolveStatusFromReports(s.id, scannedReports);
+      const status = resolveStatusFromReports(s.id, scannedReports, s.file);
       const score = report?.score ?? null;
       const lastRun = report?.timestamp ?? null;
       const reportPath = report?.reportPath ?? null;
@@ -873,6 +918,7 @@ function getPyramidData(appId: string) {
       else if (status === 'NOT_TESTED') { notTested++; pending++; }
       else if (status === 'BRIDGE_FAILURE') { bridgeFailure++; pending++; }
       else if (status === 'PENDING') pending++;
+      else if (status === 'STALE') pending++; // SHA-drift: not verified for current version
       else failed++; // PARTIAL without threshold pass = fail
 
       if (score != null && score > 0) scores.push(score);
@@ -911,7 +957,7 @@ function getPyramidData(appId: string) {
     const scores: number[] = [];
     const tests = ungrouped.map(s => {
       const report = scannedReports[s.id];
-      const status = resolveStatusFromReports(s.id, scannedReports);
+      const status = resolveStatusFromReports(s.id, scannedReports, s.file);
       const score = report?.score ?? null;
       if (status === 'PASS') passed++;
       else if (status === 'FAIL' || status === 'ERROR') failed++;
@@ -946,6 +992,13 @@ function getPyramidData(appId: string) {
   // Local aggregation above is kept for the per-test detail rows the
   // dashboard renders, but layer totals/status come from the CLI so that
   // dashboard and CLI never diverge on stale detection or status logic.
+  //
+  // STALE handling: pyramid_status.py reports stale as a SUBSET of pass
+  // (i.e. a PASS whose recorded SHA no longer matches the current scenario,
+  // or whose tested_at is older than the stale cutoff). The dashboard must
+  // not show those as "PASS" — they are not verified for the current
+  // scenario version. We subtract stale from passed and re-bucket them
+  // into pending so that the user sees the real verified-pass count.
   if (ssot && ssot.layers) {
     const STATUS_MAP: Record<string, string> = {
       PASS: 'passed',
@@ -963,11 +1016,16 @@ function getPyramidData(appId: string) {
       // Override aggregates only for the regular numbered layers (0..4).
       // Synthetic layers (e.g. id=-1 for ungrouped) keep their local counts.
       if (typeof lid === 'number' && lid >= 0 && lid <= 4) {
+        const ssotPass = ssotLayer.pass ?? layer.passed;
+        const ssotStale = ssotLayer.stale ?? 0;
+        const ssotPending = ssotLayer.pending ?? layer.pending;
+        // stale PASS → not verified for current scenario version → bucket as pending
+        const verifiedPass = Math.max(0, ssotPass - ssotStale);
         (layer as any).totalTests = ssotLayer.total ?? layer.totalTests;
-        (layer as any).passed = ssotLayer.pass ?? layer.passed;
+        (layer as any).passed = verifiedPass;
         (layer as any).failed = ssotLayer.fail ?? layer.failed;
-        (layer as any).pending = ssotLayer.pending ?? layer.pending;
-        (layer as any).stale = ssotLayer.stale ?? 0;
+        (layer as any).pending = ssotPending + ssotStale;
+        (layer as any).stale = ssotStale;
         (layer as any).bridgeFailure = ssotLayer.bridge_failures ?? (layer as any).bridgeFailure ?? 0;
         (layer as any).avgScore = ssotLayer.avg_score ?? layer.avgScore;
         (layer as any).status = STATUS_MAP[ssotLayer.status] ?? layer.status;
