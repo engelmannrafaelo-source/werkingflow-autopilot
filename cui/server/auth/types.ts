@@ -33,6 +33,10 @@ export interface CuiUser {
   allowedPanels: PanelId[] | '*';
   /** Allowed workspaces (project IDs from data/projects/) — '*' means all */
   allowedWorkspaces: string[] | '*';
+  /** Workspaces this user is the Product Owner of. Only the PO of a workspace
+   *  may approve/reject Vorschläge that target it. Independent of `role` —
+   *  a fachpartner can also be PO of their domain workspace. '*' = admin. */
+  productOwnerOf?: string[] | '*';
   /** Can this user push code to git? */
   canGitPush: boolean;
   /** Can this user approve/reject document edits? */

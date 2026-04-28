@@ -15,9 +15,9 @@
       "active": true
     },
     {
-      "id": "david",
-      "name": "David Wimmesberger",
-      "email": "david@wimmesberger.at",
+      "id": "david-steiner",
+      "name": "David Steiner",
+      "email": "david@steiner.at",
       "passwordHash": "CHANGE_ME",
       "role": "product-owner",
       "claudeAccountId": "david",

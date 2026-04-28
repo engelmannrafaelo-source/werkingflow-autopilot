@@ -11,7 +11,7 @@ Der Kern: Messdaten rein → KI-Pipeline → professioneller Bericht raus (30–
 
 ## Wer nutzt diesen Workspace
 
-### David Wimmesberger — Product Owner (Entwicklung)
+### David Steiner (vormals Wimmesberger) — Product Owner (Entwicklung)
 Mathematiker, 10 Jahre Energieoptimierung (DAGOPT GmbH). Aktuell in Karenz.
 **Sein Ziel:** WerkING Energy eigenständig weiterentwickeln via Vibe Coding.
 **Was er braucht:** Feature-Entwicklung, Code-Verständnis, Architektur-Entscheidungen.

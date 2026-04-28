@@ -107,6 +107,19 @@ export default function createCodeMgmtRoutes() {
   // NATIVE MODE — runs on partner.
   router.use(authOrInternal);
 
+  /** Is the caller the Product Owner of this workspace?
+   *  - admin: always true
+   *  - others: must have workspace in their `productOwnerOf` list */
+  function isPoOfWorkspace(userId: string | undefined, workspace: string): boolean {
+    if (!userId || userId === '__internal__') return false;
+    const u = findUser(userId);
+    if (!u) return false;
+    if (u.role === 'admin') return true;
+    const po = u.productOwnerOf;
+    if (po === '*') return true;
+    return Array.isArray(po) && po.includes(workspace);
+  }
+
   /**
    * GET /api/code-mgmt/state?workspace=...
    * Returns the "Drei Welten" summary for the calling user + workspace.
@@ -264,20 +277,20 @@ export default function createCodeMgmtRoutes() {
   /**
    * POST /api/code-mgmt/proposals/:workspace/:id/approve
    * Applies the patch in the PO's own repo and pushes to origin/develop.
-   * Restricted to admin + product-owner.
+   * Restricted to admin + the Product Owner of THIS workspace
+   * (`productOwnerOf` field in users.json).
    */
   router.post('/proposals/:workspace/:id/approve', async (req, res) => {
-    const role = req.user?.role;
-    if (role !== 'admin' && role !== 'product-owner') {
-      res.status(403).json({ error: 'Nur Admin oder Product Owner darf Vorschläge übernehmen' });
-      return;
-    }
     const decider = req.user?.sub;
     if (!decider || decider === '__internal__') {
       res.status(401).json({ error: 'Anmeldung erforderlich' });
       return;
     }
     const { workspace, id } = req.params;
+    if (!isPoOfWorkspace(decider, workspace)) {
+      res.status(403).json({ error: `Nur der Product Owner von ${workspace} darf Vorschläge übernehmen` });
+      return;
+    }
     const meta = readMeta(workspace, id);
     if (!meta) { res.status(404).json({ error: 'Vorschlag nicht gefunden' }); return; }
     if (meta.status !== 'pending') { res.status(409).json({ error: `Status ist bereits '${meta.status}'` }); return; }
@@ -338,17 +351,16 @@ export default function createCodeMgmtRoutes() {
    * Body: { reason?: string }
    */
   router.post('/proposals/:workspace/:id/reject', (req, res) => {
-    const role = req.user?.role;
-    if (role !== 'admin' && role !== 'product-owner') {
-      res.status(403).json({ error: 'Nur Admin oder Product Owner darf Vorschläge ablehnen' });
-      return;
-    }
     const decider = req.user?.sub;
     if (!decider || decider === '__internal__') {
       res.status(401).json({ error: 'Anmeldung erforderlich' });
       return;
     }
     const { workspace, id } = req.params;
+    if (!isPoOfWorkspace(decider, workspace)) {
+      res.status(403).json({ error: `Nur der Product Owner von ${workspace} darf Vorschläge ablehnen` });
+      return;
+    }
     const reason = (req.body?.reason as string | undefined) || '';
     const meta = readMeta(workspace, id);
     if (!meta) { res.status(404).json({ error: 'Vorschlag nicht gefunden' }); return; }

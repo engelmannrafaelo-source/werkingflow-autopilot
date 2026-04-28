@@ -12,7 +12,7 @@
 #   [
 #     {"id": "rafael", "name": "Rafael Engelmann", "email": "rafael@werkingflow.com",
 #      "password": "SecurePass123", "role": "admin", "claudeAccountId": "default"},
-#     {"id": "david", "name": "David Wimmesberger", "email": "david@werking.tools",
+#     {"id": "david-steiner", "name": "David Steiner", "email": "david@steiner.at",
 #      "password": "SecurePass456", "role": "product-owner"}
 #   ]
 # ============================================================================
