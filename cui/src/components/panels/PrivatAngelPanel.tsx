@@ -346,6 +346,7 @@ const S = {
   chatBox: {
     display: 'flex', flexDirection: 'column' as const, gap: '6px',
     flex: 1, minHeight: '80px', overflowY: 'auto' as const,
+    overscrollBehavior: 'contain' as const,
     border: '1px solid var(--tn-border, rgba(255,255,255,0.1))',
     borderRadius: '4px', padding: '8px',
     background: 'var(--tn-surface, #1e2030)',
@@ -484,6 +485,7 @@ export default function PrivatAngelPanel() {
   const [contextCollapsed, setContextCollapsed] = useState(false);
   const [diffsCollapsed, setDiffsCollapsed] = useState(false);
   const [chatOnly, setChatOnly] = useState(false);
+  const [chatScrollActive, setChatScrollActive] = useState(false);
 
   // Selected extra files
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
@@ -1232,7 +1234,7 @@ Wichtig:
           </div>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', height: '60vh' }}>
-            <div style={{ borderRight: '1px solid rgba(255,255,255,0.07)', overflowY: 'auto' as const, display: 'flex', flexDirection: 'column' as const, background: 'rgba(247,118,142,0.02)', minHeight: 0 }}>
+            <div style={{ borderRight: '1px solid rgba(255,255,255,0.07)', overflowY: 'auto' as const, overscrollBehavior: 'contain', display: 'flex', flexDirection: 'column' as const, background: 'rgba(247,118,142,0.02)', minHeight: 0 }}>
               {colHdr(snapshotContent ? 'Vorher (Snapshot)' : 'Vorher', 'rgba(247,118,142,0.55)')}
               <div style={{ padding: '12px 18px', fontSize: '12px', lineHeight: 1.6 }}>
                 {leftFull.trim() ? (
@@ -1242,7 +1244,7 @@ Wichtig:
                 )}
               </div>
             </div>
-            <div style={{ overflowY: 'auto' as const, display: 'flex', flexDirection: 'column' as const, background: 'rgba(158,206,106,0.02)', minHeight: 0 }}>
+            <div style={{ overflowY: 'auto' as const, overscrollBehavior: 'contain', display: 'flex', flexDirection: 'column' as const, background: 'rgba(158,206,106,0.02)', minHeight: 0 }}>
               {colHdr(hasChanges ? 'Nachher' : 'Nachher (identisch)', 'rgba(158,206,106,0.55)')}
               <div style={{ padding: '12px 18px', fontSize: '12px', lineHeight: 1.6 }}>
                 <ReactMarkdown remarkPlugins={[remarkGfm]} components={rightComponents}>{rightFull}</ReactMarkdown>
@@ -1690,7 +1692,11 @@ Wichtig:
                 <span style={{ fontSize: '11px', fontWeight: 600 }}>Chat</span>
               </div>
             )}
-            <div style={S.chatBox}>
+            <div
+              style={{ ...S.chatBox, overflowY: chatScrollActive ? 'auto' : 'hidden' }}
+              onMouseEnter={() => setChatScrollActive(true)}
+              onMouseLeave={() => setChatScrollActive(false)}
+            >
               {chatMessages.length === 0 && (
                 <div style={{ color: 'var(--tn-text-muted)', fontSize: '11px', textAlign: 'center' as const, padding: '16px 0' }}>
                   Privat Angel bereit

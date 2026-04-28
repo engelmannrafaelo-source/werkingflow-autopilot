@@ -178,88 +178,110 @@ export default function ToolHub({ projectId, workDir }: ToolHubProps) {
     }
   };
 
-  // Flatten all tools from all categories into a single list, filtered by permissions
-  const allTools = PANEL_MENU_OPTIONS
-    .flatMap(g => g.items)
-    .filter(i => !EXCLUDED_TOOLS.has(i.value) && canAccessPanel(i.value));
+  const visibleGroups = PANEL_MENU_OPTIONS
+    .map(g => ({ ...g, items: g.items.filter(i => !EXCLUDED_TOOLS.has(i.value) && canAccessPanel(i.value)) }))
+    .filter(g => g.items.length > 0);
+
+  const renderToolButton = (item: { value: string; label: string }, color: string) => {
+    const isActive = activeTool === item.value;
+    const isSynced = syncedComponents.has(item.value);
+    const displayName = PANEL_NAMES[item.value] || item.label;
+    return (
+      <div
+        key={item.value}
+        style={{
+          width: 44, height: 34, borderRadius: 4, position: 'relative',
+          background: isActive
+            ? `${color}33`
+            : 'transparent',
+          transition: 'background 0.1s',
+        }}
+      >
+        <button
+          onClick={() => selectTool(item.value)}
+          title={displayName}
+          style={{
+            display: 'flex', flexDirection: 'column', alignItems: 'center',
+            justifyContent: 'center', gap: 0,
+            width: '100%', height: '100%', border: 'none', background: 'transparent',
+            cursor: 'pointer',
+            color: isActive ? color : 'var(--tn-text-muted)',
+            transition: 'color 0.1s',
+            padding: 0,
+          }}
+        >
+          <span style={{ fontSize: 15, lineHeight: 1 }}>{TOOL_ICONS[item.value] || '•'}</span>
+          <span style={{
+            fontSize: 7, lineHeight: 1, marginTop: 1,
+            fontWeight: isActive ? 700 : 400,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            maxWidth: 42,
+          }}>
+            {SHORT_LABELS[item.value] || item.label}
+          </span>
+        </button>
+        <span
+          onClick={(e) => { e.stopPropagation(); toggleSync(item.value, displayName); }}
+          title={isSynced ? 'In allen Workspaces — klicken zum Entfernen' : 'Nur hier — klicken zum Synchronisieren'}
+          style={{
+            position: 'absolute', top: 1, right: 1,
+            width: 12, height: 12, borderRadius: 6,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 9, lineHeight: 1, cursor: 'pointer',
+            color: isSynced ? '#fff' : 'var(--tn-text-muted)',
+            background: isSynced ? color : 'rgba(0,0,0,0.25)',
+            opacity: isSynced ? 1 : 0.55,
+            userSelect: 'none',
+            transition: 'opacity 0.15s, background 0.15s, color 0.15s',
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.opacity = isSynced ? '1' : '0.55'; }}
+        >
+          📌
+        </span>
+        {isActive && (
+          <div style={{
+            position: 'absolute', bottom: 0, left: '20%', right: '20%',
+            height: 2, borderRadius: 1, background: color,
+            pointerEvents: 'none',
+          }} />
+        )}
+      </div>
+    );
+  };
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--tn-surface)', overflow: 'hidden' }}>
-      {/* Icon bar: all tools, 1-click access */}
+      {/* Icon bar: groups side-by-side, each with color background */}
       <div style={{
-        display: 'flex', flexWrap: 'wrap', gap: 2, padding: '4px 4px',
+        display: 'flex', flexDirection: 'row', alignItems: 'stretch',
         borderBottom: '1px solid var(--tn-border)', background: 'var(--tn-bg-dark)',
-        flexShrink: 0, overflowY: 'auto', maxHeight: 80,
+        flexShrink: 0, overflowX: 'auto', overflowY: 'hidden',
+        gap: 2, padding: '3px 4px',
       }}>
-        {allTools.map(item => {
-          const isActive = activeTool === item.value;
-          const isSynced = syncedComponents.has(item.value);
-          const displayName = PANEL_NAMES[item.value] || item.label;
-          return (
-            <div
-              key={item.value}
-              style={{
-                width: 44, height: 34, borderRadius: 4,
-                background: isActive ? 'rgba(122, 162, 247, 0.25)' : 'transparent',
-                position: 'relative',
-                transition: 'background 0.1s',
-              }}
-            >
-              <button
-                onClick={() => selectTool(item.value)}
-                title={displayName}
-                style={{
-                  display: 'flex', flexDirection: 'column', alignItems: 'center',
-                  justifyContent: 'center', gap: 0,
-                  width: '100%', height: '100%', border: 'none', background: 'transparent',
-                  cursor: 'pointer',
-                  color: isActive ? 'var(--tn-blue)' : 'var(--tn-text-muted)',
-                  transition: 'color 0.1s',
-                  padding: 0,
-                }}
-              >
-                <span style={{ fontSize: 15, lineHeight: 1 }}>{TOOL_ICONS[item.value] || '•'}</span>
-                <span style={{
-                  fontSize: 7, lineHeight: 1, marginTop: 1,
-                  fontWeight: isActive ? 700 : 400,
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                  maxWidth: 42,
-                }}>
-                  {SHORT_LABELS[item.value] || item.label}
-                </span>
-              </button>
-              {/* Pin/sync toggle — top-right corner of each tool button */}
-              <span
-                onClick={(e) => { e.stopPropagation(); toggleSync(item.value, displayName); }}
-                title={isSynced
-                  ? 'In allen Workspaces — klicken zum Entfernen'
-                  : 'Nur hier — klicken zum Synchronisieren'}
-                style={{
-                  position: 'absolute', top: 1, right: 1,
-                  width: 12, height: 12, borderRadius: 6,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 9, lineHeight: 1, cursor: 'pointer',
-                  color: isSynced ? '#fff' : 'var(--tn-text-muted)',
-                  background: isSynced ? 'var(--tn-blue, #7aa2f7)' : 'rgba(0,0,0,0.25)',
-                  opacity: isSynced ? 1 : 0.55,
-                  userSelect: 'none',
-                  transition: 'opacity 0.15s, background 0.15s, color 0.15s',
-                }}
-                onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.opacity = isSynced ? '1' : '0.55'; }}
-              >
-                📌
-              </span>
-              {isActive && (
-                <div style={{
-                  position: 'absolute', bottom: 0, left: '20%', right: '20%',
-                  height: 2, borderRadius: 1, background: 'var(--tn-blue)',
-                  pointerEvents: 'none',
-                }} />
-              )}
+        {visibleGroups.map((group) => (
+          <div key={group.category} style={{
+            display: 'flex', flexDirection: 'column',
+            background: `${group.color}14`,
+            border: `1px solid ${group.color}30`,
+            borderRadius: 5, padding: '2px 3px',
+            flexShrink: 0,
+          }}>
+            {/* Category label */}
+            <div style={{
+              fontSize: 6.5, fontWeight: 700, letterSpacing: '0.05em',
+              color: group.color, textAlign: 'center',
+              padding: '1px 4px 2px', marginBottom: 2,
+              borderBottom: `1px solid ${group.color}28`,
+            }}>
+              {group.category}
             </div>
-          );
-        })}
+            {/* Tool icons */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+              {group.items.map(item => renderToolButton(item, group.color))}
+            </div>
+          </div>
+        ))}
       </div>
 
       {/* Active tool content */}

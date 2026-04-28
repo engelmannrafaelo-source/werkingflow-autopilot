@@ -336,6 +336,7 @@ const S = {
   chatBox: {
     display: 'flex', flexDirection: 'column' as const, gap: '6px',
     flex: 1, minHeight: '80px', overflowY: 'auto' as const,
+    overscrollBehavior: 'contain' as const,
     border: '1px solid var(--tn-border, rgba(255,255,255,0.1))',
     borderRadius: '4px', padding: '8px',
     background: 'var(--tn-surface, #1e2030)',
@@ -474,6 +475,7 @@ export default function BusinessAngelPanel() {
   const [contextCollapsed, setContextCollapsed] = useState(false);
   const [diffsCollapsed, setDiffsCollapsed] = useState(false);
   const [chatOnly, setChatOnly] = useState(false);
+  const [chatScrollActive, setChatScrollActive] = useState(false);
 
   // Selected extra files
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
@@ -506,6 +508,10 @@ export default function BusinessAngelPanel() {
   const [chatSending, setChatSending] = useState(false);
   const [chatError, setChatError] = useState('');
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  // File watcher — external changes during session
+  const [changedFiles, setChangedFiles] = useState<string[]>([]);
+  const watcherRef = useRef<EventSource | null>(null);
 
   // Diffs
   const [diffCards, setDiffCards] = useState<DiffCard[]>([]);
@@ -589,6 +595,28 @@ export default function BusinessAngelPanel() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chatMessages]);
+
+  // Open SSE file-watcher when session starts; close when session ends
+  useEffect(() => {
+    if (!session?.session_id) {
+      watcherRef.current?.close();
+      watcherRef.current = null;
+      setChangedFiles([]);
+      return;
+    }
+    const es = new EventSource(`/api/business-angel/file-watch?session_id=${encodeURIComponent(session.session_id)}`);
+    es.onmessage = (ev) => {
+      try {
+        const { file, event } = JSON.parse(ev.data) as { file: string; event: string };
+        if (event !== 'change' && event !== 'add') return;
+        // Invalidate disk-content cache so VORHER picks up the external change
+        setFileContents(prev => { const n = { ...prev }; delete n[file]; return n; });
+        setChangedFiles(prev => prev.includes(file) ? prev : [...prev, file]);
+      } catch { /* ignore malformed */ }
+    };
+    watcherRef.current = es;
+    return () => { es.close(); watcherRef.current = null; };
+  }, [session?.session_id]);
 
   const openPreview = useCallback(async (path: string) => {
     if (previewPath === path) { setPreviewPath(null); setPreviewContent(''); setPreviewMeta(null); return; }
@@ -975,13 +1003,33 @@ Wichtig:
 
     if (appliedList.includes(card.file)) {
       setDiffCards(prev => prev.map(d => (d.id) === id ? { ...d, status: 'applied' as const } : d));
-      // Refresh snapshot so the next generate round uses the updated file as baseline
+      // Invalidate disk-content cache so VORHER re-fetches current state on next render
+      setFileContents(prev => { const n = { ...prev }; delete n[card.file]; return n; });
       if (session?.session_id) fetchSnapshot(session.session_id);
     } else if (alreadyList.includes(card.file)) {
       setDiffCards(prev => prev.map(d => (d.id) === id ? { ...d, status: 'already_applied' as const, reason: undefined } : d));
     } else {
       const reason = failedList.find(f => f.file === card.file)?.reason ?? 'Unknown';
       setDiffCards(prev => prev.map(d => (d.id) === id ? { ...d, status: 'error' as const, reason } : d));
+    }
+  };
+
+  const revertFile = async (file: string) => {
+    if (!session?.session_id) return;
+    try {
+      const resp = await fetch('/api/business-angel/revert', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file, session_id: session.session_id }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+      // Mark all diff cards for this file as skipped (they're now stale)
+      setDiffCards(prev => prev.map(d => d.file === file ? { ...d, status: 'skipped' as const } : d));
+      // Refresh snapshot so it reflects the reverted state
+      fetchSnapshot(session.session_id);
+    } catch (e: unknown) {
+      setApplyError(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -1029,18 +1077,23 @@ Wichtig:
   // Helper: render a single file's diff group (header + side-by-side preview).
   // Used inline in the chat flow, one invocation per (message, file) pair.
   const renderFileDiffGroup = (file: string, fileCards: DiffCard[], keyPrefix: string) => {
-    const snapshotContent = snapshotFiles[file];
     const rawFileContent = fileContents[file];
-    const fullFile = snapshotContent ?? (rawFileContent && rawFileContent.length > 0 ? rawFileContent : undefined);
-    const isNewFile = !fullFile && fileCards.every(c => !(c.old ?? '').trim() && c.rawHunk?.startsWith('<<<NEW'));
+    const snapshotContent = snapshotFiles[file];
+    // Prefer current disk content (rawFileContent) over session snapshot for VORHER display.
+    // Snapshot is for Angel context; diff view needs actual current state.
+    const fullFile = (rawFileContent && rawFileContent.length > 0 ? rawFileContent : undefined) ?? snapshotContent;
+    const isNewFile = !fullFile && fileCards.every(c => !(c.old ?? '').trim());
     const allDone = fileCards.every(c => (c.status ?? 'unchecked') === 'applied' || (c.status ?? 'unchecked') === 'already_applied' || (c.status ?? 'unchecked') === 'skipped');
     const isLoadingContent = !fullFile && !isNewFile;
 
     // Baseline → final text after applying all hunks for this file
     const normalize = (s: string) => s.replace(/\r\n/g, '\n').split('\n').map(l => l.trimEnd()).join('\n');
+    // With full-replace strategy: card.old is always empty; card.newText is the complete file.
+    // isNewFile = file doesn't exist on disk yet (no snapshot, no cached content).
+    const isFullReplace = fileCards.every(c => !(c.old ?? '').trim());
     const leftFull = isNewFile ? '' : (fullFile ?? '');
-    const rightFull = isNewFile
-      ? fileCards.map(c => c.newText ?? '').join('\n')
+    const rightFull = isNewFile || isFullReplace
+      ? (fileCards[fileCards.length - 1]?.newText ?? '')
       : (() => {
           if (!fullFile) return fileCards.map(c => c.newText ?? '').join('\n');
           let result = normalize(fullFile);
@@ -1050,7 +1103,7 @@ Wichtig:
               const nNew = normalize(card.newText ?? '');
               if (result.includes(nOld)) result = result.replace(nOld, nNew);
             } else {
-              result = result + (result.endsWith('\n') ? '' : '\n') + normalize(card.newText ?? '');
+              result = normalize(card.newText ?? '');
             }
           }
           return result;
@@ -1192,6 +1245,11 @@ Wichtig:
             <button style={{ ...S.btn, ...S.btnGhost, padding: '3px 7px', fontSize: '11px', color: 'rgba(247,118,142,0.6)' }}
               title="Alle entfernen"
               onClick={() => fileCards.forEach(c => removeDiff(c.id))}>✕</button>
+            {fileAppliedCount > 0 && session?.session_id && (
+              <button style={{ ...S.btn, ...S.btnGhost, padding: '3px 7px', fontSize: '11px', color: 'rgba(224,175,104,0.7)' }}
+                title="Datei auf Snapshot-Stand zurücksetzen"
+                onClick={() => revertFile(file)}>↶</button>
+            )}
           </div>
         </div>
         {/* Error details */}
@@ -1304,6 +1362,15 @@ Wichtig:
               </span>
             );
           })()}
+          {session && changedFiles.length > 0 && (
+            <span
+              onClick={() => setChangedFiles([])}
+              title={`Geändert: ${changedFiles.join(', ')} — klicken zum Schließen`}
+              style={{ fontSize: '10px', color: 'var(--tn-yellow,#e0af68)', padding: '2px 8px', borderRadius: '4px', background: 'rgba(224,175,104,0.12)', border: '1px solid rgba(224,175,104,0.35)', cursor: 'pointer', flexShrink: 0 }}
+            >
+              ⚠ {changedFiles.length} extern geändert
+            </span>
+          )}
           {session && (
             <button
               style={{
@@ -1653,7 +1720,11 @@ Wichtig:
                 <span style={{ fontSize: '11px', fontWeight: 600 }}>Chat</span>
               </div>
             )}
-            <div style={S.chatBox}>
+            <div
+              style={{ ...S.chatBox, overflowY: chatScrollActive ? 'auto' : 'hidden' }}
+              onMouseEnter={() => setChatScrollActive(true)}
+              onMouseLeave={() => setChatScrollActive(false)}
+            >
               {chatMessages.length === 0 && (
                 <div style={{ color: 'var(--tn-text-muted)', fontSize: '11px', textAlign: 'center' as const, padding: '16px 0' }}>
                   Business Angel bereit
