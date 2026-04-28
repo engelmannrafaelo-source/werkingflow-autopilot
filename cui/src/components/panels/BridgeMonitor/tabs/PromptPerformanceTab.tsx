@@ -6,12 +6,12 @@ import {
   XAxis,
   YAxis,
   Tooltip,
-  ResponsiveContainer,
   Cell,
   LineChart,
   Line,
   CartesianGrid,
 } from 'recharts';
+import { SafeChart } from '../../../shared/SafeChart';
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -310,7 +310,7 @@ export default function PromptPerformanceTab() {
           <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--tn-text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
             Avg Duration by Agent (seconds)
           </div>
-          <ResponsiveContainer width="100%" height={200}>
+          <SafeChart height={200}>
             <BarChart data={chartData} margin={{ top: 0, right: 10, left: 0, bottom: 50 }}>
               <XAxis dataKey="name" tick={{ fontSize: 8, fill: 'var(--tn-text-muted)' }} angle={-35} textAnchor="end" height={60} />
               <YAxis tick={{ fontSize: 9, fill: 'var(--tn-text-muted)' }} width={35} unit="s" />
@@ -329,7 +329,7 @@ export default function PromptPerformanceTab() {
                 ))}
               </Bar>
             </BarChart>
-          </ResponsiveContainer>
+          </SafeChart>
         </div>
       )}
 
@@ -495,7 +495,7 @@ export default function PromptPerformanceTab() {
                         <div style={{ fontSize: 9, fontWeight: 600, color: 'var(--tn-text-muted)', marginBottom: 6, textTransform: 'uppercase' }}>
                           Duration Timeline
                         </div>
-                        <ResponsiveContainer width="100%" height={120}>
+                        <SafeChart height={120}>
                           <LineChart data={timeline.timeline.map(p => ({
                             time: new Date(p.timestamp * 1000).toLocaleTimeString('de-AT', { hour: '2-digit', minute: '2-digit' }),
                             avg: Math.round(p.avg_duration_ms / 1000 * 10) / 10,
@@ -512,7 +512,7 @@ export default function PromptPerformanceTab() {
                             <Line type="monotone" dataKey="avg" stroke="var(--tn-blue)" strokeWidth={2} dot={false} />
                             <Line type="monotone" dataKey="max" stroke="var(--tn-orange)" strokeWidth={1} dot={false} opacity={0.5} />
                           </LineChart>
-                        </ResponsiveContainer>
+                        </SafeChart>
                       </div>
                     )}
                     {timeline && timeline.timeline.length === 0 && !timelineLoading && (

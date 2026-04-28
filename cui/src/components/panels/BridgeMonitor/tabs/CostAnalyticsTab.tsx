@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, Cell } from 'recharts';
 import { validateApiResponse } from '../../../../lib/validateApiResponse';
 import ContractBanner from '../../../ContractBanner';
 import { extractViolations, BridgeContracts } from '../../../../lib/dataContracts';
+import { SafeChart } from '../../../shared/SafeChart';
 
 // Validated shape — after validation these fields are guaranteed present
 interface CostData {
@@ -215,7 +216,7 @@ export default function CostAnalyticsTab() {
                   COST BY MODEL
                 </div>
                 <div data-ai-id="bridge-cost-chart">
-                <ResponsiveContainer width="100%" height={200}>
+                <SafeChart height={200}>
                   <BarChart data={getChartData()} margin={{ top: 0, right: 10, left: 0, bottom: 0 }}>
                     <XAxis dataKey="model" tick={{ fontSize: 9, fill: 'var(--tn-text-muted)' }} />
                     <YAxis tick={{ fontSize: 9, fill: 'var(--tn-text-muted)' }} width={40} />
@@ -236,7 +237,7 @@ export default function CostAnalyticsTab() {
                       ))}
                     </Bar>
                   </BarChart>
-                </ResponsiveContainer>
+                </SafeChart>
                 </div>
               </div>
 

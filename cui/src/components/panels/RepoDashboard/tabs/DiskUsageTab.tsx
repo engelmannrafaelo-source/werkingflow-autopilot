@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Treemap, ResponsiveContainer, Tooltip } from 'recharts';
+import { Treemap, Tooltip } from 'recharts';
 import { validateApiResponse } from '../../../../lib/validateApiResponse';
+import { SafeChart } from '../../../shared/SafeChart';
 
 interface FolderItem {
   name: string;
@@ -264,7 +265,7 @@ export default function DiskUsageTab() {
               height: 500,
             }}
           >
-            <ResponsiveContainer width="100%" height="100%">
+            <SafeChart>
               <Treemap
                 data-ai-id="disk-usage-treemap"
                 data={treemapData as any}
@@ -272,7 +273,7 @@ export default function DiskUsageTab() {
                 stroke="var(--tn-border)"
                 content={<CustomTreemapContent />}
               />
-            </ResponsiveContainer>
+            </SafeChart>
           </div>
 
           {/* Legend */}

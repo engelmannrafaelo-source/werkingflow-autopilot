@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line, CartesianGrid } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, LineChart, Line, CartesianGrid } from 'recharts';
 import { validateApiResponse } from '../../../../lib/validateApiResponse';
+import { SafeChart } from '../../../shared/SafeChart';
 
 interface TenantUsage {
   tenantId: string;
@@ -138,14 +139,14 @@ export default function UsageTab({ envMode }: { envMode?: string }) {
           {chartData.length > 0 && (
             <div data-ai-id="wr-usage-current-chart" style={{ marginBottom: 16 }}>
               <div data-ai-id="wr-usage-current-chart-title" style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6, fontWeight: 600 }}>TOP TENANTS BY COST</div>
-              <ResponsiveContainer width="100%" height={120}>
+              <SafeChart height={120}>
                 <BarChart data={chartData} margin={{ top: 0, right: 0, bottom: 0, left: 0 }}>
                   <XAxis dataKey="name" tick={{ fontSize: 9, fill: 'var(--tn-text-muted)' }} />
                   <YAxis tick={{ fontSize: 9, fill: 'var(--tn-text-muted)' }} width={32} />
                   <Tooltip contentStyle={{ background: 'var(--tn-bg-dark)', border: '1px solid var(--tn-border)', fontSize: 10 }} formatter={(v: number | undefined) => ['\u20ac' + (v ?? 0), 'Cost']} />
                   <Bar dataKey="cost" fill="var(--tn-blue)" radius={[2, 2, 0, 0]} />
                 </BarChart>
-              </ResponsiveContainer>
+              </SafeChart>
             </div>
           )}
 
@@ -179,7 +180,7 @@ export default function UsageTab({ envMode }: { envMode?: string }) {
             {statCard('Total Requests (6M)', '' + (trend.totalRequests ?? 0), 'var(--tn-orange)')}
           </div>
           <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 6, fontWeight: 600 }}>COST TREND (EUR/MONTH)</div>
-          <ResponsiveContainer width="100%" height={140}>
+          <SafeChart height={140}>
             <LineChart data={trendChartData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--tn-border)" />
               <XAxis dataKey="month" tick={{ fontSize: 9, fill: 'var(--tn-text-muted)' }} />
@@ -187,16 +188,16 @@ export default function UsageTab({ envMode }: { envMode?: string }) {
               <Tooltip contentStyle={{ background: 'var(--tn-bg-dark)', border: '1px solid var(--tn-border)', fontSize: 10 }} formatter={(v: number | undefined) => ['\u20ac' + (v ?? 0), 'Cost']} />
               <Line type="monotone" dataKey="cost" stroke="var(--tn-green)" strokeWidth={2} dot={{ r: 3, fill: 'var(--tn-green)' }} />
             </LineChart>
-          </ResponsiveContainer>
+          </SafeChart>
           <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginTop: 12, marginBottom: 6, fontWeight: 600 }}>REQUESTS / MONTH</div>
-          <ResponsiveContainer width="100%" height={100}>
+          <SafeChart height={100}>
             <BarChart data={trendChartData} margin={{ top: 0, right: 8, bottom: 0, left: 0 }}>
               <XAxis dataKey="month" tick={{ fontSize: 9, fill: 'var(--tn-text-muted)' }} />
               <YAxis tick={{ fontSize: 9, fill: 'var(--tn-text-muted)' }} width={36} />
               <Tooltip contentStyle={{ background: 'var(--tn-bg-dark)', border: '1px solid var(--tn-border)', fontSize: 10 }} />
               <Bar dataKey="requests" fill="var(--tn-blue)" radius={[2, 2, 0, 0]} />
             </BarChart>
-          </ResponsiveContainer>
+          </SafeChart>
         </>
       )}
 

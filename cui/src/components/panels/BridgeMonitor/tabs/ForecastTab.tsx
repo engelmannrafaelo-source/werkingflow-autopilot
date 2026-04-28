@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
-  ResponsiveContainer,
   ComposedChart,
   Line,
   Scatter,
@@ -11,6 +10,7 @@ import {
   Legend,
   ReferenceLine,
 } from 'recharts';
+import { SafeChart } from '../../../shared/SafeChart';
 
 /**
  * ForecastTab — Empirical throughput-vs-backpressure view per worker.
@@ -600,7 +600,7 @@ export default function ForecastTab() {
       {data && (
         <>
           <div style={{ height: 460, background: 'var(--tn-bg)', border: '1px solid var(--tn-border)', borderRadius: 4, padding: 8 }}>
-            <ResponsiveContainer width="100%" height="100%">
+            <SafeChart>
               <ComposedChart data={chartData} margin={{ top: 12, right: 24, left: 8, bottom: 24 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--tn-border)" />
                 <XAxis
@@ -727,7 +727,7 @@ export default function ForecastTab() {
                   );
                 })}
               </ComposedChart>
-            </ResponsiveContainer>
+            </SafeChart>
           </div>
 
           <div style={{

@@ -8,11 +8,11 @@ import {
   XAxis,
   YAxis,
   Tooltip,
-  ResponsiveContainer,
   Cell,
   Treemap,
 } from 'recharts';
 import { formatNumber } from '../shared';
+import { SafeChart } from '../../../shared/SafeChart';
 
 interface AppBreakdown {
   app_id: string;
@@ -360,7 +360,7 @@ export default function UsageAnalyticsTab() {
             <div>
               {data.models.length > 0 ? (
                 <>
-                  <ResponsiveContainer width="100%" height={220}>
+                  <SafeChart height={220}>
                     <BarChart data={data.models} margin={{ top: 0, right: 10, left: 0, bottom: 40 }}>
                       <XAxis dataKey="model" tick={{ fontSize: 8, fill: 'var(--tn-text-muted)' }} angle={-30} textAnchor="end" height={60} />
                       <YAxis tick={{ fontSize: 9, fill: 'var(--tn-text-muted)' }} width={50} tickFormatter={fmtTokens} />
@@ -374,7 +374,7 @@ export default function UsageAnalyticsTab() {
                         ))}
                       </Bar>
                     </BarChart>
-                  </ResponsiveContainer>
+                  </SafeChart>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 8 }}>
                     {data.models.map(m => (
                       <div key={m.model} style={{
