@@ -53,7 +53,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
  * Optional auth — attaches user if token present, but doesn't block.
  * Useful for routes that behave differently for authenticated users.
  */
-function optionalAuth(req: Request, _res: Response, next: NextFunction): void {
+export function optionalAuth(req: Request, _res: Response, next: NextFunction): void {
   if (!isAuthEnabled()) {
     next();
     return;

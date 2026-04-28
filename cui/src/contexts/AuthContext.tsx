@@ -14,9 +14,12 @@ interface AuthUser {
   claudeAccountId: string;
   allowedPanels: string[] | '*';
   allowedWorkspaces: string[] | '*';
+  productOwnerOf: string[] | '*';
   canGitPush: boolean;
   canApproveEdits: boolean;
 }
+
+export type { AuthUser };
 
 interface AuthState {
   /** null = loading, true = logged in, false = not logged in */

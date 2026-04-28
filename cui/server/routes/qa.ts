@@ -1,7 +1,9 @@
 import { Router } from 'express';
 import { join } from 'path';
-import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, writeFileSync, appendFileSync } from 'fs';
 import { execSync, spawn } from 'child_process';
+import { requireAuth, optionalAuth } from '../auth/middleware.js';
+import { isAuthEnabled, findUser } from '../auth/users.js';
 
 const router = Router();
 
@@ -1364,11 +1366,13 @@ router.post('/api/qa/coverage-gaps/:appId/refresh', async (req, res) => {
   }
 });
 
-// GET /api/qa/scenarios — All scenarios from filesystem + registry
-router.get('/api/qa/scenarios', async (_req, res) => {
+// GET /api/qa/scenarios — All scenarios from filesystem + registry (scope-filtered for non-admins)
+router.get('/api/qa/scenarios', optionalAuth, async (req, res) => {
   try {
     const scenarios = discoverScenarios();
-    res.json({ scenarios, total: scenarios.length, timestamp: new Date().toISOString() });
+    const scope = getUserScope(req);
+    const filtered = scope.isAdmin ? scenarios : scenarios.filter(s => scope.apps.includes(s.app));
+    res.json({ scenarios: filtered, total: filtered.length, timestamp: new Date().toISOString() });
   } catch (err: any) {
     console.error('[QA] Scenarios error:', err.message);
     res.status(500).json({ error: err.message });
@@ -2282,6 +2286,214 @@ router.get('/api/qa/knowledge/:id', (req, res) => {
   }
   const content = readFileSync(path, 'utf-8');
   res.json({ id: doc.id, title: doc.title, category: doc.category, description: doc.description, content });
+});
+
+// ========================================
+// PO Scenarios — Product Owner Self-Service
+// ========================================
+// POs manage their own test scenarios without touching the unified-tester framework.
+// Storage: <dataDir>/po-scenarios/{username}/{app}/{slug}.json
+// Audit:   <dataDir>/po-scenarios/_audit.jsonl
+
+const PO_SCENARIOS_DIR = PATHS.poScenariosDir;
+const PO_AUDIT_LOG = join(PO_SCENARIOS_DIR, '_audit.jsonl');
+
+/** Determine scope for the current user. isAdmin=true → all apps visible. */
+function getUserScope(req: any): { apps: string[]; isAdmin: boolean } {
+  if (!isAuthEnabled()) return { apps: [], isAdmin: true };
+  const sub = req.user?.sub;
+  if (!sub) return { apps: [], isAdmin: false };
+  const user = findUser(sub);
+  if (!user) return { apps: [], isAdmin: false };
+  const po = user.productOwnerOf;
+  if (po === '*') return { apps: [], isAdmin: true };
+  return { apps: Array.isArray(po) ? po : [], isAdmin: false };
+}
+
+/** Append one line to the audit log (best-effort, never throws). */
+function auditLog(entry: { user: string; action: string; scenarioId: string; app: string }) {
+  try {
+    mkdirSync(PO_SCENARIOS_DIR, { recursive: true });
+    appendFileSync(PO_AUDIT_LOG, JSON.stringify({ timestamp: new Date().toISOString(), ...entry }) + '\n', 'utf-8');
+  } catch { /* never block main path */ }
+}
+
+/** kebab-case slug from free text title. */
+function slugify(title: string): string {
+  return title.toLowerCase()
+    .replace(/[äÄ]/g, 'ae').replace(/[öÖ]/g, 'oe').replace(/[üÜ]/g, 'ue').replace(/ß/g, 'ss')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60) || 'scenario';
+}
+
+/** Generate a unique slug (appends -2, -3 … when collision). */
+function uniqueSlug(base: string, username: string, app: string): string {
+  const dir = join(PO_SCENARIOS_DIR, username, app);
+  let slug = base;
+  let n = 2;
+  while (existsSync(join(dir, `${slug}.json`))) slug = `${base}-${n++}`;
+  return slug;
+}
+
+interface PoScenario {
+  id: string;
+  system: string;
+  name: string;
+  description: string;
+  layer: 4;
+  test_type: 'mental-model-workflow';
+  tester: { perspektive: string; erfahrung: string };
+  auftrag: string;
+  ziele: string[];
+  qualitaetsfrage: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  archived: boolean;
+}
+
+/** Validate PO scenario body. Returns error string or null. */
+function validatePoScenario(body: any, scope: { apps: string[]; isAdmin: boolean }): string | null {
+  const required = ['system', 'name', 'description', 'tester', 'auftrag', 'ziele', 'qualitaetsfrage'] as const;
+  for (const f of required) {
+    if (!body[f]) return `Missing required field: ${f}`;
+  }
+  if (!Array.isArray(body.ziele) || body.ziele.length < 1) return 'ziele must be a non-empty array';
+  if (!body.tester?.perspektive) return 'tester.perspektive is required';
+  if (!scope.isAdmin && !scope.apps.includes(body.system)) return `App "${body.system}" is not in your scope`;
+  return null;
+}
+
+/** Load all PO scenarios for a username, optionally filtered by app. */
+function loadPoScenarios(username: string, scopeApps: string[], isAdmin: boolean): PoScenario[] {
+  const scenarios: PoScenario[] = [];
+  const baseDir = join(PO_SCENARIOS_DIR, username);
+  if (!existsSync(baseDir)) return scenarios;
+  for (const app of readdirSync(baseDir)) {
+    if (!isAdmin && !scopeApps.includes(app)) continue;
+    const appDir = join(baseDir, app);
+    try {
+      if (!statSync(appDir).isDirectory()) continue;
+      for (const file of readdirSync(appDir)) {
+        if (!file.endsWith('.json')) continue;
+        const data = readJSON(join(appDir, file));
+        if (data) scenarios.push(data as PoScenario);
+      }
+    } catch { /* skip unreadable dirs */ }
+  }
+  return scenarios;
+}
+
+// GET /api/qa/po-scenarios — list owned + read-only team scenarios
+router.get('/api/qa/po-scenarios', requireAuth, (req, res) => {
+  const scope = getUserScope(req);
+  const username = req.user!.sub;
+
+  // Own PO scenarios
+  const owned = loadPoScenarios(username, scope.apps, scope.isAdmin);
+
+  // Team scenarios (read-only) — from unified-tester, filtered by scope
+  let teamReadOnly: Array<{ id: string; app: string; name: string; status: string }> = [];
+  try {
+    const all = discoverScenarios();
+    teamReadOnly = (scope.isAdmin ? all : all.filter(s => scope.apps.includes(s.app)))
+      .map(s => ({ id: s.id, app: s.app, name: s.name, status: s.status }));
+  } catch { /* */ }
+
+  res.json({ owned, teamReadOnly });
+});
+
+// POST /api/qa/po-scenarios — create new PO scenario
+router.post('/api/qa/po-scenarios', requireAuth, (req, res) => {
+  const scope = getUserScope(req);
+  const username = req.user!.sub;
+
+  const err = validatePoScenario(req.body, scope);
+  if (err) return res.status(400).json({ error: err });
+
+  const { system, name, description, tester, auftrag, ziele, qualitaetsfrage } = req.body;
+  const base = slugify(name);
+  const slug = uniqueSlug(base, username, system);
+  const now = new Date().toISOString();
+
+  const scenario: PoScenario = {
+    id: slug,
+    system,
+    name,
+    description,
+    layer: 4,
+    test_type: 'mental-model-workflow',
+    tester: { perspektive: tester.perspektive, erfahrung: tester.erfahrung ?? '' },
+    auftrag,
+    ziele,
+    qualitaetsfrage,
+    created_by: username,
+    created_at: now,
+    updated_at: now,
+    archived: false,
+  };
+
+  const dir = join(PO_SCENARIOS_DIR, username, system);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${slug}.json`), JSON.stringify(scenario, null, 2), 'utf-8');
+  auditLog({ user: username, action: 'created', scenarioId: slug, app: system });
+
+  res.status(201).json(scenario);
+});
+
+// PUT /api/qa/po-scenarios/:id — update own scenario
+router.put('/api/qa/po-scenarios/:id', requireAuth, (req, res) => {
+  const scope = getUserScope(req);
+  const username = req.user!.sub;
+  const id = req.params.id;
+
+  const err = validatePoScenario(req.body, scope);
+  if (err) return res.status(400).json({ error: err });
+
+  const { system, name, description, tester, auftrag, ziele, qualitaetsfrage } = req.body;
+  const filePath = join(PO_SCENARIOS_DIR, username, system, `${id}.json`);
+  if (!existsSync(filePath)) return res.status(404).json({ error: 'Scenario not found or not owned by you' });
+
+  const existing = readJSON(filePath) as PoScenario;
+  if (!existing) return res.status(500).json({ error: 'Failed to read existing scenario' });
+
+  const updated: PoScenario = {
+    ...existing,
+    name,
+    description,
+    tester: { perspektive: tester.perspektive, erfahrung: tester.erfahrung ?? '' },
+    auftrag,
+    ziele,
+    qualitaetsfrage,
+    updated_at: new Date().toISOString(),
+  };
+
+  writeFileSync(filePath, JSON.stringify(updated, null, 2), 'utf-8');
+  auditLog({ user: username, action: 'updated', scenarioId: id, app: system });
+
+  res.json(updated);
+});
+
+// POST /api/qa/po-scenarios/:id/archive — soft-delete (no DELETE)
+router.post('/api/qa/po-scenarios/:id/archive', requireAuth, (req, res) => {
+  const username = req.user!.sub;
+  const id = req.params.id;
+  const app = req.body?.system as string;
+
+  if (!app) return res.status(400).json({ error: 'system required in body' });
+
+  const filePath = join(PO_SCENARIOS_DIR, username, app, `${id}.json`);
+  if (!existsSync(filePath)) return res.status(404).json({ error: 'Scenario not found or not owned by you' });
+
+  const existing = readJSON(filePath) as PoScenario;
+  if (!existing) return res.status(500).json({ error: 'Failed to read scenario' });
+
+  const archived = { ...existing, archived: true, updated_at: new Date().toISOString() };
+  writeFileSync(filePath, JSON.stringify(archived, null, 2), 'utf-8');
+  auditLog({ user: username, action: 'archived', scenarioId: id, app });
+
+  res.json(archived);
 });
 
 export default router;

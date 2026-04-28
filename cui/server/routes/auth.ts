@@ -102,6 +102,7 @@ function sanitizeUser(user: CuiUser) {
     claudeAccountId: user.claudeAccountId,
     allowedPanels: user.allowedPanels,
     allowedWorkspaces: user.allowedWorkspaces,
+    productOwnerOf: user.productOwnerOf ?? [],
     canGitPush: user.canGitPush,
     canApproveEdits: user.canApproveEdits,
   };

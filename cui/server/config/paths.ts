@@ -65,6 +65,9 @@ export const PATHS = {
   infisicalApiScript: process.env.CUI_INFISICAL_API_SCRIPT || '/root/.infisical/infisical-api.sh',
   infisicalTokenScript: process.env.CUI_INFISICAL_TOKEN_SCRIPT || '/root/.infisical/get-token.py',
 
+  // --- PO Scenarios (Product Owner self-service test scenarios) ---
+  poScenariosDir: process.env.CUI_PO_SCENARIOS_DIR || join(process.env.CUI_DATA_DIR || join(CUI_ROOT, 'data'), 'po-scenarios'),
+
   // --- Local Storage ---
   localStorage: process.env.CUI_LOCAL_STORAGE || '/root/projekte/local-storage',
 } as const;
