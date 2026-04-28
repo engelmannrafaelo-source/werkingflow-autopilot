@@ -8,11 +8,12 @@
 // POST /api/business-angel/apply-diffs → validate + backup + apply FILE/OLD/NEW diffs
 // =============================================================================
 
-import { Router } from 'express';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, renameSync } from 'fs';
+import { Router, type Response } from 'express';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, renameSync, unlinkSync } from 'fs';
 import { randomUUID, createHash } from 'crypto';
 import { join, basename, dirname, relative } from 'path';
 import { load as yamlLoad } from 'js-yaml';
+import chokidar from 'chokidar';
 import { PATHS } from '../config/paths.js';
 import { parseDiffs } from '../lib/diff-parser.js';
 import { bridgeChat } from '../lib/bridge-fetch.js';
@@ -25,6 +26,9 @@ const CONTEXT_YAML = '/root/projekte/local-storage/report-builder/business-angel
 const BACKUP_DIR   = '/root/projekte/local-storage/report-builder/backups';
 const TEMP_DIR     = '/root/projekte/local-storage/report-builder/temp';
 const SNAPSHOT_DIR = '/root/projekte/local-storage/cui/snapshots';
+const DIARY_BASE_DIR = '/root/projekte/local-storage/diary';
+const DIARY_DAILY_DAYS_DEFAULT  = 14;
+const DIARY_WEEKLY_DAYS_DEFAULT = 60;
 
 // Approx tokens per character (rough estimate for German/English mixed text)
 const CHARS_PER_TOKEN = 4;
@@ -143,6 +147,19 @@ function getOrRestoreSession(session_id: string): ChatSession | null {
       budget -= tokens;
     }
 
+    // Tagebuch-Pyramide auch beim Auto-Restore neu aufbauen
+    const diaryRestore = loadDiaryPyramid(yaml.tagebuch);
+    const diaryIncluded: DiaryEntry[] = [];
+    for (const e of [...diaryRestore.entries].sort((a, b) => b.sortKey - a.sortKey)) {
+      if (e.tokens > budget) continue;
+      diaryIncluded.push(e);
+      filesLoaded++;
+      totalTokens += e.tokens;
+      budget -= e.tokens;
+    }
+    diaryIncluded.sort((a, b) => a.sortKey - b.sortKey);
+    const diarySectionRestore = renderDiarySection(diaryIncluded);
+
     const systemPrompt = `Du bist ein strategischer Berater für WerkING Tools / Engelmann Data Energyneering.
 
 Deine erste Nachricht enthält Kontext-Dokumente in <documents> Tags.
@@ -153,30 +170,14 @@ REGELN:
 - Verwende AUSSCHLIESSLICH was in den <documents> steht
 - Erfinde keine Zahlen, Konditionen, Personen oder Deals
 - Wenn du etwas nicht weißt: sag es direkt
-- Wenn Rafael sagt "bau die Diffs" oder "Generiere Diffs": schreibe strukturierte Diff-Blöcke
-  BEVORZUGTES Format für Änderungen an bestehenden Dateien:
-    <<<DIFF pfad/zur/datei.md
-    old_string: |
-      ...exakter Text aus dem Original-Dokument...
-    new_string: |
-      ...neuer Text...
-    >>>
-  Format für NEUE Dateien:
-    <<<NEW pfad/zur/neuen-datei.md
-    content: |
-      ...vollständiger Inhalt...
-    >>>
-  ALTERNATIVES Format (auch akzeptiert):
+- Wenn Rafael sagt "bau die Diffs" oder "Generiere Diffs": schreibe Diff-Blöcke im folgenden Format:
+  FORMAT (für neue UND bestehende Dateien — immer gleich):
     FILE: <relativer Pfad ab business/>
-    OLD:
-    <Text aus dem Original>
     NEW:
-    <Neuer Text>
-- KRITISCH für old_string/OLD: Beziehe dich IMMER auf den ORIGINAL-Inhalt der Dateien (wie sie zu Beginn der Session geladen wurden), NICHT auf zwischenzeitliche Änderungen
-- KRITISCH: Genug Kontext-Zeilen für eindeutigen Match
-- Mehrere Diff-Blöcke pro Datei sind erlaubt
-- Bei neuen Dateien: <<<NEW verwenden mit vollständigem Inhalt
-- Nur die betroffenen Abschnitte liefern, nicht das gesamte Dokument
+    <VOLLSTÄNDIGER neuer Inhalt der Datei>
+- KRITISCH: Schreibe IMMER den KOMPLETTEN Dateiinhalt in NEW — nie nur den geänderten Abschnitt
+- Mehrere FILE/NEW Blöcke pro Antwort sind erlaubt
+- Falls ein [KONTEXT-UPDATE] in der Konversation erscheint: Verwende diesen aktuellen Stand als Basis für weitere Änderungen
 - PFADE: Der <dateibaum> Block enthält die aktuelle Ordnerstruktur. Verwende IMMER existierende Pfade und Namenskonventionen daraus. Für neue Dateien: orientiere dich am Namensschema der Nachbar-Dateien im gleichen Ordner.`;
 
     const fileTreeText = renderFileTreeText(BUSINESS_DIR, '');
@@ -194,6 +195,10 @@ ${kernSections.join('\n\n---\n\n')}
 ${tempSections.length > 0 ? `<temp_ordner>
 ${tempSections.join('\n\n---\n\n')}
 </temp_ordner>` : ''}
+
+${diarySectionRestore ? `<verlauf description="Rafaels Arbeits-Tagebuch — chronologischer Verlauf. Pyramide: jüngste Tage täglich, ältere wochenweise, sehr alte monatlich. Quelle und Erzeugung: /root/projekte/local-storage/diary/CONVENTION.md">
+${diarySectionRestore}
+</verlauf>` : ''}
 
 </documents>
 
@@ -241,10 +246,36 @@ function archiveSession(session: PersistedSession): void {
 }
 
 // --- Types ---
+interface DiaryConfig {
+  base_dir?: string;
+  daily_days?: number;
+  weekly_days?: number;
+}
+
 interface ContextYaml {
   kern_files: string[];
   zusatz_kategorien: Record<string, string[]>;
   temp_ordner: string;
+  tagebuch?: DiaryConfig;
+}
+
+interface DiaryEntry {
+  type: 'daily' | 'weekly' | 'monthly';
+  name: string;        // filename (e.g. 2026-04-28.md, 2026-W17.md, 2026-04.md)
+  label: string;       // human-friendly date label (e.g. 2026-04-28, 2026 KW17, 2026-04)
+  sortKey: number;     // unix ms — used to order chronologically
+  content: string;
+  tokens: number;
+}
+
+interface DiaryStats {
+  daily_count: number;
+  weekly_count: number;
+  monthly_count: number;
+  total_tokens: number;
+  latest_daily: string | null;
+  base_dir: string;
+  config: { daily_days: number; weekly_days: number };
 }
 
 interface FileTokenInfo {
@@ -317,6 +348,147 @@ function readTempFiles(tempDir: string): Array<{ name: string; content: string }
     }
   }
   return files;
+}
+
+/** Sunday (week-end) of an ISO 8601 week as unix-ms. Jan 4 is always in ISO week 1. */
+function isoWeekEndMs(year: number, week: number): number {
+  const jan4 = new Date(year, 0, 4);
+  const jan4Day = jan4.getDay() || 7; // ISO: Sun=7
+  const mondayWeek1 = new Date(year, 0, 4 - (jan4Day - 1));
+  const sunday = new Date(mondayWeek1);
+  sunday.setDate(mondayWeek1.getDate() + (week - 1) * 7 + 6);
+  return sunday.getTime();
+}
+
+/**
+ * Load the diary pyramid: 0..daily_days days → daily files, daily..weekly_days → weekly,
+ * older → monthly. Returns entries sorted chronologically (oldest first) for prompt rendering.
+ * Reads silently if dirs are missing — diary is optional.
+ */
+function loadDiaryPyramid(cfg: DiaryConfig | undefined): { entries: DiaryEntry[]; stats: DiaryStats } {
+  const baseDir   = cfg?.base_dir   || DIARY_BASE_DIR;
+  const dailyDays  = cfg?.daily_days  ?? DIARY_DAILY_DAYS_DEFAULT;
+  const weeklyDays = cfg?.weekly_days ?? DIARY_WEEKLY_DAYS_DEFAULT;
+  const todayMs = Date.now();
+  const DAY = 86_400_000;
+
+  const daily:   DiaryEntry[] = [];
+  const weekly:  DiaryEntry[] = [];
+  const monthly: DiaryEntry[] = [];
+
+  // Daily — files named YYYY-MM-DD.md
+  const dailyDir = join(baseDir, 'daily');
+  if (existsSync(dailyDir)) {
+    for (const f of readdirSync(dailyDir)) {
+      const m = /^(\d{4})-(\d{2})-(\d{2})\.md$/.exec(f);
+      if (!m) continue;
+      const dateMs = new Date(`${m[1]}-${m[2]}-${m[3]}T00:00:00`).getTime();
+      if (Number.isNaN(dateMs)) continue;
+      const ageDays = (todayMs - dateMs) / DAY;
+      if (ageDays < 0 || ageDays > dailyDays) continue;
+      try {
+        const content = readFileSync(join(dailyDir, f), 'utf-8');
+        daily.push({
+          type: 'daily',
+          name: f,
+          label: `${m[1]}-${m[2]}-${m[3]}`,
+          sortKey: dateMs,
+          content,
+          tokens: estimateTokens(content),
+        });
+      } catch { /* skip unreadable */ }
+    }
+  }
+
+  // Weekly — files named YYYY-Www.md (ISO week)
+  const weeklyDir = join(baseDir, 'weekly');
+  if (existsSync(weeklyDir)) {
+    for (const f of readdirSync(weeklyDir)) {
+      const m = /^(\d{4})-W(\d{1,2})\.md$/.exec(f);
+      if (!m) continue;
+      const year = parseInt(m[1], 10);
+      const week = parseInt(m[2], 10);
+      const weekEndMs = isoWeekEndMs(year, week);
+      const ageDays = (todayMs - weekEndMs) / DAY;
+      if (ageDays <= dailyDays || ageDays > weeklyDays) continue;
+      try {
+        const content = readFileSync(join(weeklyDir, f), 'utf-8');
+        weekly.push({
+          type: 'weekly',
+          name: f,
+          label: `${m[1]} KW${m[2].padStart(2, '0')}`,
+          sortKey: weekEndMs,
+          content,
+          tokens: estimateTokens(content),
+        });
+      } catch { /* skip unreadable */ }
+    }
+  }
+
+  // Monthly — files named YYYY-MM.md
+  const monthlyDir = join(baseDir, 'monthly');
+  if (existsSync(monthlyDir)) {
+    for (const f of readdirSync(monthlyDir)) {
+      const m = /^(\d{4})-(\d{2})\.md$/.exec(f);
+      if (!m) continue;
+      const year  = parseInt(m[1], 10);
+      const month = parseInt(m[2], 10);
+      const monthEndMs = new Date(year, month, 0).getTime(); // day 0 of next month = last day of this month
+      const ageDays = (todayMs - monthEndMs) / DAY;
+      if (ageDays <= weeklyDays) continue;
+      try {
+        const content = readFileSync(join(monthlyDir, f), 'utf-8');
+        monthly.push({
+          type: 'monthly',
+          name: f,
+          label: `${m[1]}-${m[2]}`,
+          sortKey: monthEndMs,
+          content,
+          tokens: estimateTokens(content),
+        });
+      } catch { /* skip unreadable */ }
+    }
+  }
+
+  // Latest daily for stats (descending order → first)
+  const latestDaily = daily.length > 0
+    ? [...daily].sort((a, b) => b.sortKey - a.sortKey)[0].label
+    : null;
+
+  // Render order: chronological (oldest → newest), monthly → weekly → daily within their bands
+  const entries: DiaryEntry[] = [
+    ...monthly.sort((a, b) => a.sortKey - b.sortKey),
+    ...weekly .sort((a, b) => a.sortKey - b.sortKey),
+    ...daily  .sort((a, b) => a.sortKey - b.sortKey),
+  ];
+
+  const totalTokens = entries.reduce((s, e) => s + e.tokens, 0);
+
+  return {
+    entries,
+    stats: {
+      daily_count: daily.length,
+      weekly_count: weekly.length,
+      monthly_count: monthly.length,
+      total_tokens: totalTokens,
+      latest_daily: latestDaily,
+      base_dir: baseDir,
+      config: { daily_days: dailyDays, weekly_days: weeklyDays },
+    },
+  };
+}
+
+/** Render diary entries as a single block for the system prompt. */
+function renderDiarySection(entries: DiaryEntry[]): string {
+  if (entries.length === 0) return '';
+  const headerByType: Record<DiaryEntry['type'], string> = {
+    monthly: 'Monats-Rollup',
+    weekly:  'Wochen-Rollup',
+    daily:   'Tag',
+  };
+  return entries
+    .map(e => `### ${headerByType[e.type]} ${e.label}\n\n${e.content.trim()}`)
+    .join('\n\n---\n\n');
 }
 
 const SKIP_DIR = /^(_archive|archive|archiv|_archiv|reports|_reports)$/i;
@@ -440,6 +612,9 @@ router.get('/context', (_req, res) => {
       zusatz[key] = { files, totalTokens: files.reduce((s, f) => s + f.tokens, 0) };
     }
 
+    // Tagebuch-Pyramide — Status (nicht geladen, nur Übersicht)
+    const diary = loadDiaryPyramid(yaml.tagebuch);
+
     res.json({
       kern_files: kernFiles,
       kern_tokens: kernTokens,
@@ -447,6 +622,7 @@ router.get('/context', (_req, res) => {
       temp_files: tempFiles.map(f => ({ name: f.name, tokens: estimateTokens(f.content) })),
       temp_tokens: tempTokens,
       temp_dir: tempDir,
+      tagebuch: diary.stats,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -822,7 +998,27 @@ router.post('/load', async (req, res) => {
       budget -= tokens;
     }
 
-    // 3. Collect zusatz content (category-based) + extra_files
+    // 3. Tagebuch-Pyramide — historischer Verlauf, automatisch aus local-storage/diary
+    const diary = loadDiaryPyramid(yaml.tagebuch);
+    const diaryEntriesIncluded: DiaryEntry[] = [];
+    // Walk newest → oldest so the most recent entries survive a tight budget.
+    const diaryByRecency = [...diary.entries].sort((a, b) => b.sortKey - a.sortKey);
+    for (const e of diaryByRecency) {
+      if (e.tokens > budget) continue;
+      diaryEntriesIncluded.push(e);
+      filesLoaded++;
+      totalTokens += e.tokens;
+      budget -= e.tokens;
+    }
+    // Re-render in chronological order for prompt readability
+    diaryEntriesIncluded.sort((a, b) => a.sortKey - b.sortKey);
+    const diarySection = renderDiarySection(diaryEntriesIncluded);
+    const diarySkippedCount = diary.entries.length - diaryEntriesIncluded.length;
+    if (diarySkippedCount > 0) {
+      console.warn(`[BusinessAngel] Tagebuch: ${diarySkippedCount} Eintrag/Einträge wegen Token-Budget übersprungen`);
+    }
+
+    // 4. Collect zusatz content (category-based) + extra_files
     const zusatzSections: string[] = [];
     const loadedPaths = new Set<string>(yaml.kern_files);
 
@@ -881,30 +1077,14 @@ REGELN:
 - Verwende AUSSCHLIESSLICH was in den <documents> steht
 - Erfinde keine Zahlen, Konditionen, Personen oder Deals
 - Wenn du etwas nicht weißt: sag es direkt
-- Wenn Rafael sagt "bau die Diffs" oder "Generiere Diffs": schreibe strukturierte Diff-Blöcke
-  BEVORZUGTES Format für Änderungen an bestehenden Dateien:
-    <<<DIFF pfad/zur/datei.md
-    old_string: |
-      ...exakter Text aus dem Original-Dokument...
-    new_string: |
-      ...neuer Text...
-    >>>
-  Format für NEUE Dateien:
-    <<<NEW pfad/zur/neuen-datei.md
-    content: |
-      ...vollständiger Inhalt...
-    >>>
-  ALTERNATIVES Format (auch akzeptiert):
+- Wenn Rafael sagt "bau die Diffs" oder "Generiere Diffs": schreibe Diff-Blöcke im folgenden Format:
+  FORMAT (für neue UND bestehende Dateien — immer gleich):
     FILE: <relativer Pfad ab business/>
-    OLD:
-    <Text aus dem Original>
     NEW:
-    <Neuer Text>
-- KRITISCH für old_string/OLD: Beziehe dich IMMER auf den ORIGINAL-Inhalt der Dateien (wie sie zu Beginn der Session geladen wurden), NICHT auf zwischenzeitliche Änderungen
-- KRITISCH: Genug Kontext-Zeilen für eindeutigen Match
-- Mehrere Diff-Blöcke pro Datei sind erlaubt
-- Bei neuen Dateien: <<<NEW verwenden mit vollständigem Inhalt
-- Nur die betroffenen Abschnitte liefern, nicht das gesamte Dokument
+    <VOLLSTÄNDIGER neuer Inhalt der Datei>
+- KRITISCH: Schreibe IMMER den KOMPLETTEN Dateiinhalt in NEW — nie nur den geänderten Abschnitt
+- Mehrere FILE/NEW Blöcke pro Antwort sind erlaubt
+- Falls ein [KONTEXT-UPDATE] in der Konversation erscheint: Verwende diesen aktuellen Stand als Basis für weitere Änderungen
 - PFADE: Der <dateibaum> Block enthält die aktuelle Ordnerstruktur. Verwende IMMER existierende Pfade und Namenskonventionen daraus. Für neue Dateien: orientiere dich am Namensschema der Nachbar-Dateien im gleichen Ordner.`;
 
     // Build file tree text for context injection (so Angel knows all paths)
@@ -926,6 +1106,10 @@ ${kernSections.join('\n\n---\n\n')}
 ${tempSections.length > 0 ? `<temp_ordner>
 ${tempSections.join('\n\n---\n\n')}
 </temp_ordner>` : ''}
+
+${diarySection ? `<verlauf description="Rafaels Arbeits-Tagebuch — chronologischer Verlauf. Pyramide: jüngste Tage täglich, ältere wochenweise, sehr alte monatlich. Quelle und Erzeugung: /root/projekte/local-storage/diary/CONVENTION.md">
+${diarySection}
+</verlauf>` : ''}
 
 ${zusatzSections.length > 0 ? `<zusatz_kontext>
 ${zusatzSections.join('\n\n---\n\n')}
@@ -1019,6 +1203,14 @@ Dokumente geladen (${filesLoaded} Dateien). Bitte stelle mir deine Fragen.`;
       restored: restore && restoredConversation.length > 0,
       conversation_turns: restoredConversation.length,
       conversation: restore && restoredConversation.length > 0 ? restoredConversation : undefined,
+      tagebuch: {
+        loaded_daily:   diaryEntriesIncluded.filter(e => e.type === 'daily').length,
+        loaded_weekly:  diaryEntriesIncluded.filter(e => e.type === 'weekly').length,
+        loaded_monthly: diaryEntriesIncluded.filter(e => e.type === 'monthly').length,
+        skipped: diarySkippedCount,
+        tokens: diaryEntriesIncluded.reduce((s, e) => s + e.tokens, 0),
+        latest_daily: diary.stats.latest_daily,
+      },
     });
   } catch (err: any) {
     console.error('[BusinessAngel] /load error:', err.message);
@@ -1055,6 +1247,7 @@ router.post('/chat', async (req, res) => {
     console.log(`[BusinessAngel] /chat session=${session_id.slice(0, 8)} history=${session.history.length} msg_len=${message.length} sys_len=${session.system_prompt.length}`);
 
     const responseText = await bridgeChat({
+      model: 'claude-sonnet-4-6',
       messages: [
         { role: 'system', content: session.system_prompt },
         ...messages,
@@ -1114,80 +1307,23 @@ router.post('/apply-diffs', (req, res) => {
     for (const diff of resolvedDiffs) {
       const absPath = join(BUSINESS_DIR, diff.file);
 
-      // DEFENSIVE GUARD (rescue 2026-04-24): reject parser-corruption signature.
-      if (
-        diff.old.includes('\n') &&
-        !diff.newText.includes('\n') &&
-        diff.newText.trim().length > 0 &&
-        diff.newText.length < diff.old.length * 0.1
-      ) {
-        simResults.push({
-          diff, absPath, status: 'failed',
-          reason: `Refused: suspicious shrink (old=${diff.old.length} chars, new=${diff.newText.length} chars, single line). Likely parser corruption — inspect raw diff.`,
-        });
+      if (!diff.newText.trim()) {
+        simResults.push({ diff, absPath, status: 'failed', reason: 'NEW content is empty' });
         continue;
       }
 
-      // New file: OLD is empty → create
-      if (!diff.old.trim()) {
-        if (existsSync(absPath)) {
-          simResults.push({ diff, absPath, status: 'failed', reason: 'NEW FILE: file already exists (use OLD/NEW diff to modify)' });
+      // Idempotency: disk content already matches newText exactly
+      if (existsSync(absPath) && !workingVersions.has(absPath)) {
+        const diskContent = readFileSync(absPath, 'utf-8');
+        originalContents.set(absPath, diskContent);
+        if (normalizeWs(diskContent) === normalizeWs(diff.newText)) {
+          simResults.push({ diff, absPath, status: 'already_applied' });
           continue;
         }
-        workingVersions.set(absPath, diff.newText);
-        simResults.push({ diff, absPath, status: 'ok' });
-        continue;
       }
 
-      if (!existsSync(absPath)) {
-        simResults.push({ diff, absPath, status: 'failed', reason: 'File not found' });
-        continue;
-      }
-
-      // Load: use working version for multi-diff on same file, else read disk once
-      if (!workingVersions.has(absPath)) {
-        const diskContent = readFileSync(absPath, 'utf-8');
-        workingVersions.set(absPath, diskContent);
-        originalContents.set(absPath, diskContent);
-      }
-      const current = workingVersions.get(absPath)!;
-
-      // Idempotency: new text already present and old text gone → already applied
-      if (diff.newText.length > 0 && current.includes(diff.newText) && !current.includes(diff.old)) {
-        simResults.push({ diff, absPath, status: 'already_applied' });
-        continue;
-      }
-
-      // Try replace: exact → normalized → section-level
-      let updated: string | null = null;
-      if (current.includes(diff.old)) {
-        updated = current.replace(diff.old, diff.newText);
-      } else {
-        const normCurrent = normalizeWs(current);
-        const normOld = normalizeWs(diff.old);
-        if (normCurrent.includes(normOld)) {
-          updated = normCurrent.replace(normOld, normalizeWs(diff.newText));
-        } else {
-          const headingMatch = diff.old.trim().match(/^(#{1,6})\s+(.+)$/);
-          if (headingMatch) {
-            const level = headingMatch[1].length;
-            const escapedHeading = diff.old.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            const sectionRe = new RegExp(
-              `(${escapedHeading}[\\s\\S]*?)(?=\\n#{1,${level}} |\\n#{1,${level}}\\t|$)`,
-            );
-            if (sectionRe.test(normCurrent)) {
-              updated = normCurrent.replace(sectionRe, normalizeWs(diff.newText).trimEnd() + '\n');
-            }
-          }
-        }
-      }
-
-      if (updated === null) {
-        simResults.push({ diff, absPath, status: 'failed', reason: 'OLD text not found in file (exact match and section-level both failed)' });
-        continue;
-      }
-
-      workingVersions.set(absPath, updated);
+      // Full-replace: always write complete new content (no string matching)
+      workingVersions.set(absPath, diff.newText);
       simResults.push({ diff, absPath, status: 'ok' });
     }
 
@@ -1331,6 +1467,24 @@ router.post('/apply-diffs', (req, res) => {
       }
     }
 
+    // ── Phase 4: Inject context-update into live session history ─────────────
+    if (session_id && SESSION_STORE.has(session_id) && finalRelPaths.length > 0) {
+      const liveSession = SESSION_STORE.get(session_id)!;
+      for (const relPath of finalRelPaths) {
+        const absPath = join(BUSINESS_DIR, relPath);
+        const newContent = existsSync(absPath) ? readFileSync(absPath, 'utf-8') : '[gelöscht]';
+        liveSession.history.push({
+          role: 'user',
+          content: `[KONTEXT-UPDATE] \`${relPath}\` wurde soeben gespeichert. Aktueller Inhalt:\n\n\`\`\`\n${newContent}\n\`\`\`\n\nVerwende ab jetzt diesen Stand als Basis für weitere Änderungen.`,
+        });
+        liveSession.history.push({
+          role: 'assistant',
+          content: `Verstanden — \`${relPath}\` aktualisiert. Ich arbeite ab jetzt mit dem neuen Stand.`,
+        });
+      }
+      console.log(`[BusinessAngel] Context injected for ${finalRelPaths.length} file(s) into session ${session_id.slice(0, 8)}`);
+    }
+
     res.json({
       ok: true, dry_run: false,
       applied:           finalRelPaths,
@@ -1344,6 +1498,93 @@ router.post('/apply-diffs', (req, res) => {
     console.error('[BusinessAngel] /apply-diffs error:', err.message);
     res.status(500).json({ error: err.message });
   }
+});
+
+// --- POST /revert ---
+// Reverts a single file to its snapshot state (state at session load time).
+// If the file wasn't in the snapshot (created during session), it is deleted.
+router.post('/revert', (req, res) => {
+  try {
+    const { file, session_id } = req.body as { file?: string; session_id?: string };
+    if (!file) { res.status(400).json({ error: 'file required' }); return; }
+
+    const absPath = join(BUSINESS_DIR, file);
+
+    if (session_id) {
+      const snap = readSnapshot(session_id);
+      if (snap && file in snap.files) {
+        // File existed at session start — restore to snapshot content
+        const tmp = absPath + '.revert-tmp.' + Date.now();
+        writeFileSync(tmp, snap.files[file], 'utf-8');
+        renameSync(tmp, absPath);
+        console.log(`[BusinessAngel] Reverted ${file} to snapshot (session ${session_id})`);
+        res.json({ ok: true, source: 'snapshot', file });
+        return;
+      }
+      if (snap && !(file in snap.files)) {
+        // File was created during the session — delete it
+        if (existsSync(absPath)) {
+          unlinkSync(absPath);
+          console.log(`[BusinessAngel] Deleted session-created file ${file}`);
+          res.json({ ok: true, source: 'deleted_new_file', file });
+        } else {
+          res.json({ ok: true, source: 'already_gone', file });
+        }
+        return;
+      }
+    }
+
+    res.status(404).json({ error: 'No snapshot found for this session — cannot revert' });
+  } catch (err: any) {
+    console.error('[BusinessAngel] /revert error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- GET /file-watch --- SSE stream for file changes during active session ---
+// Client connects once per session; receives events when files in BUSINESS_DIR change.
+const watchClients = new Map<string, Set<Response>>();
+
+const watcher = chokidar.watch(BUSINESS_DIR, {
+  ignored: /(^|[/\\])\..|(node_modules|_archive|backups)/,
+  persistent: true,
+  ignoreInitial: true,
+  awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
+});
+
+function emitFileChange(event: 'change' | 'add' | 'unlink', absPath: string) {
+  const relPath = relative(BUSINESS_DIR, absPath);
+  const payload = JSON.stringify({ event, file: relPath, ts: Date.now() });
+  for (const clients of watchClients.values()) {
+    for (const res of clients) {
+      try { res.write(`data: ${payload}\n\n`); } catch { /* client gone */ }
+    }
+  }
+}
+
+watcher.on('change', p => emitFileChange('change', p));
+watcher.on('add',    p => emitFileChange('add',    p));
+watcher.on('unlink', p => emitFileChange('unlink', p));
+
+router.get('/file-watch', (req, res) => {
+  const sessionId = req.query.session_id as string | undefined;
+  if (!sessionId) { res.status(400).json({ error: 'session_id required' }); return; }
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  if (!watchClients.has(sessionId)) watchClients.set(sessionId, new Set());
+  watchClients.get(sessionId)!.add(res);
+
+  const keepalive = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* ignore */ } }, 15000);
+
+  req.on('close', () => {
+    clearInterval(keepalive);
+    watchClients.get(sessionId)?.delete(res);
+    if (watchClients.get(sessionId)?.size === 0) watchClients.delete(sessionId);
+  });
 });
 
 export default router;

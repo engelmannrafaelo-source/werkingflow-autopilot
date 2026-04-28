@@ -17,12 +17,23 @@ interface FileTokenInfo {
   tokens: number;
 }
 
+interface DiaryStats {
+  daily_count: number;
+  weekly_count: number;
+  monthly_count: number;
+  total_tokens: number;
+  latest_daily: string | null;
+  base_dir: string;
+  config: { daily_days: number; weekly_days: number };
+}
+
 interface ContextData {
   kern_files?: FileTokenInfo[];
   kern_tokens?: number;
   temp_files?: Array<{ name: string; tokens: number }>;
   temp_tokens?: number;
   temp_dir?: string;
+  tagebuch?: DiaryStats;
 }
 
 interface TreeFile {
@@ -472,6 +483,7 @@ export default function BusinessAngelPanel() {
   // Section open states
   const [kernOpen, setKernOpen] = useState(false);
   const [tempOpen, setTempOpen] = useState(false);
+  const [diaryOpen, setDiaryOpen] = useState(false);
   const [contextCollapsed, setContextCollapsed] = useState(false);
   const [diffsCollapsed, setDiffsCollapsed] = useState(false);
   const [chatOnly, setChatOnly] = useState(false);
@@ -647,7 +659,7 @@ export default function BusinessAngelPanel() {
     });
   };
 
-  const totalTokens = (ctx?.kern_tokens ?? 0) + (ctx?.temp_tokens ?? 0) + selectedTokens;
+  const totalTokens = (ctx?.kern_tokens ?? 0) + (ctx?.temp_tokens ?? 0) + (ctx?.tagebuch?.total_tokens ?? 0) + selectedTokens;
 
   // --- Session ---
 
@@ -1489,6 +1501,45 @@ Wichtig:
                   );
                 })
               }
+            </div>
+          )}
+        </div>
+
+        {/* ── Tagebuch (Verlauf) ── */}
+        <div style={S.section}>
+          <div style={S.secLabel} onClick={() => setDiaryOpen(v => !v)}>
+            <span style={{ fontSize: '9px', width: '10px' }}>{diaryOpen ? '▾' : '▸'}</span>
+            Tagebuch (Verlauf)
+            <span style={S.badge((ctx?.tagebuch?.total_tokens ?? 0) > 0 ? 'var(--tn-green,#9ece6a)' : undefined)}>
+              {ctx?.tagebuch
+                ? `${ctx.tagebuch.daily_count}d · ${ctx.tagebuch.weekly_count}w · ${ctx.tagebuch.monthly_count}m · ${formatTokens(ctx.tagebuch.total_tokens)}`
+                : '—'}
+            </span>
+          </div>
+          {diaryOpen && (
+            <div style={{ paddingLeft: '10px', fontSize: '11px', color: 'var(--tn-text-muted)' }}>
+              {!ctx?.tagebuch ? (
+                <div style={{ padding: '2px 0' }}>Keine Konfiguration gefunden.</div>
+              ) : ctx.tagebuch.daily_count + ctx.tagebuch.weekly_count + ctx.tagebuch.monthly_count === 0 ? (
+                <div style={{ padding: '2px 0' }}>
+                  Noch keine Einträge in {ctx.tagebuch.base_dir}.
+                  Erzeuge welche mit einer Claude Code Session: "neuer Tagebuch-Eintrag".
+                </div>
+              ) : (
+                <>
+                  <div style={{ padding: '1px 0' }}>
+                    Pyramide: 0–{ctx.tagebuch.config.daily_days}T täglich, {ctx.tagebuch.config.daily_days}–{ctx.tagebuch.config.weekly_days}T wöchentlich, älter monatlich
+                  </div>
+                  {ctx.tagebuch.latest_daily && (
+                    <div style={{ padding: '1px 0' }}>
+                      Letzter Daily-Eintrag: <span style={{ color: 'var(--tn-text)' }}>{ctx.tagebuch.latest_daily}</span>
+                    </div>
+                  )}
+                  <div style={{ padding: '1px 0' }}>
+                    Daily: {ctx.tagebuch.daily_count} · Weekly: {ctx.tagebuch.weekly_count} · Monthly: {ctx.tagebuch.monthly_count}
+                  </div>
+                </>
+              )}
             </div>
           )}
         </div>
