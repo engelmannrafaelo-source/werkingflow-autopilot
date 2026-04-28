@@ -8,7 +8,7 @@ const ROLE_LABEL: Record<string, string> = {
 };
 
 export default function ToolHubWelcome({ workspace }: { workspace?: string } = {}) {
-  const { user } = useAuth();
+  const { user, authEnabled } = useAuth();
   const role = user?.role ?? 'admin';
   const name = user?.name ?? 'Partner';
 
@@ -31,7 +31,7 @@ export default function ToolHubWelcome({ workspace }: { workspace?: string } = {
           Du bist als <b>{ROLE_LABEL[role] ?? role}</b> auf der WerkING Partner-Plattform angemeldet.
         </div>
 
-        {workspace && <CodeMgmt workspace={workspace} />}
+        {workspace && authEnabled && user && <CodeMgmt workspace={workspace} />}
 
         <Section title="Was ist das hier?">
           Die <b>WerkING Partner-Plattform</b> ist die gemeinsame Entwicklungsumgebung für

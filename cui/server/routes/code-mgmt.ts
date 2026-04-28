@@ -119,7 +119,16 @@ export default function createCodeMgmtRoutes() {
       return;
     }
     if (userId === '__internal__') {
-      res.status(400).json({ error: 'state endpoint requires a real user (forward x-cui-forward-user)' });
+      // No authenticated user — return a "not available" stub instead of 4xx
+      // so the dashboard renders cleanly on dev/no-auth setups.
+      res.json({
+        available: false,
+        reason: 'Bitte melde dich an, um deinen Code-Stand zu sehen.',
+        workspace, userId,
+        proposalCounts: { pending: 0, approved: 0, rejected: 0, mine: 0 },
+        myProposals: [],
+        timeline: [],
+      });
       return;
     }
     try {
