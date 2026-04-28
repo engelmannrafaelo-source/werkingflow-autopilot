@@ -20,7 +20,7 @@ export const PATHS = {
   cuiRoot: CUI_ROOT,
   dataDir: process.env.CUI_DATA_DIR || join(CUI_ROOT, 'data'),
   /** Desktop-App-Bundles (mac.zip / windows.zip / linux.AppImage) für Login-Seite. */
-  downloadsDir: process.env.CUI_DOWNLOADS_DIR || join(process.env.CUI_DATA_DIR || join(CUI_ROOT, 'data'), '..', 'downloads'),
+  downloadsDir: process.env.CUI_DOWNLOADS_DIR || join(process.env.CUI_DATA_DIR || join(CUI_ROOT, 'data'), 'downloads'),
 
   // --- Claude User Home (JSONL sessions, .claude config) ---
   claudeUserHome: process.env.CUI_CLAUDE_USER_HOME || '/home/claude-user',
