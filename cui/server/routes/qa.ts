@@ -505,6 +505,11 @@ function resolveStatusFromReports(scenarioId: string, reports: Record<string, Sc
  * For scenarios that have a registry entry but no markdown report file,
  * a synthetic ScannedReport is created from the registry data.
  * Report files always take priority (registry is fallback only).
+ *
+ * Note: per-scenario stale detection (auftrag_sha drift) lives in
+ * pyramid_status.py — the single source of truth for layer-level status.
+ * This function only collects raw entries; the Pyramid view applies
+ * stale-aware status from pyramid_status.py via the CLI bridge.
  */
 function mergeRegistryIntoReports(appId: string, reports: Record<string, ScannedReport>): void {
   const registry = readJSON(SCENARIO_REGISTRY);
@@ -658,9 +663,56 @@ function getScenarioSummary(scenarioFile: string, reportPath: string | null): {
   return { description, stepsPreview, criteriaPreview, reviewExcerpt, scenarioJson };
 }
 
+/**
+ * Single source of truth for layer-level status.
+ *
+ * pyramid_status.py owns: status resolution, stale detection (auftrag_sha
+ * drift), score verification, real-world layer routing, optional-deprecation
+ * warnings. This bridge runs the CLI and returns its JSON output verbatim,
+ * so qa.ts never reimplements what pyramid_status already decides.
+ *
+ * On failure (CLI missing, parse error, timeout) returns null — the caller
+ * falls back to local aggregation (legacy path) so the dashboard never
+ * goes blank, but the discrepancy is logged for triage.
+ */
+function getPyramidStatusFromCli(appId: string): {
+  layers: Record<string, {
+    total: number; pass: number; fail: number; pending: number;
+    orange?: number; stale: number; bridge_failures?: number;
+    status: string; avg_score?: number;
+  }>;
+  totals: {
+    total: number; pass: number; fail: number; pending: number;
+    orange?: number; stale: number; bridge_failures?: number;
+  };
+} | null {
+  try {
+    const out = execSync(
+      `python3 pyramid_status.py --app ${appId} --json`,
+      {
+        cwd: UNIFIED_TESTER_ROOT,
+        encoding: 'utf-8',
+        timeout: 30_000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    const parsed = JSON.parse(out);
+    if (!parsed || typeof parsed !== 'object' || !parsed.layers) return null;
+    return parsed;
+  } catch (err: any) {
+    console.warn(`[QA] pyramid_status.py bridge failed for ${appId}: ${err.message ?? err}`);
+    return null;
+  }
+}
+
 function getPyramidData(appId: string) {
   const appScenarioDir = join(SCENARIOS_DIR, appId);
   if (!existsSync(appScenarioDir)) return null;
+
+  // Single source of truth for layer-level status — pyramid_status.py.
+  // Returned per-layer counts (passed/failed/pending/stale) override the
+  // local aggregates below so that dashboard and CLI never disagree.
+  const ssot = getPyramidStatusFromCli(appId);
 
   // Scan reports from markdown files, supplemented by scenario_registry.json
   const scannedReports = scanReportsForApp(appId);
@@ -890,6 +942,39 @@ function getPyramidData(appId: string) {
     });
   }
 
+  // Overlay layer-level counts and status from pyramid_status.py (SSoT).
+  // Local aggregation above is kept for the per-test detail rows the
+  // dashboard renders, but layer totals/status come from the CLI so that
+  // dashboard and CLI never diverge on stale detection or status logic.
+  if (ssot && ssot.layers) {
+    const STATUS_MAP: Record<string, string> = {
+      PASS: 'passed',
+      STALE: 'stale',
+      PARTIAL: 'partial',
+      FAIL: 'failed',
+      SKIP: 'pending',
+      PART: 'partial',
+    };
+    for (const layer of layers) {
+      const lid = (layer as any).id;
+      const ssotKey = String(lid);
+      const ssotLayer = ssot.layers[ssotKey];
+      if (!ssotLayer) continue;
+      // Override aggregates only for the regular numbered layers (0..4).
+      // Synthetic layers (e.g. id=-1 for ungrouped) keep their local counts.
+      if (typeof lid === 'number' && lid >= 0 && lid <= 4) {
+        (layer as any).totalTests = ssotLayer.total ?? layer.totalTests;
+        (layer as any).passed = ssotLayer.pass ?? layer.passed;
+        (layer as any).failed = ssotLayer.fail ?? layer.failed;
+        (layer as any).pending = ssotLayer.pending ?? layer.pending;
+        (layer as any).stale = ssotLayer.stale ?? 0;
+        (layer as any).bridgeFailure = ssotLayer.bridge_failures ?? (layer as any).bridgeFailure ?? 0;
+        (layer as any).avgScore = ssotLayer.avg_score ?? layer.avgScore;
+        (layer as any).status = STATUS_MAP[ssotLayer.status] ?? layer.status;
+      }
+    }
+  }
+
   // Load coverage gap data to attach to pyramid response
   const coveragePath = join(COVERAGE_DIR, appId, 'gap-report.json');
   const coverageData = readJSON(coveragePath);
@@ -906,6 +991,7 @@ function getPyramidData(appId: string) {
     app: appId,
     layers,
     coverage,
+    ssot_source: ssot ? 'pyramid_status.py' : 'local-fallback',
     timestamp: new Date().toISOString(),
   };
 }
