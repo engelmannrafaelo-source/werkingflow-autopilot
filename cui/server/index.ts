@@ -438,7 +438,19 @@ app.use('/api/team', documentManager);
 import { KnowledgeWatcher } from './knowledge-watcher.js';
 const knowledgeWatcher = new KnowledgeWatcher({
   base_path: PATHS.businessDir,
-  ignore_patterns: ['**/archive/**', '**/_archiv/**', '**/.DS_Store', '**/*.pdf', '**/*.html'],
+  ignore_patterns: [
+    '**/.claude/**',
+    '**/.git/**',
+    '**/node_modules/**',
+    '**/archive/**',
+    '**/_archiv/**',
+    '**/.DS_Store',
+    '**/*.pdf',
+    '**/*.html',
+    '**/*.png',
+    '**/*.jpg',
+    '**/*.svg',
+  ],
   debounce_ms: 2000,
   auto_scan_threshold: 5,
 });
