@@ -2388,7 +2388,7 @@ function loadPoScenarios(username: string, scopeApps: string[], isAdmin: boolean
 // GET /api/qa/po-scenarios — list owned + read-only team scenarios
 router.get('/api/qa/po-scenarios', requireAuth, (req, res) => {
   const scope = getUserScope(req);
-  const username = req.user!.sub;
+  const username = req.user?.sub ?? 'admin';
 
   // Own PO scenarios
   const owned = loadPoScenarios(username, scope.apps, scope.isAdmin);
@@ -2407,7 +2407,7 @@ router.get('/api/qa/po-scenarios', requireAuth, (req, res) => {
 // POST /api/qa/po-scenarios — create new PO scenario
 router.post('/api/qa/po-scenarios', requireAuth, (req, res) => {
   const scope = getUserScope(req);
-  const username = req.user!.sub;
+  const username = req.user?.sub ?? 'admin';
 
   const err = validatePoScenario(req.body, scope);
   if (err) return res.status(400).json({ error: err });
@@ -2445,7 +2445,7 @@ router.post('/api/qa/po-scenarios', requireAuth, (req, res) => {
 // PUT /api/qa/po-scenarios/:id — update own scenario
 router.put('/api/qa/po-scenarios/:id', requireAuth, (req, res) => {
   const scope = getUserScope(req);
-  const username = req.user!.sub;
+  const username = req.user?.sub ?? 'admin';
   const id = req.params.id;
 
   const err = validatePoScenario(req.body, scope);
@@ -2477,7 +2477,7 @@ router.put('/api/qa/po-scenarios/:id', requireAuth, (req, res) => {
 
 // POST /api/qa/po-scenarios/:id/archive — soft-delete (no DELETE)
 router.post('/api/qa/po-scenarios/:id/archive', requireAuth, (req, res) => {
-  const username = req.user!.sub;
+  const username = req.user?.sub ?? 'admin';
   const id = req.params.id;
   const app = req.body?.system as string;
 
