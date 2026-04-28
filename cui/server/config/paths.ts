@@ -67,6 +67,8 @@ export const PATHS = {
 
   // --- PO Scenarios (Product Owner self-service test scenarios) ---
   poScenariosDir: process.env.CUI_PO_SCENARIOS_DIR || join(process.env.CUI_DATA_DIR || join(CUI_ROOT, 'data'), 'po-scenarios'),
+  /** PO test runs (immutable per-run records — written by tester worker, never edited). */
+  poRunsDir: process.env.CUI_PO_RUNS_DIR || join(process.env.CUI_DATA_DIR || join(CUI_ROOT, 'data'), 'po-runs'),
 
   // --- Local Storage ---
   localStorage: process.env.CUI_LOCAL_STORAGE || '/root/projekte/local-storage',

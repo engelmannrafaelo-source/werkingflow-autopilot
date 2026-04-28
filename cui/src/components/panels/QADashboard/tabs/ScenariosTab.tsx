@@ -14,10 +14,29 @@ interface PoScenario {
   auftrag: string;
   ziele: string[];
   qualitaetsfrage: string;
+  target_url: string;
   created_by: string;
   created_at: string;
   updated_at: string;
   archived: boolean;
+  last_run_at?: string;
+  last_run_id?: string;
+}
+
+interface PoRunRecord {
+  runId: string;
+  scenarioId: string;
+  app: string;
+  user: string;
+  targetUrl: string;
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'timeout' | 'infra-error';
+  enqueuedAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  durationSeconds?: number;
+  verdict?: 'pass' | 'fail' | 'unclear' | 'error';
+  summary?: string;
+  exitCode?: number;
 }
 
 export default function ScenariosTab() {
@@ -71,6 +90,26 @@ export default function ScenariosTab() {
       fetchData();
     } catch (err: any) {
       alert(`Archivierung fehlgeschlagen: ${err.message}`);
+    }
+  };
+
+  const handleStartTest = async (scenario: PoScenario) => {
+    const ok = confirm(
+      `Test "${scenario.name}" jetzt starten?\n\n` +
+      `Ziel-URL: ${scenario.target_url}\n\n` +
+      `Der Tester (Container) öffnet die URL, prüft sie aus deiner Persona-Sicht und liefert ein Urteil. Dauer: meist 1–3 Minuten.`
+    );
+    if (!ok) return;
+    try {
+      const res = await fetch(`/api/qa/po-scenarios/${scenario.id}/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ system: scenario.system }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      fetchData();
+    } catch (err: any) {
+      alert(`Test konnte nicht gestartet werden: ${err.message}`);
     }
   };
 
@@ -170,6 +209,7 @@ export default function ScenariosTab() {
                   scenario={scenario}
                   onEdit={() => { setEditingScenario(scenario); setWizardOpen(true); }}
                   onArchive={() => handleArchive(scenario)}
+                  onStartTest={() => handleStartTest(scenario)}
                 />
               ))}
             </div>
@@ -258,7 +298,9 @@ function filterBtnStyle(active: boolean): React.CSSProperties {
   };
 }
 
-function PoScenarioCard({ scenario, onEdit, onArchive }: { scenario: PoScenario; onEdit: () => void; onArchive: () => void }) {
+function PoScenarioCard({ scenario, onEdit, onArchive, onStartTest }: { scenario: PoScenario; onEdit: () => void; onArchive: () => void; onStartTest: () => void }) {
+  const [historyOpen, setHistoryOpen] = useState(false);
+
   return (
     <div style={{
       background: 'var(--tn-bg-dark)',
@@ -301,11 +343,14 @@ function PoScenarioCard({ scenario, onEdit, onArchive }: { scenario: PoScenario;
       <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 10 }}>
         <div>Persona: {scenario.tester?.perspektive?.slice(0, 60)}{(scenario.tester?.perspektive?.length ?? 0) > 60 ? '…' : ''}</div>
         <div>Ziele: {scenario.ziele?.length ?? 0}</div>
+        {scenario.target_url && (
+          <div style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>URL: {scenario.target_url}</div>
+        )}
         <div>Erstellt: {new Date(scenario.created_at).toLocaleDateString()}</div>
       </div>
 
       {!scenario.archived && (
-        <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+        <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
           <button
             onClick={onEdit}
             style={{
@@ -337,8 +382,22 @@ function PoScenarioCard({ scenario, onEdit, onArchive }: { scenario: PoScenario;
             Archivieren
           </button>
           <button
-            disabled
-            title="Kommt in Phase 4"
+            onClick={onStartTest}
+            style={{
+              background: 'var(--tn-green)',
+              border: 'none',
+              borderRadius: 4,
+              padding: '4px 10px',
+              fontSize: 11,
+              color: '#fff',
+              cursor: 'pointer',
+              fontWeight: 700,
+            }}
+          >
+            ▶ Test starten
+          </button>
+          <button
+            onClick={() => setHistoryOpen(v => !v)}
             style={{
               background: 'transparent',
               border: '1px solid var(--tn-border)',
@@ -346,16 +405,148 @@ function PoScenarioCard({ scenario, onEdit, onArchive }: { scenario: PoScenario;
               padding: '4px 10px',
               fontSize: 11,
               color: 'var(--tn-text-muted)',
-              cursor: 'not-allowed',
+              cursor: 'pointer',
               fontWeight: 600,
-              opacity: 0.4,
             }}
           >
-            Test starten
+            {historyOpen ? '▲ Verlauf' : '▼ Verlauf'}
           </button>
         </div>
       )}
+
+      {historyOpen && !scenario.archived && (
+        <RunHistoryPanel scenarioId={scenario.id} system={scenario.system} />
+      )}
     </div>
+  );
+}
+
+function RunHistoryPanel({ scenarioId, system }: { scenarioId: string; system: string }) {
+  const [runs, setRuns] = useState<PoRunRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: any;
+
+    const fetchRuns = async () => {
+      try {
+        const res = await fetch(`/api/qa/po-scenarios/${scenarioId}/runs?system=${encodeURIComponent(system)}`);
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        if (cancelled) return;
+        setRuns(data.runs ?? []);
+        setLoading(false);
+        // Poll while any run is queued or running
+        const hasActive = (data.runs ?? []).some((r: PoRunRecord) => r.status === 'queued' || r.status === 'running');
+        if (hasActive && !cancelled) {
+          timer = setTimeout(fetchRuns, 5000);
+        }
+      } catch {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    fetchRuns();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [scenarioId, system]);
+
+  if (loading) {
+    return <div style={{ marginTop: 10, fontSize: 11, color: 'var(--tn-text-muted)' }}>Lade Verlauf…</div>;
+  }
+  if (runs.length === 0) {
+    return <div style={{ marginTop: 10, fontSize: 11, color: 'var(--tn-text-muted)' }}>Noch keine Test-Läufe.</div>;
+  }
+
+  return (
+    <div style={{ marginTop: 10, borderTop: '1px solid var(--tn-border)', paddingTop: 10 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--tn-text-muted)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 }}>
+        Letzte Läufe ({runs.length})
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {runs.slice(0, 5).map(run => (
+          <RunRow key={run.runId} run={run} system={system} scenarioId={scenarioId} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RunRow({ run, system, scenarioId }: { run: PoRunRecord; system: string; scenarioId: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const ts = run.startedAt || run.enqueuedAt;
+  return (
+    <div style={{ background: 'rgba(30, 45, 74, 0.3)', borderRadius: 4, padding: 8 }}>
+      <div
+        onClick={() => setExpanded(v => !v)}
+        style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 11 }}
+      >
+        <RunStatusBadge run={run} />
+        <div style={{ flex: 1, color: 'var(--tn-text)' }}>
+          {ts ? new Date(ts).toLocaleString() : '—'}
+          {run.durationSeconds != null && (
+            <span style={{ marginLeft: 6, color: 'var(--tn-text-muted)' }}>
+              ({run.durationSeconds}s)
+            </span>
+          )}
+        </div>
+        <span style={{ fontSize: 10, color: 'var(--tn-text-muted)' }}>{expanded ? '▲' : '▼'}</span>
+      </div>
+      {expanded && (
+        <div style={{ marginTop: 6, fontSize: 11, color: 'var(--tn-text-muted)', lineHeight: 1.5 }}>
+          {run.summary && <div style={{ color: 'var(--tn-text)', marginBottom: 4 }}>{run.summary}</div>}
+          <div>Run-ID: <code style={{ fontFamily: 'monospace' }}>{run.runId}</code></div>
+          <div>Status: <code style={{ fontFamily: 'monospace' }}>{run.status}</code>{run.verdict && ` · Verdict: ${run.verdict}`}</div>
+          {run.exitCode != null && <div>Exit: {run.exitCode}</div>}
+          {run.status === 'completed' && (
+            <div style={{ marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              <a
+                href={`/api/qa/po-scenarios/${scenarioId}/runs/${run.runId}/report/screenshot.png?system=${encodeURIComponent(system)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ fontSize: 10, color: 'var(--tn-blue)', textDecoration: 'underline' }}
+              >
+                Screenshot
+              </a>
+              <a
+                href={`/api/qa/po-scenarios/${scenarioId}/runs/${run.runId}/report/result.json?system=${encodeURIComponent(system)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ fontSize: 10, color: 'var(--tn-blue)', textDecoration: 'underline' }}
+              >
+                result.json
+              </a>
+              <a
+                href={`/api/qa/po-scenarios/${scenarioId}/runs/${run.runId}/report/page-text.txt?system=${encodeURIComponent(system)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ fontSize: 10, color: 'var(--tn-blue)', textDecoration: 'underline' }}
+              >
+                page-text
+              </a>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RunStatusBadge({ run }: { run: PoRunRecord }) {
+  let bg = 'rgba(150, 150, 150, 0.15)';
+  let color = 'var(--tn-text-muted)';
+  let label: string = run.status;
+  if (run.status === 'queued') { bg = 'rgba(150,150,150,0.15)'; color = 'var(--tn-text-muted)'; label = '⏳ wartet'; }
+  else if (run.status === 'running') { bg = 'rgba(122, 162, 247, 0.15)'; color = 'var(--tn-blue)'; label = '↻ läuft'; }
+  else if (run.status === 'completed' && run.verdict === 'pass') { bg = 'rgba(158, 206, 106, 0.15)'; color = 'var(--tn-green)'; label = '✓ pass'; }
+  else if (run.status === 'completed' && run.verdict === 'fail') { bg = 'rgba(236, 72, 153, 0.15)'; color = 'var(--tn-red)'; label = '✗ fail'; }
+  else if (run.status === 'completed') { bg = 'rgba(224, 175, 104, 0.15)'; color = 'var(--tn-orange)'; label = `~ ${run.verdict ?? 'unclear'}`; }
+  else if (run.status === 'failed' || run.status === 'infra-error') { bg = 'rgba(236, 72, 153, 0.15)'; color = 'var(--tn-red)'; label = '✗ fehler'; }
+  else if (run.status === 'timeout') { bg = 'rgba(224, 175, 104, 0.15)'; color = 'var(--tn-orange)'; label = '⏱ timeout'; }
+  return (
+    <span style={{ fontSize: 10, fontWeight: 700, background: bg, color, padding: '2px 6px', borderRadius: 3, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+      {label}
+    </span>
   );
 }
 

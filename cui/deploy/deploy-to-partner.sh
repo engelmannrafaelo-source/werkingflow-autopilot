@@ -77,6 +77,21 @@ if [ -d "$ORCH_BIN" ]; then
   echo "  orchestrator/bin synced"
 fi
 
+# ── 4b. Ensure tester-po image is present on Partner ─────────────────────
+# Idempotent — skipped if image already loaded with matching ID.
+HAS_IMAGE=$(ssh "root@$TARGET" "docker image inspect tester-po:latest --format '{{.Id}}' 2>/dev/null || echo missing")
+if [ "$HAS_IMAGE" = "missing" ]; then
+  echo "  tester-po:latest missing on Partner — shipping..."
+  SHIP_SCRIPT="$(dirname "$0")/ship-tester-po-image.sh"
+  if [ -x "$SHIP_SCRIPT" ]; then
+    "$SHIP_SCRIPT" "$TARGET"
+  else
+    echo "  WARNING: $SHIP_SCRIPT not executable — PO test runs will fail until image is shipped"
+  fi
+else
+  echo "  tester-po:latest present (${HAS_IMAGE:0:23}...)"
+fi
+
 STATUS=$(ssh "root@$TARGET" "systemctl is-active cui-workspace" 2>/dev/null || echo "failed")
 AUTH_CHECK=$(ssh "root@$TARGET" "curl -sf http://localhost:4005/api/auth/status 2>/dev/null || echo 'unreachable'")
 

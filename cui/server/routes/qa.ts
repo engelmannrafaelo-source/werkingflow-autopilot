@@ -2296,6 +2296,7 @@ router.get('/api/qa/knowledge/:id', (req, res) => {
 // Audit:   <dataDir>/po-scenarios/_audit.jsonl
 
 const PO_SCENARIOS_DIR = PATHS.poScenariosDir;
+const PO_RUNS_DIR = PATHS.poRunsDir;
 const PO_AUDIT_LOG = join(PO_SCENARIOS_DIR, '_audit.jsonl');
 
 /** Determine scope for the current user. isAdmin=true → all apps visible. */
@@ -2347,21 +2348,29 @@ interface PoScenario {
   auftrag: string;
   ziele: string[];
   qualitaetsfrage: string;
+  /** Where the tester navigates. Must be reachable from inside the docker network
+   * (use `host.docker.internal:<port>` for host apps, or full http(s)://host). */
+  target_url: string;
   created_by: string;
   created_at: string;
   updated_at: string;
   archived: boolean;
+  last_run_at?: string;
+  last_run_id?: string;
 }
 
 /** Validate PO scenario body. Returns error string or null. */
 function validatePoScenario(body: any, scope: { apps: string[]; isAdmin: boolean }): string | null {
-  const required = ['system', 'name', 'description', 'tester', 'auftrag', 'ziele', 'qualitaetsfrage'] as const;
+  const required = ['system', 'name', 'description', 'tester', 'auftrag', 'ziele', 'qualitaetsfrage', 'target_url'] as const;
   for (const f of required) {
     if (!body[f]) return `Missing required field: ${f}`;
   }
   if (!Array.isArray(body.ziele) || body.ziele.length < 1) return 'ziele must be a non-empty array';
   if (!body.tester?.perspektive) return 'tester.perspektive is required';
   if (!scope.isAdmin && !scope.apps.includes(body.system)) return `App "${body.system}" is not in your scope`;
+  if (typeof body.target_url !== 'string' || !/^https?:\/\//i.test(body.target_url)) {
+    return 'target_url must start with http:// or https://';
+  }
   return null;
 }
 
@@ -2412,7 +2421,7 @@ router.post('/api/qa/po-scenarios', requireAuth, (req, res) => {
   const err = validatePoScenario(req.body, scope);
   if (err) return res.status(400).json({ error: err });
 
-  const { system, name, description, tester, auftrag, ziele, qualitaetsfrage } = req.body;
+  const { system, name, description, tester, auftrag, ziele, qualitaetsfrage, target_url } = req.body;
   const base = slugify(name);
   const slug = uniqueSlug(base, username, system);
   const now = new Date().toISOString();
@@ -2428,6 +2437,7 @@ router.post('/api/qa/po-scenarios', requireAuth, (req, res) => {
     auftrag,
     ziele,
     qualitaetsfrage,
+    target_url,
     created_by: username,
     created_at: now,
     updated_at: now,
@@ -2451,7 +2461,7 @@ router.put('/api/qa/po-scenarios/:id', requireAuth, (req, res) => {
   const err = validatePoScenario(req.body, scope);
   if (err) return res.status(400).json({ error: err });
 
-  const { system, name, description, tester, auftrag, ziele, qualitaetsfrage } = req.body;
+  const { system, name, description, tester, auftrag, ziele, qualitaetsfrage, target_url } = req.body;
   const filePath = join(PO_SCENARIOS_DIR, username, system, `${id}.json`);
   if (!existsSync(filePath)) return res.status(404).json({ error: 'Scenario not found or not owned by you' });
 
@@ -2466,6 +2476,7 @@ router.put('/api/qa/po-scenarios/:id', requireAuth, (req, res) => {
     auftrag,
     ziele,
     qualitaetsfrage,
+    target_url,
     updated_at: new Date().toISOString(),
   };
 
@@ -2473,6 +2484,113 @@ router.put('/api/qa/po-scenarios/:id', requireAuth, (req, res) => {
   auditLog({ user: username, action: 'updated', scenarioId: id, app: system });
 
   res.json(updated);
+});
+
+// POST /api/qa/po-scenarios/:id/run — enqueue a test run for own scenario
+router.post('/api/qa/po-scenarios/:id/run', requireAuth, async (req, res) => {
+  const username = req.user?.sub ?? 'admin';
+  const id = req.params.id;
+  const app = req.body?.system as string;
+
+  if (!app) return res.status(400).json({ error: 'system required in body' });
+
+  const filePath = join(PO_SCENARIOS_DIR, username, app, `${id}.json`);
+  if (!existsSync(filePath)) return res.status(404).json({ error: 'Scenario not found or not owned by you' });
+
+  const scenario = readJSON(filePath) as PoScenario;
+  if (!scenario) return res.status(500).json({ error: 'Failed to read scenario' });
+  if (scenario.archived) return res.status(409).json({ error: 'Cannot run archived scenario' });
+  if (!scenario.target_url) return res.status(400).json({ error: 'Scenario has no target_url — edit and add one' });
+
+  const { enqueueRun } = await import('../lib/po-test-runner.js');
+  const rec = enqueueRun({
+    scenarioId: id,
+    app,
+    user: username,
+    targetUrl: scenario.target_url,
+    scenario,
+  });
+
+  // Bookkeeping on the scenario itself: track latest run
+  const updated: PoScenario = {
+    ...scenario,
+    last_run_at: rec.enqueuedAt,
+    last_run_id: rec.runId,
+    updated_at: new Date().toISOString(),
+  };
+  writeFileSync(filePath, JSON.stringify(updated, null, 2), 'utf-8');
+  auditLog({ user: username, action: 'run-enqueued', scenarioId: id, app });
+
+  res.status(202).json(rec);
+});
+
+// GET /api/qa/po-scenarios/:id/runs?system=<app> — list runs for own scenario
+router.get('/api/qa/po-scenarios/:id/runs', requireAuth, async (req, res) => {
+  const username = req.user?.sub ?? 'admin';
+  const id = req.params.id;
+  const app = String(req.query.system || '');
+
+  if (!app) return res.status(400).json({ error: 'system query param required' });
+
+  const filePath = join(PO_SCENARIOS_DIR, username, app, `${id}.json`);
+  if (!existsSync(filePath)) return res.status(404).json({ error: 'Scenario not found or not owned by you' });
+
+  const { listRuns, getQueueState } = await import('../lib/po-test-runner.js');
+  const runs = listRuns(username, id);
+  res.json({ runs, queue: getQueueState() });
+});
+
+// GET /api/qa/po-scenarios/:id/runs/:runId?system=<app> — single run detail
+router.get('/api/qa/po-scenarios/:id/runs/:runId', requireAuth, async (req, res) => {
+  const username = req.user?.sub ?? 'admin';
+  const id = req.params.id;
+  const runId = req.params.runId;
+  const app = String(req.query.system || '');
+
+  if (!app) return res.status(400).json({ error: 'system query param required' });
+
+  const filePath = join(PO_SCENARIOS_DIR, username, app, `${id}.json`);
+  if (!existsSync(filePath)) return res.status(404).json({ error: 'Scenario not found or not owned by you' });
+
+  const { readRun } = await import('../lib/po-test-runner.js');
+  const rec = readRun(username, id, runId);
+  if (!rec) return res.status(404).json({ error: 'Run not found' });
+  res.json(rec);
+});
+
+// GET /api/qa/po-scenarios/:id/runs/:runId/report/:filename?system=<app>
+// Streams a report artifact (screenshot, page-text, result.json, etc.). Owned by the user.
+router.get('/api/qa/po-scenarios/:id/runs/:runId/report/:filename', requireAuth, (req, res) => {
+  const username = req.user?.sub ?? 'admin';
+  const id = req.params.id;
+  const runId = req.params.runId;
+  const filename = req.params.filename;
+  const app = String(req.query.system || '');
+
+  if (!app) return res.status(400).json({ error: 'system query param required' });
+  // Defensive: filename must be a plain basename, never traverse paths.
+  if (filename.includes('/') || filename.includes('\\') || filename.includes('..')) {
+    return res.status(400).json({ error: 'invalid filename' });
+  }
+
+  const scenarioFile = join(PO_SCENARIOS_DIR, username, app, `${id}.json`);
+  if (!existsSync(scenarioFile)) return res.status(404).json({ error: 'Scenario not found or not owned by you' });
+
+  const reportPath = join(PO_RUNS_DIR, username, id, runId, filename);
+  if (!existsSync(reportPath)) return res.status(404).json({ error: 'Report file not found' });
+
+  const ext = filename.split('.').pop()?.toLowerCase();
+  const mime: Record<string, string> = {
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    json: 'application/json',
+    txt: 'text/plain; charset=utf-8',
+    log: 'text/plain; charset=utf-8',
+    html: 'text/html; charset=utf-8',
+  };
+  res.setHeader('Content-Type', mime[ext ?? ''] ?? 'application/octet-stream');
+  res.sendFile(reportPath);
 });
 
 // POST /api/qa/po-scenarios/:id/archive — soft-delete (no DELETE)

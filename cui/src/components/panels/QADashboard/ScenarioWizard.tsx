@@ -9,6 +9,7 @@ interface PoScenario {
   auftrag: string;
   ziele: string[];
   qualitaetsfrage: string;
+  target_url?: string;
 }
 
 interface Props {
@@ -22,12 +23,23 @@ interface FormData {
   system: string;
   name: string;
   description: string;
+  target_url: string;
   perspektive: string;
   erfahrung: string;
   auftrag: string;
   ziele: string[];
   qualitaetsfrage: string;
 }
+
+// Default suggestion when picking an app — PO can override.
+const DEFAULT_TARGET_URLS: Record<string, string> = {
+  engelmann: 'http://host.docker.internal:3009',
+  'werking-report': 'http://host.docker.internal:3008',
+  'werking-energy': 'http://host.docker.internal:3007',
+  'werking-safety': 'http://host.docker.internal:3006',
+  'werking-noise': 'http://host.docker.internal:3005',
+  platform: 'http://host.docker.internal:3004',
+};
 
 const STEPS = [
   'Was soll getestet werden?',
@@ -42,16 +54,30 @@ export default function ScenarioWizard({ initialData, scopeApps, onClose, onSucc
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const initialSystem = initialData?.system ?? (scopeApps !== 'all' && scopeApps.length === 1 ? scopeApps[0] : '');
   const [form, setForm] = useState<FormData>({
-    system: initialData?.system ?? (scopeApps !== 'all' && scopeApps.length === 1 ? scopeApps[0] : ''),
+    system: initialSystem,
     name: initialData?.name ?? '',
     description: initialData?.description ?? '',
+    target_url: initialData?.target_url ?? DEFAULT_TARGET_URLS[initialSystem] ?? '',
     perspektive: initialData?.tester?.perspektive ?? '',
     erfahrung: initialData?.tester?.erfahrung ?? '',
     auftrag: initialData?.auftrag ?? '',
     ziele: initialData?.ziele ?? [''],
     qualitaetsfrage: initialData?.qualitaetsfrage ?? '',
   });
+
+  function setSystem(value: string) {
+    setForm(f => ({
+      ...f,
+      system: value,
+      // Auto-suggest target_url when picking an app, only if user hasn't customized it.
+      target_url: f.target_url === '' || f.target_url === DEFAULT_TARGET_URLS[f.system]
+        ? (DEFAULT_TARGET_URLS[value] ?? '')
+        : f.target_url,
+    }));
+    setError(null);
+  }
 
   function set(field: keyof FormData, value: string | string[]) {
     setForm(f => ({ ...f, [field]: value }));
@@ -63,6 +89,8 @@ export default function ScenarioWizard({ initialData, scopeApps, onClose, onSucc
       if (!form.system) return 'Bitte App auswählen';
       if (!form.name.trim()) return 'Titel ist erforderlich';
       if (!form.description.trim()) return 'Kurzbeschreibung ist erforderlich';
+      if (!form.target_url.trim()) return 'Test-URL ist erforderlich';
+      if (!/^https?:\/\//i.test(form.target_url.trim())) return 'Test-URL muss mit http:// oder https:// beginnen';
     }
     if (step === 1) {
       if (!form.perspektive.trim()) return 'Persona-Name ist erforderlich';
@@ -100,6 +128,7 @@ export default function ScenarioWizard({ initialData, scopeApps, onClose, onSucc
       system: form.system,
       name: form.name.trim(),
       description: form.description.trim(),
+      target_url: form.target_url.trim(),
       tester: { perspektive: form.perspektive.trim(), erfahrung: form.erfahrung.trim() },
       auftrag: form.auftrag.trim(),
       ziele: form.ziele.filter(z => z.trim()),
@@ -192,7 +221,7 @@ export default function ScenarioWizard({ initialData, scopeApps, onClose, onSucc
                 <select
                   value={form.system}
                   disabled={locked}
-                  onChange={e => set('system', e.target.value)}
+                  onChange={e => setSystem(e.target.value)}
                   style={selectStyle}
                 >
                   <option value="">— App wählen —</option>
@@ -215,6 +244,17 @@ export default function ScenarioWizard({ initialData, scopeApps, onClose, onSucc
                   placeholder="Was soll dieser Test prüfen?"
                   style={{ ...inputStyle, resize: 'vertical' }}
                 />
+              </Field>
+              <Field label="Test-URL (was der Tester aufruft)">
+                <input
+                  value={form.target_url}
+                  onChange={e => set('target_url', e.target.value)}
+                  placeholder="z.B. http://host.docker.internal:3007"
+                  style={{ ...inputStyle, fontFamily: 'monospace', fontSize: 12 }}
+                />
+                <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginTop: 4, lineHeight: 1.4 }}>
+                  Aus Sicht des Test-Containers. Nutze <code>host.docker.internal:&lt;port&gt;</code> für lokal laufende Apps auf diesem Server.
+                </div>
               </Field>
             </div>
           )}
