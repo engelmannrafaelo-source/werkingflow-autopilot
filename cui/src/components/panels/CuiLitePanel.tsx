@@ -3,6 +3,7 @@ import type React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ACCOUNTS } from '../../types';
+import { useAuth } from '../../contexts/AuthContext';
 import QueueOverlay from './QueueOverlay';
 import { validateApiResponse } from '../../lib/validateApiResponse';
 
@@ -460,6 +461,8 @@ function LoadingConversation({ sessionId, onBack, onRetry, onLoadFailed }: { ses
 
 // --- Main Component ---
 export default function CuiLitePanel({ accountId, projectId, workDir, panelId, isTabVisible = true, onRouteChange, initialSessionId, onLoadFailed, onFinish, onStateChange }: CuiLitePanelProps) {
+  const { user } = useAuth();
+  const isAdvancedUser = !user || user.role === 'admin' || user.role === 'product-owner';
   const storageKey = `cui-lite-account-${panelId || projectId || 'default'}`;
   const persistSession = !initialSessionId; // Don't persist to localStorage for AllChats panels
 
@@ -1856,34 +1859,39 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
             background: 'var(--tn-bg-dark)', flexShrink: 0,
           }}>
             {/* Action Buttons Row - Plan, Loop, Stop, ... */}
+            {/* Fachpartner role: only Stop visible (Plan/Loop/KILL/Templates are dev-tools). */}
             <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 4 }}>
-              <button
-                onClick={() => setPlanMode(!planMode)}
-                title={`Plan-Modus: ${selectedId === 'gemini' ? 'Gemini' : 'Claude'} plant zuerst`}
-                style={{
-                  padding: '4px 8px', borderRadius: 4, cursor: 'pointer', flexShrink: 0,
-                  background: planMode ? 'rgba(245,158,11,0.15)' : 'var(--tn-bg)',
-                  border: `1px solid ${planMode ? '#F59E0B' : 'var(--tn-border)'}`,
-                  color: planMode ? '#F59E0B' : 'var(--tn-text-muted)',
-                  fontSize: 11, fontWeight: planMode ? 700 : 400,
-                }}
-              >
-                Plan
-              </button>
-              <button
-                onClick={() => { if (loopEnabled) { toggleLoop(false); } else { toggleLoop(true); } }}
-                onContextMenu={(e) => { e.preventDefault(); setShowLoopConfig(!showLoopConfig); }}
-                title={loopEnabled ? "Loop stoppen (Klick)" : "Loop starten (Klick) | Config (Rechtsklick)"}
-                style={{
-                  padding: "4px 8px", borderRadius: 4, cursor: "pointer", flexShrink: 0,
-                  background: loopEnabled ? "rgba(16,185,129,0.15)" : "var(--tn-bg)",
-                  border: `1px solid ${loopEnabled ? "#10B981" : "var(--tn-border)"}`,
-                  color: loopEnabled ? "#10B981" : "var(--tn-text-muted)",
-                  fontSize: 11, fontWeight: loopEnabled ? 700 : 400,
-                }}
-              >
-                {loopEnabled ? "Loop u25CF" : "Loop"}
-              </button>
+              {isAdvancedUser && (
+                <button
+                  onClick={() => setPlanMode(!planMode)}
+                  title={`Plan-Modus: ${selectedId === 'gemini' ? 'Gemini' : 'Claude'} plant zuerst`}
+                  style={{
+                    padding: '4px 8px', borderRadius: 4, cursor: 'pointer', flexShrink: 0,
+                    background: planMode ? 'rgba(245,158,11,0.15)' : 'var(--tn-bg)',
+                    border: `1px solid ${planMode ? '#F59E0B' : 'var(--tn-border)'}`,
+                    color: planMode ? '#F59E0B' : 'var(--tn-text-muted)',
+                    fontSize: 11, fontWeight: planMode ? 700 : 400,
+                  }}
+                >
+                  Plan
+                </button>
+              )}
+              {isAdvancedUser && (
+                <button
+                  onClick={() => { if (loopEnabled) { toggleLoop(false); } else { toggleLoop(true); } }}
+                  onContextMenu={(e) => { e.preventDefault(); setShowLoopConfig(!showLoopConfig); }}
+                  title={loopEnabled ? "Loop stoppen (Klick)" : "Loop starten (Klick) | Config (Rechtsklick)"}
+                  style={{
+                    padding: "4px 8px", borderRadius: 4, cursor: "pointer", flexShrink: 0,
+                    background: loopEnabled ? "rgba(16,185,129,0.15)" : "var(--tn-bg)",
+                    border: `1px solid ${loopEnabled ? "#10B981" : "var(--tn-border)"}`,
+                    color: loopEnabled ? "#10B981" : "var(--tn-text-muted)",
+                    fontSize: 11, fontWeight: loopEnabled ? 700 : 400,
+                  }}
+                >
+                  {loopEnabled ? "Loop u25CF" : "Loop"}
+                </button>
+              )}
               <button
                 onClick={handleStop}
                 title="Konversation stoppen"
@@ -1897,26 +1905,30 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
               >
                 Stop
               </button>
-              <button
-                onClick={handleHardKill}
-                title="HARD KILL — Alle Prozesse sofort beenden (inkl. Zombies)"
-                style={{
-                  padding: '4px 6px', borderRadius: 4, fontSize: 9, cursor: 'pointer', flexShrink: 0,
-                  background: 'rgba(239,68,68,0.15)',
-                  border: '1px solid rgba(239,68,68,0.5)',
-                  color: '#EF4444', fontWeight: 700, letterSpacing: 0.5,
-                }}
-              >
-                KILL
-              </button>
-              <button
-                onClick={() => { setShowTemplateForm(true); setEditingTemplate(null); setNewTplLabel(''); setNewTplMessage(''); }}
-                title="Neues Template erstellen"
-                style={{ padding: '4px 8px', borderRadius: 4, fontSize: 11, cursor: 'pointer', background: 'transparent', border: '1px dashed var(--tn-border)', color: 'var(--tn-text-muted)', opacity: 0.6 }}
-              >
-                ...
-              </button>
-              {planMode && (
+              {isAdvancedUser && (
+                <button
+                  onClick={handleHardKill}
+                  title="HARD KILL — Alle Prozesse sofort beenden (inkl. Zombies)"
+                  style={{
+                    padding: '4px 6px', borderRadius: 4, fontSize: 9, cursor: 'pointer', flexShrink: 0,
+                    background: 'rgba(239,68,68,0.15)',
+                    border: '1px solid rgba(239,68,68,0.5)',
+                    color: '#EF4444', fontWeight: 700, letterSpacing: 0.5,
+                  }}
+                >
+                  KILL
+                </button>
+              )}
+              {isAdvancedUser && (
+                <button
+                  onClick={() => { setShowTemplateForm(true); setEditingTemplate(null); setNewTplLabel(''); setNewTplMessage(''); }}
+                  title="Neues Template erstellen"
+                  style={{ padding: '4px 8px', borderRadius: 4, fontSize: 11, cursor: 'pointer', background: 'transparent', border: '1px dashed var(--tn-border)', color: 'var(--tn-text-muted)', opacity: 0.6 }}
+                >
+                  ...
+                </button>
+              )}
+              {planMode && isAdvancedUser && (
                 <span style={{ fontSize: 10, color: '#F59E0B', fontWeight: 600, marginLeft: 4 }}>
                   Plan-Modus
                 </span>

@@ -1,9 +1,37 @@
 import { Router, Request, Response } from 'express';
 import { join } from 'path';
 import { homedir } from 'os';
+import { execFileSync } from 'child_process';
 import { IS_LOCAL_MODE, broadcast } from './state.js';
 import { readFileSync, readdirSync, statSync, existsSync, mkdirSync, writeFileSync, unlinkSync, renameSync } from 'fs';
 import Busboy from 'busboy';
+
+/**
+ * Convert binary doc (PDF/DOCX) to Markdown for token-efficient AI consumption.
+ * Returns absolute path to .md sibling file, or null if no converter applies.
+ * Silent-fail: if the converter binary is missing or errors, just return null
+ * (the original upload still works — markdown is best-effort).
+ */
+function convertToMarkdown(srcPath: string, ext: string): string | null {
+  const mdPath = srcPath.replace(/\.[^.]+$/, '.md');
+  try {
+    if (ext === '.pdf') {
+      // pdftotext writes plain text to stdout/file. -layout preserves columns.
+      execFileSync('pdftotext', ['-layout', srcPath, mdPath], { timeout: 30000, stdio: 'pipe' });
+      return mdPath;
+    }
+    if (ext === '.docx' || ext === '.doc' || ext === '.odt' || ext === '.rtf') {
+      // pandoc handles a wide range of formats → markdown.
+      execFileSync('pandoc', [srcPath, '-o', mdPath, '-t', 'gfm', '--wrap=none'],
+        { timeout: 30000, stdio: 'pipe' });
+      return mdPath;
+    }
+    return null;
+  } catch (err) {
+    console.warn(`[Upload] Markdown conversion failed for ${srcPath}:`, (err as Error).message);
+    return null;
+  }
+}
 
 interface LayoutsDeps {
   LAYOUTS_DIR: string;
@@ -757,16 +785,30 @@ export default function createLayoutsRouter(deps: LayoutsDeps): Router {
       return;
     }
 
-    const ext = filename?.match(/\.[^.]+$/)?.[0] || '.png';
+    const ext = (filename?.match(/\.[^.]+$/)?.[0] || '.png').toLowerCase();
     const name = `${Date.now()}${ext}`;
     const filePath = join(UPLOADS_DIR, name);
 
-    // Strip data URL prefix if present
-    const base64Data = data.replace(/^data:image\/[^;]+;base64,/, '');
+    // Strip data URL prefix if present (handles data:image/*, data:application/pdf, etc.)
+    const base64Data = data.replace(/^data:[^;]+;base64,/, '');
     writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
 
     console.log(`[Upload] Saved ${name} (${Math.round(Buffer.from(base64Data, 'base64').length / 1024)}KB)`);
-    res.json({ path: filePath, filename: name, url: `/api/uploads/${name}` });
+
+    // Auto-convert binary docs (PDF/DOCX/etc.) to a Markdown sibling for AI use.
+    // Original is preserved — partner sees both in the file browser.
+    const mdPath = convertToMarkdown(filePath, ext);
+    const mdName = mdPath ? mdPath.split('/').pop() : null;
+    if (mdName) {
+      console.log(`[Upload] Auto-converted ${name} → ${mdName} (Markdown for AI)`);
+    }
+
+    res.json({
+      path: filePath,
+      filename: name,
+      url: `/api/uploads/${name}`,
+      ...(mdName && { markdownPath: mdPath, markdownUrl: `/api/uploads/${mdName}`, markdownFilename: mdName }),
+    });
   });
 
   // Upload images for CUI: saves locally + optionally sends to remote server

@@ -48,7 +48,7 @@ export default function ToolHubWelcome({ workspace }: { workspace?: string } = {
             <li><b>Links unten — Browser:</b> Live-Preview der App, an der du gerade
               arbeitest. Aktualisiert sich nach jedem Build automatisch.</li>
             <li><b>Rechts — Tool Hub:</b> Diese Ansicht. Alle Werkzeuge auf einen Klick:
-              Files, Notes, Tasks, Inbox, Feedback, Mail, Kalender, …</li>
+              Notizen, Aufgaben, Nachrichten, Feedback, Datei-Upload, …</li>
           </ul>
         </Section>
 
@@ -65,8 +65,8 @@ export default function ToolHubWelcome({ workspace }: { workspace?: string } = {
             <>
               Als <b>Fachpartner</b> sicherst du die fachliche Qualität deines Produkts.
               Du testest Workflows mit echten Daten, gibst Feedback im Chat und nutzt
-              den <i>Feedback</i>-Tab oben, um Punkte für die Entwicklung zu sammeln.
-              Code-Änderungen pushed Rafael.
+              den <i>Feedback an Rafael</i>-Tab oben, um Punkte für die Entwicklung zu
+              sammeln. Code-Änderungen pushed Rafael.
             </>
           )}
           {role === 'admin' && (
@@ -85,14 +85,51 @@ export default function ToolHubWelcome({ workspace }: { workspace?: string } = {
             <li>Im <b>Chat</b> deine Aufgabe formulieren — auf Deutsch, ganz normal.
               Claude fragt nach, wenn etwas unklar ist.</li>
             <li>Im <b>Browser</b> daneben die Live-App im Auge behalten.</li>
-            <li>Über die Icons oben hier im <b>Tool Hub</b> Files öffnen, Notizen
-              machen, Tasks anlegen.</li>
+            <li>Über die Icons oben hier im <b>Tool Hub</b> Notizen, Aufgaben oder
+              Datei-Uploads öffnen.</li>
           </ol>
         </Section>
 
-        <Section title="Hilfe & Support">
-          Fragen, Bugs, Wünsche → <i>Feedback</i>-Tool oben oder direkt an Rafael per
-          Chat. Antworten kommen meist innerhalb eines Tages.
+        <Section title="📋 Wie melde ich mich in der App an?">
+          Die Apps (Engelmann AI Hub, WerkING Energy, …) im <b>Browser</b> links unten
+          haben jeweils einen <b>eigenen Login</b> — separat vom Plattform-Login hier.
+          So findest du die Test-Zugangsdaten:
+          <ol style={{ paddingLeft: 20, margin: '8px 0' }}>
+            <li>Im <b>Tool Hub</b> oben das Werkzeug <b>Notes</b> öffnen.</li>
+            <li>Dort den Tab <b>Shared</b> wählen (oben in den Notes).</li>
+            <li>Du siehst eine Tabelle mit allen Test-Logins für deine Apps —
+              Email + Passwort.</li>
+            <li>Diese kopieren und im Login-Formular der App im Browser einfügen.</li>
+          </ol>
+          <div style={{
+            marginTop: 8, padding: '8px 10px',
+            background: 'var(--tn-bg, #1a1b26)',
+            border: '1px solid var(--tn-border, #292e42)',
+            borderRadius: 4, fontSize: 11,
+          }}>
+            💡 <b>Tipp:</b> Wenn die App-Login-Seite leer aussieht oder nichts
+            funktioniert, frag im Chat: <i>„Schau mal warum ich mich in der App
+            nicht anmelden kann."</i> — Claude prüft das Backend für dich.
+          </div>
+        </Section>
+
+        <Section title="✉️ Wie sage ich Rafael was nicht funktioniert?">
+          Drei Wege:
+          <ul style={{ paddingLeft: 20, margin: '4px 0' }}>
+            <li><b>Direkt im Chat:</b> „Schick Rafael bitte eine Nachricht, dass …" —
+              Claude packt das in deine Outbox.</li>
+            <li><b>Tool Hub → <i>Feedback an Rafael</i>:</b> strukturiertes Formular
+              mit Subject und Beschreibung.</li>
+            <li><b>Tool Hub → <i>Nachrichten</i>:</b> Posteingang für Antworten von
+              Rafael auf deine vorherigen Punkte.</li>
+          </ul>
+        </Section>
+
+        <Section title="Hilfe">
+          Etwas unklar? Frag einfach im Chat: <i>„Was kann ich hier machen?"</i> —
+          Claude erklärt dir das Tool, an dem du gerade dran bist. Bei Bugs oder
+          fehlenden Features → <i>Feedback an Rafael</i>-Tab. Antworten kommen
+          meist innerhalb eines Tages.
         </Section>
 
         <div style={{

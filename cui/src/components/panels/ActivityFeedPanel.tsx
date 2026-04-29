@@ -98,6 +98,41 @@ function stripConventionalPrefix(message: string): string {
   return message.replace(/^\w+(?:\([^)]*\))?!?:\s*/, '');
 }
 
+// ── Storage-Activity (cross-partner file changes) ──────────────────────────
+
+interface StorageEntry {
+  path: string;
+  size: number;
+  modified: string;
+  owner: string;
+}
+
+// Map workspace IDs (used by frontend) → commit-app slugs (used by /activity).
+// Engelmann splits one app across 3 workspaces; commits are tracked under one.
+const WORKSPACE_TO_APP: Record<string, string> = {
+  'engelmann-ai-hub': 'engelmann',
+  'engelmann-developer': 'engelmann',
+  'engelmann-dashboards': 'engelmann',
+  'werkingsafety': 'werking-safety',
+};
+
+function formatRelTime(isoDate: string): string {
+  const ageMs = Date.now() - new Date(isoDate).getTime();
+  const min = Math.floor(ageMs / 60000);
+  if (min < 1) return 'gerade eben';
+  if (min < 60) return `vor ${min} Min`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `vor ${h} h`;
+  const d = Math.floor(h / 24);
+  return `vor ${d} Tag${d > 1 ? 'en' : ''}`;
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 // ── Component ──────────────────────────────────────────────────────────────
 
 interface ActivityFeedPanelProps {
@@ -106,38 +141,58 @@ interface ActivityFeedPanelProps {
 
 export default function ActivityFeedPanel({ app }: ActivityFeedPanelProps) {
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
+  const [storage, setStorage] = useState<StorageEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
-  // Detect app from URL or prop
-  const resolvedApp = app ?? (new URLSearchParams(window.location.search).get('app') ?? 'werking-energy');
+  // Workspace from URL or prop. Used as-is for storage-activity (workspace IDs);
+  // mapped via WORKSPACE_TO_APP for commit-activity (app slugs in apps/).
+  const resolvedWorkspace = app ?? (new URLSearchParams(window.location.search).get('app') ?? 'werking-energy');
+  const resolvedApp = WORKSPACE_TO_APP[resolvedWorkspace] ?? resolvedWorkspace;
 
   const fetchActivity = useCallback(async () => {
     if (window.__cuiServerAlive === false) return;
+    // Run both fetches in parallel — commit-history (git log) + storage-changes (file mtimes).
+    const [commitRes, storageRes] = await Promise.allSettled([
+      fetch(`/api/partner/activity?app=${encodeURIComponent(resolvedApp)}&limit=50`,
+        { signal: AbortSignal.timeout(15000) }),
+      fetch(`/api/partner/storage-activity?workspace=${encodeURIComponent(resolvedWorkspace)}&hours=72&limit=30`,
+        { signal: AbortSignal.timeout(15000) }),
+    ]);
+
     try {
-      const res = await fetch(
-        `/api/partner/activity?app=${encodeURIComponent(resolvedApp)}&limit=50`,
-        { signal: AbortSignal.timeout(15000) }
-      );
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-        throw new Error(body.error ?? `HTTP ${res.status}`);
+      if (commitRes.status === 'fulfilled' && commitRes.value.ok) {
+        const raw = await commitRes.value.json();
+        const data = validateApiResponse<{ activity: ActivityEntry[] }>(raw, '/api/partner/activity', { activity: 'array' });
+        setEntries(data.activity);
+        setError(null);
+      } else if (commitRes.status === 'fulfilled') {
+        const body = await commitRes.value.json().catch(() => ({ error: `HTTP ${commitRes.value.status}` }));
+        throw new Error(body.error ?? `HTTP ${commitRes.value.status}`);
+      } else {
+        throw commitRes.reason;
       }
-      const raw = await res.json();
-      const data = validateApiResponse<{ activity: ActivityEntry[] }>(raw, '/api/partner/activity', { activity: 'array' });
-      setEntries(data.activity);
-      setLastRefresh(new Date());
-      setError(null);
     } catch (err) {
       if ((err as Error).name !== 'AbortError') {
-        console.warn('[ActivityFeedPanel] fetch failed:', err);
+        console.warn('[ActivityFeedPanel] commit fetch failed:', err);
         setError(err instanceof Error ? err.message : 'Unbekannter Fehler');
       }
-    } finally {
-      setLoading(false);
     }
-  }, [resolvedApp]);
+
+    // Storage-activity is best-effort — failures don't block commits view.
+    if (storageRes.status === 'fulfilled' && storageRes.value.ok) {
+      try {
+        const raw = await storageRes.value.json();
+        if (Array.isArray(raw.files)) setStorage(raw.files);
+      } catch (err) {
+        console.warn('[ActivityFeedPanel] storage parse failed:', err);
+      }
+    }
+
+    setLastRefresh(new Date());
+    setLoading(false);
+  }, [resolvedApp, resolvedWorkspace]);
 
   useEffect(() => {
     fetchActivity();
@@ -215,13 +270,73 @@ export default function ActivityFeedPanel({ app }: ActivityFeedPanelProps) {
           </div>
         )}
 
+        {/* Storage Activity — what other partners (or Rafael on dev) wrote into shared-storage */}
+        {!loading && storage.length > 0 && (
+          <>
+            <div style={{
+              padding: '8px 12px 4px', fontSize: 10, fontWeight: 700,
+              color: 'var(--tn-text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em',
+              background: 'var(--tn-bg-dark)', borderBottom: '1px solid var(--tn-border)',
+              position: 'sticky', top: 0, zIndex: 1,
+            }}>
+              Geteilter Speicher · letzte 72h ({storage.length})
+            </div>
+            {storage.slice(0, 15).map((s, idx) => (
+              <div key={`storage-${idx}`} style={{
+                display: 'flex', alignItems: 'flex-start', gap: 10,
+                padding: '6px 12px', borderBottom: '1px solid var(--tn-border)',
+              }}>
+                <div style={{
+                  width: 8, height: 8, borderRadius: '50%',
+                  background: '#7dcfff', flexShrink: 0, marginTop: 4,
+                }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{
+                    fontSize: 11, color: 'var(--tn-text)',
+                    wordBreak: 'break-all', fontFamily: 'monospace',
+                  }}>
+                    {s.path}
+                  </div>
+                  <div style={{
+                    display: 'flex', gap: 8, marginTop: 2,
+                    fontSize: 9, color: 'var(--tn-text-muted)',
+                  }}>
+                    <span>{formatRelTime(s.modified)}</span>
+                    <span style={{ opacity: 0.6 }}>·</span>
+                    <span>{formatSize(s.size)}</span>
+                    <span style={{ opacity: 0.6 }}>·</span>
+                    <span>uid {s.owner}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+            {storage.length > 15 && (
+              <div style={{
+                padding: '6px 12px', fontSize: 10, color: 'var(--tn-text-muted)',
+                textAlign: 'center', fontStyle: 'italic',
+                borderBottom: '1px solid var(--tn-border)',
+              }}>
+                + {storage.length - 15} weitere Dateien
+              </div>
+            )}
+            <div style={{
+              padding: '8px 12px 4px', fontSize: 10, fontWeight: 700,
+              color: 'var(--tn-text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em',
+              background: 'var(--tn-bg-dark)', borderBottom: '1px solid var(--tn-border)',
+              marginTop: 4,
+            }}>
+              Code-Änderungen · letzte 30 Tage
+            </div>
+          </>
+        )}
+
         {!loading && error && (
           <div style={{ padding: 20, color: '#f7768e', fontSize: 12 }}>
             Fehler: {error}
           </div>
         )}
 
-        {!loading && !error && entries.length === 0 && (
+        {!loading && !error && entries.length === 0 && storage.length === 0 && (
           <div style={{ padding: 20, color: 'var(--tn-text-muted)', fontSize: 12, textAlign: 'center' }}>
             Keine Aktivitäten in den letzten 30 Tagen.
           </div>
