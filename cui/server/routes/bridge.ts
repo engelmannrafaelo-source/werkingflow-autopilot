@@ -1156,6 +1156,129 @@ router.get('/api/bridge/errors', async (req: any, res: any) => {
 // A "lost" request = final status 5xx (failover failed or none attempted).
 // ============================================================================
 
+// ── Worker Health — Autobahn-Prinzip ────────────────────────────────────────
+// Per-worker health via /v1/metrics/queue-forecast fanout (nginx round-robin
+// distributes across workers). Worker missing from fanout results = down.
+// Queue > 85% cap = degraded even if Anthropic quota is green ("Auffahrt
+// blockiert obwohl Spuren frei").
+//
+// 5xx per worker: upstream_addr in nginx logs uses Docker container names
+// (e.g. "worker1:8000") — strip port to get worker name.
+
+export interface WorkerHealth {
+  name: string;                        // worker1..4
+  status: 'healthy' | 'degraded' | 'down';
+  inflight_tokens: number | null;
+  cap_tokens: number | null;
+  inflight_count: number | null;
+  queue_pct: number | null;            // inflight_tokens / cap_tokens × 100
+  errors_5min: number;                 // 5xx on this worker's upstream in last 5 min
+  cooldown_remaining_s: number | null; // from account-pool-state
+}
+
+const EXPECTED_WORKERS = ['worker1', 'worker2', 'worker3', 'worker4'];
+
+// Pure function — easy to test, no network calls.
+export function countUpstreamErrors(
+  entries: NginxLogEntry[],
+  windowSec: number = 300,
+  nowSec: number = Date.now() / 1000
+): Record<string, number> {
+  const cutoff = nowSec - windowSec;
+  const errors: Record<string, number> = {};
+  for (const e of entries) {
+    if (e.ts_epoch < cutoff) continue;
+    const addrs = String(e.upstream_addr || '').split(',').map(s => s.trim()).filter(Boolean);
+    const statuses = String(e.upstream_status || '').split(',').map(s => s.trim());
+    addrs.forEach((addr, i) => {
+      if (parseInt(statuses[i] || '0', 10) >= 500) {
+        // "worker1:8000" → "worker1"
+        const name = addr.includes(':') ? addr.split(':')[0] : addr;
+        errors[name] = (errors[name] ?? 0) + 1;
+      }
+    });
+  }
+  return errors;
+}
+
+// Pure function — easy to test, no network calls.
+export function deriveWorkerStatus(
+  limiterPresent: boolean,
+  queuePct: number | null,
+  errors5min: number
+): WorkerHealth['status'] {
+  if (!limiterPresent) return 'down';
+  if ((queuePct !== null && queuePct > 85) || errors5min > 5) return 'degraded';
+  return 'healthy';
+}
+
+// Fans out 12 requests to /v1/metrics/queue-forecast through the nginx LB.
+// With 4 workers and fair round-robin, each worker gets ~3 calls.
+// Returns map of worker name → adaptive_limiter data.
+async function workerFanout(): Promise<Record<string, any>> {
+  const FANOUT = 12;
+  const responses = await Promise.allSettled(
+    Array.from({ length: FANOUT }).map(() =>
+      bridgeFetch('/v1/metrics/queue-forecast?window=60')
+    )
+  );
+  const limiters: Record<string, any> = {};
+  for (const r of responses) {
+    if (r.status !== 'fulfilled') continue;
+    const al = r.value?.adaptive_limiter;
+    if (al?.worker && !limiters[al.worker]) limiters[al.worker] = al;
+  }
+  return limiters;
+}
+
+// Builds worker health array. Pure given the inputs.
+export function buildWorkerHealth(
+  limiters: Record<string, any>,
+  poolState: any | null,
+  allEntries: NginxLogEntry[]
+): { workers: WorkerHealth[]; has_any_down: boolean; has_any_degraded: boolean } {
+  const upstreamErrors = countUpstreamErrors(allEntries);
+
+  // account-pool-state accounts sorted by key: account1, account2, … → worker1, worker2, …
+  const accountEntries: Array<[string, any]> = poolState?.accounts
+    ? Object.entries(poolState.accounts).sort(([a], [b]) => a.localeCompare(b))
+    : [];
+
+  let has_any_down = false;
+  let has_any_degraded = false;
+
+  const workers: WorkerHealth[] = EXPECTED_WORKERS.map((name, idx) => {
+    const limiter = limiters[name];
+    const isPresent = name in limiters;
+    const accountData = accountEntries[idx]?.[1] as { cooldown_remaining_s?: number } | undefined;
+
+    const inflight = limiter?.inflight_tokens ?? null;
+    const cap = limiter?.cap_tokens ?? null;
+    const queuePct = (inflight !== null && cap !== null && cap > 0)
+      ? Math.round((inflight / cap) * 1000) / 10
+      : null;
+
+    const errors5min = upstreamErrors[name] ?? 0;
+    const status = deriveWorkerStatus(isPresent, queuePct, errors5min);
+
+    if (status === 'down') has_any_down = true;
+    if (status === 'degraded') has_any_degraded = true;
+
+    return {
+      name,
+      status,
+      inflight_tokens: inflight,
+      cap_tokens: cap,
+      inflight_count: limiter?.inflight_count ?? null,
+      queue_pct: queuePct,
+      errors_5min: errors5min,
+      cooldown_remaining_s: accountData?.cooldown_remaining_s ?? null,
+    };
+  });
+
+  return { workers, has_any_down, has_any_degraded };
+}
+
 // Caller classification — Rafael-Prinzip 2026-04-29:
 // "Wenn jemand auf die Autobahn nicht auffahren kann, ist es ein Ausfall."
 // Failures count as failures regardless of caller_kind. caller_kind is
@@ -1648,13 +1771,18 @@ router.get('/api/bridge/events', async (req: any, res: any) => {
 
     const activeIncidents = incidents.filter(i => !i.resolved);
 
-    // Worker-pool exhaustion — if ALL workers were unavailable concurrently,
-    // even briefly, that's an infra outage. Detect via account-pool-state.
+    // Worker-pool exhaustion + per-worker health — both fetch from Bridge concurrently.
     let poolExhaustion: { detected: boolean; cooldown_workers: number; total_workers: number } = {
       detected: false, cooldown_workers: 0, total_workers: 0,
     };
+    let workerResult: ReturnType<typeof buildWorkerHealth> = {
+      workers: [], has_any_down: false, has_any_degraded: false,
+    };
     try {
-      const poolState: any = await bridgeFetch('/v1/metrics/account-pool-state');
+      const [poolState, limiters] = await Promise.all([
+        bridgeFetch('/v1/metrics/account-pool-state').catch(() => null),
+        workerFanout().catch(() => ({} as Record<string, any>)),
+      ]);
       const accounts = (poolState && typeof poolState === 'object' && poolState.accounts) || {};
       const accountList = Object.values(accounts) as Array<{ available?: boolean; cooldown_remaining_s?: number }>;
       if (accountList.length > 0) {
@@ -1665,13 +1793,17 @@ router.get('/api/bridge/events', async (req: any, res: any) => {
           total_workers: accountList.length,
         };
       }
+      // All nginx entries for the 5-min upstream-error window
+      const allEntries = [...byPool.dev, ...byPool.prod];
+      workerResult = buildWorkerHealth(limiters, poolState, allEntries);
     } catch { /* metrics-reader unreachable — leave defaults */ }
 
     // Rafael-Prinzip 2026-04-29: jeder 5xx ist ein Failure. KEIN Filter nach caller_kind.
     // Status ladder:
-    //   critical : ANY lost on Prod (any caller_kind), OR all workers in cooldown
-    //   degraded : ANY lost on Dev, high 5xx rate, partial worker cooldown, missing data
-    //   healthy  : zero lost, full worker availability
+    //   critical : ANY lost on Prod, OR all workers in cooldown, OR any worker DOWN
+    //   degraded : ANY lost on Dev, high 5xx rate, partial cooldown, workers DEGRADED,
+    //              or pool quota green but workers sick ("Auffahrt blockiert")
+    //   healthy  : zero lost, all workers healthy
     const prodActiveLost = activeIncidents
       .filter(i => i.source === 'prod')
       .some(i => (i.count - (i.rescued_via_failover || 0)) > 0);
@@ -1682,11 +1814,17 @@ router.get('/api/bridge/events', async (req: any, res: any) => {
       poolExhaustion.cooldown_workers > 0 &&
       poolExhaustion.cooldown_workers < poolExhaustion.total_workers;
     const overall_status: 'healthy' | 'degraded' | 'critical' =
-      (pools.prod.lost > 0 || prodActiveLost || poolExhaustion.detected) ? 'critical' :
+      (pools.prod.lost > 0 || prodActiveLost || poolExhaustion.detected || workerResult.has_any_down) ? 'critical' :
       (pools.dev.lost > 0 || devActiveLost ||
        pools.prod.server_error_rate >= 0.5 || someWorkerInCooldown ||
-       !pools.dev.present) ? 'degraded' :
+       !pools.dev.present || workerResult.has_any_degraded) ? 'degraded' :
       'healthy';
+
+    // "Auffahrt blockiert": pool quota is NOT exhausted, but workers are sick.
+    // This is the key lie the old monitor told: grüne Bars, kaputte Auffahrten.
+    const auffahrt_blocked =
+      !poolExhaustion.detected &&
+      (workerResult.has_any_down || workerResult.has_any_degraded);
 
     res.json({
       overall_status,
@@ -1695,6 +1833,8 @@ router.get('/api/bridge/events', async (req: any, res: any) => {
       incidents: incidents.slice(0, 50),
       active_incidents: activeIncidents.length,
       pool_exhaustion: poolExhaustion,
+      workers: workerResult.workers,
+      auffahrt_blocked,
       window_hours: hours,
       sources: sourceStats,
       generated_at: new Date().toISOString(),

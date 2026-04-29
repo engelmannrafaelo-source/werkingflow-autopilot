@@ -58,6 +58,17 @@ interface FailoverStats {
   success_rate: number;
 }
 
+interface WorkerHealth {
+  name: string;
+  status: 'healthy' | 'degraded' | 'down';
+  inflight_tokens: number | null;
+  cap_tokens: number | null;
+  inflight_count: number | null;
+  queue_pct: number | null;
+  errors_5min: number;
+  cooldown_remaining_s: number | null;
+}
+
 interface EventsData {
   overall_status: 'healthy' | 'degraded' | 'critical';
   pools: { dev: PoolSummary; prod: PoolSummary };
@@ -65,6 +76,8 @@ interface EventsData {
   incidents: Incident[];
   active_incidents: number;
   pool_exhaustion?: PoolExhaustion;
+  workers?: WorkerHealth[];
+  auffahrt_blocked?: boolean;
   window_hours: number;
   sources: Record<string, { present: boolean; mtime: number | null; bytes: number; age_sec: number | null }>;
   generated_at: string;
@@ -596,6 +609,113 @@ function SourceFreshness({ sources }: { sources: EventsData['sources'] }) {
   );
 }
 
+// ─── Worker Health Components ────────────────────────────────────────
+
+function workerStatusColor(status: WorkerHealth['status']): string {
+  if (status === 'down') return 'var(--tn-red)';
+  if (status === 'degraded') return 'var(--tn-orange)';
+  return 'var(--tn-green)';
+}
+
+function WorkerCard({ worker }: { worker: WorkerHealth }) {
+  const color = workerStatusColor(worker.status);
+  const queuePct = worker.queue_pct ?? 0;
+  const label = worker.status === 'down' ? 'DOWN' : worker.status === 'degraded' ? 'DEGRADED' : 'OK';
+  const tokenTip = worker.inflight_tokens !== null && worker.cap_tokens !== null
+    ? `${worker.inflight_tokens.toLocaleString('de-AT')} / ${worker.cap_tokens.toLocaleString('de-AT')} tokens`
+    : 'keine Daten';
+
+  return (
+    <div
+      data-ai-id={`worker-health-${worker.name}`}
+      style={{
+        background: 'var(--tn-bg-dark)',
+        border: `1px solid ${color}`,
+        borderRadius: 6,
+        padding: '8px 10px',
+        minWidth: 110,
+        flex: 1,
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--tn-text)', fontFamily: 'monospace' }}>
+          {worker.name}
+        </span>
+        <span style={{ fontSize: 8, color, fontWeight: 700, letterSpacing: '0.04em' }}>
+          {label}
+        </span>
+      </div>
+
+      {/* Queue-depth bar */}
+      <div style={{ marginBottom: 4 }}>
+        <div style={{ height: 4, background: 'var(--tn-border)', borderRadius: 2, overflow: 'hidden' }}>
+          <div style={{
+            height: '100%',
+            width: `${Math.min(100, worker.status === 'down' ? 100 : queuePct)}%`,
+            background: worker.status === 'down' ? 'var(--tn-red)' : color,
+            borderRadius: 2,
+            transition: 'width 0.3s',
+          }} />
+        </div>
+        <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginTop: 2, fontFamily: 'monospace' }}>
+          {worker.status === 'down' ? '— kein Response' : `${queuePct.toFixed(0)}% Queue`}
+        </div>
+      </div>
+
+      <div
+        title={tokenTip}
+        style={{
+          fontSize: 9, fontFamily: 'monospace', color: 'var(--tn-text-muted)',
+          display: 'flex', gap: 6, flexWrap: 'wrap',
+        }}
+      >
+        {worker.inflight_tokens !== null && (
+          <span>{Math.round(worker.inflight_tokens / 1000)}k tok</span>
+        )}
+        {worker.errors_5min > 0 && (
+          <span style={{ color: 'var(--tn-red)' }}>{worker.errors_5min} 5xx</span>
+        )}
+        {(worker.cooldown_remaining_s ?? 0) > 0 && (
+          <span style={{ color: 'var(--tn-orange)' }}>CD {worker.cooldown_remaining_s}s</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function WorkerHealthGrid({ workers, auffahrtBlocked }: {
+  workers: WorkerHealth[];
+  auffahrtBlocked?: boolean;
+}) {
+  const anyDown = workers.some(w => w.status === 'down');
+  const anyDegraded = workers.some(w => w.status === 'degraded');
+
+  return (
+    <div data-ai-id="worker-health-grid">
+      {auffahrtBlocked && (
+        <div style={{
+          padding: '6px 12px', marginBottom: 8,
+          background: 'rgba(224,175,104,0.12)',
+          border: '1px solid var(--tn-orange)',
+          borderLeftWidth: 3, borderRadius: 4,
+          fontSize: 10, color: 'var(--tn-orange)', fontWeight: 600,
+        }}>
+          ⚠ Auffahrt blockiert obwohl Spuren frei —{' '}
+          {anyDown ? 'Worker ausgefallen' : 'Queue gesättigt'}, Anthropic-Quota aber noch OK
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        {workers.map(w => <WorkerCard key={w.name} worker={w} />)}
+      </div>
+      {(anyDown || anyDegraded) && !auffahrtBlocked && (
+        <div style={{ marginTop: 4, fontSize: 9, color: 'var(--tn-text-muted)' }}>
+          Worker degraded/down — Pool-Quota erschöpft
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main Component ─────────────────────────────────────────────────
 
 export default function StatusTab() {
@@ -656,6 +776,10 @@ export default function StatusTab() {
   const devLost = events?.pools.dev.lost ?? 0;
   const devPresent = events?.pools.dev.present ?? true;
   const exhaustion = events?.pool_exhaustion;
+  const workerData = events?.workers ?? [];
+  const anyWorkerDown = workerData.some(w => w.status === 'down');
+  const anyWorkerDegraded = workerData.some(w => w.status === 'degraded');
+  const auffahrtBlocked = events?.auffahrt_blocked ?? false;
   const overall = events?.overall_status ?? 'healthy';
   const overallColor =
     overall === 'critical' ? 'var(--tn-red)' :
@@ -673,6 +797,10 @@ export default function StatusTab() {
   };
   const subtitle: string = (() => {
     if (overall === 'critical') {
+      if (anyWorkerDown) {
+        const downNames = workerData.filter(w => w.status === 'down').map(w => w.name).join(', ');
+        return `Worker ausgefallen: ${downNames} — Auffahrt gesperrt`;
+      }
       if (exhaustion?.detected) {
         return `Worker-Pool erschöpft: ${exhaustion.cooldown_workers}/${exhaustion.total_workers} in Cooldown`;
       }
@@ -681,6 +809,14 @@ export default function StatusTab() {
              'Prod-Server-Fehler aktiv';
     }
     if (overall === 'degraded') {
+      if (auffahrtBlocked) {
+        const degradedNames = workerData.filter(w => w.status !== 'healthy').map(w => w.name).join(', ');
+        return `Auffahrt blockiert (${degradedNames}) obwohl Anthropic-Quota OK`;
+      }
+      if (anyWorkerDegraded) {
+        const degradedNames = workerData.filter(w => w.status === 'degraded').map(w => w.name).join(', ');
+        return `Worker degraded: ${degradedNames}`;
+      }
       if (devLost > 0) return buildDriverText(events?.pools.dev, 'Dev')!;
       if (exhaustion && exhaustion.cooldown_workers > 0) {
         return `${exhaustion.cooldown_workers}/${exhaustion.total_workers} Workers in Cooldown`;
@@ -757,6 +893,21 @@ export default function StatusTab() {
             <PoolCard label="DEV" pool={events.pools.dev} workers={devWorkers} hours={hours} />
             <PoolCard label="PROD" pool={events.pools.prod} workers={prodWorkers} isReserve hours={hours} />
           </div>
+
+          {workerData.length > 0 && (
+            <div style={{
+              marginBottom: 14,
+              padding: '10px 12px',
+              background: 'var(--tn-bg-dark)',
+              border: '1px solid var(--tn-border)',
+              borderRadius: 8,
+            }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--tn-text-muted)', marginBottom: 8, letterSpacing: '0.05em' }}>
+                WORKER-HEALTH · Auffahrten
+              </div>
+              <WorkerHealthGrid workers={workerData} auffahrtBlocked={auffahrtBlocked} />
+            </div>
+          )}
 
           <div style={{ marginBottom: 14 }}>
             <FailoverBar failover={events.failover} />
