@@ -529,7 +529,7 @@ function resolveStatusFromReports(
  * meta.last_run, no SHA on either side) — the layer-level CLI handles
  * the date-based fallback for those cases.
  */
-function isScenarioStale(scenarioFile: string, registryEntry?: any, reportPath?: string | null): boolean {
+function isScenarioStale(scenarioFile: string, _registryEntry?: any, reportPath?: string | null): boolean {
   try {
     const data = readJSON(scenarioFile);
     if (!data) return false;
@@ -538,31 +538,22 @@ function isScenarioStale(scenarioFile: string, registryEntry?: any, reportPath?:
     const currentAuftrag = generated.auftrag_sha;
     if (!currentAuftrag) return false;
 
-    // Source 1: scenario.meta.last_run.tested_against_sha (newer pipeline)
+    // SSoT: meta.last_run.tested_against_sha drives drift detection.
+    // The orchestrator registry is no longer consulted.
     const lastRun = data?.meta?.last_run;
-    if (lastRun) {
-      const testedAuftrag = lastRun.tested_against_sha;
-      if (testedAuftrag && testedAuftrag !== currentAuftrag) return true;
-      if (!testedAuftrag) return true;
-    }
+    if (!lastRun) return true;
+    const testedAuftrag = lastRun.tested_against_sha;
+    if (!testedAuftrag) return true;
+    if (testedAuftrag !== currentAuftrag) return true;
 
-    // Source 2: scenario_registry.json entry (older pipeline + locks)
-    // After regen the registry can still hold a PASS for a previous
-    // auftrag_sha. Without this check, mergeRegistryIntoReports would
-    // surface that PASS as fresh.
-    if (registryEntry) {
-      const regAuftrag = registryEntry.auftrag_sha;
-      if (regAuftrag && regAuftrag !== currentAuftrag) return true;
-      if (!regAuftrag) return true; // legacy entry without sha tracking
-    }
-
-    // Source 3: report file existence. A registry/last_run entry that
-    // points at a non-existent report file (archived, deleted, never
-    // written because the runner crashed) is not a verified PASS.
-    if (reportPath) {
-      const fsPath = reportPath.startsWith('/tester/')
-        ? reportPath.replace('/tester/', UNIFIED_TESTER_ROOT + '/')
-        : reportPath;
+    // Report file existence. A meta.last_run entry pointing at a missing
+    // report file (archived, deleted, runner crashed before writing) is not
+    // a verified PASS — surface as stale so the dashboard re-tests.
+    const metaReport = lastRun.report_path ?? reportPath;
+    if (metaReport) {
+      const fsPath = String(metaReport).startsWith('/tester/')
+        ? String(metaReport).replace('/tester/', UNIFIED_TESTER_ROOT + '/')
+        : String(metaReport);
       if (!existsSync(fsPath)) return true;
     }
 
@@ -573,49 +564,64 @@ function isScenarioStale(scenarioFile: string, registryEntry?: any, reportPath?:
 }
 
 /**
- * Supplement scanned reports with scenario_registry.json entries.
- * For scenarios that have a registry entry but no markdown report file,
- * a synthetic ScannedReport is created from the registry data.
- * Report files always take priority (registry is fallback only).
+ * Supplement scanned reports with `meta.last_run` from scenario JSON files.
  *
- * Note: per-scenario stale detection (auftrag_sha drift) lives in
- * pyramid_status.py — the single source of truth for layer-level status.
- * This function only collects raw entries; the Pyramid view applies
- * stale-aware status from pyramid_status.py via the CLI bridge.
+ * Status SSoT — `meta.last_run` inside each scenario file is now the single
+ * source of truth for status / score / report_path / tested_at. The
+ * orchestrator registry (scenario_registry.json) is no longer consulted for
+ * status; it carries lock-state only.
+ *
+ * Markdown reports under reports/scenarios/ still take priority when they
+ * are present and same-day-or-newer than `meta.last_run.tested_at`. When the
+ * markdown is missing (archived, never written, runner crashed) we fall back
+ * to the meta block so the dashboard sees the most recent run instead of
+ * silently dropping the scenario back to PENDING.
  */
-function mergeRegistryIntoReports(appId: string, reports: Record<string, ScannedReport>): void {
-  const registry = readJSON(SCENARIO_REGISTRY);
-  if (!registry?.scenarios) return;
+function mergeMetaLastRunIntoReports(appId: string, reports: Record<string, ScannedReport>): void {
+  const appScenarioDir = join(SCENARIOS_DIR, appId);
+  if (!existsSync(appScenarioDir)) return;
 
-  const prefix = appId + '.';
-  for (const [scenarioId, entry] of Object.entries(registry.scenarios as Record<string, any>)) {
-    if (!scenarioId.startsWith(prefix)) continue;
+  const ingest = (scenarioFile: string) => {
+    const data = readJSON(scenarioFile);
+    if (!data) return;
+    const sid: string = data.id || data.scenario_id;
+    if (!sid) return;
+    const lastRun = data?.meta?.last_run;
+    if (!lastRun || !lastRun.status) return;
+    const status: string = String(lastRun.status).toUpperCase();
 
-    const existing = reports[scenarioId];
+    const existing = reports[sid];
     if (existing) {
-      // Registry takes priority when its date is >= the report's date.
-      // The registry is updated as the final step of a test run, so it is the
-      // authoritative source. Report files use full ISO timestamps like
-      // "2026-04-11T19:14:48" which are lexicographically > the registry's
-      // date-only "2026-04-11", causing same-day report files to incorrectly
-      // win over a newer registry result. Normalize both to YYYY-MM-DD before
-      // comparing so the registry wins on same-day conflicts.
-      const registryDate: string | null = entry.tested_at ?? null;
+      const metaDate: string | null = lastRun.tested_at ?? null;
       const reportDate: string | null = existing.timestamp ?? null;
       const reportDateOnly = reportDate ? reportDate.substring(0, 10) : null;
-      // Keep existing report only if it is strictly newer (day-level) than registry
-      if (!registryDate || (reportDateOnly && reportDateOnly > registryDate)) continue;
+      const metaDateOnly = metaDate ? metaDate.substring(0, 10) : null;
+      // Keep existing markdown report only if strictly newer (day-level).
+      if (!metaDateOnly || (reportDateOnly && reportDateOnly > metaDateOnly)) return;
     }
 
-    reports[scenarioId] = {
-      scenarioId,
-      status: entry.status ?? 'PENDING',
-      score: typeof entry.score === 'number' ? entry.score : null,
-      timestamp: entry.tested_at ?? null,
-      reportPath: entry.report_path ?? '',
-      duration: typeof entry.duration_seconds === 'number' ? entry.duration_seconds : null,
+    reports[sid] = {
+      scenarioId: sid,
+      status,
+      score: typeof lastRun.score === 'number' ? lastRun.score : null,
+      timestamp: lastRun.tested_at ?? null,
+      reportPath: lastRun.report_path ?? '',
+      duration: typeof lastRun.duration_seconds === 'number' ? lastRun.duration_seconds : null,
     };
-  }
+  };
+
+  const walk = (dir: string) => {
+    try {
+      for (const entry of readdirSync(dir)) {
+        const full = join(dir, entry);
+        try {
+          if (statSync(full).isDirectory()) { walk(full); continue; }
+        } catch { continue; }
+        if (full.endsWith('.json')) ingest(full);
+      }
+    } catch { /* unreadable dir */ }
+  };
+  walk(appScenarioDir);
 }
 
 // Legacy compatibility: keep pyramid cache dir reference for rescan endpoint
@@ -786,23 +792,14 @@ function getPyramidData(appId: string) {
   // local aggregates below so that dashboard and CLI never disagree.
   const ssot = getPyramidStatusFromCli(appId);
 
-  // Scan reports from markdown files, supplemented by scenario_registry.json
+  // SSoT: scan markdown reports, then merge `meta.last_run` from scenario JSON.
+  // The orchestrator registry is no longer consulted for status.
   const scannedReports = scanReportsForApp(appId);
-  mergeRegistryIntoReports(appId, scannedReports);
+  mergeMetaLastRunIntoReports(appId, scannedReports);
 
-  // Per-scenario registry lookup map for stale detection — used below
-  // when resolving per-test status. Allows isScenarioStale() to compare
-  // current scenario.auftrag_sha against the registry entry's recorded
-  // auftrag_sha (catches the case where the scenario was regenerated
-  // but the registry still points at the old PASS).
-  const registryRaw = readJSON(SCENARIO_REGISTRY);
+  // Empty placeholder kept so existing call sites still type-check; isScenarioStale
+  // now relies entirely on meta.last_run inside the scenario file.
   const registryByScenarioId: Record<string, any> = {};
-  if (registryRaw?.scenarios) {
-    const prefix = appId + '.';
-    for (const [sid, entry] of Object.entries(registryRaw.scenarios as Record<string, any>)) {
-      if (sid.startsWith(prefix)) registryByScenarioId[sid] = entry;
-    }
-  }
 
   // Also check for flat scenarios (not in layer dirs — e.g. werking-safety, werking-noise)
   const flatScenarios: Array<{ id: string; file: string }> = [];
