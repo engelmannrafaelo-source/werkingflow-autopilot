@@ -2380,7 +2380,13 @@ router.get('/api/qa/journey', (req, res) => {
     // Limit to 20 journeys max to avoid huge responses
     journeys = journeys.slice(0, 20);
 
-    // Truncate steps to essential fields, verify screenshot exists
+    // Truncate steps to essential fields, verify screenshot exists.
+    // Screenshots written from inside the tester container store the
+    // /tester/ absolute path. Remap to host filesystem before existsSync.
+    const toHostPath = (p: string): string =>
+      p.startsWith('/tester/')
+        ? UNIFIED_TESTER_ROOT + '/' + p.slice('/tester/'.length)
+        : p;
     const result = journeys.map(j => ({
       scenario: j.scenario,
       persona: j.persona,
@@ -2388,16 +2394,19 @@ router.get('/api/qa/journey', (req, res) => {
       duration: j.duration,
       totalSteps: j.totalSteps,
       fileName: j.fileName,
-      steps: j.steps.map(s => ({
-        nr: s.nr,
-        action: s.action,
-        command: (s.command || '').slice(0, 100),
-        url: s.url,
-        screenshotPath: s.screenshot,
-        screenshotExists: existsSync(s.screenshot),
-        timestamp: s.timestamp,
-        ...(s.note ? { note: (s.note as string).slice(0, 300) } : {}),
-      })),
+      steps: j.steps.map(s => {
+        const hostPath = toHostPath(s.screenshot);
+        return {
+          nr: s.nr,
+          action: s.action,
+          command: (s.command || '').slice(0, 100),
+          url: s.url,
+          screenshotPath: hostPath,
+          screenshotExists: existsSync(hostPath),
+          timestamp: s.timestamp,
+          ...(s.note ? { note: (s.note as string).slice(0, 300) } : {}),
+        };
+      }),
     }));
 
     res.json({ journeys: result });
