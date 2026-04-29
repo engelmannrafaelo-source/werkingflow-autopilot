@@ -29,6 +29,24 @@ const CHECKPOINTS_DIR = '/tmp/test-checkpoints';
 const TEST_RUNNER_LOGS = '/tmp';
 const SCENARIO_REGISTRY = PATHS.scenarioRegistry;
 
+// Tester paths (meta.last_run.report_path, journey screenshots) are stored
+// relative to UNIFIED_TESTER_ROOT — see tests/unified-tester/validators/
+// path_format_validator.py for the Tier-0 gate. The defensive branches
+// below are kept only as belt-and-braces during runner rollouts; if they
+// ever fire we want to know, hence the warn.
+function toTesterHostPath(rawPath: string): string {
+  if (!rawPath) return rawPath;
+  if (rawPath.startsWith('/tester/')) {
+    console.warn(`[QA] legacy /tester/ path passed reader; migration tools/migrate_paths_to_relative.py should be re-run: ${rawPath}`);
+    return join(UNIFIED_TESTER_ROOT, rawPath.slice('/tester/'.length));
+  }
+  if (rawPath.startsWith('/')) {
+    console.warn(`[QA] legacy absolute path passed reader; migration tools/migrate_paths_to_relative.py should be re-run: ${rawPath}`);
+    return rawPath;
+  }
+  return join(UNIFIED_TESTER_ROOT, rawPath);
+}
+
 // Contract Scanner directories (Layer 0 data sources)
 const TESTS_ROOT = PATHS.testsRoot;
 const API_SCANNER_SNAPSHOTS = join(TESTS_ROOT, 'api-contract-scanner/snapshots');
@@ -551,10 +569,7 @@ function isScenarioStale(scenarioFile: string, _registryEntry?: any, reportPath?
     // a verified PASS — surface as stale so the dashboard re-tests.
     const metaReport = lastRun.report_path ?? reportPath;
     if (metaReport) {
-      const fsPath = String(metaReport).startsWith('/tester/')
-        ? String(metaReport).replace('/tester/', UNIFIED_TESTER_ROOT + '/')
-        : String(metaReport);
-      if (!existsSync(fsPath)) return true;
+      if (!existsSync(toTesterHostPath(String(metaReport)))) return true;
     }
 
     return false;
@@ -710,16 +725,13 @@ function getScenarioSummary(scenarioFile: string, reportPath: string | null): {
   } catch { /* */ }
 
   // Read report excerpt (## AI Report section or ## Bewertung).
-  // meta.last_run.report_path can be: in-container (/tester/...), relative (reports/scenarios/...) or absolute.
-  // Normalize to absolute host path so existsSync/readFileSync find the file.
+  // meta.last_run.report_path is stored relative to UNIFIED_TESTER_ROOT
+  // (enforced by validators/path_format_validator.py — Tier-0 gate).
+  // toTesterHostPath warns + remaps if a legacy absolute / "/tester/"
+  // path slips through, so the reader stays correct during rollouts.
   if (reportPath) {
     try {
-      const raw = String(reportPath);
-      const fsReportPath = raw.startsWith('/tester/')
-        ? raw.replace('/tester/', UNIFIED_TESTER_ROOT + '/')
-        : raw.startsWith('/')
-          ? raw
-          : join(UNIFIED_TESTER_ROOT, raw);
+      const fsReportPath = toTesterHostPath(String(reportPath));
       if (existsSync(fsReportPath)) {
         const content = readFileSync(fsReportPath, 'utf-8');
         // Extract rating line
@@ -2384,12 +2396,9 @@ router.get('/api/qa/journey', (req, res) => {
     journeys = journeys.slice(0, 20);
 
     // Truncate steps to essential fields, verify screenshot exists.
-    // Screenshots written from inside the tester container store the
-    // /tester/ absolute path. Remap to host filesystem before existsSync.
-    const toHostPath = (p: string): string =>
-      p.startsWith('/tester/')
-        ? UNIFIED_TESTER_ROOT + '/' + p.slice('/tester/'.length)
-        : p;
+    // Screenshots are stored relative to UNIFIED_TESTER_ROOT (enforced by
+    // validators/path_format_validator.py). toTesterHostPath warns + remaps
+    // if a legacy absolute / "/tester/" path slips through during rollouts.
     const result = journeys.map(j => ({
       scenario: j.scenario,
       persona: j.persona,
@@ -2398,7 +2407,7 @@ router.get('/api/qa/journey', (req, res) => {
       totalSteps: j.totalSteps,
       fileName: j.fileName,
       steps: j.steps.map(s => {
-        const hostPath = toHostPath(s.screenshot);
+        const hostPath = toTesterHostPath(s.screenshot);
         return {
           nr: s.nr,
           action: s.action,
