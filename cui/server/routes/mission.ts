@@ -70,16 +70,25 @@ const _lastReminderSentAt = new Map<string, number>();
 // then fall back to parent-reminder.
 const _silentExitAttempts = new Map<string, number>();
 const MAX_SILENT_EXIT_AUTO_CONTINUE = 2;
+// Auto-Nudge: when a sub is STALLED (>50 turns, 0 commits, mostly Read/Glob),
+// inject a hard-pivot message into the sub itself instead of only signalling
+// to the parent. Throttle and cap to avoid spam — after MAX_NUDGES the parent
+// reminder takes over ("nudged 3x, still stalled").
+const _lastSubNudgeSentAt = new Map<string, number>();
+const _subNudgeCount = new Map<string, number>();
+const SUB_NUDGE_INTERVAL_MS = 600_000; // 10min, mirrors autoinject MIN_INJECT_INTERVAL_MS
+const MAX_AUTO_NUDGES = 3;
 
 /**
  * Heuristic classification of a sub-session's current state for the parent reminder.
  * Best-effort, fail-soft: never throws — returns 'progress' on any read/parse error.
  *
  * - 'ready': stdout has a terminal_reason:"completed" result line → parent should /finish
- * - 'stalled': long-running with no commits and mostly read-only tool calls → parent should intervene
+ * - 'quota_blocked': sub died with stop_sequence + "out of extra usage" text → respawn on different account
+ * - 'stalled': long-running with no commits, no edits, mostly read-only tool calls → parent should intervene
  * - 'progress': default — still working
  */
-function classifySubStatus(sid: string): { status: 'ready' | 'stalled' | 'progress'; signals: string[] } {
+function classifySubStatus(sid: string): { status: 'ready' | 'quota_blocked' | 'stalled' | 'progress'; signals: string[] } {
   const signals: string[] = [];
   try {
     // 1. Check stdout file for terminal_reason: completed
@@ -96,7 +105,7 @@ function classifySubStatus(sid: string): { status: 'ready' | 'stalled' | 'progre
       } catch { /* fail-soft */ }
     }
 
-    // 2. STALLED heuristic: read JSONL last ~30 entries, count tool patterns
+    // 2. STALLED / QUOTA heuristic: read JSONL last ~30 entries, count tool patterns
     const found = findJsonlPathAllAccounts(sid);
     if (!found) return { status: 'progress', signals };
 
@@ -104,6 +113,23 @@ function classifySubStatus(sid: string): { status: 'ready' | 'stalled' | 'progre
     try {
       lines = readFileSync(found.path, 'utf8').split('\n').filter(Boolean);
     } catch { return { status: 'progress', signals }; }
+
+    // 2a. QUOTA-BLOCKED: last 3 assistant messages — if any has stop_reason='stop_sequence'
+    // AND text matches Anthropic's quota-exhausted message, classify before any turn-count check.
+    // (Quota stalls die fast — often <30 turns — and would otherwise be mis-classified as 'progress'.)
+    for (const line of lines.slice(-3).reverse()) {
+      try {
+        const obj = JSON.parse(line);
+        if (obj.type !== 'assistant') continue;
+        const sr = obj.message?.stop_reason;
+        if (sr !== 'stop_sequence') continue;
+        const parts = Array.isArray(obj.message?.content) ? obj.message.content : [];
+        const text = parts.find((b: any) => b?.type === 'text')?.text || '';
+        if (/out of extra usage|usage limit reached|rate.?limit/i.test(text)) {
+          return { status: 'quota_blocked', signals: ['quota exhausted', 'stop_sequence + quota text'] };
+        }
+      } catch { /* skip malformed */ }
+    }
 
     const turns = lines.length;
     if (turns <= 50) return { status: 'progress', signals: [`${turns} turns`] };
@@ -141,10 +167,13 @@ function classifySubStatus(sid: string): { status: 'ready' | 'stalled' | 'progre
     if (toolCalls === 0) return { status: 'progress', signals: [`${turns} turns / no tool-calls in last 30`] };
 
     const readOnlyPct = readOnlyCalls / toolCalls;
-    if (gitCommitCalls === 0 && readOnlyPct > 0.7) {
+    const editPct = editWriteCalls / toolCalls;
+    // Edit-quote gate: subs with substantive edits (≥10% of recent tool-calls) are NOT stalled,
+    // even without commits — they may be in the edit-batch phase before a commit lands.
+    if (gitCommitCalls === 0 && readOnlyPct > 0.7 && editPct < 0.1) {
       return {
         status: 'stalled',
-        signals: [`${turns} turns / 0 commits / ${Math.round(readOnlyPct * 100)}% explore-only`],
+        signals: [`${turns} turns / 0 commits / 0 edits / ${Math.round(readOnlyPct * 100)}% explore-only`],
       };
     }
 
@@ -154,9 +183,30 @@ function classifySubStatus(sid: string): { status: 'ready' | 'stalled' | 'progre
   }
 }
 
+/**
+ * Picks the best available account for a respawn/continuation when the original assignment is missing.
+ * Calls the local /api/claude-code/best-account endpoint (which already weighs quota/usage).
+ * Returns the first available accountId, or '' if all accounts are critical (caller decides fallback).
+ * Fail-soft: returns '' on any fetch / parse error.
+ */
+async function resolveBestAccount(): Promise<string> {
+  try {
+    const resp = await fetch(`http://localhost:${process.env.PORT || 4005}/api/claude-code/best-account`, { signal: AbortSignal.timeout(3000) });
+    if (!resp.ok) return '';
+    const data = await resp.json() as any;
+    const accounts = (data.accounts || []) as Array<{ accountId: string; available: boolean }>;
+    const best = accounts.find(a => a.available);
+    return best?.accountId || '';
+  } catch {
+    return '';
+  }
+}
+
 function cleanupSubSession(sessionId: string) {
   _subSessionsInjectInProgress.delete(sessionId);
   _silentExitAttempts.delete(sessionId);
+  _lastSubNudgeSentAt.delete(sessionId);
+  _subNudgeCount.delete(sessionId);
   convMeta.setFinished(sessionId, true);
   convMeta.deleteInjectedAt(sessionId);
   const parentSessionId = convMeta.getParentSessionId(sessionId);
@@ -583,20 +633,33 @@ export function initMissionRouter(deps: MissionDeps) {
         // Auto-Continue: re-spawn Sub with a continue-nudge message before reporting to parent.
         // SDK silently exits mid-tool-use when stuck in long Read/Grep cycles — give it a kick.
         _silentExitAttempts.set(sessionId, attempts);
-        const accountId = convMeta.getAssignment(sessionId) || 'gmail';
+        const assigned = convMeta.getAssignment(sessionId);
         const workDir = convMeta.getWorkDir(sessionId) || '';
         const model = convMeta.getModel(sessionId) || '';
         const nudge = `Du wurdest mid-tool-use vom SDK abgebrochen (silently-exited, attempt ${attempts}/${MAX_SILENT_EXIT_AUTO_CONTINUE}). ` +
                       `Continue mit dem naechsten konkreten Edit. Keine weitere Discovery — du hast den Code schon genug gelesen. ` +
                       `Wenn du fertig bist: commit + push + ende explizit.`;
         console.log(`[SubSession] Silently-exited "${title}" (${sessionId.slice(0, 8)}) — auto-continue attempt ${attempts}/${MAX_SILENT_EXIT_AUTO_CONTINUE}`);
-        claudeCli.startConversation(accountId, nudge, workDir, sessionId, model).then(res => {
-          if (!res.ok) {
-            console.warn(`[SubSession] Auto-continue failed for ${sessionId.slice(0, 8)}: ${res.error || 'unknown'}`);
+        // Spawn fire-and-forget: resolve best-account if no assignment exists, then re-launch.
+        // 'gmail' was the historic hardcoded fallback — replaced because gmail is rate-limited.
+        (async () => {
+          let accountId = assigned;
+          if (!accountId) {
+            accountId = await resolveBestAccount();
+            if (!accountId) {
+              accountId = claudeCli.ACCOUNT_CONFIG[0]?.id || 'werking';
+              console.warn(`[SubSession] resolveBestAccount returned empty for ${sessionId.slice(0, 8)} — falling back to ${accountId}`);
+            }
           }
-        }).catch(err => {
-          console.warn(`[SubSession] Auto-continue error for ${sessionId.slice(0, 8)}: ${(err as Error).message}`);
-        });
+          try {
+            const res = await claudeCli.startConversation(accountId, nudge, workDir, sessionId, model);
+            if (!res.ok) {
+              console.warn(`[SubSession] Auto-continue failed for ${sessionId.slice(0, 8)}: ${res.error || 'unknown'}`);
+            }
+          } catch (err) {
+            console.warn(`[SubSession] Auto-continue error for ${sessionId.slice(0, 8)}: ${(err as Error).message}`);
+          }
+        })();
         continue;
       }
 
@@ -711,8 +774,45 @@ export function initMissionRouter(deps: MissionDeps) {
 
           if (cls.status === 'ready' || isCompleted) {
             lines.push(`- ${sid8} [READY TO FINISH] "${title}"${sigStr} — → review + /finish`);
+          } else if (cls.status === 'quota_blocked') {
+            lines.push(`- ${sid8} [QUOTA BLOCKED] "${title}"${sigStr} — Account exhausted, /finish + respawn auf anderem Account (accountId:'auto')`);
+            killCmds.push(`curl -s -X POST http://localhost:${PORT}/api/mission/conversation/${sessionId}/kill`);
           } else if (cls.status === 'stalled') {
-            lines.push(`- ${sid8} [STALLED] "${title}"${sigStr} — → anstupsen / kill+respawn / selbst uebernehmen`);
+            // Auto-Nudge: inject hard-pivot directly into the sub, throttled + capped.
+            const nudgeCount = _subNudgeCount.get(sessionId) || 0;
+            const lastNudge = _lastSubNudgeSentAt.get(sessionId) || 0;
+            const cooldownOk = Date.now() - lastNudge >= SUB_NUDGE_INTERVAL_MS;
+            const stillUnderCap = nudgeCount < MAX_AUTO_NUDGES;
+            const nudgeStatus = nudgeCount > 0 ? `, nudged ${nudgeCount}x` : '';
+
+            if (cooldownOk && stillUnderCap) {
+              const subAccountId = convMeta.getAssignment(sessionId) || claudeCli.ACCOUNT_CONFIG[0]?.id || 'werking';
+              const subWorkDir = convMeta.getWorkDir(sessionId) || '';
+              const subModel = convMeta.getModel(sessionId) || '';
+              const nudgeMsg = `[Auto-Nudge: STALL detected]\n${cls.signals.join(' / ')}\n\n` +
+                `Du hast die letzten Turns hauptsaechlich gelesen, aber 0 Edits/Commits gemacht.\n` +
+                `STOPP Recherche. Dein naechster Tool-Call MUSS Edit, Write oder Bash (commit/test/run) sein.\n` +
+                `Falls du wirklich blockiert bist: schreibe nur "BLOCKED: <konkrete Frage>" — finishe dich NICHT selbst.\n` +
+                `Du hast schon viel Repo-Wissen aufgebaut. Nutze es. Editiere jetzt.`;
+
+              _lastSubNudgeSentAt.set(sessionId, Date.now());
+              _subNudgeCount.set(sessionId, nudgeCount + 1);
+              claudeCli.startConversation(subAccountId, nudgeMsg, subWorkDir, sessionId, subModel)
+                .then(res => {
+                  if (res.ok) {
+                    console.log(`[Auto-Nudge] sent to ${sessionId.slice(0, 8)} (${nudgeCount + 1}/${MAX_AUTO_NUDGES})`);
+                  } else {
+                    console.warn(`[Auto-Nudge] failed for ${sessionId.slice(0, 8)}: ${res.error}`);
+                  }
+                })
+                .catch(err => console.warn(`[Auto-Nudge] error for ${sessionId.slice(0, 8)}: ${(err as Error).message}`));
+
+              lines.push(`- ${sid8} [STALLED${nudgeStatus} → auto-nudge sent ${nudgeCount + 1}/${MAX_AUTO_NUDGES}] "${title}"${sigStr} — Sub angestupst, beobachten`);
+            } else if (!stillUnderCap) {
+              lines.push(`- ${sid8} [STALLED${nudgeStatus}, cap erreicht] "${title}"${sigStr} — → kill+respawn / selbst uebernehmen`);
+            } else {
+              lines.push(`- ${sid8} [STALLED${nudgeStatus}, cooldown] "${title}"${sigStr} — naechster Nudge in ${Math.ceil((SUB_NUDGE_INTERVAL_MS - (Date.now() - lastNudge)) / 60000)}min`);
+            }
             killCmds.push(`curl -s -X POST http://localhost:${PORT}/api/mission/conversation/${sessionId}/kill`);
           } else {
             lines.push(`- ${sid8} [IN PROGRESS] "${title}"${sigStr} — → noch arbeiten lassen`);
