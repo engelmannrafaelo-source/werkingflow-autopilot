@@ -709,11 +709,16 @@ function getScenarioSummary(scenarioFile: string, reportPath: string | null): {
     }
   } catch { /* */ }
 
-  // Read report excerpt (## AI Report section or ## Bewertung)
+  // Read report excerpt (## AI Report section or ## Bewertung).
+  // meta.last_run.report_path is the in-container path (/tester/...).
+  // Convert to host path so existsSync/readFileSync find the file.
   if (reportPath) {
     try {
-      if (existsSync(reportPath)) {
-        const content = readFileSync(reportPath, 'utf-8');
+      const fsReportPath = String(reportPath).startsWith('/tester/')
+        ? String(reportPath).replace('/tester/', UNIFIED_TESTER_ROOT + '/')
+        : String(reportPath);
+      if (existsSync(fsReportPath)) {
+        const content = readFileSync(fsReportPath, 'utf-8');
         // Extract rating line
         const ratingMatch = content.match(/## Rating:.*$/m);
         const rating = ratingMatch?.[0] ?? '';
