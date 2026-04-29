@@ -297,7 +297,17 @@ router.get("/api/claude-code/best-account", (_req, res) => {
       return a.weeklyPercent - b.weeklyPercent;
     });
 
-    const best = ranked.find(a => a.available) || ranked[0];
+    const best = ranked.find(a => a.available);
+    if (!best) {
+      // All accounts critical (≥80% weekly OR extra balance depleted).
+      // Caller MUST handle 503 — picking the least-bad account here just guarantees a quota fail.
+      res.status(503).json({
+        error: "all accounts critical",
+        accounts: ranked,
+        timestamp: new Date().toISOString(),
+      });
+      return;
+    }
 
     res.json({
       bestAccount: best.accountId,
@@ -1146,6 +1156,50 @@ router.get('/api/bridge/errors', async (req: any, res: any) => {
 // A "lost" request = final status 5xx (failover failed or none attempted).
 // ============================================================================
 
+// Caller classification — Rafael-Prinzip 2026-04-29:
+// "Wenn jemand auf die Autobahn nicht auffahren kann, ist es ein Ausfall."
+// Failures count as failures regardless of caller_kind. caller_kind is
+// metadata for drill-down only, NEVER a filter.
+type CallerKind =
+  | 'production_user'  // App users (app_id ∈ {engelmann, werking-*, acro-*, …})
+  | 'workflow'         // Backend workflow runs (Energy, Safety, bridge-research)
+  | 'platform'         // dev-server / CUI internal (BusinessAngel, Classifier, …)
+  | 'test'             // unified-tester
+  | 'monitoring';      // synthetic /health probes, no workload
+
+const PRODUCTION_USER_APP_IDS = new Set([
+  'engelmann', 'werking-report', 'werking-energy', 'werking-safety',
+  'werking-noise', 'acro-community', 'platform-app',
+]);
+const WORKFLOW_APP_IDS = new Set([
+  'workflow', 'workflow-engine', 'energy-workflow', 'safety-workflow',
+  'bridge-research', 'workflows',
+]);
+const PLATFORM_APP_IDS = new Set([
+  'cui', 'business-angel', 'peer-awareness', 'classifier', 'dev-server',
+]);
+
+export function classifyCaller(e: NginxLogEntry): CallerKind {
+  const app = (e.app_id || '').trim().toLowerCase();
+  const ua = (e.user_agent || '').toLowerCase();
+  const uri = (e.uri || '').toLowerCase();
+
+  // Synthetic health probes carry no workload — only these are "monitoring".
+  if (uri === '/health' || uri === '/lb-status' || uri.startsWith('/v1/metrics')) {
+    return 'monitoring';
+  }
+  if (app === 'unified-tester' || ua.includes('unified-tester')) return 'test';
+  if (PRODUCTION_USER_APP_IDS.has(app)) return 'production_user';
+  if (WORKFLOW_APP_IDS.has(app) || ua.includes('workflow')) return 'workflow';
+  if (PLATFORM_APP_IDS.has(app) || ua.includes('cui') || ua.includes('claude-cli')) {
+    return 'platform';
+  }
+  // No app_id and not a known probe path: still real workload — treat as platform
+  // (an actual call that hit nginx, just unlabelled). NOT 'monitoring'.
+  if (!app) return 'platform';
+  return 'platform';
+}
+
 interface PoolSummary {
   requests: number;
   errors: number;          // all 4xx+5xx combined (legacy)
@@ -1157,19 +1211,22 @@ interface PoolSummary {
   p95_ms: number;
   avg_ms: number;
   rescued: number;         // 5xx rescued by failover (success for customer)
-  lost: number;            // total 5xx delivered (user + monitoring combined)
-  lost_user: number;       // 5xx on real user requests (app_id ∈ {engelmann, werking-*, …})
-  lost_monitoring: number; // 5xx on internal polling (cui, unified-tester, no app_id)
+  lost: number;            // total 5xx delivered — every caller_kind counted
+  lost_by_caller: Record<CallerKind, number>;  // drill-down per caller, sums to `lost`
+  /** @deprecated use `lost` (= total) and `lost_by_caller` */
+  lost_user: number;
+  /** @deprecated use `lost_by_caller.monitoring` */
+  lost_monitoring: number;
   retry_count: number;
   present: boolean;
 }
 
-// Internal clients whose lost 5xx reflect monitoring noise, not user-visible outages.
-// Keep in sync with the Errors-Tab classification so UI numbers agree across tabs.
+// Legacy classifier — kept only because two other tabs still read these fields.
+// New code MUST use classifyCaller() and `lost_by_caller`.
 const MONITORING_APP_IDS = new Set(['cui', 'unified-tester']);
 function isMonitoringEntry(e: NginxLogEntry): boolean {
   const app = (e.app_id || '').trim().toLowerCase();
-  if (!app) return true;                     // no app_id → internal probe
+  if (!app) return true;
   return MONITORING_APP_IDS.has(app);
 }
 
@@ -1194,18 +1251,24 @@ function percentile(sorted: number[], p: number): number {
   return sorted[idx];
 }
 
-function summarizePool(entries: NginxLogEntry[]): PoolSummary {
+function emptyLostByCaller(): Record<CallerKind, number> {
+  return { production_user: 0, workflow: 0, platform: 0, test: 0, monitoring: 0 };
+}
+
+export function summarizePool(entries: NginxLogEntry[]): PoolSummary {
   if (entries.length === 0) {
     return {
       requests: 0, errors: 0, client_errors: 0, server_errors: 0,
       error_rate: 0, server_error_rate: 0,
       p50_ms: 0, p95_ms: 0, avg_ms: 0,
-      rescued: 0, lost: 0, lost_user: 0, lost_monitoring: 0,
+      rescued: 0, lost: 0, lost_by_caller: emptyLostByCaller(),
+      lost_user: 0, lost_monitoring: 0,
       retry_count: 0, present: false,
     };
   }
   let errors = 0, clientErrors = 0, serverErrors = 0;
-  let rescued = 0, lost = 0, lostUser = 0, lostMonitoring = 0;
+  let rescued = 0, lost = 0;
+  const lostByCaller = emptyLostByCaller();
   let retries = 0, totalMs = 0;
   const durations: number[] = [];
   for (const e of entries) {
@@ -1228,14 +1291,16 @@ function summarizePool(entries: NginxLogEntry[]): PoolSummary {
       wasLost = true;
     }
     if (wasLost) {
-      if (isMonitoringEntry(e)) lostMonitoring++;
-      else lostUser++;
+      lostByCaller[classifyCaller(e)]++;
     }
     const ms = Math.max(0, (e.req_time || 0) * 1000);
     durations.push(ms);
     totalMs += ms;
   }
   durations.sort((a, b) => a - b);
+  // Deprecated legacy fields — derived from new classifier so callers stay consistent.
+  const lostUser = lostByCaller.production_user + lostByCaller.workflow + lostByCaller.platform;
+  const lostMonitoring = lostByCaller.monitoring + lostByCaller.test;
   return {
     requests: entries.length,
     errors,
@@ -1248,6 +1313,7 @@ function summarizePool(entries: NginxLogEntry[]): PoolSummary {
     avg_ms: totalMs / entries.length,
     rescued,
     lost,
+    lost_by_caller: lostByCaller,
     lost_user: lostUser,
     lost_monitoring: lostMonitoring,
     retry_count: retries,
@@ -1581,20 +1647,45 @@ router.get('/api/bridge/events', async (req: any, res: any) => {
     };
 
     const activeIncidents = incidents.filter(i => !i.resolved);
-    // Status ladder — only real user impact drives colors:
-    //   critical : any user-visible 5xx on Prod (lost_user > 0 or active prod incident)
-    //   degraded : user-visible 5xx on Dev, OR high 5xx rate on Prod, OR Dev data missing
-    //   healthy  : everything else (monitoring-only noise is ignored, see lost_monitoring)
+
+    // Worker-pool exhaustion — if ALL workers were unavailable concurrently,
+    // even briefly, that's an infra outage. Detect via account-pool-state.
+    let poolExhaustion: { detected: boolean; cooldown_workers: number; total_workers: number } = {
+      detected: false, cooldown_workers: 0, total_workers: 0,
+    };
+    try {
+      const poolState: any = await bridgeFetch('/v1/metrics/account-pool-state');
+      const accounts = (poolState && typeof poolState === 'object' && poolState.accounts) || {};
+      const accountList = Object.values(accounts) as Array<{ available?: boolean; cooldown_remaining_s?: number }>;
+      if (accountList.length > 0) {
+        const inCooldown = accountList.filter(a => a.available === false || (a.cooldown_remaining_s ?? 0) > 0).length;
+        poolExhaustion = {
+          detected: inCooldown > 0 && inCooldown === accountList.length,
+          cooldown_workers: inCooldown,
+          total_workers: accountList.length,
+        };
+      }
+    } catch { /* metrics-reader unreachable — leave defaults */ }
+
+    // Rafael-Prinzip 2026-04-29: jeder 5xx ist ein Failure. KEIN Filter nach caller_kind.
+    // Status ladder:
+    //   critical : ANY lost on Prod (any caller_kind), OR all workers in cooldown
+    //   degraded : ANY lost on Dev, high 5xx rate, partial worker cooldown, missing data
+    //   healthy  : zero lost, full worker availability
     const prodActiveLost = activeIncidents
       .filter(i => i.source === 'prod')
       .some(i => (i.count - (i.rescued_via_failover || 0)) > 0);
     const devActiveLost = activeIncidents
       .filter(i => i.source === 'dev')
       .some(i => (i.count - (i.rescued_via_failover || 0)) > 0);
+    const someWorkerInCooldown =
+      poolExhaustion.cooldown_workers > 0 &&
+      poolExhaustion.cooldown_workers < poolExhaustion.total_workers;
     const overall_status: 'healthy' | 'degraded' | 'critical' =
-      (pools.prod.lost_user > 0 || prodActiveLost) ? 'critical' :
-      (pools.dev.lost_user > 0 || devActiveLost ||
-       pools.prod.server_error_rate >= 0.5 || !pools.dev.present) ? 'degraded' :
+      (pools.prod.lost > 0 || prodActiveLost || poolExhaustion.detected) ? 'critical' :
+      (pools.dev.lost > 0 || devActiveLost ||
+       pools.prod.server_error_rate >= 0.5 || someWorkerInCooldown ||
+       !pools.dev.present) ? 'degraded' :
       'healthy';
 
     res.json({
@@ -1603,6 +1694,7 @@ router.get('/api/bridge/events', async (req: any, res: any) => {
       failover,
       incidents: incidents.slice(0, 50),
       active_incidents: activeIncidents.length,
+      pool_exhaustion: poolExhaustion,
       window_hours: hours,
       sources: sourceStats,
       generated_at: new Date().toISOString(),

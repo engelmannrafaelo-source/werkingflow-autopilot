@@ -3,6 +3,8 @@ import { bridgeJson, Toolbar, ErrorBanner, LoadingSpinner, SectionFlat } from '.
 
 // ─── Types ──────────────────────────────────────────────────────────
 
+type CallerKind = 'production_user' | 'workflow' | 'platform' | 'test' | 'monitoring';
+
 interface PoolSummary {
   requests: number;
   errors: number;
@@ -14,11 +16,20 @@ interface PoolSummary {
   p95_ms: number;
   avg_ms: number;
   rescued: number;
-  lost: number;             // total (user + monitoring)
-  lost_user: number;        // real user-visible 5xx
-  lost_monitoring: number;  // internal polling 5xx (cui/unified-tester/no app_id)
+  lost: number;             // total — every caller_kind counted (Rafael-Prinzip 2026-04-29)
+  lost_by_caller: Record<CallerKind, number>;
+  /** @deprecated use `lost` (= total) and `lost_by_caller` */
+  lost_user: number;
+  /** @deprecated use `lost_by_caller.monitoring` */
+  lost_monitoring: number;
   retry_count: number;
   present: boolean;
+}
+
+interface PoolExhaustion {
+  detected: boolean;
+  cooldown_workers: number;
+  total_workers: number;
 }
 
 interface Incident {
@@ -53,6 +64,7 @@ interface EventsData {
   failover: FailoverStats;
   incidents: Incident[];
   active_incidents: number;
+  pool_exhaustion?: PoolExhaustion;
   window_hours: number;
   sources: Record<string, { present: boolean; mtime: number | null; bytes: number; age_sec: number | null }>;
   generated_at: string;
@@ -129,11 +141,35 @@ function formatDurationLong(sec: number): string {
 
 function poolStatus(p: PoolSummary): { color: string; label: string; border: string } {
   if (!p.present) return { color: 'var(--tn-text-muted)', label: 'NO DATA', border: 'var(--tn-border)' };
-  // AUSFALL only when real user traffic hit 5xx. Monitoring-only noise → SERVER-FEHLER.
-  if (p.lost_user > 0) return { color: 'var(--tn-red)', label: 'AUSFALL', border: 'var(--tn-red)' };
-  if (p.lost_monitoring > 0) return { color: 'var(--tn-orange)', label: 'MONITORING-LOSS', border: 'var(--tn-orange)' };
+  // Rafael-Prinzip 2026-04-29: every 5xx is a failure. caller_kind drives the
+  // *label*, not whether it counts. test/monitoring losses are still infra failures.
+  if (p.lost > 0) {
+    const userImpact =
+      (p.lost_by_caller?.production_user || 0) +
+      (p.lost_by_caller?.workflow || 0);
+    if (userImpact > 0) return { color: 'var(--tn-red)', label: 'AUSFALL', border: 'var(--tn-red)' };
+    return { color: 'var(--tn-red)', label: 'AUSFALL (intern)', border: 'var(--tn-red)' };
+  }
   if (p.server_errors > 0) return { color: 'var(--tn-orange)', label: 'SERVER-FEHLER', border: 'var(--tn-orange)' };
   return { color: 'var(--tn-green)', label: 'OPERATIONAL', border: 'var(--tn-green)' };
+}
+
+const CALLER_LABELS: Record<CallerKind, string> = {
+  production_user: 'App-User',
+  workflow: 'Workflow',
+  platform: 'Platform',
+  test: 'Tester',
+  monitoring: 'Probe',
+};
+
+function lostBreakdown(p: PoolSummary): string {
+  const parts: string[] = [];
+  const lbc = p.lost_by_caller || ({} as Record<CallerKind, number>);
+  (Object.keys(CALLER_LABELS) as CallerKind[]).forEach(k => {
+    const n = lbc[k] || 0;
+    if (n > 0) parts.push(`${n} ${CALLER_LABELS[k]}`);
+  });
+  return parts.join(' · ');
 }
 
 function fmtMs(ms: number): string {
@@ -164,7 +200,7 @@ function PoolCard({ label, pool, workers, isReserve, hours }: {
   hours: number;
 }) {
   const s = poolStatus(pool);
-  const isCritical = pool.lost_user > 0;
+  const isCritical = pool.lost > 0;
 
   return (
     <div
@@ -200,19 +236,17 @@ function PoolCard({ label, pool, workers, isReserve, hours }: {
 
       <div style={{ marginBottom: 12 }}>
         <div style={{ fontSize: 24, fontWeight: 700, color: s.color, fontFamily: 'monospace', lineHeight: 1 }}>
-          {pool.lost_user > 0
-            ? `${pool.lost_user} User verloren`
-            : pool.lost_monitoring > 0
-              ? `${pool.lost_monitoring} Monitoring 5xx`
-              : pool.server_errors > 0
-                ? `${pool.server_errors} 5xx`
-                : '0 Ausfälle'}
+          {pool.lost > 0
+            ? `${pool.lost} Ausfall${pool.lost === 1 ? '' : 'e'}`
+            : pool.server_errors > 0
+              ? `${pool.server_errors} 5xx`
+              : '0 Ausfälle'}
         </div>
         <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginTop: 2 }}>
           {pool.requests.toLocaleString('de-AT')} Requests ({hours}h)
-          {pool.lost_user > 0 && pool.lost_monitoring > 0 && (
-            <span style={{ marginLeft: 6, color: 'var(--tn-orange)' }}>
-              · +{pool.lost_monitoring} Polling
+          {pool.lost > 0 && (
+            <span style={{ marginLeft: 6, color: 'var(--tn-orange)' }} title="Drill-Down nach Caller">
+              · {lostBreakdown(pool) || `${pool.lost} 5xx`}
             </span>
           )}
           {pool.client_errors > 0 && (
@@ -257,16 +291,20 @@ function PoolCard({ label, pool, workers, isReserve, hours }: {
               ✓ {pool.rescued} gerettet
             </span>
           )}
-          {pool.lost_user > 0 && (
-            <span style={{ color: 'var(--tn-red)' }}>
-              ✗ {pool.lost_user} User
-            </span>
-          )}
-          {pool.lost_monitoring > 0 && (
-            <span style={{ color: 'var(--tn-orange)' }} title="Internes Polling (cui, unified-tester) — kein User-Impact">
-              ⚠ {pool.lost_monitoring} Polling
-            </span>
-          )}
+          {(Object.keys(CALLER_LABELS) as CallerKind[]).map(k => {
+            const n = pool.lost_by_caller?.[k] || 0;
+            if (n === 0) return null;
+            const userImpact = k === 'production_user' || k === 'workflow';
+            return (
+              <span
+                key={k}
+                style={{ color: userImpact ? 'var(--tn-red)' : 'var(--tn-orange)' }}
+                title={`Caller: ${k}`}
+              >
+                ✗ {n} {CALLER_LABELS[k]}
+              </span>
+            );
+          })}
           {pool.retry_count > 0 && (
             <span style={{ color: 'var(--tn-text-muted)' }}>
               {pool.retry_count} Retries
@@ -614,9 +652,10 @@ export default function StatusTab() {
   }
 
   const prodServerErrors = events?.pools.prod.server_errors ?? 0;
-  const prodLostUser = events?.pools.prod.lost_user ?? 0;
-  const devLostUser = events?.pools.dev.lost_user ?? 0;
+  const prodLost = events?.pools.prod.lost ?? 0;
+  const devLost = events?.pools.dev.lost ?? 0;
   const devPresent = events?.pools.dev.present ?? true;
+  const exhaustion = events?.pool_exhaustion;
   const overall = events?.overall_status ?? 'healthy';
   const overallColor =
     overall === 'critical' ? 'var(--tn-red)' :
@@ -626,20 +665,36 @@ export default function StatusTab() {
     overall === 'critical' ? 'KRITISCH' :
     overall === 'degraded' ? 'DEGRADIERT' :
     'ALLES OK';
-  // Build an honest subtitle that names the driver — critical/degraded must
-  // explain *why*, otherwise the top status looks fake against the incident list.
-  const degradedReason: string = (() => {
-    if (devLostUser > 0) return `${devLostUser} Dev-User-Requests verloren`;
-    if (prodServerErrors > 0 && (events?.pools.prod.server_error_rate ?? 0) >= 0.5) {
-      return `${prodServerErrors} Prod 5xx-Fehler (${(events!.pools.prod.server_error_rate).toFixed(1)}%)`;
+  // Rafael-Prinzip: jeder lost ist ein Failure. Subtitle nennt den Driver
+  // ehrlich (auch wenn nur Tester betroffen ist — ein Tester-Fail ist Infra-Fail).
+  const buildDriverText = (p: PoolSummary | undefined, label: string): string | null => {
+    if (!p || p.lost === 0) return null;
+    return `${p.lost} ${label}-Ausfälle (${lostBreakdown(p) || 'unbekannt'})`;
+  };
+  const subtitle: string = (() => {
+    if (overall === 'critical') {
+      if (exhaustion?.detected) {
+        return `Worker-Pool erschöpft: ${exhaustion.cooldown_workers}/${exhaustion.total_workers} in Cooldown`;
+      }
+      return buildDriverText(events?.pools.prod, 'Prod') ||
+             buildDriverText(events?.pools.dev, 'Dev') ||
+             'Prod-Server-Fehler aktiv';
     }
-    if (!devPresent) return 'Dev-Daten nicht verfügbar';
-    return 'Monitoring-Fehler aktiv';
+    if (overall === 'degraded') {
+      if (devLost > 0) return buildDriverText(events?.pools.dev, 'Dev')!;
+      if (exhaustion && exhaustion.cooldown_workers > 0) {
+        return `${exhaustion.cooldown_workers}/${exhaustion.total_workers} Workers in Cooldown`;
+      }
+      if (prodServerErrors > 0 && (events?.pools.prod.server_error_rate ?? 0) >= 0.5) {
+        return `${prodServerErrors} Prod 5xx-Fehler (${(events!.pools.prod.server_error_rate).toFixed(1)}%)`;
+      }
+      if (!devPresent) return 'Dev-Daten nicht verfügbar';
+      return 'Server-Fehler-Rate erhöht';
+    }
+    if (prodLost === 0 && devLost === 0) return 'Keine Ausfälle';
+    return 'Keine Ausfälle';  // unreachable: lost>0 ⇒ degraded oder critical
   })();
-  const overallSubtitle =
-    overall === 'critical' ? (prodLostUser > 0 ? `${prodLostUser} Prod-User-Requests verloren` : 'Prod-Server-Fehler aktiv') :
-    overall === 'degraded' ? degradedReason :
-    'Keine Kundenimpact-Fehler';
+  const overallSubtitle = subtitle;
 
   return (
     <div data-ai-id="bridge-status-tab" style={{ padding: 12 }}>
