@@ -104,9 +104,14 @@ export type ConvAttentionState = _ConvAttentionState;
 export type SessionState = _SessionState;
 
 // --- Persistent Storage Dirs ---
-export const DATA_DIR = IS_LOCAL_MODE
-  ? resolve(process.env.CUI_DATA_DIR || join(homedir(), '.cui', 'local-data'))
-  : resolve(import.meta.dirname ?? __dirname, '..', '..', 'data');
+// CUI_DATA_DIR (set via systemd Environment=) takes precedence on any deployment.
+// Falls back to per-machine defaults: ~/.cui/local-data on dev (LOCAL_MODE),
+// or <cui-root>/data on a built deployment.
+export const DATA_DIR = process.env.CUI_DATA_DIR
+  ? resolve(process.env.CUI_DATA_DIR)
+  : IS_LOCAL_MODE
+    ? resolve(join(homedir(), '.cui', 'local-data'))
+    : resolve(import.meta.dirname ?? __dirname, '..', '..', 'data');
 export const PROJECTS_DIR = join(DATA_DIR, 'projects');
 export const NOTES_DIR = join(DATA_DIR, 'notes');
 export const LAYOUTS_DIR = join(DATA_DIR, 'layouts');
