@@ -506,6 +506,7 @@ function resolveStatusFromReports(
   scenarioId: string,
   reports: Record<string, ScannedReport>,
   scenarioFile?: string,
+  registryEntry?: any,
 ): string {
   const report = reports[scenarioId];
   if (!report) return 'PENDING';
@@ -514,7 +515,7 @@ function resolveStatusFromReports(
   // are not "verified for any version" and are returned as-is.
   if (baseStatus !== 'PASS' && baseStatus !== 'PARTIAL') return baseStatus;
   if (!scenarioFile) return baseStatus;
-  if (isScenarioStale(scenarioFile)) return 'STALE';
+  if (isScenarioStale(scenarioFile, registryEntry, report.reportPath)) return 'STALE';
   return baseStatus;
 }
 
@@ -528,17 +529,43 @@ function resolveStatusFromReports(
  * meta.last_run, no SHA on either side) — the layer-level CLI handles
  * the date-based fallback for those cases.
  */
-function isScenarioStale(scenarioFile: string): boolean {
+function isScenarioStale(scenarioFile: string, registryEntry?: any, reportPath?: string | null): boolean {
   try {
     const data = readJSON(scenarioFile);
     if (!data) return false;
-    const lastRun = data?.meta?.last_run;
     const generated = data?.generated;
-    if (!lastRun || !generated) return false;
-    const testedAuftrag = lastRun.tested_against_sha;
+    if (!generated) return false;
     const currentAuftrag = generated.auftrag_sha;
-    if (currentAuftrag && testedAuftrag && currentAuftrag !== testedAuftrag) return true;
-    if (currentAuftrag && !testedAuftrag) return true;
+    if (!currentAuftrag) return false;
+
+    // Source 1: scenario.meta.last_run.tested_against_sha (newer pipeline)
+    const lastRun = data?.meta?.last_run;
+    if (lastRun) {
+      const testedAuftrag = lastRun.tested_against_sha;
+      if (testedAuftrag && testedAuftrag !== currentAuftrag) return true;
+      if (!testedAuftrag) return true;
+    }
+
+    // Source 2: scenario_registry.json entry (older pipeline + locks)
+    // After regen the registry can still hold a PASS for a previous
+    // auftrag_sha. Without this check, mergeRegistryIntoReports would
+    // surface that PASS as fresh.
+    if (registryEntry) {
+      const regAuftrag = registryEntry.auftrag_sha;
+      if (regAuftrag && regAuftrag !== currentAuftrag) return true;
+      if (!regAuftrag) return true; // legacy entry without sha tracking
+    }
+
+    // Source 3: report file existence. A registry/last_run entry that
+    // points at a non-existent report file (archived, deleted, never
+    // written because the runner crashed) is not a verified PASS.
+    if (reportPath) {
+      const fsPath = reportPath.startsWith('/tester/')
+        ? reportPath.replace('/tester/', UNIFIED_TESTER_ROOT + '/')
+        : reportPath;
+      if (!existsSync(fsPath)) return true;
+    }
+
     return false;
   } catch {
     return false;
@@ -763,6 +790,20 @@ function getPyramidData(appId: string) {
   const scannedReports = scanReportsForApp(appId);
   mergeRegistryIntoReports(appId, scannedReports);
 
+  // Per-scenario registry lookup map for stale detection — used below
+  // when resolving per-test status. Allows isScenarioStale() to compare
+  // current scenario.auftrag_sha against the registry entry's recorded
+  // auftrag_sha (catches the case where the scenario was regenerated
+  // but the registry still points at the old PASS).
+  const registryRaw = readJSON(SCENARIO_REGISTRY);
+  const registryByScenarioId: Record<string, any> = {};
+  if (registryRaw?.scenarios) {
+    const prefix = appId + '.';
+    for (const [sid, entry] of Object.entries(registryRaw.scenarios as Record<string, any>)) {
+      if (sid.startsWith(prefix)) registryByScenarioId[sid] = entry;
+    }
+  }
+
   // Also check for flat scenarios (not in layer dirs — e.g. werking-safety, werking-noise)
   const flatScenarios: Array<{ id: string; file: string }> = [];
   try {
@@ -810,7 +851,7 @@ function getPyramidData(appId: string) {
         const scenarios = scanLayerScenarios(layerDir);
         for (const s of scenarios) {
           const report = scannedReports[s.id];
-          const status = resolveStatusFromReports(s.id, scannedReports, s.file);
+          const status = resolveStatusFromReports(s.id, scannedReports, s.file, registryByScenarioId[s.id]);
           const score = report?.score ?? null;
           if (status === 'PASS') sPassed++;
           else if (status === 'FAIL' || status === 'ERROR') sFailed++;
@@ -907,7 +948,7 @@ function getPyramidData(appId: string) {
 
     const tests = scenarios.map(s => {
       const report = scannedReports[s.id];
-      const status = resolveStatusFromReports(s.id, scannedReports, s.file);
+      const status = resolveStatusFromReports(s.id, scannedReports, s.file, registryByScenarioId[s.id]);
       const score = report?.score ?? null;
       const lastRun = report?.timestamp ?? null;
       const reportPath = report?.reportPath ?? null;
@@ -957,7 +998,7 @@ function getPyramidData(appId: string) {
     const scores: number[] = [];
     const tests = ungrouped.map(s => {
       const report = scannedReports[s.id];
-      const status = resolveStatusFromReports(s.id, scannedReports, s.file);
+      const status = resolveStatusFromReports(s.id, scannedReports, s.file, registryByScenarioId[s.id]);
       const score = report?.score ?? null;
       if (status === 'PASS') passed++;
       else if (status === 'FAIL' || status === 'ERROR') failed++;
