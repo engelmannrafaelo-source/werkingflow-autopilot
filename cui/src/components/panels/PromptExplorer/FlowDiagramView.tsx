@@ -58,6 +58,26 @@ interface CrossPhaseFlow {
   to: string[];
 }
 
+interface PhaseSectionEnrichment {
+  sectionedLoads: { sourcePhase: number; requestingPhase: number; sourceFile: string }[];
+  directReads: { phaseDir: string; path: string }[];
+  consumersNeed: Record<string, string[]>;
+  consumersDescription: Record<string, string>;
+  liveMeasurements: Record<
+    string,
+    {
+      sourcePhase: number;
+      requestingPhase: number;
+      fullChars: number;
+      sectionedChars: number;
+      reductionPct: number;
+      strategy: string;
+      sectionsKept: string[];
+    }
+  >;
+  producerMarkers: { fileChars?: number; markerCount?: number; taggedConsumers?: number[] };
+}
+
 interface PipelineScanResult {
   id: string;
   name: string;
@@ -68,6 +88,8 @@ interface PipelineScanResult {
   finalOutputs?: string[];
   crossPhaseFlow?: CrossPhaseFlow[];
   scannedAt?: string;
+  sectionEnrichment?: Record<number, PhaseSectionEnrichment>;
+  liveProjectPath?: string;
 }
 
 interface ConnLine {
@@ -354,6 +376,34 @@ export default function FlowDiagramView({ pipeline, selectedPromptFile, onSelect
                   </span>
                   {phase.iterative && <span className="pe-fd-loop-badge" style={{ color: phaseColor }}>↻ iterative</span>}
                   <span className="pe-fd-phase-count">{(phase.steps ?? []).length} step{(phase.steps ?? []).length !== 1 ? 's' : ''}</span>
+                  {(() => {
+                    const enrich = pipeline.sectionEnrichment?.[phase.number ?? -1];
+                    if (!enrich) return null;
+                    const mc = enrich.producerMarkers.markerCount ?? 0;
+                    const tagged = enrich.producerMarkers.taggedConsumers ?? [];
+                    if (mc === 0 && tagged.length === 0) {
+                      return (
+                        <span className="pe-fd-marker-badge" title="No <!-- needed_by --> markers in this phase's output (downstream loaders fall back to keyword matching)" style={{ color: '#f7768e', borderColor: '#f7768e40', background: '#f7768e10' }}>
+                          ⚠ no markers
+                        </span>
+                      );
+                    }
+                    return (
+                      <span className="pe-fd-marker-badge" title={`Output contains ${mc} needed_by markers tagged for: ${tagged.map(p => `phase_${p}`).join(', ')}`} style={{ color: '#9ece6a', borderColor: '#9ece6a40', background: '#9ece6a10' }}>
+                        ✓ {mc} marker{mc === 1 ? '' : 's'} → {tagged.length} phase{tagged.length === 1 ? '' : 's'}
+                      </span>
+                    );
+                  })()}
+                  {(() => {
+                    const enrich = pipeline.sectionEnrichment?.[phase.number ?? -1];
+                    const sectionedLoads = enrich?.sectionedLoads ?? [];
+                    if (sectionedLoads.length === 0) return null;
+                    return (
+                      <span className="pe-fd-marker-badge" title={`This phase loads sectioned data from upstream: ${sectionedLoads.map(s => `phase_${s.sourcePhase}`).join(', ')}`} style={{ color: '#7dcfff', borderColor: '#7dcfff40', background: '#7dcfff10' }}>
+                        ← {sectionedLoads.length} sectioned load{sectionedLoads.length === 1 ? '' : 's'}
+                      </span>
+                    );
+                  })()}
                 </div>
 
                 {/* Steps row */}
@@ -413,19 +463,52 @@ export default function FlowDiagramView({ pipeline, selectedPromptFile, onSelect
                   })}
                 </div>
 
-                {/* CrossPhaseFlow outputs for this phase */}
+                {/* CrossPhaseFlow outputs for this phase. When section
+                    enrichment is present we replace the coarse file-level
+                    flow with per-consumer rows that include live reduction %
+                    so the user sees what each downstream phase actually
+                    pulls (markers/keywords/full + size delta). */}
                 {(() => {
                   const outFlows = crossPhaseFlow.filter(f => f.from.split('/')[0] === phase.id);
                   if (outFlows.length === 0) return null;
+                  // Merge consumer phase numbers with their live measurement
+                  const consumerInfo: { id: string; reduction?: number; strategy?: string }[] = [];
+                  const seen = new Set<string>();
+                  for (const flow of outFlows) {
+                    for (const to of (flow.to ?? [])) {
+                      if (seen.has(to)) continue;
+                      seen.add(to);
+                      // Pull live measurement from THE CONSUMER's enrichment
+                      // (live[src->req] is keyed on the consumer's phase view)
+                      const consumerNum = Number((to.match(/\d+/) ?? [])[0]);
+                      const phaseNum = phase.number ?? -1;
+                      const consumerEnrich = pipeline.sectionEnrichment?.[consumerNum];
+                      const live = consumerEnrich?.liveMeasurements?.[`${phaseNum}->${consumerNum}`];
+                      consumerInfo.push({
+                        id: to,
+                        reduction: live?.reductionPct,
+                        strategy: live?.strategy,
+                      });
+                    }
+                  }
                   return (
                     <div className="pe-fd-phase-flows">
-                      {outFlows.map((flow, fi) => (
-                        <div key={fi} className="pe-fd-flow-tag" style={{ color: '#bb9af7', borderColor: '#bb9af740', background: '#bb9af708' }}>
-                          <span style={{ opacity: 0.6 }}>→</span>
-                          {' '}
-                          {(flow.to ?? []).join(', ')}
-                        </div>
-                      ))}
+                      {consumerInfo.map((c, fi) => {
+                        const colorByStrategy =
+                          c.strategy === 'markers' ? '#9ece6a' :
+                          c.strategy === 'keywords' ? '#e0af68' :
+                          c.strategy === 'full' ? '#f7768e' : '#bb9af7';
+                        const label = c.reduction != null
+                          ? `${c.id} (${c.strategy}, -${c.reduction.toFixed(0)}%)`
+                          : c.id;
+                        return (
+                          <div key={fi} className="pe-fd-flow-tag" title={c.strategy ? `Loading strategy: ${c.strategy}; reduction ${c.reduction?.toFixed(1)}%` : 'No live measurement'} style={{ color: colorByStrategy, borderColor: colorByStrategy + '40', background: colorByStrategy + '08' }}>
+                            <span style={{ opacity: 0.6 }}>→</span>
+                            {' '}
+                            {label}
+                          </div>
+                        );
+                      })}
                     </div>
                   );
                 })()}

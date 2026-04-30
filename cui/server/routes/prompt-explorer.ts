@@ -35,9 +35,12 @@ export function createPromptExplorerRouter(): Router {
     res.json({ pipelines });
   });
 
-  // Full scan of a single pipeline
+  // Full scan of a single pipeline.
+  // Optional ?project=<absolute-pipeline-root> triggers live section-loading
+  // measurements via the Python inspector (energy pipeline only).
   router.get('/scan/:id', (req: Request, res: Response) => {
-    const result = scanPipeline(req.params.id);
+    const liveProjectPath = typeof req.query.project === 'string' ? req.query.project : undefined;
+    const result = scanPipeline(req.params.id, { liveProjectPath });
     if (!result) {
       res.status(404).json({ error: `Pipeline "${req.params.id}" not found` });
       return;

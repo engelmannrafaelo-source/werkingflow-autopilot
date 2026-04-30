@@ -1128,6 +1128,90 @@
   flex-shrink: 0;
 }
 
+/* Section-marker info badges (energy pipeline only) */
+.pe-fd-marker-badge {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border: 1px solid;
+  border-radius: 3px;
+  flex-shrink: 0;
+  letter-spacing: 0.02em;
+  cursor: help;
+}
+
+/* Live-project measurement bar (between title-bar and flow list) */
+.pe-live-project-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--tn-bg-elev, #1f2335);
+  border-bottom: 1px solid var(--tn-border, #292e42);
+  font-size: 11px;
+}
+
+.pe-live-project-label {
+  color: var(--tn-text-muted, #565f89);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.pe-live-project-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  background: var(--tn-bg, #1a1b26);
+  border: 1px solid var(--tn-border, #292e42);
+  border-radius: 3px;
+  color: var(--tn-text, #c0caf5);
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 11px;
+}
+
+.pe-live-project-input:focus {
+  outline: none;
+  border-color: #7aa2f7;
+}
+
+.pe-live-project-apply,
+.pe-live-project-clear {
+  padding: 4px 10px;
+  background: #7aa2f720;
+  border: 1px solid #7aa2f750;
+  color: #7aa2f7;
+  border-radius: 3px;
+  font-size: 11px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.pe-live-project-apply:hover {
+  background: #7aa2f730;
+}
+
+.pe-live-project-clear {
+  background: #f7768e15;
+  border-color: #f7768e40;
+  color: #f7768e;
+}
+
+.pe-live-project-clear:hover {
+  background: #f7768e25;
+}
+
+.pe-live-project-badge {
+  font-size: 9px;
+  font-weight: 700;
+  color: #9ece6a;
+  padding: 2px 6px;
+  background: #9ece6a15;
+  border: 1px solid #9ece6a40;
+  border-radius: 3px;
+  flex-shrink: 0;
+  letter-spacing: 0.02em;
+}
+
 /* Steps row */
 .pe-fd-steps-row {
   display: flex;

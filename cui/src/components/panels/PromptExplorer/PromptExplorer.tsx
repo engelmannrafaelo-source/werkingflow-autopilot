@@ -102,6 +102,23 @@ interface ValidationIssue {
   message: string;
 }
 
+interface PhaseSectionEnrichment {
+  sectionedLoads: { sourcePhase: number; requestingPhase: number; sourceFile: string }[];
+  directReads: { phaseDir: string; path: string }[];
+  consumersNeed: Record<string, string[]>;
+  consumersDescription: Record<string, string>;
+  liveMeasurements: Record<string, {
+    sourcePhase: number;
+    requestingPhase: number;
+    fullChars: number;
+    sectionedChars: number;
+    reductionPct: number;
+    strategy: string;
+    sectionsKept: string[];
+  }>;
+  producerMarkers: { fileChars?: number; markerCount?: number; taggedConsumers?: number[] };
+}
+
 interface PipelineScanResult {
   id: string;
   name: string;
@@ -113,6 +130,8 @@ interface PipelineScanResult {
   crossPhaseFlow?: CrossPhaseFlow[];
   validationIssues?: ValidationIssue[];
   scannedAt?: string;
+  sectionEnrichment?: Record<number, PhaseSectionEnrichment>;
+  liveProjectPath?: string;
 }
 
 interface PipelineSummary {
@@ -157,6 +176,16 @@ export default function PromptExplorer() {
   const [fileContent, setFileContent] = useState<FileContent | null>(null);
   const [fileLoading, setFileLoading] = useState(false);
 
+  // Live-project path for section-loading measurements (energy pipeline only).
+  // Persisted across reloads via localStorage so the user doesn't have to
+  // re-paste their pipeline-root path every time.
+  const [liveProjectPath, setLiveProjectPath] = useState<string>(
+    () => typeof window !== 'undefined'
+      ? (window.localStorage.getItem('pe.liveProjectPath') ?? '')
+      : '',
+  );
+  const [liveProjectInput, setLiveProjectInput] = useState<string>(liveProjectPath);
+
   useEffect(() => {
     fetch('/api/prompt-explorer/pipelines')
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
@@ -170,11 +199,14 @@ export default function PromptExplorer() {
       .catch(err => { setError(`Failed to load: ${err.message}`); setLoading(false); });
   }, []);
 
-  const loadPipeline = useCallback((id: string) => {
+  const loadPipeline = useCallback((id: string, projectPath?: string) => {
     setLoading(true);
     setExpandedPhase(null);
     setSelectedPromptFile(null);
-    fetch(`/api/prompt-explorer/scan/${id}`)
+    const url = projectPath
+      ? `/api/prompt-explorer/scan/${id}?project=${encodeURIComponent(projectPath)}`
+      : `/api/prompt-explorer/scan/${id}`;
+    fetch(url)
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then(raw => {
         const data = validateApiResponse<PipelineScanResult>(raw, `/api/prompt-explorer/scan/${id}`, {
@@ -187,6 +219,21 @@ export default function PromptExplorer() {
       })
       .catch(err => { setError(`Failed to scan: ${err.message}`); setLoading(false); });
   }, []);
+
+  const applyLiveProject = useCallback(() => {
+    const trimmed = liveProjectInput.trim();
+    setLiveProjectPath(trimmed);
+    if (typeof window !== 'undefined') {
+      if (trimmed) {
+        window.localStorage.setItem('pe.liveProjectPath', trimmed);
+      } else {
+        window.localStorage.removeItem('pe.liveProjectPath');
+      }
+    }
+    if (activePipeline) {
+      loadPipeline(activePipeline.id, trimmed || undefined);
+    }
+  }, [liveProjectInput, activePipeline, loadPipeline]);
 
   const loadFileContent = useCallback(async (path: string) => {
     setSelectedFilePath(path);
@@ -222,7 +269,7 @@ export default function PromptExplorer() {
           <div className="pe-title-bar">Pipeline Explorer</div>
           <div className="pe-pipeline-grid">
             {pipelines.map(p => (
-              <button key={p.id} className="pe-pipeline-card" onClick={() => loadPipeline(p.id)}>
+              <button key={p.id} className="pe-pipeline-card" onClick={() => loadPipeline(p.id, liveProjectPath || undefined)}>
                 <span className={`pe-dot ${p.hasErrors ? 'error' : 'ok'}`} />
                 <span className="pe-card-name">{p.name}</span>
                 <span className="pe-card-stats">
@@ -272,6 +319,30 @@ export default function PromptExplorer() {
           </div>
           <span className="pe-scanned">{activePipeline.scannedAt ? new Date(activePipeline.scannedAt).toLocaleTimeString() : ''}</span>
         </div>
+        {activePipeline.id === 'energy' && viewMode === 'flow' && (
+          <div className="pe-live-project-bar" title="Pipeline-root path of a real project run. When set, the Flow tab shows live section-loading reductions per phase boundary instead of just the static contract.">
+            <label className="pe-live-project-label">Live project:</label>
+            <input
+              className="pe-live-project-input"
+              type="text"
+              placeholder="/root/projekte/local-storage/.../pipeline/<id>"
+              value={liveProjectInput}
+              onChange={e => setLiveProjectInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') applyLiveProject(); }}
+            />
+            <button className="pe-live-project-apply" onClick={applyLiveProject}>
+              {liveProjectPath ? 'Re-measure' : 'Measure'}
+            </button>
+            {liveProjectPath && (
+              <button className="pe-live-project-clear" onClick={() => { setLiveProjectInput(''); setLiveProjectPath(''); if (typeof window !== 'undefined') window.localStorage.removeItem('pe.liveProjectPath'); if (activePipeline) loadPipeline(activePipeline.id); }}>
+                Clear
+              </button>
+            )}
+            {activePipeline.liveProjectPath && (
+              <span className="pe-live-project-badge" title={`Live measurements active against ${activePipeline.liveProjectPath}`}>● live</span>
+            )}
+          </div>
+        )}
         <div className="pe-flow-list">
           {viewMode === 'flow' ? (
             <FlowDiagramView

@@ -139,6 +139,41 @@ export interface ValidationIssue {
   message: string;
 }
 
+/**
+ * Section-loading enrichment from the Python inspector. Optional — only
+ * energy pipeline emits it today, and only when the inspector script is
+ * available on disk. See ``server/section-bridge.ts``.
+ */
+export interface PhaseSectionEnrichment {
+  /** ``ctx_mgr.load_phase_section()`` calls this phase's loader makes */
+  sectionedLoads: { sourcePhase: number; requestingPhase: number; sourceFile: string }[];
+  /** Direct ``read_text()`` references this phase's loader still does */
+  directReads: { phaseDir: string; path: string }[];
+  /** What this producer's downstream consumers say they need (registry view) */
+  consumersNeed: Record<string, string[]>;
+  /** Human-readable purpose strings keyed by consumer phase number */
+  consumersDescription: Record<string, string>;
+  /** Live measurements keyed as "src->req" (only with --project) */
+  liveMeasurements: Record<
+    string,
+    {
+      sourcePhase: number;
+      requestingPhase: number;
+      fullChars: number;
+      sectionedChars: number;
+      reductionPct: number;
+      strategy: string;
+      sectionsKept: string[];
+    }
+  >;
+  /** This phase's output file marker scan */
+  producerMarkers: {
+    fileChars?: number;
+    markerCount?: number;
+    taggedConsumers?: number[];
+  };
+}
+
 export interface PipelineScanResult {
   id: string;
   name: string;
@@ -150,11 +185,17 @@ export interface PipelineScanResult {
   crossPhaseFlow: CrossPhaseFlow[];
   validationIssues: ValidationIssue[];
   scannedAt: string;
+  /** Per-phase section-loading info, keyed by phase number. Empty when the
+   *  pipeline has no Python inspector wired (today: only `energy` emits it). */
+  sectionEnrichment?: Record<number, PhaseSectionEnrichment>;
+  /** Project-pipeline-root path used for live measurements, when set */
+  liveProjectPath?: string;
 }
 
 // ─── Pipeline Registry (hardcoded paths — these ARE the source of truth) ─────
 
 import { PATHS } from './config/paths.js';
+import { runInspector, indexByPhase, type PhaseSectionInfo } from './section-bridge.js';
 
 const PIPELINE_CONFIGS: PipelineConfig[] = [
   {
@@ -1193,7 +1234,43 @@ function buildResult(
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 /** Scan a single pipeline by ID */
-export function scanPipeline(pipelineId: string): PipelineScanResult | null {
+/** Convert PhaseSectionInfo (Python snake_case shape) to PhaseSectionEnrichment (TS). */
+function toEnrichment(p: PhaseSectionInfo): PhaseSectionEnrichment {
+  return {
+    sectionedLoads: p.sectioned_loads.map(c => ({
+      sourcePhase: c.source_phase,
+      requestingPhase: c.requesting_phase,
+      sourceFile: c.source_file,
+    })),
+    directReads: p.direct_reads.map(d => ({
+      phaseDir: d.phase_dir,
+      path: d.path,
+    })),
+    consumersNeed: p.consumers_need ?? {},
+    consumersDescription: p.consumers_descr ?? {},
+    liveMeasurements: Object.fromEntries(
+      Object.entries(p.live ?? {}).map(([key, m]) => [
+        key,
+        {
+          sourcePhase: m.source_phase,
+          requestingPhase: m.requesting_phase,
+          fullChars: m.full_chars,
+          sectionedChars: m.sectioned_chars,
+          reductionPct: m.reduction_pct,
+          strategy: m.strategy,
+          sectionsKept: m.sections_kept ?? [],
+        },
+      ]),
+    ),
+    producerMarkers: {
+      fileChars: p.producer_marker_info?.file_chars,
+      markerCount: p.producer_marker_info?.marker_count,
+      taggedConsumers: p.producer_marker_info?.tagged_consumers,
+    },
+  };
+}
+
+export function scanPipeline(pipelineId: string, options: { liveProjectPath?: string } = {}): PipelineScanResult | null {
   const config = PIPELINE_CONFIGS.find(c => c.id === pipelineId);
   if (!config) return null;
 
@@ -1219,6 +1296,22 @@ export function scanPipeline(pipelineId: string): PipelineScanResult | null {
   // Load and apply annotations
   const annotations = loadAnnotations(config);
   applyAnnotations(result, annotations);
+
+  // ─── Section-loading enrichment (energy pipeline only) ─────────────────
+  if (config.id === 'energy') {
+    const inspector = runInspector(options.liveProjectPath);
+    if (inspector) {
+      const indexed = indexByPhase(inspector);
+      const enrichment: Record<number, PhaseSectionEnrichment> = {};
+      for (const [phaseNum, info] of Object.entries(indexed)) {
+        enrichment[Number(phaseNum)] = toEnrichment(info);
+      }
+      result.sectionEnrichment = enrichment;
+      if (options.liveProjectPath) {
+        result.liveProjectPath = options.liveProjectPath;
+      }
+    }
+  }
 
   // ─── Post-scan: Call-Site Analysis ─────────────────────────────────────
   // Collect all prompt files from the scan result
