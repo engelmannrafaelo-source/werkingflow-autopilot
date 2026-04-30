@@ -25,3 +25,7 @@ cui/data/uploads/
 cui/tsconfig.tsbuildinfo
 .env.server
 .env.*
+
+# Runtime data
+cui/data/errors.jsonl
+cui/dist-partner/
