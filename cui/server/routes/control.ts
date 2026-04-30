@@ -268,9 +268,9 @@ export default function createControlRouter(deps: ControlDeps): Router {
     let idCounter = 1;
     const nextId = () => `#auto-${idCounter++}`;
 
-    const cuiTabs = mainConvs.map((c, i) => ({
+    const cuiTabs = mainConvs.map((c) => ({
       type: 'tab' as const, id: nextId(),
-      name: c.customName || `Session ${i + 1}`,
+      name: 'Chat',
       component: 'cui',
       config: { initialSessionId: c.sessionId, accountId: c.accountId },
     }));
