@@ -8,6 +8,8 @@
 import { resolve, join } from 'path';
 import { readFileSync, existsSync, mkdirSync } from 'fs';
 import { atomicWriteFileSync } from './shared/utils.js';
+import * as convMeta from './shared/conv-metadata.js';
+import { removeSessionFromLayouts } from './shared/layout-utils.js';
 import { homedir } from 'os';
 import { watch } from 'chokidar';
 import type { WebSocket as WsType, WebSocketServer as WssType } from 'ws';
@@ -61,6 +63,14 @@ function updatePanelVisibility(data: { panelId: string; projectId: string; accou
           entry.sessionId = '';
           entry.route = '';
         }
+      }
+      // Auto-unfinish: a session that's now visible in an active CUI panel is
+      // by definition active again. User must explicitly finish it once more
+      // (Mission Control finish button or X close).
+      if (convMeta.isFinished(data.sessionId)) {
+        convMeta.setFinished(data.sessionId, false);
+        console.log(`[Visibility] Session ${data.sessionId.slice(0, 8)} re-opened in panel ${data.panelId} — cleared finished flag`);
+        broadcast({ type: 'control:conversation-unfinished', sessionId: data.sessionId, projectId: data.projectId, panelId: data.panelId });
       }
     }
     broadcast({ type: 'visibility-update', visibleSessionIds: [...getVisibleSessionIds()] });
@@ -123,6 +133,25 @@ const SESSION_STATES_FILE = join(DATA_DIR, "session-states.json");
 for (const dir of [PROJECTS_DIR, NOTES_DIR, LAYOUTS_DIR, UPLOADS_DIR, ACTIVE_DIR]) {
   mkdirSync(dir, { recursive: true });
 }
+
+// Layout zombie-cleanup: when any session is marked finished, drop its CUI
+// tab(s) from every persisted layout file. Without this, finished sessions
+// reappear as ghost tabs after a frontend reload (runAutoLayout only adds
+// missing ongoing sessions, it never removes finished ones).
+convMeta.onFinishedChange((sessionId, finished) => {
+  if (!finished) return;
+  let changes;
+  try {
+    changes = removeSessionFromLayouts(LAYOUTS_DIR, sessionId);
+  } catch (err) {
+    console.warn('[Layout] Zombie cleanup failed for', sessionId.slice(0, 8), err instanceof Error ? err.message : err);
+    return;
+  }
+  for (const c of changes) {
+    console.log(`[Layout] Removed ${c.removed} zombie tab(s) for session ${sessionId.slice(0, 8)} from ${c.projectId}`);
+    broadcast({ type: 'control:apply-layout', projectId: c.projectId, layout: c.layout });
+  }
+});
 
 export const sessionStates = new Map<string, SessionState>();
 

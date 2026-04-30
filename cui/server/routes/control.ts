@@ -8,6 +8,7 @@ import type { WebSocket } from 'ws';
 import type { SessionState, ConvAttentionState, AttentionReason, PanelVisibility } from './state.js';
 import * as convMeta from './shared/conv-metadata.js';
 import { findJsonlPathAllAccounts } from './shared/jsonl.js';
+import { removeSessionFromLayouts, collectLayoutSessionIds } from './shared/layout-utils.js';
 import { getOrphanCleanupStatus, killOrphanProcesses, getActiveProcesses } from './claude-cli.js';
 
 const execAsync = promisify(exec);
@@ -342,16 +343,47 @@ export default function createControlRouter(deps: ControlDeps): Router {
     return { triggered: true, total: mainConvs.length + subConvs.length, subSessions: subConvs.length };
   }
 
-  // Backwards-compat wrapper — project/switch now only checks status, never overwrites
-  async function runAutoLayout(projectId: string): Promise<{ triggered: boolean; reason?: string; total?: number; existing?: number; unassigned?: number; subSessions?: number }> {
+  // Backwards-compat wrapper — project/switch checks status and prunes zombie tabs.
+  // Zombies = CUI tabs whose sessionId is not in the live ongoing-conversation set.
+  // Cleanup never *adds* panels (that's generateLayout's job); it only removes
+  // dead ones so the user doesn't keep seeing finished sessions as ghost tabs.
+  async function runAutoLayout(projectId: string): Promise<{ triggered: boolean; reason?: string; total?: number; existing?: number; unassigned?: number; subSessions?: number; zombies?: number }> {
     const status = await checkLayoutStatus(projectId);
+    const { mainConvs, subConvs } = await getWorkspaceConversations(projectId);
+    const liveSids = new Set([...mainConvs.map(c => c.sessionId), ...subConvs.map(c => c.sessionId)]);
+
+    // Detect zombies in this project's layout
+    const zombieSids: string[] = [];
+    const layoutPath = join(LAYOUTS_DIR, `${projectId}.json`);
+    try {
+      if (existsSync(layoutPath)) {
+        const layout = JSON.parse(readFileSync(layoutPath, 'utf8'));
+        for (const sid of collectLayoutSessionIds(layout)) {
+          if (!liveSids.has(sid)) zombieSids.push(sid);
+        }
+      }
+    } catch { /* parse fail = leave alone */ }
+
+    if (zombieSids.length > 0) {
+      const changes = removeSessionFromLayouts(LAYOUTS_DIR, zombieSids);
+      for (const c of changes) {
+        console.log(`[AutoLayout] ${c.projectId}: removed ${c.removed} zombie tab(s)`);
+        broadcast({ type: 'control:apply-layout', projectId: c.projectId, layout: c.layout });
+      }
+    }
+
     return {
-      triggered: false,
-      reason: status.missing > 0 ? `${status.missing} sessions not in layout` : 'all sessions in layout',
+      triggered: zombieSids.length > 0,
+      reason: status.missing > 0
+        ? `${status.missing} sessions not in layout`
+        : zombieSids.length > 0
+          ? `removed ${zombieSids.length} zombie tab(s)`
+          : 'all sessions in layout',
       total: status.total,
       existing: status.inLayout,
       unassigned: status.missing,
       subSessions: status.subSessions,
+      zombies: zombieSids.length,
     };
   }
 

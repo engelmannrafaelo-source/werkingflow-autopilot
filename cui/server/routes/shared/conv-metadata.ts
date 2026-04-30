@@ -205,11 +205,30 @@ export function getAllFinished(): Record<string, boolean> {
   return { ..._load().finished };
 }
 
+type FinishedListener = (sessionId: string, finished: boolean) => void;
+const _finishedListeners: FinishedListener[] = [];
+
+/**
+ * Register a callback fired after `setFinished()` mutates the metadata.
+ * Used by state.ts to clean zombie tabs out of layout files when a session
+ * is marked finished. Listener errors are swallowed to keep setFinished
+ * crash-proof for callers in mission.ts.
+ */
+export function onFinishedChange(listener: FinishedListener): void {
+  _finishedListeners.push(listener);
+}
+
 export function setFinished(sessionId: string, finished: boolean) {
   const data = _load();
+  const prev = data.finished[sessionId] === true;
   if (finished) data.finished[sessionId] = true;
   else delete data.finished[sessionId];
   _scheduleSave();
+  if (prev !== finished) {
+    for (const cb of _finishedListeners) {
+      try { cb(sessionId, finished); } catch { /* ignore */ }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
