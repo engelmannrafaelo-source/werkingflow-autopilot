@@ -154,3 +154,69 @@ export function indexByPhase(
   }
   return out;
 }
+
+
+// ─── Validator bridge ────────────────────────────────────────────────────────
+
+const VALIDATE_SCRIPT = join(ENERGY_BACKEND_DIR, 'pipeline/validate_prompts.py');
+
+/** One finding from the Layer-0 prompt validator. */
+export interface ValidatorFinding {
+  severity: 'error' | 'warning';
+  test: string;
+  location: string;
+  message: string;
+}
+
+/** Result of one validator test, mirroring the Python TestResult. */
+export interface ValidatorTestResult {
+  name: string;
+  passed: boolean;
+  findings: ValidatorFinding[];
+}
+
+/**
+ * Run validate_prompts.py and return the parsed JSON results.
+ * Returns ``null`` when the validator script is missing (non-energy
+ * deployments).
+ */
+export function runValidator(): ValidatorTestResult[] | null {
+  if (!existsSync(VALIDATE_SCRIPT)) {
+    return null;
+  }
+  const env = {
+    ...process.env,
+    PYTHONPATH: `${ENERGY_BACKEND_DIR}:${process.env.PYTHONPATH ?? ''}`,
+    PYTHONUNBUFFERED: '1',
+  };
+  let stdout: string;
+  try {
+    stdout = execFileSync(
+      'python3',
+      ['pipeline/validate_prompts.py', '--json'],
+      {
+        cwd: ENERGY_BACKEND_DIR,
+        env,
+        encoding: 'utf-8',
+        timeout: 15_000,
+        maxBuffer: 4 * 1024 * 1024,
+      },
+    );
+  } catch (err) {
+    const e = err as { status?: number; stdout?: Buffer | string };
+    // Exit code 1 = validation failures. The JSON payload is still on
+    // stdout — parse it and surface as failed tests.
+    if (e.status === 1 && e.stdout) {
+      stdout = typeof e.stdout === 'string' ? e.stdout : e.stdout.toString('utf-8');
+    } else {
+      console.error('[section-bridge] validate_prompts.py failed:', err);
+      return null;
+    }
+  }
+  try {
+    return JSON.parse(stdout) as ValidatorTestResult[];
+  } catch (err) {
+    console.error('[section-bridge] failed to parse validator JSON:', err);
+    return null;
+  }
+}

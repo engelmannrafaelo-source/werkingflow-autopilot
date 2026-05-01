@@ -9,6 +9,7 @@
 
 import { Router, Request, Response } from 'express';
 import { scanPipeline, scanAllPipelines, getPipelineIds, readPromptFile } from '../pipeline-scanner.js';
+import { runValidator } from '../section-bridge.js';
 
 export function createPromptExplorerRouter(): Router {
   const router = Router();
@@ -52,6 +53,27 @@ export function createPromptExplorerRouter(): Router {
   router.get('/scan', (_req: Request, res: Response) => {
     const results = scanAllPipelines();
     res.json({ pipelines: results });
+  });
+
+  // Run the Layer-0 prompt validator (energy pipeline only).
+  // Returns the parsed JSON test results, including failures.
+  router.get('/validator', (_req: Request, res: Response) => {
+    const results = runValidator();
+    if (results === null) {
+      res.status(404).json({ error: 'Validator not available (non-energy deployment).' });
+      return;
+    }
+    const errors = results.flatMap(r => r.findings.filter(f => f.severity === 'error')).length;
+    const warnings = results.flatMap(r => r.findings.filter(f => f.severity === 'warning')).length;
+    res.json({
+      results,
+      summary: {
+        total_tests: results.length,
+        passed: results.filter(r => r.passed).length,
+        errors,
+        warnings,
+      },
+    });
   });
 
   // Read a specific prompt file (security-checked in scanner)

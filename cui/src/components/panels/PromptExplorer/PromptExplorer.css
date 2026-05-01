@@ -1212,6 +1212,18 @@
   letter-spacing: 0.02em;
 }
 
+.pe-validator-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border: 1px solid;
+  border-radius: 3px;
+  flex-shrink: 0;
+  letter-spacing: 0.02em;
+  cursor: help;
+  white-space: pre-line;
+}
+
 /* Steps row */
 .pe-fd-steps-row {
   display: flex;

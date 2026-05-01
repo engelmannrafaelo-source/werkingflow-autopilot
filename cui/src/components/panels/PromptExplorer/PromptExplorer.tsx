@@ -186,6 +186,13 @@ export default function PromptExplorer() {
   );
   const [liveProjectInput, setLiveProjectInput] = useState<string>(liveProjectPath);
 
+  // Layer-0 prompt validator status (energy pipeline only). Polled once on
+  // pipeline activation and refreshable from the live-project bar.
+  type ValidatorSummary = { total_tests: number; passed: number; errors: number; warnings: number };
+  type ValidatorFinding = { severity: 'error' | 'warning'; test: string; location: string; message: string };
+  type ValidatorResult = { name: string; passed: boolean; findings: ValidatorFinding[] };
+  const [validatorStatus, setValidatorStatus] = useState<{ summary: ValidatorSummary; results: ValidatorResult[] } | null>(null);
+
   useEffect(() => {
     fetch('/api/prompt-explorer/pipelines')
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
@@ -203,6 +210,7 @@ export default function PromptExplorer() {
     setLoading(true);
     setExpandedPhase(null);
     setSelectedPromptFile(null);
+    setValidatorStatus(null);
     const url = projectPath
       ? `/api/prompt-explorer/scan/${id}?project=${encodeURIComponent(projectPath)}`
       : `/api/prompt-explorer/scan/${id}`;
@@ -218,6 +226,13 @@ export default function PromptExplorer() {
         setLoading(false);
       })
       .catch(err => { setError(`Failed to scan: ${err.message}`); setLoading(false); });
+    // Fire validator request in parallel — energy pipeline only.
+    if (id === 'energy') {
+      fetch('/api/prompt-explorer/validator')
+        .then(r => r.ok ? r.json() : null)
+        .then(data => { if (data) setValidatorStatus(data); })
+        .catch(() => { /* validator unavailable — ignore */ });
+    }
   }, []);
 
   const applyLiveProject = useCallback(() => {
@@ -341,6 +356,29 @@ export default function PromptExplorer() {
             {activePipeline.liveProjectPath && (
               <span className="pe-live-project-badge" title={`Live measurements active against ${activePipeline.liveProjectPath}`}>● live</span>
             )}
+            {validatorStatus && (() => {
+              const s = validatorStatus.summary;
+              const ok = s.errors === 0;
+              const tooltip = ok
+                ? `Layer-0 prompt validator: ${s.passed}/${s.total_tests} tests pass`
+                : `${s.errors} validator error(s) across ${s.total_tests} test(s):\n` +
+                  validatorStatus.results
+                    .filter(r => !r.passed)
+                    .flatMap(r => r.findings.filter(f => f.severity === 'error'))
+                    .map(f => `• ${f.test}: ${f.location} — ${f.message}`)
+                    .join('\n');
+              return (
+                <span
+                  className="pe-validator-badge"
+                  title={tooltip}
+                  style={ok
+                    ? { color: '#9ece6a', borderColor: '#9ece6a40', background: '#9ece6a10' }
+                    : { color: '#f7768e', borderColor: '#f7768e60', background: '#f7768e15' }}
+                >
+                  {ok ? '✓' : '✗'} L0 {ok ? 'OK' : `${s.errors}`}
+                </span>
+              );
+            })()}
           </div>
         )}
         <div className="pe-flow-list">
