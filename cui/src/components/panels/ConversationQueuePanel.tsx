@@ -62,7 +62,6 @@ function extractText(content: unknown): string {
 }
 
 // --- Color scheme per state (consistent with ProjectTabs) ---
-// Orange (#ff9e64) = needs user input, Green (#9ece6a) = working, Gray (#565f89) = idle
 const STATE_COLORS = {
   working:    { bg: 'rgba(158, 206, 106, 0.15)', border: '#9ece6a', text: '#9ece6a', label: 'ARBEITET',  labelBg: 'rgba(158,206,106,0.25)' },
   needs_input:{ bg: 'rgba(255, 158, 100, 0.18)', border: '#ff9e64', text: '#ff9e64', label: 'INPUT',     labelBg: 'rgba(255,158,100,0.3)' },
@@ -99,6 +98,8 @@ function ensureStyles() {
     @keyframes cq-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
     .cq-row:hover { filter: brightness(1.15); }
     .cq-row:hover .cq-actions { opacity: 1 !important; }
+    @media (hover: none) { .cq-actions { opacity: 1 !important; } }
+    .cq-actions button { min-height: 36px; }
   `;
   document.head.appendChild(s);
 }
@@ -111,11 +112,16 @@ export default function ConversationQueuePanel({ projectId: _projectId }: { proj
   const [visibleSessionIds, setVisibleSessionIds] = useState<Set<string>>(new Set());
   const [panelMap, setPanelMap] = useState<Map<string, string>>(new Map());
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
-  const [timeFilter, setTimeFilter] = useState<TimeFilter>('today');
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 600);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [timeFilter, setTimeFilter] = useState<TimeFilter>(() =>
+    typeof window !== 'undefined' && window.innerWidth < 600 ? 'week' : 'today'
+  );
   const [accountFilter, setAccountFilter] = useState<string>('all');
   const [projectFilter, setProjectFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [snippets, setSnippets] = useState<Map<string, string>>(new Map());
@@ -124,6 +130,12 @@ export default function ConversationQueuePanel({ projectId: _projectId }: { proj
   const { sessionStates, addMessageHandler } = useSessionStore();
 
   useEffect(() => { ensureStyles(); }, []);
+
+  useEffect(() => {
+    const handler = () => setIsMobile(window.innerWidth < 600);
+    window.addEventListener('resize', handler);
+    return () => window.removeEventListener('resize', handler);
+  }, []);
 
   useEffect(() => {
     fetch(`${API}/projects`, { signal: AbortSignal.timeout(5000) })
@@ -149,6 +161,11 @@ export default function ConversationQueuePanel({ projectId: _projectId }: { proj
         fetch(`${API}/mission/conversations`, { signal: AbortSignal.timeout(10000) }),
         fetch(`${API}/mission/visibility`, { signal: AbortSignal.timeout(5000) }).catch(() => null), // silent-ok: visibility check is optional; UI renders without panel visibility info
       ]);
+      if (convRes.status === 401) {
+        setAuthError(true);
+        setLoading(false);
+        return;
+      }
       if (convRes.ok) {
         const raw = await convRes.json();
         const wrapper = validateApiResponse<{ conversations: Conversation[] }>(raw, '/api/mission/conversations', {
@@ -162,6 +179,7 @@ export default function ConversationQueuePanel({ projectId: _projectId }: { proj
           })
         );
         setConversations(validated);
+        setAuthError(false);
       }
       if (visRes?.ok) {
         const v = await visRes.json();
@@ -289,33 +307,60 @@ export default function ConversationQueuePanel({ projectId: _projectId }: { proj
   };
 
   if (loading) return <div style={{ display: 'flex', height: '100%', justifyContent: 'center', alignItems: 'center', background: 'var(--tn-surface)', color: 'var(--tn-text-secondary)' }}>Lade...</div>;
+  if (authError) return <div style={{ display: 'flex', height: '100%', justifyContent: 'center', alignItems: 'center', background: 'var(--tn-surface)', color: '#ff9e64', fontSize: 13 }}>Bitte einloggen</div>;
 
   const sel: React.CSSProperties = { background: 'var(--tn-surface-raised, #2a2a3e)', color: 'var(--tn-text)', border: '1px solid var(--tn-border)', borderRadius: 4, padding: '2px 4px', fontSize: 11, cursor: 'pointer' };
+
+  const filterSelects = (
+    <>
+      <select style={sel} value={timeFilter} onChange={e => setTimeFilter(e.target.value as TimeFilter)}>
+        <option value="today">Heute</option><option value="yesterday">Gestern</option><option value="week">7 Tage</option><option value="all">Alle</option>
+      </select>
+      <select style={sel} value={accountFilter} onChange={e => setAccountFilter(e.target.value)}>
+        <option value="all">Alle Accounts</option>
+        {ACCOUNTS.filter(a => a.id !== 'local' && a.id !== 'gemini').map(a => <option key={a.id} value={a.id}>{a.label}</option>)}
+      </select>
+      <select style={sel} value={projectFilter} onChange={e => setProjectFilter(e.target.value)}>
+        <option value="all">Alle Projekte</option>
+        {projectNames.map(p => <option key={p} value={p}>{p}</option>)}
+      </select>
+      <select style={sel} value={statusFilter} onChange={e => setStatusFilter(e.target.value as StatusFilter)}>
+        <option value="all">Alle Status</option>
+        <option value="working">Arbeitet</option>
+        <option value="needs_input">Braucht Input</option>
+        <option value="idle">Idle</option>
+      </select>
+    </>
+  );
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--tn-surface)', color: 'var(--tn-text)', fontSize: 13 }}>
       {/* Header */}
       <div style={{ flexShrink: 0, padding: '8px 12px', borderBottom: '1px solid var(--tn-border)', display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-          <span style={{ fontWeight: 700, fontSize: 14 }}>Queue</span>
-          <select style={sel} value={timeFilter} onChange={e => setTimeFilter(e.target.value as TimeFilter)}>
-            <option value="today">Heute</option><option value="yesterday">Gestern</option><option value="week">7 Tage</option><option value="all">Alle</option>
-          </select>
-          <select style={sel} value={accountFilter} onChange={e => setAccountFilter(e.target.value)}>
-            <option value="all">Alle Accounts</option>
-            {ACCOUNTS.filter(a => a.id !== 'local' && a.id !== 'gemini').map(a => <option key={a.id} value={a.id}>{a.label}</option>)}
-          </select>
-          <select style={sel} value={projectFilter} onChange={e => setProjectFilter(e.target.value)}>
-            <option value="all">Alle Projekte</option>
-            {projectNames.map(p => <option key={p} value={p}>{p}</option>)}
-          </select>
-          <select style={sel} value={statusFilter} onChange={e => setStatusFilter(e.target.value as StatusFilter)}>
-            <option value="all">Alle Status</option>
-            <option value="working">Arbeitet</option>
-            <option value="needs_input">Braucht Input</option>
-            <option value="idle">Idle</option>
-          </select>
-        </div>
+        {isMobile ? (
+          /* Mobile: title + filter toggle button */
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontWeight: 700, fontSize: 14 }}>Queue</span>
+            <button
+              onClick={() => setFiltersOpen(o => !o)}
+              style={{ background: filtersOpen ? 'rgba(139,92,246,0.2)' : 'var(--tn-surface-raised, #2a2a3e)', color: 'var(--tn-text)', border: '1px solid var(--tn-border)', borderRadius: 4, padding: '2px 8px', fontSize: 11, cursor: 'pointer' }}
+            >
+              Filter {filtersOpen ? '▲' : '▼'}
+            </button>
+          </div>
+        ) : (
+          /* Desktop: all filters in one row */
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <span style={{ fontWeight: 700, fontSize: 14 }}>Queue</span>
+            {filterSelects}
+          </div>
+        )}
+        {/* Mobile collapsible filter drawer */}
+        {isMobile && filtersOpen && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+            {filterSelects}
+          </div>
+        )}
         {/* Big colored stat blocks */}
         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
           {stats.working > 0 && <StatBlock count={stats.working} label="arbeiten" color={STATE_COLORS.working} />}
@@ -339,6 +384,7 @@ export default function ConversationQueuePanel({ projectId: _projectId }: { proj
           <ConvRow key={c.sessionId} conv={c} expanded={expandedId === (c.sessionId)} snippet={snippets.get(c.sessionId)}
             isVisible={visibleSessionIds.has(c.sessionId)} isWrong={!KNOWN_PROJECTS.has(c.projectName ?? '')}
             isSelected={selected.has(c.sessionId)} projects={projects}
+            showFeedback={showFeedback}
             onToggleSelect={() => toggleSelect(c.sessionId)} onClick={() => toggleExpand(c)}
             onActivate={(t) => doActivate(c, t)} onFinish={() => doFinish(c.sessionId)} onDelete={() => doDelete(c)} />
         ))}
@@ -349,6 +395,7 @@ export default function ConversationQueuePanel({ projectId: _projectId }: { proj
               <ConvRow key={c.sessionId} conv={c} expanded={expandedId === (c.sessionId)} snippet={snippets.get(c.sessionId)}
                 isVisible={visibleSessionIds.has(c.sessionId)} isWrong={!KNOWN_PROJECTS.has(c.projectName ?? '')}
                 isSelected={selected.has(c.sessionId)} projects={projects} isCompleted
+                showFeedback={showFeedback}
                 onToggleSelect={() => toggleSelect(c.sessionId)} onClick={() => toggleExpand(c)}
                 onActivate={(t) => doActivate(c, t)} onFinish={() => doFinish(c.sessionId, false)} onDelete={() => doDelete(c)} />
             ))}
@@ -377,10 +424,11 @@ function StatBlock({ count, label, color }: { count: number; label: string; colo
 }
 
 // --- Conversation Row ---
-function ConvRow({ conv, expanded, snippet, isVisible, isWrong, isSelected, isCompleted, projects, onToggleSelect, onClick, onActivate, onFinish, onDelete }: {
+function ConvRow({ conv, expanded, snippet, isVisible, isWrong, isSelected, isCompleted, projects, showFeedback, onToggleSelect, onClick, onActivate, onFinish, onDelete }: {
   conv: Conversation; expanded: boolean; snippet?: string;
   isVisible: boolean; isWrong: boolean; isSelected: boolean; isCompleted?: boolean;
   projects: ProjectInfo[];
+  showFeedback: (msg: string) => void;
   onToggleSelect: () => void; onClick: () => void; onActivate: (target: string) => void; onFinish: () => void; onDelete: () => void;
 }) {
   const [openMenu, setOpenMenu] = useState<null | 'move'>(null);
@@ -410,7 +458,7 @@ function ConvRow({ conv, expanded, snippet, isVisible, isWrong, isSelected, isCo
         <input type="checkbox" checked={isSelected} onChange={e => { e.stopPropagation(); onToggleSelect(); }}
           style={{ width: 14, height: 14, cursor: 'pointer', flexShrink: 0, accentColor: colors.border }} />
 
-        {/* Status badge — big and obvious */}
+        {/* Status badge */}
         {!isCompleted && colors.label && (
           <span style={{
             fontSize: 9, fontWeight: 700, letterSpacing: '0.04em',
@@ -489,14 +537,21 @@ function ConvRow({ conv, expanded, snippet, isVisible, isWrong, isSelected, isCo
       {/* Expanded snippet */}
       {expanded && (
         <div style={{ padding: '0 12px 8px 38px' }}>
-          <div style={{
-            padding: '6px 10px', borderRadius: 4, background: 'rgba(0,0,0,0.3)',
-            borderLeft: `3px solid ${colors.border}44`,
-            fontFamily: 'ui-monospace, "SF Mono", Monaco, Menlo, monospace',
-            fontSize: 11, lineHeight: '15px', color: '#c0caf5',
-            whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 160, overflow: 'auto',
-          }}>
-            {snippet || <span style={{ color: 'var(--tn-text-muted)', fontStyle: 'italic' }}>Lade...</span>}
+          <div style={{ position: 'relative' }}>
+            <button
+              onClick={e => { e.stopPropagation(); navigator.clipboard.writeText(snippet || '').then(() => showFeedback('Kopiert!')).catch(() => showFeedback('Kopieren fehlgeschlagen')); }}
+              style={{ position: 'absolute', top: 4, right: 4, zIndex: 1, background: 'rgba(86,90,110,0.5)', border: '1px solid rgba(255,255,255,0.15)', color: '#c0caf5', cursor: 'pointer', fontSize: 9, padding: '2px 6px', borderRadius: 3, fontWeight: 600 }}>
+              Copy
+            </button>
+            <div style={{
+              padding: '6px 10px', borderRadius: 4, background: 'rgba(0,0,0,0.3)',
+              borderLeft: `3px solid ${colors.border}44`,
+              fontFamily: 'ui-monospace, "SF Mono", Monaco, Menlo, monospace',
+              fontSize: 11, lineHeight: '15px', color: '#c0caf5',
+              whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 160, overflow: 'auto',
+            }}>
+              {snippet || <span style={{ color: 'var(--tn-text-muted)', fontStyle: 'italic' }}>Lade...</span>}
+            </div>
           </div>
           <div style={{ fontSize: 9, color: 'var(--tn-text-muted)', marginTop: 3 }}>
             {conv.model && <span>{conv.model.split('-').slice(0, 3).join('-')} · </span>}
