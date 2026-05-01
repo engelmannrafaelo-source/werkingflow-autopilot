@@ -988,8 +988,17 @@ export default function PyramidTab() {
     return <div style={{ padding: 20, textAlign: 'center', color: 'var(--tn-text-muted)' }}>Loading...</div>;
   }
 
-  // Sort layers: 4 on top (narrowest), 0 on bottom (widest) = true pyramid
-  const sortedLayers = pyramid ? [...pyramid.layers].filter(l => l.id >= 0).sort((a, b) => b.id - a.id) : [];
+  // Sort layers: 4 on top (narrowest), 0 on bottom (widest) = true pyramid.
+  // Layer 0 (Architecture) sources its counts from arch-test, not pyramid_status.py
+  // — so totalTests can be 0 even with 70+ PASS tests. Derive counts from the
+  // tests[] array as a fallback so the header counts match the bars.
+  const sortedLayers = pyramid ? [...pyramid.layers].filter(l => l.id >= 0).sort((a, b) => b.id - a.id).map(l => {
+    if (l.totalTests > 0 || !l.tests?.length) return l;
+    const passed = l.tests.filter(t => t.status === 'PASS').length;
+    const failed = l.tests.filter(t => t.status === 'FAIL').length;
+    const pending = l.tests.filter(t => t.status === 'PENDING' || t.status === 'NOT_RUN' || t.status === 'BRIDGE_FAILURE').length;
+    return { ...l, totalTests: l.tests.length, passed, failed, pending };
+  }) : [];
   const ungrouped = pyramid?.layers.find(l => l.id === -1);
   const coverage = coverageOverride ?? pyramid?.coverage ?? null;
 
