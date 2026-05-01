@@ -379,6 +379,13 @@ export default function FlowDiagramView({ pipeline, selectedPromptFile, onSelect
                   {(() => {
                     const enrich = pipeline.sectionEnrichment?.[phase.number ?? -1];
                     if (!enrich) return null;
+                    // Producer-marker info only exists if a live project was
+                    // scanned (no project = no real output file to inspect).
+                    // Don't show a badge at all in that case — the user
+                    // hasn't asked for marker data yet.
+                    if (!pipeline.liveProjectPath || enrich.producerMarkers.fileChars === undefined) {
+                      return null;
+                    }
                     const mc = enrich.producerMarkers.markerCount ?? 0;
                     const tagged = enrich.producerMarkers.taggedConsumers ?? [];
                     if (mc === 0 && tagged.length === 0) {
