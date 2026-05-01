@@ -109,9 +109,15 @@ function writePersistedSession(session: ChatSession): void {
  */
 /**
  * Re-read disk diary; if newer entries exist than what was loaded into the
- * session's <verlauf> block, regenerate the block in-place. This makes a
- * resumed long-lived session pick up newly-written daily entries without
- * forcing a full /load.
+ * session's history, do TWO things so the LLM definitely picks them up:
+ *
+ *   1. Replace the <verlauf> block in the first user message (the static
+ *      context document) — keeps that section internally consistent.
+ *   2. Inject a [KONTEXT-UPDATE] user/assistant pair AT THE END of the
+ *      history listing only the new entries' content. This works with the
+ *      "Falls ein [KONTEXT-UPDATE] in der Konversation erscheint" rule
+ *      already present in the system prompt — the LLM treats the latest
+ *      [KONTEXT-UPDATE] as the current state.
  *
  * Cheap path when nothing changed: just compares sort keys, no rewrites.
  */
@@ -120,27 +126,45 @@ function refreshDiaryIfStale(session: ChatSession): void {
     const yaml = loadContextYaml();
     const diary = loadDiaryPyramid(yaml.tagebuch);
     const newestDiskKey = diary.entries.reduce((max, e) => Math.max(max, e.sortKey), 0);
-    if (newestDiskKey <= (session.latestDiaryKey ?? 0)) return;
+    const oldKey = session.latestDiaryKey ?? 0;
+    if (newestDiskKey <= oldKey) return;
 
-    // Render the full pyramid again (token-budget aware would require recomputing
-    // the whole prompt; a simpler approach is to just re-render and accept that
-    // the budget for the diary section might have shifted slightly).
+    // Strictly-new entries (those past the old key).
+    const newEntries = diary.entries
+      .filter(e => e.sortKey > oldKey)
+      .sort((a, b) => a.sortKey - b.sortKey);
+    if (newEntries.length === 0) return;
+
+    // (1) Update the static <verlauf> block in first user message.
     const sorted = [...diary.entries].sort((a, b) => a.sortKey - b.sortKey);
     const newSection = renderDiarySection(sorted);
-    if (!newSection) return;
-
-    // Replace the existing <verlauf>...</verlauf> block in the very first
-    // user message (which carries the <documents> with <verlauf> inside).
     const firstUser = session.history.find(m => m.role === 'user');
-    if (!firstUser) return;
-    const re = /<verlauf[^>]*>[\s\S]*?<\/verlauf>/;
-    if (!re.test(firstUser.content)) return;
-    firstUser.content = firstUser.content.replace(
-      re,
-      `<verlauf description="Rafaels Arbeits-Tagebuch — chronologischer Verlauf. Pyramide: jüngste Tage täglich, ältere wochenweise, sehr alte monatlich. Quelle und Erzeugung: /root/projekte/local-storage/diary/CONVENTION.md">\n${newSection}\n</verlauf>`
+    if (firstUser && newSection) {
+      const re = /<verlauf[^>]*>[\s\S]*?<\/verlauf>/;
+      if (re.test(firstUser.content)) {
+        firstUser.content = firstUser.content.replace(
+          re,
+          `<verlauf description="Rafaels Arbeits-Tagebuch — chronologischer Verlauf. Pyramide: jüngste Tage täglich, ältere wochenweise, sehr alte monatlich. Quelle und Erzeugung: /root/projekte/local-storage/diary/CONVENTION.md">\n${newSection}\n</verlauf>`
+        );
+      }
+    }
+
+    // (2) Push a [KONTEXT-UPDATE] message-pair so the LLM actually sees it.
+    const newEntriesRendered = renderDiarySection(newEntries);
+    const labels = newEntries.map(e => e.label).join(', ');
+    session.history.push(
+      {
+        role: 'user',
+        content: `[KONTEXT-UPDATE] Neue Tagebucheinträge seit dem letzten Stand: ${labels}\n\n${newEntriesRendered}`,
+      },
+      {
+        role: 'assistant',
+        content: `Verstanden. Aktueller Tagebuchstand übernommen (jetzt bis ${newEntries[newEntries.length - 1].label}).`,
+      }
     );
+
     session.latestDiaryKey = newestDiskKey;
-    console.log(`[BusinessAngel] Diary refreshed for session ${session.session_id.slice(0, 8)} (new latestDiaryKey=${newestDiskKey})`);
+    console.log(`[BusinessAngel] Diary refreshed for session ${session.session_id.slice(0, 8)} — injected ${newEntries.length} new entries (${labels})`);
   } catch (err: any) {
     console.warn(`[BusinessAngel] refreshDiaryIfStale failed: ${err.message}`);
   }
