@@ -49,6 +49,7 @@ interface ChatSession {
   files_loaded: number;
   temp_files: string[];
   zusatz_loaded: string[];
+  latestDiaryKey: number; // sortKey of newest diary entry injected in context
 }
 
 // Disk-persisted session state (survives server restarts)
@@ -106,9 +107,51 @@ function writePersistedSession(session: ChatSession): void {
  * Auto-restore: if session is not in memory but exists on disk, rebuild it.
  * This handles CUI server restarts / hot-reloads without losing the active session.
  */
+/**
+ * Re-read disk diary; if newer entries exist than what was loaded into the
+ * session's <verlauf> block, regenerate the block in-place. This makes a
+ * resumed long-lived session pick up newly-written daily entries without
+ * forcing a full /load.
+ *
+ * Cheap path when nothing changed: just compares sort keys, no rewrites.
+ */
+function refreshDiaryIfStale(session: ChatSession): void {
+  try {
+    const yaml = loadContextYaml();
+    const diary = loadDiaryPyramid(yaml.tagebuch);
+    const newestDiskKey = diary.entries.reduce((max, e) => Math.max(max, e.sortKey), 0);
+    if (newestDiskKey <= (session.latestDiaryKey ?? 0)) return;
+
+    // Render the full pyramid again (token-budget aware would require recomputing
+    // the whole prompt; a simpler approach is to just re-render and accept that
+    // the budget for the diary section might have shifted slightly).
+    const sorted = [...diary.entries].sort((a, b) => a.sortKey - b.sortKey);
+    const newSection = renderDiarySection(sorted);
+    if (!newSection) return;
+
+    // Replace the existing <verlauf>...</verlauf> block in the very first
+    // user message (which carries the <documents> with <verlauf> inside).
+    const firstUser = session.history.find(m => m.role === 'user');
+    if (!firstUser) return;
+    const re = /<verlauf[^>]*>[\s\S]*?<\/verlauf>/;
+    if (!re.test(firstUser.content)) return;
+    firstUser.content = firstUser.content.replace(
+      re,
+      `<verlauf description="Rafaels Arbeits-Tagebuch — chronologischer Verlauf. Pyramide: jüngste Tage täglich, ältere wochenweise, sehr alte monatlich. Quelle und Erzeugung: /root/projekte/local-storage/diary/CONVENTION.md">\n${newSection}\n</verlauf>`
+    );
+    session.latestDiaryKey = newestDiskKey;
+    console.log(`[BusinessAngel] Diary refreshed for session ${session.session_id.slice(0, 8)} (new latestDiaryKey=${newestDiskKey})`);
+  } catch (err: any) {
+    console.warn(`[BusinessAngel] refreshDiaryIfStale failed: ${err.message}`);
+  }
+}
+
 function getOrRestoreSession(session_id: string): ChatSession | null {
   const existing = SESSION_STORE.get(session_id);
-  if (existing) return existing;
+  if (existing) {
+    refreshDiaryIfStale(existing);
+    return existing;
+  }
 
   // Try to restore from disk
   const persisted = readPersistedSession();
@@ -219,6 +262,7 @@ Dokumente geladen (${filesLoaded} Dateien). Bitte stelle mir deine Fragen.`;
       files_loaded: filesLoaded,
       temp_files: tempFiles.map(f => f.name),
       zusatz_loaded: persisted.zusatz_loaded ?? [],
+      latestDiaryKey: diaryIncluded.reduce((max, e) => Math.max(max, e.sortKey), 0),
     };
 
     SESSION_STORE.set(session_id, restored);
@@ -1159,6 +1203,7 @@ Dokumente geladen (${filesLoaded} Dateien). Bitte stelle mir deine Fragen.`;
       files_loaded: filesLoaded,
       temp_files: tempFiles.map(f => f.name),
       zusatz_loaded: zusatz,
+      latestDiaryKey: diaryEntriesIncluded.reduce((max, e) => Math.max(max, e.sortKey), 0),
     };
     SESSION_STORE.set(session_id, newSession);
     writePersistedSession(newSession);
