@@ -21,6 +21,7 @@ import { randomUUID, createHash } from 'crypto';
 import { join, basename, dirname, relative } from 'path';
 import { load as yamlLoad } from 'js-yaml';
 import { parseDiffs } from '../lib/diff-parser.js';
+import { autoApplyNewFiles, summarizeApplyResult } from '../lib/auto-apply-new.js';
 import { bridgeChat } from '../lib/bridge-fetch.js';
 
 const router = Router();
@@ -984,11 +985,18 @@ router.post('/chat', async (req, res) => {
       attribution: { appId: 'cui', userId: 'rafael', agentId: 'privat-angel' },
     });
 
+    // Auto-apply <<<NEW>>> blocks (only safe new-file writes, never overwrites).
+    const applyResult = autoApplyNewFiles(responseText, PRIVAT_DIR);
+    const finalResponse = responseText + summarizeApplyResult(applyResult);
+    if (applyResult.written.length > 0) {
+      console.log(`[PrivatAngel] auto-applied ${applyResult.written.length} new file(s): ${applyResult.written.join(', ')}`);
+    }
+
     session.history.push({ role: 'user', content: message.trim() });
-    session.history.push({ role: 'assistant', content: responseText });
+    session.history.push({ role: 'assistant', content: finalResponse });
     writePersistedSession(session);
 
-    res.json({ ok: true, response: responseText, session_id });
+    res.json({ ok: true, response: finalResponse, session_id });
   } catch (err: any) {
     console.error('[PrivatAngel] /chat error:', err.message);
     res.status(500).json({ error: err.message });

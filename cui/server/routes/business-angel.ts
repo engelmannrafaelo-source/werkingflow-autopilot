@@ -16,6 +16,7 @@ import { load as yamlLoad } from 'js-yaml';
 import chokidar from 'chokidar';
 import { PATHS } from '../config/paths.js';
 import { parseDiffs } from '../lib/diff-parser.js';
+import { autoApplyNewFiles, summarizeApplyResult } from '../lib/auto-apply-new.js';
 import { bridgeChat } from '../lib/bridge-fetch.js';
 
 const router = Router();
@@ -1323,16 +1324,23 @@ router.post('/chat', async (req, res) => {
       ],
     });
 
+    // Auto-apply <<<NEW>>> blocks (only safe new-file writes, never overwrites).
+    const applyResult = autoApplyNewFiles(responseText, BUSINESS_DIR);
+    const finalResponse = responseText + summarizeApplyResult(applyResult);
+    if (applyResult.written.length > 0) {
+      console.log(`[BusinessAngel] auto-applied ${applyResult.written.length} new file(s): ${applyResult.written.join(', ')}`);
+    }
+
     // Update history
     session.history.push({ role: 'user', content: message.trim() });
-    session.history.push({ role: 'assistant', content: responseText });
+    session.history.push({ role: 'assistant', content: finalResponse });
 
     // Persist to disk after every message
     writePersistedSession(session);
 
-    console.log(`[BusinessAngel] /chat response: ${responseText.length} chars`);
+    console.log(`[BusinessAngel] /chat response: ${finalResponse.length} chars`);
 
-    res.json({ ok: true, response: responseText, session_id });
+    res.json({ ok: true, response: finalResponse, session_id });
   } catch (err: any) {
     console.error('[BusinessAngel] /chat error:', err.message);
     res.status(500).json({ error: err.message });
