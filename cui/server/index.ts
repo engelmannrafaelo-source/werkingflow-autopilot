@@ -315,6 +315,9 @@ app.use('/api/partner-server', createPartnerServerRoutes());
 //     supports JWT cookie and x-cui-internal-token + x-cui-forward-user for dev→partner forward) ---
 app.use('/api/code-mgmt', createCodeMgmtRoutes());
 
+// --- Partner-Audit (BEFORE /api auth — same forward pattern as partner-server) ---
+app.use('/api/partner-audit', partnerAuditRouter);
+
 // --- Auth middleware (no-op when users.json doesn't exist) ---
 app.use('/api', requireAuth);
 
@@ -360,9 +363,6 @@ app.use('/api/business-angel', businessAngelRouter); // /api/business-angel/cont
 
 // --- Privat Angel API (personal coach, clone of business-angel for privat workspace) ---
 app.use('/api/privat-angel', privatAngelRouter);
-
-// --- Partner Audit Chat API (read-only audit assistant for partner activity) ---
-app.use('/api/partner-audit', partnerAuditRouter);     // /api/privat-angel/context, /load, /apply-diffs
 
 // --- Prompt Explorer API ---
 app.use('/api/prompt-explorer', createPromptExplorerRouter()); // /api/prompt-explorer/pipelines, /scan, /prompt
