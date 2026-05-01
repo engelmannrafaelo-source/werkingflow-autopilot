@@ -58,7 +58,17 @@ export default function PartnerServerPanel() {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [auditError, setAuditError] = useState<string | null>(null);
+  const [auditLoaded, setAuditLoaded] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Restore persisted audit chat history on mount
+  useEffect(() => {
+    fetch(`${AUDIT_API}/session`)
+      .then(r => r.ok ? r.json() : { messages: [] })
+      .then(d => { setMessages(Array.isArray(d.messages) ? d.messages : []); })
+      .catch(() => {})
+      .finally(() => setAuditLoaded(true));
+  }, []);
 
   const fetchMatrix = useCallback(async () => {
     try {
@@ -163,6 +173,17 @@ export default function PartnerServerPanel() {
       setSending(false);
     }
   }, [input, messages, sending]);
+
+  const resetAudit = useCallback(async () => {
+    if (!confirm('Audit-Chat-Verlauf wirklich löschen?')) return;
+    try {
+      await fetch(`${AUDIT_API}/reset`, { method: 'POST' });
+      setMessages([]);
+      setAuditError(null);
+    } catch (e: any) {
+      setAuditError(e.message);
+    }
+  }, []);
 
   const grouped = useMemo(() => {
     if (!data) return new Map<string, Cell[]>();
@@ -303,9 +324,35 @@ export default function PartnerServerPanel() {
 
       {activeTab === 'audit' && (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          {/* Sub-header: data source + reset */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8, padding: '6px 16px',
+            borderBottom: '1px solid var(--tn-border, #292e42)', flexShrink: 0,
+            fontSize: 11, color: 'var(--tn-text-muted, #a9b1d6)',
+          }}>
+            <span>Quelle:</span>
+            {health?.mode === 'forward' ? (
+              <span style={{ padding: '2px 6px', borderRadius: 3, background: 'var(--tn-yellow, #e0af68)', color: '#1a1b26', fontWeight: 500 }}>
+                {health.forwardUrl?.replace(/^https?:\/\//, '') ?? 'partner'}
+              </span>
+            ) : (
+              <span style={{ padding: '2px 6px', borderRadius: 3, background: 'var(--tn-green, #9ece6a)', color: '#1a1b26', fontWeight: 500 }}>
+                local (dev-server)
+              </span>
+            )}
+            <span style={{ flex: 1 }} />
+            <span>{messages.length} Nachrichten</span>
+            <button onClick={resetAudit} style={miniBtnStyle} disabled={sending || messages.length === 0}>
+              Reset
+            </button>
+          </div>
+
           {/* Message list */}
           <div style={{ flex: 1, overflow: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {messages.length === 0 && (
+            {!auditLoaded && (
+              <div style={{ color: 'var(--tn-text-muted, #a9b1d6)', fontSize: 12 }}>Lade Verlauf…</div>
+            )}
+            {auditLoaded && messages.length === 0 && (
               <div style={{ color: 'var(--tn-text-muted, #a9b1d6)', fontSize: 13 }}>
                 Frag mich zur Partner-Aktivität. Beispiel: "Was haben die Partner heute gemacht?"
               </div>
