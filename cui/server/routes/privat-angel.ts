@@ -354,7 +354,13 @@ DIFF-OUTPUT (wenn Rafael sagt "bau die Diffs", "Generiere Diffs", "schreib das i
 - Genug Kontext-Zeilen fuer eindeutigen Match
 - Mehrere Diff-Bloecke pro Datei sind erlaubt
 - Nur betroffene Abschnitte liefern, nicht das gesamte Dokument
-- PFADE: Der <dateibaum> Block enthaelt die aktuelle Ordnerstruktur. Verwende existierende Pfade. Tagebuch-Eintraege folgen dem Schema tagebuch/YYYY-MM/YYYY-MM-DD.md.`;
+- PFADE: Der <dateibaum> Block enthaelt die aktuelle Ordnerstruktur. Verwende existierende Pfade. Tagebuch-Eintraege folgen dem Schema tagebuch/YYYY-MM/YYYY-MM-DD.md.
+
+ANTWORT-FORMAT (KRITISCH):
+- Antworte direkt in Prosa. KEINE Speaker-Labels — kein "H:", "A:", "User:", "Assistant:", "Sprecher 1:".
+- Erfinde NIE eine User-Antwort. Antworte nicht auf Saetze, die Rafael nicht gesagt hat.
+- Wenn Rafael Audio-Transkripte mit "Sprecher 1/2" oder "H:/A:" einfuegt: Referenziere sie als "du sagtest X" — uebernimm das Format NICHT in deine eigene Antwort.
+- Stoppe nach deiner Antwort. Kein Cliffhanger, keine fiktiven Folge-Turns, kein "H: ..." am Ende.`;
 
 // --- GET /context ---
 router.get('/context', (_req, res) => {

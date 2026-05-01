@@ -246,7 +246,13 @@ REGELN:
 - KRITISCH: Schreibe IMMER den KOMPLETTEN Dateiinhalt in NEW — nie nur den geänderten Abschnitt
 - Mehrere FILE/NEW Blöcke pro Antwort sind erlaubt
 - Falls ein [KONTEXT-UPDATE] in der Konversation erscheint: Verwende diesen aktuellen Stand als Basis für weitere Änderungen
-- PFADE: Der <dateibaum> Block enthält die aktuelle Ordnerstruktur. Verwende IMMER existierende Pfade und Namenskonventionen daraus. Für neue Dateien: orientiere dich am Namensschema der Nachbar-Dateien im gleichen Ordner.`;
+- PFADE: Der <dateibaum> Block enthält die aktuelle Ordnerstruktur. Verwende IMMER existierende Pfade und Namenskonventionen daraus. Für neue Dateien: orientiere dich am Namensschema der Nachbar-Dateien im gleichen Ordner.
+
+ANTWORT-FORMAT (KRITISCH):
+- Antworte direkt in Prosa. KEINE Speaker-Labels — kein "H:", "A:", "User:", "Assistant:", "Sprecher 1:".
+- Erfinde NIE eine User-Antwort. Antworte nicht auf Sätze, die Rafael nicht gesagt hat.
+- Wenn Rafael Audio-Transkripte mit "Sprecher 1/2" oder "H:/A:" einfügt: Referenziere sie als "du sagtest X" — übernimm das Format NICHT in deine eigene Antwort.
+- Stoppe nach deiner Antwort. Kein Cliffhanger, keine fiktiven Folge-Turns, kein "H: ..." am Ende.`;
 
     const fileTreeText = renderFileTreeText(BUSINESS_DIR, '');
 
@@ -1154,7 +1160,13 @@ REGELN:
 - KRITISCH: Schreibe IMMER den KOMPLETTEN Dateiinhalt in NEW — nie nur den geänderten Abschnitt
 - Mehrere FILE/NEW Blöcke pro Antwort sind erlaubt
 - Falls ein [KONTEXT-UPDATE] in der Konversation erscheint: Verwende diesen aktuellen Stand als Basis für weitere Änderungen
-- PFADE: Der <dateibaum> Block enthält die aktuelle Ordnerstruktur. Verwende IMMER existierende Pfade und Namenskonventionen daraus. Für neue Dateien: orientiere dich am Namensschema der Nachbar-Dateien im gleichen Ordner.`;
+- PFADE: Der <dateibaum> Block enthält die aktuelle Ordnerstruktur. Verwende IMMER existierende Pfade und Namenskonventionen daraus. Für neue Dateien: orientiere dich am Namensschema der Nachbar-Dateien im gleichen Ordner.
+
+ANTWORT-FORMAT (KRITISCH):
+- Antworte direkt in Prosa. KEINE Speaker-Labels — kein "H:", "A:", "User:", "Assistant:", "Sprecher 1:".
+- Erfinde NIE eine User-Antwort. Antworte nicht auf Sätze, die Rafael nicht gesagt hat.
+- Wenn Rafael Audio-Transkripte mit "Sprecher 1/2" oder "H:/A:" einfügt: Referenziere sie als "du sagtest X" — übernimm das Format NICHT in deine eigene Antwort.
+- Stoppe nach deiner Antwort. Kein Cliffhanger, keine fiktiven Folge-Turns, kein "H: ..." am Ende.`;
 
     // Build file tree text for context injection (so Angel knows all paths)
     const fileTreeText = renderFileTreeText(BUSINESS_DIR, '');
