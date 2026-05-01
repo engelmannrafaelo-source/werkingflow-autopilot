@@ -109,6 +109,7 @@ import architectureStatusRouter from './routes/architecture-status.js';
 import reportBuilderRouter, { initReportBuilder } from './routes/report-builder.js';
 import businessAngelRouter from './routes/business-angel.js';
 import privatAngelRouter from './routes/privat-angel.js';
+import partnerAuditRouter, { initPartnerAuditRouter } from './routes/partner-audit.js';
 
 // External route modules (pre-existing, not part of the extraction)
 import knowledgeRegistryRouter from './knowledge-registry.js';
@@ -225,6 +226,7 @@ initAuditRouter(DATA_DIR);
 initReportBuilder(DATA_DIR);
 initPartnerTasksRouter(DATA_DIR);
 initPartnerDocsRouter(DATA_DIR);
+initPartnerAuditRouter(DATA_DIR);
 
 const filesRouter = createFilesRouter({ DATA_DIR, ACTIVE_DIR, PORT });
 const layoutsRouter = createLayoutsRouter({ LAYOUTS_DIR, PROJECTS_DIR, NOTES_DIR, UPLOADS_DIR, DATA_DIR });
@@ -357,7 +359,10 @@ app.use('/api/report-builder', reportBuilderRouter); // /api/report-builder/sess
 app.use('/api/business-angel', businessAngelRouter); // /api/business-angel/context, /load, /apply-diffs
 
 // --- Privat Angel API (personal coach, clone of business-angel for privat workspace) ---
-app.use('/api/privat-angel', privatAngelRouter);     // /api/privat-angel/context, /load, /apply-diffs
+app.use('/api/privat-angel', privatAngelRouter);
+
+// --- Partner Audit Chat API (read-only audit assistant for partner activity) ---
+app.use('/api/partner-audit', partnerAuditRouter);     // /api/privat-angel/context, /load, /apply-diffs
 
 // --- Prompt Explorer API ---
 app.use('/api/prompt-explorer', createPromptExplorerRouter()); // /api/prompt-explorer/pipelines, /scan, /prompt
