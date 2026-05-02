@@ -29,19 +29,18 @@ const CHECKPOINTS_DIR = '/tmp/test-checkpoints';
 const TEST_RUNNER_LOGS = '/tmp';
 const SCENARIO_REGISTRY = PATHS.scenarioRegistry;
 
-// Tester paths (meta.last_run.report_path, journey screenshots) are stored
-// relative to UNIFIED_TESTER_ROOT — see tests/unified-tester/validators/
-// path_format_validator.py for the Tier-0 gate. The defensive branches
-// below are kept only as belt-and-braces during runner rollouts; if they
-// ever fire we want to know, hence the warn.
+// Tester paths (report_path values, journey screenshots) are stored
+// relative to UNIFIED_TESTER_ROOT. The defensive branches below are
+// kept only as belt-and-braces during runner rollouts; if they ever
+// fire we want to know, hence the warn.
 function toTesterHostPath(rawPath: string): string {
   if (!rawPath) return rawPath;
   if (rawPath.startsWith('/tester/')) {
-    console.warn(`[QA] legacy /tester/ path passed reader; migration tools/migrate_paths_to_relative.py should be re-run: ${rawPath}`);
+    console.warn(`[QA] legacy /tester/ path passed reader: ${rawPath}`);
     return join(UNIFIED_TESTER_ROOT, rawPath.slice('/tester/'.length));
   }
   if (rawPath.startsWith('/')) {
-    console.warn(`[QA] legacy absolute path passed reader; migration tools/migrate_paths_to_relative.py should be re-run: ${rawPath}`);
+    console.warn(`[QA] legacy absolute path passed reader: ${rawPath}`);
     return rawPath;
   }
   return join(UNIFIED_TESTER_ROOT, rawPath);
@@ -512,131 +511,18 @@ function scanReportsForApp(appId: string): Record<string, ScannedReport> {
  * Resolve scenario status from scanned reports.
  * Falls back to 'PENDING' if no report exists.
  *
- * SHA-drift aware: when a scenario file is provided and its current
- * generator SHAs (auftrag_sha / product_sha / prompt_template_sha)
- * disagree with what the report tested against, the report is treated
- * as stale and the per-test status is downgraded to 'STALE'. This
- * mirrors the layer-level logic in pyramid_status.py so the dashboard
- * never shows a green PASS for a scenario that has been regenerated
- * since the last test run.
+ * SSoT — reports/scenarios/*.md is the only source of truth. MD reports
+ * do not carry tested_against_sha, so SHA-drift detection is no longer
+ * possible at this layer; pyramid_status.py owns that signal where it
+ * still applies.
  */
 function resolveStatusFromReports(
   scenarioId: string,
   reports: Record<string, ScannedReport>,
-  scenarioFile?: string,
-  registryEntry?: any,
 ): string {
   const report = reports[scenarioId];
   if (!report) return 'PENDING';
-  const baseStatus = report.status;
-  // Only PASS / PARTIAL can be stale — FAIL / NOT_TESTED / BRIDGE_FAILURE
-  // are not "verified for any version" and are returned as-is.
-  if (baseStatus !== 'PASS' && baseStatus !== 'PARTIAL') return baseStatus;
-  if (!scenarioFile) return baseStatus;
-  if (isScenarioStale(scenarioFile, registryEntry, report.reportPath)) return 'STALE';
-  return baseStatus;
-}
-
-/**
- * Check whether the scenario at the given JSON path has been regenerated
- * since its last recorded test run. Reads meta.last_run.tested_against_sha
- * from the scenario file and compares it with generated.auftrag_sha. A
- * mismatch means the report no longer reflects the current scenario.
- *
- * Returns false when there is not enough information to decide (no
- * meta.last_run, no SHA on either side) — the layer-level CLI handles
- * the date-based fallback for those cases.
- */
-function isScenarioStale(scenarioFile: string, _registryEntry?: any, reportPath?: string | null): boolean {
-  try {
-    const data = readJSON(scenarioFile);
-    if (!data) return false;
-    const generated = data?.generated;
-    if (!generated) return false;
-    const currentAuftrag = generated.auftrag_sha;
-    if (!currentAuftrag) return false;
-
-    // SSoT: meta.last_run.tested_against_sha drives drift detection.
-    // The orchestrator registry is no longer consulted.
-    const lastRun = data?.meta?.last_run;
-    if (!lastRun) return true;
-    const testedAuftrag = lastRun.tested_against_sha;
-    if (!testedAuftrag) return true;
-    if (testedAuftrag !== currentAuftrag) return true;
-
-    // Report file existence. A meta.last_run entry pointing at a missing
-    // report file (archived, deleted, runner crashed before writing) is not
-    // a verified PASS — surface as stale so the dashboard re-tests.
-    const metaReport = lastRun.report_path ?? reportPath;
-    if (metaReport) {
-      if (!existsSync(toTesterHostPath(String(metaReport)))) return true;
-    }
-
-    return false;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Supplement scanned reports with `meta.last_run` from scenario JSON files.
- *
- * Status SSoT — `meta.last_run` inside each scenario file is now the single
- * source of truth for status / score / report_path / tested_at. The
- * orchestrator registry (scenario_registry.json) is no longer consulted for
- * status; it carries lock-state only.
- *
- * Markdown reports under reports/scenarios/ still take priority when they
- * are present and same-day-or-newer than `meta.last_run.tested_at`. When the
- * markdown is missing (archived, never written, runner crashed) we fall back
- * to the meta block so the dashboard sees the most recent run instead of
- * silently dropping the scenario back to PENDING.
- */
-function mergeMetaLastRunIntoReports(appId: string, reports: Record<string, ScannedReport>): void {
-  const appScenarioDir = join(SCENARIOS_DIR, appId);
-  if (!existsSync(appScenarioDir)) return;
-
-  const ingest = (scenarioFile: string) => {
-    const data = readJSON(scenarioFile);
-    if (!data) return;
-    const sid: string = data.id || data.scenario_id;
-    if (!sid) return;
-    const lastRun = data?.meta?.last_run;
-    if (!lastRun || !lastRun.status) return;
-    const status: string = String(lastRun.status).toUpperCase();
-
-    const existing = reports[sid];
-    if (existing) {
-      const metaDate: string | null = lastRun.tested_at ?? null;
-      const reportDate: string | null = existing.timestamp ?? null;
-      const reportDateOnly = reportDate ? reportDate.substring(0, 10) : null;
-      const metaDateOnly = metaDate ? metaDate.substring(0, 10) : null;
-      // Keep existing markdown report only if strictly newer (day-level).
-      if (!metaDateOnly || (reportDateOnly && reportDateOnly > metaDateOnly)) return;
-    }
-
-    reports[sid] = {
-      scenarioId: sid,
-      status,
-      score: typeof lastRun.score === 'number' ? lastRun.score : null,
-      timestamp: lastRun.tested_at ?? null,
-      reportPath: lastRun.report_path ?? '',
-      duration: typeof lastRun.duration_seconds === 'number' ? lastRun.duration_seconds : null,
-    };
-  };
-
-  const walk = (dir: string) => {
-    try {
-      for (const entry of readdirSync(dir)) {
-        const full = join(dir, entry);
-        try {
-          if (statSync(full).isDirectory()) { walk(full); continue; }
-        } catch { continue; }
-        if (full.endsWith('.json')) ingest(full);
-      }
-    } catch { /* unreadable dir */ }
-  };
-  walk(appScenarioDir);
+  return report.status;
 }
 
 // Legacy compatibility: keep pyramid cache dir reference for rescan endpoint
@@ -725,8 +611,7 @@ function getScenarioSummary(scenarioFile: string, reportPath: string | null): {
   } catch { /* */ }
 
   // Read report excerpt (## AI Report section or ## Bewertung).
-  // meta.last_run.report_path is stored relative to UNIFIED_TESTER_ROOT
-  // (enforced by validators/path_format_validator.py — Tier-0 gate).
+  // Report paths are stored relative to UNIFIED_TESTER_ROOT.
   // toTesterHostPath warns + remaps if a legacy absolute / "/tester/"
   // path slips through, so the reader stays correct during rollouts.
   if (reportPath) {
@@ -812,14 +697,9 @@ function getPyramidData(appId: string) {
   // local aggregates below so that dashboard and CLI never disagree.
   const ssot = getPyramidStatusFromCli(appId);
 
-  // SSoT: scan markdown reports, then merge `meta.last_run` from scenario JSON.
-  // The orchestrator registry is no longer consulted for status.
+  // SSoT: scan reports/scenarios/*.md directly. No registry / meta.last_run
+  // merging — the markdown report is the only source of truth.
   const scannedReports = scanReportsForApp(appId);
-  mergeMetaLastRunIntoReports(appId, scannedReports);
-
-  // Empty placeholder kept so existing call sites still type-check; isScenarioStale
-  // now relies entirely on meta.last_run inside the scenario file.
-  const registryByScenarioId: Record<string, any> = {};
 
   // Also check for flat scenarios (not in layer dirs — e.g. werking-safety, werking-noise)
   const flatScenarios: Array<{ id: string; file: string }> = [];
@@ -868,7 +748,7 @@ function getPyramidData(appId: string) {
         const scenarios = scanLayerScenarios(layerDir);
         for (const s of scenarios) {
           const report = scannedReports[s.id];
-          const status = resolveStatusFromReports(s.id, scannedReports, s.file, registryByScenarioId[s.id]);
+          const status = resolveStatusFromReports(s.id, scannedReports);
           const score = report?.score ?? null;
           if (status === 'PASS') sPassed++;
           else if (status === 'FAIL' || status === 'ERROR') sFailed++;
@@ -965,7 +845,7 @@ function getPyramidData(appId: string) {
 
     const tests = scenarios.map(s => {
       const report = scannedReports[s.id];
-      const status = resolveStatusFromReports(s.id, scannedReports, s.file, registryByScenarioId[s.id]);
+      const status = resolveStatusFromReports(s.id, scannedReports);
       const score = report?.score ?? null;
       const lastRun = report?.timestamp ?? null;
       const reportPath = report?.reportPath ?? null;
@@ -1015,7 +895,7 @@ function getPyramidData(appId: string) {
     const scores: number[] = [];
     const tests = ungrouped.map(s => {
       const report = scannedReports[s.id];
-      const status = resolveStatusFromReports(s.id, scannedReports, s.file, registryByScenarioId[s.id]);
+      const status = resolveStatusFromReports(s.id, scannedReports);
       const score = report?.score ?? null;
       if (status === 'PASS') passed++;
       else if (status === 'FAIL' || status === 'ERROR') failed++;
