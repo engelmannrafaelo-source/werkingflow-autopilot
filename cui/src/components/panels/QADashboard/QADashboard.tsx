@@ -10,6 +10,7 @@ import CoverageTab from './tabs/CoverageTab';
 import DependenciesTab from './tabs/DependenciesTab';
 import ProductTab from './tabs/ProductTab';
 import KnowledgeTab from './tabs/KnowledgeTab';
+import DurationTab from './tabs/DurationTab';
 import { resilientFetch } from '../../../utils/resilientFetch';
 
 interface Tab {
@@ -82,6 +83,12 @@ export default function QADashboard() {
       component: <ErrorBoundary componentName="TestRunsTab"><TestRunsTab /></ErrorBoundary>,
       group: 'monitoring',
       badge: runningCount
+    },
+    {
+      key: 'duration',
+      label: 'Duration',
+      component: <ErrorBoundary componentName="DurationTab"><DurationTab /></ErrorBoundary>,
+      group: 'monitoring'
     },
     {
       key: 'coverage',

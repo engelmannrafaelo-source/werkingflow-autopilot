@@ -1222,6 +1222,135 @@ function readReportContent(reportPath: string): string | null {
 }
 
 // ========================================
+// Duration Stats — parses **Duration:** Xs from report headers
+// ========================================
+
+export interface DurationReport {
+  app: string;
+  scenarioId: string;
+  status: string;       // PASS | FAIL | PARTIAL | NOT_TESTED | PENDING
+  duration: number;     // seconds
+  timestamp: string | null;
+  mtime: number;        // file mtime in ms
+  file: string;
+}
+
+export interface DurationStats {
+  count: number;
+  avg: number;
+  median: number;
+  p90: number;
+  p99: number;
+  min: number;
+  max: number;
+}
+
+// Match longest app prefix first (werking-report before werking).
+const DURATION_APP_PREFIXES: readonly string[] = [...APP_IDS].sort((a, b) => b.length - a.length);
+
+export function parseReportForDuration(file: string, content: string, mtime: number): DurationReport | null {
+  let appId: string | null = null;
+  for (const id of DURATION_APP_PREFIXES) {
+    if (file.startsWith(id + '_')) { appId = id; break; }
+  }
+  if (!appId) return null;
+
+  const baseName = file.replace(/\.md$/, '');
+  const parts = baseName.split('_');
+  let tsStart = -1;
+  for (let i = parts.length - 1; i >= 0; i--) {
+    if (parts[i].length === 8 && /^\d{8}$/.test(parts[i])) { tsStart = i; break; }
+  }
+  if (tsStart <= 0) return null;
+  const scenarioBase = parts.slice(1, tsStart);
+  if (scenarioBase.length === 0) return null;
+  const scenarioId = `${appId}.${scenarioBase.join('.')}`;
+
+  const head = content.slice(0, 800);
+
+  let status = 'PENDING';
+  if (head.includes('✅ PASS')) status = 'PASS';
+  else if (head.includes('⛔ NOT TESTED') || head.includes('NOT_TESTED')) status = 'NOT_TESTED';
+  else if (head.includes('❌ FAIL')) status = 'FAIL';
+  else if (head.includes('⚠') || head.includes('PARTIAL')) status = 'PARTIAL';
+
+  const durMatch = head.match(/\*\*Duration:\*\*\s*([\d.]+)s/);
+  if (!durMatch) return null;
+  const duration = parseFloat(durMatch[1]);
+  if (!Number.isFinite(duration)) return null;
+
+  let timestamp: string | null = null;
+  const tsMatch = head.match(/\*\*Timestamp:\*\*\s*(\S+)/);
+  if (tsMatch) timestamp = tsMatch[1];
+
+  return { app: appId, scenarioId, status, duration, timestamp, mtime, file };
+}
+
+function scanDurationReports(daysBack: number, appFilter?: string): DurationReport[] {
+  const out: DurationReport[] = [];
+  if (!existsSync(REPORTS_SCENARIOS_DIR)) return out;
+  const cutoff = Date.now() - daysBack * 24 * 3600 * 1000;
+
+  let entries: string[] = [];
+  try { entries = readdirSync(REPORTS_SCENARIOS_DIR); } catch { return out; }
+
+  for (const file of entries) {
+    if (!file.endsWith('.md')) continue;
+    if (appFilter && !file.startsWith(appFilter + '_')) continue;
+    const full = join(REPORTS_SCENARIOS_DIR, file);
+    let mtime: number;
+    try { mtime = statSync(full).mtimeMs; } catch { continue; }
+    if (mtime < cutoff) continue;
+    let content: string;
+    try { content = readFileSync(full, 'utf-8'); } catch { continue; }
+    const r = parseReportForDuration(file, content, mtime);
+    if (r) out.push(r);
+  }
+  return out;
+}
+
+// Bucket boundaries in seconds. Last bucket is "30m+" (open-ended).
+const HISTOGRAM_BUCKETS: { label: string; max: number }[] = [
+  { label: '<30s', max: 30 },
+  { label: '30s–1m', max: 60 },
+  { label: '1–2m', max: 120 },
+  { label: '2–5m', max: 300 },
+  { label: '5–10m', max: 600 },
+  { label: '10–30m', max: 1800 },
+  { label: '30m+', max: Infinity },
+];
+
+export function computeHistogram(durations: number[]): { bucket: string; count: number }[] {
+  const counts = HISTOGRAM_BUCKETS.map(b => ({ bucket: b.label, count: 0 }));
+  for (const d of durations) {
+    for (let i = 0; i < HISTOGRAM_BUCKETS.length; i++) {
+      if (d < HISTOGRAM_BUCKETS[i].max) { counts[i].count++; break; }
+    }
+  }
+  return counts;
+}
+
+export function computeDurationStats(durations: number[]): DurationStats {
+  // Caller is responsible for filtering duration > 0 — see daysBack endpoints.
+  // Empty input → zeros (caller renders "no data").
+  const sorted = [...durations].sort((a, b) => a - b);
+  const n = sorted.length;
+  if (n === 0) return { count: 0, avg: 0, median: 0, p90: 0, p99: 0, min: 0, max: 0 };
+  const sum = sorted.reduce((s, d) => s + d, 0);
+  const pct = (p: number) => sorted[Math.min(n - 1, Math.floor((p / 100) * n))];
+  const median = n % 2 === 0 ? (sorted[n / 2 - 1] + sorted[n / 2]) / 2 : sorted[Math.floor(n / 2)];
+  return {
+    count: n,
+    avg: sum / n,
+    median,
+    p90: pct(90),
+    p99: pct(99),
+    min: sorted[0],
+    max: sorted[n - 1],
+  };
+}
+
+// ========================================
 // API Routes
 // ========================================
 
@@ -1262,6 +1391,79 @@ router.get('/api/qa/runs', async (_req, res) => {
     });
   } catch (err: any) {
     console.error('[QA] Runs error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/qa/duration-stats — aggregated test-duration stats (last N days)
+// Reports with duration=0 (NOT_RUN / crash) are dropped before stats — they would skew median.
+router.get('/api/qa/duration-stats', async (req, res) => {
+  try {
+    const daysBack = Math.max(1, Math.min(90, parseInt(req.query.days as string) || 7));
+    const all = scanDurationReports(daysBack).filter(r => r.duration > 0);
+
+    const byApp = new Map<string, number[]>();
+    for (const r of all) {
+      const arr = byApp.get(r.app);
+      if (arr) arr.push(r.duration); else byApp.set(r.app, [r.duration]);
+    }
+    const apps = [...byApp.entries()]
+      .map(([app, durs]) => ({ app, ...computeDurationStats(durs) }))
+      .sort((a, b) => b.count - a.count);
+
+    const byStatus = new Map<string, number[]>();
+    for (const r of all) {
+      const arr = byStatus.get(r.status);
+      if (arr) arr.push(r.duration); else byStatus.set(r.status, [r.duration]);
+    }
+    const statuses: Record<string, DurationStats> = {};
+    for (const [s, durs] of byStatus) statuses[s] = computeDurationStats(durs);
+
+    const allDurations = all.map(r => r.duration);
+    const global = computeDurationStats(allDurations);
+    const histogram = computeHistogram(allDurations);
+
+    res.json({ daysBack, apps, statuses, global, histogram, timestamp: new Date().toISOString() });
+  } catch (err: any) {
+    console.error('[QA] Duration-stats error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/qa/duration-stats/:appId — single app stats + last 20 runs (newest first)
+router.get('/api/qa/duration-stats/:appId', async (req, res) => {
+  try {
+    const { appId } = req.params;
+    const daysBack = Math.max(1, Math.min(90, parseInt(req.query.days as string) || 7));
+    const all = scanDurationReports(daysBack, appId);
+    const usable = all.filter(r => r.duration > 0);
+
+    const usableDurations = usable.map(r => r.duration);
+    const stats = computeDurationStats(usableDurations);
+    const histogram = computeHistogram(usableDurations);
+
+    const byStatus = new Map<string, number[]>();
+    for (const r of usable) {
+      const arr = byStatus.get(r.status);
+      if (arr) arr.push(r.duration); else byStatus.set(r.status, [r.duration]);
+    }
+    const statuses: Record<string, DurationStats> = {};
+    for (const [s, durs] of byStatus) statuses[s] = computeDurationStats(durs);
+
+    const recent = [...all]
+      .sort((a, b) => b.mtime - a.mtime)
+      .slice(0, 20)
+      .map(r => ({
+        scenarioId: r.scenarioId,
+        status: r.status,
+        duration: r.duration,
+        timestamp: r.timestamp,
+        file: r.file,
+      }));
+
+    res.json({ app: appId, daysBack, stats, statuses, recent, histogram, timestamp: new Date().toISOString() });
+  } catch (err: any) {
+    console.error(`[QA] App duration-stats error for ${req.params.appId}:`, err.message);
     res.status(500).json({ error: err.message });
   }
 });
