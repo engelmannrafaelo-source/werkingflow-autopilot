@@ -44,13 +44,14 @@ interface ChatMessage {
 interface ChatSession {
   session_id: string;
   system_prompt: string;
+  context_message: string;        // First user message (with <documents>) — IMMUTABLE after session start
+  manifest: Record<string, string>; // filename -> sha256 of file content at session start
   history: ChatMessage[];
   created_at: number;
   token_count: number;
   files_loaded: number;
   temp_files: string[];
   zusatz_loaded: string[];
-  latestDiaryKey: number; // sortKey of newest diary entry injected in context
 }
 
 // Disk-persisted session state (survives server restarts)
@@ -63,9 +64,41 @@ interface PersistedSession {
   files_loaded: number;
   temp_files: string[];
   zusatz_loaded: string[];
+  context_message?: string;       // Migrated lazily — old sessions rebuild on first restore
+  manifest?: Record<string, string>;
   // Only the real conversation (indices 2+), not the injected context messages
   conversation: ChatMessage[];
 }
+
+function sha256(s: string): string {
+  return createHash('sha256').update(s).digest('hex');
+}
+
+const BUSINESS_ANGEL_SYSTEM_PROMPT = `Du bist ein strategischer Berater für WerkING Tools / Engelmann Data Energyneering.
+
+Deine erste Nachricht enthält Kontext-Dokumente in <documents> Tags.
+Lies diese Dokumente und verwende sie als einzige Wissensquelle.
+Antworte NUR auf Rafaels Fragen — gib den Inhalt der Dokumente NICHT wieder.
+
+REGELN:
+- Verwende AUSSCHLIESSLICH was in den <documents> steht
+- Erfinde keine Zahlen, Konditionen, Personen oder Deals
+- Wenn du etwas nicht weißt: sag es direkt
+- Wenn Rafael sagt "bau die Diffs" oder "Generiere Diffs": schreibe Diff-Blöcke im folgenden Format:
+  FORMAT (für neue UND bestehende Dateien — immer gleich):
+    FILE: <relativer Pfad ab business/>
+    NEW:
+    <VOLLSTÄNDIGER neuer Inhalt der Datei>
+- KRITISCH: Schreibe IMMER den KOMPLETTEN Dateiinhalt in NEW — nie nur den geänderten Abschnitt
+- Mehrere FILE/NEW Blöcke pro Antwort sind erlaubt
+- Falls ein [KONTEXT-UPDATE] in der Konversation erscheint: Verwende diesen aktuellen Stand als Basis für weitere Änderungen
+- PFADE: Der <dateibaum> Block enthält die aktuelle Ordnerstruktur. Verwende IMMER existierende Pfade und Namenskonventionen daraus. Für neue Dateien: orientiere dich am Namensschema der Nachbar-Dateien im gleichen Ordner.
+
+ANTWORT-FORMAT (KRITISCH):
+- Antworte direkt in Prosa. KEINE Speaker-Labels — kein "H:", "A:", "User:", "Assistant:", "Sprecher 1:".
+- Erfinde NIE eine User-Antwort. Antworte nicht auf Sätze, die Rafael nicht gesagt hat.
+- Wenn Rafael Audio-Transkripte mit "Sprecher 1/2" oder "H:/A:" einfügt: Referenziere sie als "du sagtest X" — übernimm das Format NICHT in deine eigene Antwort.
+- Stoppe nach deiner Antwort. Kein Cliffhanger, keine fiktiven Folge-Turns, kein "H: ..." am Ende.`;
 
 const ACTIVE_SESSION_PATH = '/root/projekte/local-storage/report-builder/business-angel-active.json';
 const SESSION_LOG_DIR     = '/root/projekte/local-storage/report-builder/business-angel-logs';
@@ -99,6 +132,8 @@ function writePersistedSession(session: ChatSession): void {
     files_loaded: session.files_loaded,
     temp_files: session.temp_files,
     zusatz_loaded: session.zusatz_loaded,
+    context_message: session.context_message,
+    manifest: session.manifest,
     conversation,
   };
   writeFileSync(ACTIVE_SESSION_PATH, JSON.stringify(data, null, 2), 'utf-8');
@@ -107,80 +142,44 @@ function writePersistedSession(session: ChatSession): void {
 /**
  * Auto-restore: if session is not in memory but exists on disk, rebuild it.
  * This handles CUI server restarts / hot-reloads without losing the active session.
- */
-/**
- * Re-read disk diary; if newer entries exist than what was loaded into the
- * session's history, do TWO things so the LLM definitely picks them up:
  *
- *   1. Replace the <verlauf> block in the first user message (the static
- *      context document) — keeps that section internally consistent.
- *   2. Inject a [KONTEXT-UPDATE] user/assistant pair AT THE END of the
- *      history listing only the new entries' content. This works with the
- *      "Falls ein [KONTEXT-UPDATE] in der Konversation erscheint" rule
- *      already present in the system prompt — the LLM treats the latest
- *      [KONTEXT-UPDATE] as the current state.
+ * Fast-Path: persisted session has context_message → restore 1:1 (cache stable, no rebuild).
+ * Migration-Path: legacy session without context_message → rebuild from current yaml,
+ * then persist context_message + manifest so next restore is 1:1.
  *
- * Cheap path when nothing changed: just compares sort keys, no rewrites.
+ * Diary/yaml updates during a running session are no longer auto-injected here.
+ * Frontend must call /sync-context explicitly (general delta detection via manifest).
  */
-function refreshDiaryIfStale(session: ChatSession): void {
-  try {
-    const yaml = loadContextYaml();
-    const diary = loadDiaryPyramid(yaml.tagebuch);
-    const newestDiskKey = diary.entries.reduce((max, e) => Math.max(max, e.sortKey), 0);
-    const oldKey = session.latestDiaryKey ?? 0;
-    if (newestDiskKey <= oldKey) return;
-
-    // Strictly-new entries (those past the old key).
-    const newEntries = diary.entries
-      .filter(e => e.sortKey > oldKey)
-      .sort((a, b) => a.sortKey - b.sortKey);
-    if (newEntries.length === 0) return;
-
-    // (1) Update the static <verlauf> block in first user message.
-    const sorted = [...diary.entries].sort((a, b) => a.sortKey - b.sortKey);
-    const newSection = renderDiarySection(sorted);
-    const firstUser = session.history.find(m => m.role === 'user');
-    if (firstUser && newSection) {
-      const re = /<verlauf[^>]*>[\s\S]*?<\/verlauf>/;
-      if (re.test(firstUser.content)) {
-        firstUser.content = firstUser.content.replace(
-          re,
-          `<verlauf description="Rafaels Arbeits-Tagebuch — chronologischer Verlauf. Pyramide: jüngste Tage täglich, ältere wochenweise, sehr alte monatlich. Quelle und Erzeugung: /root/projekte/local-storage/diary/CONVENTION.md">\n${newSection}\n</verlauf>`
-        );
-      }
-    }
-
-    // (2) Push a [KONTEXT-UPDATE] message-pair so the LLM actually sees it.
-    const newEntriesRendered = renderDiarySection(newEntries);
-    const labels = newEntries.map(e => e.label).join(', ');
-    session.history.push(
-      {
-        role: 'user',
-        content: `[KONTEXT-UPDATE] Neue Tagebucheinträge seit dem letzten Stand: ${labels}\n\n${newEntriesRendered}`,
-      },
-      {
-        role: 'assistant',
-        content: `Verstanden. Aktueller Tagebuchstand übernommen (jetzt bis ${newEntries[newEntries.length - 1].label}).`,
-      }
-    );
-
-    session.latestDiaryKey = newestDiskKey;
-    console.log(`[BusinessAngel] Diary refreshed for session ${session.session_id.slice(0, 8)} — injected ${newEntries.length} new entries (${labels})`);
-  } catch (err: any) {
-    console.warn(`[BusinessAngel] refreshDiaryIfStale failed: ${err.message}`);
-  }
-}
-
 function getOrRestoreSession(session_id: string): ChatSession | null {
   const existing = SESSION_STORE.get(session_id);
-  if (existing) {
-    refreshDiaryIfStale(existing);
-    return existing;
-  }
+  if (existing) return existing;
 
   // Try to restore from disk
   const persisted = readPersistedSession();
   if (!persisted || persisted.session_id !== session_id) return null;
+
+  // Fast-path: persisted has context_message → restore 1:1 without rebuild.
+  if (persisted.context_message) {
+    const restored: ChatSession = {
+      session_id: persisted.session_id,
+      system_prompt: BUSINESS_ANGEL_SYSTEM_PROMPT,
+      context_message: persisted.context_message,
+      manifest: persisted.manifest ?? {},
+      history: [
+        { role: 'user', content: persisted.context_message },
+        { role: 'assistant', content: 'Verstanden. Dokumente geladen und bereit.' },
+        ...persisted.conversation,
+      ],
+      created_at: persisted.created_at,
+      token_count: persisted.token_count,
+      files_loaded: persisted.files_loaded,
+      temp_files: persisted.temp_files,
+      zusatz_loaded: persisted.zusatz_loaded ?? [],
+    };
+    SESSION_STORE.set(session_id, restored);
+    console.log(`[BusinessAngel] Auto-restored session ${session_id.slice(0, 8)} from persisted context (${persisted.conversation.length} turns)`);
+    return restored;
+  }
 
   try {
     // Rebuild system prompt from current YAML + files (same logic as /load)
@@ -228,32 +227,6 @@ function getOrRestoreSession(session_id: string): ChatSession | null {
     diaryIncluded.sort((a, b) => a.sortKey - b.sortKey);
     const diarySectionRestore = renderDiarySection(diaryIncluded);
 
-    const systemPrompt = `Du bist ein strategischer Berater für WerkING Tools / Engelmann Data Energyneering.
-
-Deine erste Nachricht enthält Kontext-Dokumente in <documents> Tags.
-Lies diese Dokumente und verwende sie als einzige Wissensquelle.
-Antworte NUR auf Rafaels Fragen — gib den Inhalt der Dokumente NICHT wieder.
-
-REGELN:
-- Verwende AUSSCHLIESSLICH was in den <documents> steht
-- Erfinde keine Zahlen, Konditionen, Personen oder Deals
-- Wenn du etwas nicht weißt: sag es direkt
-- Wenn Rafael sagt "bau die Diffs" oder "Generiere Diffs": schreibe Diff-Blöcke im folgenden Format:
-  FORMAT (für neue UND bestehende Dateien — immer gleich):
-    FILE: <relativer Pfad ab business/>
-    NEW:
-    <VOLLSTÄNDIGER neuer Inhalt der Datei>
-- KRITISCH: Schreibe IMMER den KOMPLETTEN Dateiinhalt in NEW — nie nur den geänderten Abschnitt
-- Mehrere FILE/NEW Blöcke pro Antwort sind erlaubt
-- Falls ein [KONTEXT-UPDATE] in der Konversation erscheint: Verwende diesen aktuellen Stand als Basis für weitere Änderungen
-- PFADE: Der <dateibaum> Block enthält die aktuelle Ordnerstruktur. Verwende IMMER existierende Pfade und Namenskonventionen daraus. Für neue Dateien: orientiere dich am Namensschema der Nachbar-Dateien im gleichen Ordner.
-
-ANTWORT-FORMAT (KRITISCH):
-- Antworte direkt in Prosa. KEINE Speaker-Labels — kein "H:", "A:", "User:", "Assistant:", "Sprecher 1:".
-- Erfinde NIE eine User-Antwort. Antworte nicht auf Sätze, die Rafael nicht gesagt hat.
-- Wenn Rafael Audio-Transkripte mit "Sprecher 1/2" oder "H:/A:" einfügt: Referenziere sie als "du sagtest X" — übernimm das Format NICHT in deine eigene Antwort.
-- Stoppe nach deiner Antwort. Kein Cliffhanger, keine fiktiven Folge-Turns, kein "H: ..." am Ende.`;
-
     const fileTreeText = renderFileTreeText(BUSINESS_DIR, '');
 
     const contextMessage = `<documents>
@@ -278,6 +251,15 @@ ${diarySectionRestore}
 
 Dokumente geladen (${filesLoaded} Dateien). Bitte stelle mir deine Fragen.`;
 
+    // Build manifest for the migrated session so /sync-context can compare future deltas.
+    const migrationManifest: Record<string, string> = {};
+    for (const relPath of yaml.kern_files) {
+      const c = readFileContent(relPath);
+      if (c) migrationManifest[relPath] = sha256(c);
+    }
+    for (const f of tempFiles) migrationManifest[`temp/${f.name}`] = sha256(f.content);
+    for (const e of diaryIncluded) migrationManifest[`diary/${e.label}`] = sha256(e.content);
+
     const initialHistory: ChatMessage[] = [
       { role: 'user', content: contextMessage },
       { role: 'assistant', content: 'Verstanden. Dokumente geladen und bereit.' },
@@ -286,18 +268,20 @@ Dokumente geladen (${filesLoaded} Dateien). Bitte stelle mir deine Fragen.`;
 
     const restored: ChatSession = {
       session_id: persisted.session_id,
-      system_prompt: systemPrompt,
+      system_prompt: BUSINESS_ANGEL_SYSTEM_PROMPT,
+      context_message: contextMessage,
+      manifest: migrationManifest,
       history: initialHistory,
       created_at: persisted.created_at,
       token_count: totalTokens,
       files_loaded: filesLoaded,
       temp_files: tempFiles.map(f => f.name),
       zusatz_loaded: persisted.zusatz_loaded ?? [],
-      latestDiaryKey: diaryIncluded.reduce((max, e) => Math.max(max, e.sortKey), 0),
     };
 
     SESSION_STORE.set(session_id, restored);
-    console.log(`[BusinessAngel] Auto-restored session ${session_id.slice(0, 8)} from disk (${persisted.conversation.length} turns, ${filesLoaded} files)`);
+    writePersistedSession(restored);  // Persist context_message + manifest for next 1:1 restore
+    console.log(`[BusinessAngel] Migrated legacy session ${session_id.slice(0, 8)} — persisted context_message + manifest (${persisted.conversation.length} turns, ${filesLoaded} files)`);
     return restored;
   } catch (err: any) {
     console.error(`[BusinessAngel] Auto-restore failed: ${err.message}`);
@@ -1138,36 +1122,6 @@ router.post('/load', async (req, res) => {
 
     const excluded = [...kernExcluded, ...tempExcluded];
 
-    // 4. Assemble prompts
-    // IMPORTANT: Large document context goes into the FIRST USER MESSAGE, not the system prompt.
-    // Bridge's Claude Code SDK has a ~32k char limit on system messages, but user messages are unlimited.
-    // The context is wrapped in <documents> tags so the model clearly distinguishes it from conversation.
-    const systemPrompt = `Du bist ein strategischer Berater für WerkING Tools / Engelmann Data Energyneering.
-
-Deine erste Nachricht enthält Kontext-Dokumente in <documents> Tags.
-Lies diese Dokumente und verwende sie als einzige Wissensquelle.
-Antworte NUR auf Rafaels Fragen — gib den Inhalt der Dokumente NICHT wieder.
-
-REGELN:
-- Verwende AUSSCHLIESSLICH was in den <documents> steht
-- Erfinde keine Zahlen, Konditionen, Personen oder Deals
-- Wenn du etwas nicht weißt: sag es direkt
-- Wenn Rafael sagt "bau die Diffs" oder "Generiere Diffs": schreibe Diff-Blöcke im folgenden Format:
-  FORMAT (für neue UND bestehende Dateien — immer gleich):
-    FILE: <relativer Pfad ab business/>
-    NEW:
-    <VOLLSTÄNDIGER neuer Inhalt der Datei>
-- KRITISCH: Schreibe IMMER den KOMPLETTEN Dateiinhalt in NEW — nie nur den geänderten Abschnitt
-- Mehrere FILE/NEW Blöcke pro Antwort sind erlaubt
-- Falls ein [KONTEXT-UPDATE] in der Konversation erscheint: Verwende diesen aktuellen Stand als Basis für weitere Änderungen
-- PFADE: Der <dateibaum> Block enthält die aktuelle Ordnerstruktur. Verwende IMMER existierende Pfade und Namenskonventionen daraus. Für neue Dateien: orientiere dich am Namensschema der Nachbar-Dateien im gleichen Ordner.
-
-ANTWORT-FORMAT (KRITISCH):
-- Antworte direkt in Prosa. KEINE Speaker-Labels — kein "H:", "A:", "User:", "Assistant:", "Sprecher 1:".
-- Erfinde NIE eine User-Antwort. Antworte nicht auf Sätze, die Rafael nicht gesagt hat.
-- Wenn Rafael Audio-Transkripte mit "Sprecher 1/2" oder "H:/A:" einfügt: Referenziere sie als "du sagtest X" — übernimm das Format NICHT in deine eigene Antwort.
-- Stoppe nach deiner Antwort. Kein Cliffhanger, keine fiktiven Folge-Turns, kein "H: ..." am Ende.`;
-
     // Build file tree text for context injection (so Angel knows all paths)
     const fileTreeText = renderFileTreeText(BUSINESS_DIR, '');
     const fileTreeTokens = estimateTokens(fileTreeText);
@@ -1223,8 +1177,24 @@ Dokumente geladen (${filesLoaded} Dateien). Bitte stelle mir deine Fragen.`;
       }
     }
 
+    // Build manifest of all loaded files (filename -> sha256). Used by /sync-context to
+    // detect added/changed/removed files relative to the original session-start state.
+    const freshManifest: Record<string, string> = {};
+    for (const relPath of loadedPaths) {
+      const c = readFileContent(relPath);
+      if (c) freshManifest[relPath] = sha256(c);
+    }
+    for (const f of tempFiles) freshManifest[`temp/${f.name}`] = sha256(f.content);
+    for (const e of diaryEntriesIncluded) freshManifest[`diary/${e.label}`] = sha256(e.content);
+
+    // PROMPT-CACHING + KONSISTENZ: bei restore IMMER persisted context_message + manifest 1:1
+    // verwenden (falls vorhanden). Updates während laufender Session laufen über /sync-context.
+    const usePersistedContext = restore && persisted?.context_message;
+    const sessionContextMessage = usePersistedContext ? persisted.context_message! : contextMessage;
+    const sessionManifest = usePersistedContext && persisted!.manifest ? persisted!.manifest : freshManifest;
+
     const initialHistory: ChatMessage[] = [
-      { role: 'user', content: contextMessage },
+      { role: 'user', content: sessionContextMessage },
       { role: 'assistant', content: 'Verstanden. Dokumente geladen und bereit.' },
       ...restoredConversation,
     ];
@@ -1233,14 +1203,15 @@ Dokumente geladen (${filesLoaded} Dateien). Bitte stelle mir deine Fragen.`;
     const session_id = persisted?.session_id ?? randomUUID();
     const newSession: ChatSession = {
       session_id,
-      system_prompt: systemPrompt,
+      system_prompt: BUSINESS_ANGEL_SYSTEM_PROMPT,
+      context_message: sessionContextMessage,
+      manifest: sessionManifest,
       history: initialHistory,
       created_at: persisted?.created_at ?? Date.now(),
       token_count: totalTokens,
       files_loaded: filesLoaded,
       temp_files: tempFiles.map(f => f.name),
       zusatz_loaded: zusatz,
-      latestDiaryKey: diaryEntriesIncluded.reduce((max, e) => Math.max(max, e.sortKey), 0),
     };
     SESSION_STORE.set(session_id, newSession);
     writePersistedSession(newSession);
@@ -1296,6 +1267,117 @@ Dokumente geladen (${filesLoaded} Dateien). Bitte stelle mir deine Fragen.`;
     });
   } catch (err: any) {
     console.error('[BusinessAngel] /load error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- POST /sync-context ---
+// Compares the current yaml + filesystem state against the session's manifest (frozen at session
+// start) and appends a single user message to the conversation listing added/changed/removed
+// files (plus optional extra_files chosen by the user). Manifest is updated. Keeps the original
+// context_message immutable for prompt caching + consistency.
+router.post('/sync-context', (req, res) => {
+  try {
+    const { session_id, extra_files = [] } = req.body as {
+      session_id?: string;
+      extra_files?: string[];
+    };
+    if (!session_id) { res.status(400).json({ error: 'session_id required' }); return; }
+
+    const session = getOrRestoreSession(session_id);
+    if (!session) { res.status(404).json({ error: `Session not found: ${session_id}` }); return; }
+
+    const yaml = loadContextYaml();
+    const tempDir = yaml.temp_ordner || TEMP_DIR;
+
+    type CandidateFile = { key: string; content: string };
+    const current: CandidateFile[] = [];
+    for (const relPath of yaml.kern_files) {
+      const c = readFileContent(relPath);
+      if (c) current.push({ key: relPath, content: c });
+    }
+    for (const f of readTempFiles(tempDir)) {
+      current.push({ key: `temp/${f.name}`, content: f.content });
+    }
+    for (const e of loadDiaryPyramid(yaml.tagebuch).entries) {
+      current.push({ key: `diary/${e.label}`, content: e.content });
+    }
+    for (const relPath of extra_files) {
+      const c = readFileContent(relPath);
+      if (c && !current.some(x => x.key === relPath)) current.push({ key: relPath, content: c });
+    }
+
+    const oldManifest = session.manifest ?? {};
+    const added: CandidateFile[] = [];
+    const changed: CandidateFile[] = [];
+    const newManifest: Record<string, string> = {};
+
+    for (const f of current) {
+      const hash = sha256(f.content);
+      newManifest[f.key] = hash;
+      if (!(f.key in oldManifest)) added.push(f);
+      else if (oldManifest[f.key] !== hash) changed.push(f);
+    }
+    const removed = Object.keys(oldManifest).filter(k => !(k in newManifest));
+
+    if (added.length === 0 && changed.length === 0 && removed.length === 0) {
+      res.json({ ok: true, no_changes: true, message: 'Kein Update — Dokumente unverändert.' });
+      return;
+    }
+
+    const TOKEN_BUDGET = 50000;
+    let budget = TOKEN_BUDGET;
+    const sections: string[] = [];
+    const truncated: string[] = [];
+
+    if (added.length > 0) {
+      sections.push(`### NEU hinzugekommen (${added.length})\n`);
+      for (const f of added) {
+        const tokens = estimateTokens(f.content);
+        if (tokens > budget) { truncated.push(f.key); continue; }
+        sections.push(`#### ${f.key}\n\n${f.content}`);
+        budget -= tokens;
+      }
+    }
+    if (changed.length > 0) {
+      sections.push(`\n### GEÄNDERT seit Session-Start (${changed.length})\n`);
+      for (const f of changed) {
+        const tokens = estimateTokens(f.content);
+        if (tokens > budget) { truncated.push(f.key); continue; }
+        sections.push(`#### ${f.key}\n\n${f.content}`);
+        budget -= tokens;
+      }
+    }
+    if (removed.length > 0) {
+      sections.push(`\n### Nicht mehr im aktuellen Kontext (${removed.length}):\n${removed.map(k => `- ${k}`).join('\n')}`);
+    }
+    if (truncated.length > 0) {
+      sections.push(`\n_Wegen Token-Budget übersprungen: ${truncated.join(', ')}_`);
+    }
+
+    const updateMessage = `📎 **Stand-Update seit Session-Start**\n\n${sections.join('\n\n')}`;
+    const ackMessage = `Verstanden. Update integriert (${added.length} neu, ${changed.length} geändert, ${removed.length} entfallen).`;
+
+    session.history.push({ role: 'user', content: updateMessage });
+    session.history.push({ role: 'assistant', content: ackMessage });
+    session.manifest = newManifest;
+    writePersistedSession(session);
+
+    console.log(`[BusinessAngel] /sync-context session=${session_id.slice(0, 8)}: +${added.length} new, ~${changed.length} changed, -${removed.length} removed, ${truncated.length} truncated`);
+
+    res.json({
+      ok: true,
+      added: added.map(f => f.key),
+      changed: changed.map(f => f.key),
+      removed,
+      truncated,
+      messages: [
+        { role: 'user', content: updateMessage },
+        { role: 'assistant', content: ackMessage },
+      ],
+    });
+  } catch (err: any) {
+    console.error('[BusinessAngel] /sync-context error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

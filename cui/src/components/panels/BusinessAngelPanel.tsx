@@ -828,24 +828,36 @@ export default function BusinessAngelPanel() {
       if (lines.length) parts.push(`<diff_status>\n${lines.join('\n')}\n</diff_status>`);
     }
 
-    const pendingFiles = [...selectedFiles].filter(f => !committedFiles.has(f));
-    if (pendingFiles.length > 0) {
-      const sections: string[] = [];
-      for (const path of pendingFiles) {
-        try {
-          const r = await fetch(`/api/business-angel/file-preview?path=${encodeURIComponent(path)}`);
-          if (!r.ok) continue;
-          const data = await r.json();
-          const content = data.preview ?? data.content ?? '';
-          if (content) sections.push(`### ${path}\n\n${content}`);
-        } catch { /* skip */ }
-      }
-      if (sections.length) {
-        parts.push(`<new_context description="Zusätzliche Dokumente, die Rafael mitten in der Session hinzugefügt hat — ab jetzt verfügbar">\n${sections.join('\n\n---\n\n')}\n</new_context>`);
-      }
-    }
-
+    // Pending file injection happens via /sync-context (separate turn) before send — see sendMessage.
     return parts.length > 0 ? parts.join('\n\n') + '\n\n' : '';
+  };
+
+  // Sync new/changed files into the conversation as a separate turn (not into the immutable
+  // first context_message). Backend computes diff against session manifest. Returns whether
+  // anything was synced.
+  const syncContext = async (extra: string[]): Promise<boolean> => {
+    if (!session) return false;
+    try {
+      const resp = await fetch('/api/business-angel/sync-context', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: session.session_id, extra_files: extra }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+      if (data.no_changes) {
+        setChatError('Keine Änderungen seit Session-Start');
+        setTimeout(() => setChatError(''), 3000);
+        return false;
+      }
+      setChatMessages(prev => [...prev, ...(data.messages ?? [])]);
+      setCommittedFiles(new Set(selectedFiles));
+      return true;
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setChatError(`Sync fehlgeschlagen: ${msg}`);
+      return false;
+    }
   };
 
   const sendMessage = async () => {
@@ -854,9 +866,13 @@ export default function BusinessAngelPanel() {
     setChatInput('');
     setChatSending(true);
     setChatError('');
+    const pendingFiles = [...selectedFiles].filter(f => !committedFiles.has(f));
+    if (pendingFiles.length > 0) {
+      await syncContext(pendingFiles);
+    }
     // Assistant msg will be appended after the user msg — predict its index now
     // so we can tie any diffs to the correct message.
-    const assistantIdx = chatMessages.length + 1;
+    const assistantIdx = chatMessages.length + 1 + (pendingFiles.length > 0 ? 2 : 0);
     setChatMessages(prev => [...prev, { role: 'user', content: userMsg }]);
     try {
       const prefix = await buildMessagePrefix();
@@ -1362,18 +1378,27 @@ Wichtig:
             </span>
           )}
           {session && (() => {
-            const pendingCount = [...selectedFiles].filter(f => !committedFiles.has(f)).length;
-            if (pendingCount === 0) return null;
+            const pendingFiles = [...selectedFiles].filter(f => !committedFiles.has(f));
+            if (pendingFiles.length === 0) return null;
             return (
               <span
-                onClick={() => { setChatOnly(false); setContextCollapsed(false); setTreeOpen(true); }}
+                onClick={() => { syncContext(pendingFiles); }}
                 style={{ fontSize: '10px', color: 'var(--tn-cyan,#7dcfff)', padding: '2px 8px', borderRadius: '4px', background: 'rgba(125,207,255,0.12)', border: '1px dashed rgba(125,207,255,0.45)', cursor: 'pointer', fontWeight: 600 }}
-                title="Neue Kontext-Dateien — werden mit der nächsten Nachricht gesendet. Klicken öffnet den Kontext-Bereich."
+                title="Klick: Auswahl jetzt in den Chat einfügen (separater Turn — Original-Kontext bleibt unverändert)"
               >
-                📎 {pendingCount} neu
+                📎 {pendingFiles.length} sync
               </span>
             );
           })()}
+          {session && (
+            <button
+              style={{ ...S.btn, ...S.btnGhost, padding: '3px 7px', fontSize: '11px' }}
+              onClick={() => syncContext([])}
+              title="Stand abgleichen — checkt yaml + Filesystem auf Änderungen seit Session-Start und schickt nur das Delta in den Chat"
+            >
+              🔄
+            </button>
+          )}
           {session && changedFiles.length > 0 && (
             <span
               onClick={() => setChangedFiles([])}
