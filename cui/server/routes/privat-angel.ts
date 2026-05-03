@@ -50,6 +50,8 @@ interface ChatMessage {
 interface ChatSession {
   session_id: string;
   system_prompt: string;
+  context_message: string;        // First user message (with <documents>) — IMMUTABLE after session start
+  manifest: Record<string, string>; // filename -> sha256 of file content at session start
   history: ChatMessage[];
   created_at: number;
   token_count: number;
@@ -69,7 +71,13 @@ interface PersistedSession {
   inbox_files: string[];
   tagebuch_files: string[];
   zusatz_loaded: string[];
+  context_message?: string;       // Migrated lazily — old sessions rebuild on first restore
+  manifest?: Record<string, string>;
   conversation: ChatMessage[];
+}
+
+function sha256(s: string): string {
+  return createHash('sha256').update(s).digest('hex');
 }
 
 const SESSION_STORE = new Map<string, ChatSession>();
@@ -102,6 +110,8 @@ function writePersistedSession(session: ChatSession): void {
     inbox_files: session.inbox_files,
     tagebuch_files: session.tagebuch_files,
     zusatz_loaded: session.zusatz_loaded,
+    context_message: session.context_message,
+    manifest: session.manifest,
     conversation,
   };
   writeFileSync(ACTIVE_SESSION_PATH, JSON.stringify(data, null, 2), 'utf-8');
@@ -737,6 +747,16 @@ router.post('/load', async (req, res) => {
 
     const excluded = [...kernExcluded, ...inboxExcluded];
 
+    // Build manifest of all loaded files (filename -> sha256). Used by /sync-context to
+    // detect added/changed/removed files relative to the original session-start state.
+    const freshManifest: Record<string, string> = {};
+    for (const relPath of loadedPaths) {
+      const c = readFileContent(relPath);
+      if (c) freshManifest[relPath] = sha256(c);
+    }
+    for (const f of inboxFiles) freshManifest[`inbox/${f.name}`] = sha256(f.content);
+    for (const d of diary) freshManifest[d.name] = sha256(d.content);
+
     const fileTreeText = renderFileTreeText(PRIVAT_DIR, '');
 
     // Split persona kern into <persona> (identity files) and <betriebssystem> (rafael-betriebssystem*)
@@ -793,8 +813,15 @@ Dokumente geladen (${filesLoaded} Dateien, ${diary.length} Tagebuch-Tage, ${inbo
     const persisted = restore ? readPersistedSession() : null;
     const restoredConversation: ChatMessage[] = persisted?.conversation ?? [];
 
+    // PROMPT-CACHING + KONSISTENZ: bei restore IMMER persisted context_message + manifest 1:1 verwenden
+    // (falls vorhanden). Nur Migration alter Sessions ohne persistierten Context fällt auf den frisch
+    // gebauten contextMessage zurück. Updates während laufender Session laufen über /sync-context.
+    const usePersistedContext = restore && persisted?.context_message;
+    const sessionContextMessage = usePersistedContext ? persisted.context_message! : contextMessage;
+    const sessionManifest = usePersistedContext && persisted!.manifest ? persisted!.manifest : freshManifest;
+
     const initialHistory: ChatMessage[] = [
-      { role: 'user', content: contextMessage },
+      { role: 'user', content: sessionContextMessage },
       { role: 'assistant', content: 'Verstanden. Ich kenne deinen Kontext. Frag mich.' },
       ...restoredConversation,
     ];
@@ -803,6 +830,8 @@ Dokumente geladen (${filesLoaded} Dateien, ${diary.length} Tagebuch-Tage, ${inbo
     const newSession: ChatSession = {
       session_id,
       system_prompt: SYSTEM_PROMPT,
+      context_message: sessionContextMessage,
+      manifest: sessionManifest,
       history: initialHistory,
       created_at: persisted?.created_at ?? Date.now(),
       token_count: totalTokens,
@@ -863,6 +892,32 @@ function getOrRestoreSession(session_id: string): ChatSession | null {
   const persisted = readPersistedSession();
   if (!persisted || persisted.session_id !== session_id) return null;
 
+  // Fast-path: persisted has context_message → restore 1:1 without rebuild (keeps Cache stable).
+  if (persisted.context_message) {
+    const restored: ChatSession = {
+      session_id: persisted.session_id,
+      system_prompt: SYSTEM_PROMPT,
+      context_message: persisted.context_message,
+      manifest: persisted.manifest ?? {},
+      history: [
+        { role: 'user', content: persisted.context_message },
+        { role: 'assistant', content: 'Verstanden. Ich kenne deinen Kontext. Frag mich.' },
+        ...persisted.conversation,
+      ],
+      created_at: persisted.created_at,
+      token_count: persisted.token_count,
+      files_loaded: persisted.files_loaded,
+      inbox_files: persisted.inbox_files,
+      tagebuch_files: persisted.tagebuch_files,
+      zusatz_loaded: persisted.zusatz_loaded ?? [],
+    };
+    SESSION_STORE.set(session_id, restored);
+    console.log(`[PrivatAngel] Auto-restored session ${session_id.slice(0, 8)} from persisted context (${persisted.conversation.length} turns)`);
+    return restored;
+  }
+
+  // Migration path: legacy session without persisted context_message → rebuild from current yaml,
+  // then persist so next restore is 1:1.
   try {
     const yaml = loadContextYaml();
     const inboxDir = yaml.inbox_ordner || INBOX_DIR;
@@ -936,6 +991,15 @@ ${inboxSections.join('\n\n---\n\n')}
 
 Dokumente geladen (${filesLoaded} Dateien). Was beschaeftigt dich?`;
 
+    // Build manifest for the migrated session so future /sync-context can compare deltas.
+    const migrationManifest: Record<string, string> = {};
+    for (const relPath of yaml.kern_files) {
+      const c = readFileContent(relPath);
+      if (c) migrationManifest[relPath] = sha256(c);
+    }
+    for (const f of inboxFiles) migrationManifest[`inbox/${f.name}`] = sha256(f.content);
+    for (const d of diary) migrationManifest[d.name] = sha256(d.content);
+
     const initialHistory: ChatMessage[] = [
       { role: 'user', content: contextMessage },
       { role: 'assistant', content: 'Verstanden. Ich kenne deinen Kontext. Frag mich.' },
@@ -945,6 +1009,8 @@ Dokumente geladen (${filesLoaded} Dateien). Was beschaeftigt dich?`;
     const restored: ChatSession = {
       session_id: persisted.session_id,
       system_prompt: SYSTEM_PROMPT,
+      context_message: contextMessage,
+      manifest: migrationManifest,
       history: initialHistory,
       created_at: persisted.created_at,
       token_count: totalTokens,
@@ -955,13 +1021,127 @@ Dokumente geladen (${filesLoaded} Dateien). Was beschaeftigt dich?`;
     };
 
     SESSION_STORE.set(session_id, restored);
-    console.log(`[PrivatAngel] Auto-restored session ${session_id.slice(0, 8)} from disk (${persisted.conversation.length} turns)`);
+    writePersistedSession(restored);  // Persist the migrated context_message + manifest
+    console.log(`[PrivatAngel] Migrated legacy session ${session_id.slice(0, 8)} — persisted context_message + manifest (${persisted.conversation.length} turns)`);
     return restored;
   } catch (err: any) {
     console.error(`[PrivatAngel] Auto-restore failed: ${err.message}`);
     return null;
   }
 }
+
+// --- POST /sync-context ---
+// Compares the current yaml + filesystem state against the session's manifest (frozen at session
+// start) and appends a single user message to the conversation listing added/changed files (and
+// optional extra_files chosen by the user). Manifest is updated so subsequent syncs only show
+// the new delta. Keeps the original context_message immutable for prompt caching + consistency.
+router.post('/sync-context', (req, res) => {
+  try {
+    const { session_id, extra_files = [] } = req.body as {
+      session_id?: string;
+      extra_files?: string[];
+    };
+    if (!session_id) { res.status(400).json({ error: 'session_id required' }); return; }
+
+    const session = getOrRestoreSession(session_id);
+    if (!session) { res.status(404).json({ error: `Session not found: ${session_id}` }); return; }
+
+    const yaml = loadContextYaml();
+    const inboxDir = yaml.inbox_ordner || INBOX_DIR;
+    const days = yaml.tagebuch_rolling_days ?? TAGEBUCH_ROLLING_DAYS_DEFAULT;
+
+    // Collect everything that should be in the current context (kern + diary + inbox + extras).
+    type CandidateFile = { key: string; content: string };
+    const current: CandidateFile[] = [];
+    for (const relPath of yaml.kern_files) {
+      const c = readFileContent(relPath);
+      if (c) current.push({ key: relPath, content: c });
+    }
+    for (const d of readRecentDiary(days)) {
+      current.push({ key: d.name, content: d.content });
+    }
+    for (const f of readInboxFiles(inboxDir)) {
+      current.push({ key: `inbox/${f.name}`, content: f.content });
+    }
+    for (const relPath of extra_files) {
+      const c = readFileContent(relPath);
+      if (c && !current.some(x => x.key === relPath)) current.push({ key: relPath, content: c });
+    }
+
+    const oldManifest = session.manifest ?? {};
+    const added: CandidateFile[] = [];
+    const changed: CandidateFile[] = [];
+    const newManifest: Record<string, string> = {};
+
+    for (const f of current) {
+      const hash = sha256(f.content);
+      newManifest[f.key] = hash;
+      if (!(f.key in oldManifest)) added.push(f);
+      else if (oldManifest[f.key] !== hash) changed.push(f);
+    }
+    const removed = Object.keys(oldManifest).filter(k => !(k in newManifest));
+
+    if (added.length === 0 && changed.length === 0 && removed.length === 0) {
+      res.json({ ok: true, no_changes: true, message: 'Kein Update — Dokumente unverändert.' });
+      return;
+    }
+
+    const TOKEN_BUDGET = 50000;
+    let budget = TOKEN_BUDGET;
+    const sections: string[] = [];
+    const truncated: string[] = [];
+
+    if (added.length > 0) {
+      sections.push(`### NEU hinzugekommen (${added.length})\n`);
+      for (const f of added) {
+        const tokens = estimateTokens(f.content);
+        if (tokens > budget) { truncated.push(f.key); continue; }
+        sections.push(`#### ${f.key}\n\n${f.content}`);
+        budget -= tokens;
+      }
+    }
+    if (changed.length > 0) {
+      sections.push(`\n### GEÄNDERT seit Session-Start (${changed.length})\n`);
+      for (const f of changed) {
+        const tokens = estimateTokens(f.content);
+        if (tokens > budget) { truncated.push(f.key); continue; }
+        sections.push(`#### ${f.key}\n\n${f.content}`);
+        budget -= tokens;
+      }
+    }
+    if (removed.length > 0) {
+      sections.push(`\n### Nicht mehr im aktuellen Kontext (${removed.length}):\n${removed.map(k => `- ${k}`).join('\n')}`);
+    }
+    if (truncated.length > 0) {
+      sections.push(`\n_Wegen Token-Budget übersprungen: ${truncated.join(', ')}_`);
+    }
+
+    const updateMessage = `📎 **Stand-Update seit Session-Start**\n\n${sections.join('\n\n')}`;
+    const ackMessage = `Verstanden. Update integriert (${added.length} neu, ${changed.length} geändert, ${removed.length} entfallen).`;
+
+    session.history.push({ role: 'user', content: updateMessage });
+    session.history.push({ role: 'assistant', content: ackMessage });
+    session.manifest = newManifest;
+    writePersistedSession(session);
+
+    console.log(`[PrivatAngel] /sync-context session=${session_id.slice(0, 8)}: +${added.length} new, ~${changed.length} changed, -${removed.length} removed, ${truncated.length} truncated`);
+
+    res.json({
+      ok: true,
+      added: added.map(f => f.key),
+      changed: changed.map(f => f.key),
+      removed,
+      truncated,
+      messages: [
+        { role: 'user', content: updateMessage },
+        { role: 'assistant', content: ackMessage },
+      ],
+    });
+  } catch (err: any) {
+    console.error('[PrivatAngel] /sync-context error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // --- POST /chat ---
 router.post('/chat', async (req, res) => {
