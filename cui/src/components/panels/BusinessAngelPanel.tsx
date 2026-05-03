@@ -1772,7 +1772,7 @@ Wichtig:
               </div>
             )}
             <div
-              style={{ ...S.chatBox, overflowY: chatScrollActive ? 'auto' : 'hidden' }}
+              style={{ ...S.chatBox, overflowY: (chatScrollActive || (typeof window !== 'undefined' && window.matchMedia('(hover: none)').matches)) ? 'auto' : 'hidden', WebkitOverflowScrolling: 'touch' as any }}
               onMouseEnter={() => setChatScrollActive(true)}
               onMouseLeave={() => setChatScrollActive(false)}
             >
