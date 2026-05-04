@@ -331,16 +331,23 @@ function loadContextYaml(): ContextYaml {
 
 const SYSTEM_PROMPT = `Du bist Rafaels persoenlicher Coach und Reflexionsspiegel.
 
-Deine erste Nachricht enthaelt Rafaels Kontext-Dokumente in <documents> Tags:
-- <persona>: Wer er ist (Identitaet, Psychologie, Coaching-Stil, Personen-Map)
-- <betriebssystem>: Sein aktuelles Lebens-OS (Prioritaeten, Trainings-Plan, Tagesmodi)
-- <recent_diary>: Tagebuch-Eintraege der letzten Tage (chronologisch)
-- <inbox>: Frische Inputs (Voice-Transkripte, Notizen) fuer diese Session
-- <zusatz_kontext>: Optional gewaehlte Vertiefungs-Bereiche
-- <dateibaum>: Aktuelle Ordnerstruktur fuer Pfad-Referenzen
+Deine erste Nachricht enthaelt eine Uebersicht ueber Rafaels Workspace:
+- <dateibaum>: Aktuelle Ordnerstruktur mit allen verfuegbaren Dateien
+- <inbox>: Liste frischer Inputs (Voice-Transkripte, Notizen) — falls vorhanden, lies sie zuerst
 
-Lies diese Dokumente und behandle sie als deine einzige Wissensquelle ueber Rafael.
-Antworte NUR auf seine Fragen — gib den Inhalt der Dokumente NICHT wieder.
+Du hast initial KEINEN File-Inhalt geladen — nur den Dateibaum.
+Lade Files gezielt via <<<READ>>> wenn du sie brauchst — das ist effizienter als alles vorzuladen.
+
+ERSTE ANTWORT (wichtig):
+- Begruesse Rafael kurz und nenne die verfuegbaren Bereiche aus dem Dateibaum (Persoenlichkeit, Beziehungen, Training, Biohacking, Coaching, Tagebuch, Inbox, etc.)
+- Wenn <inbox> Files enthaelt: erwaehne sie und biete an, sie zu lesen
+- Frage Rafael was er heute machen will, statt sofort zu analysieren
+- Lade noch keine Files — warte auf seine Antwort, dann gezielt READ
+
+DANACH:
+- Rafael sagt was er will → du laedst die relevanten Files via <<<READ>>>, danach Inhalt analysieren und antworten.
+- Im Verlauf weitere Files nachladen via <<<READ>>> wenn du Tiefe brauchst.
+- Aenderungen schreiben via <<<WRITE>>> mit komplettem Datei-Inhalt.
 
 COACHING-PRINZIPIEN (aus rafael-coaching.md ableiten und anwenden):
 - Direkt, analytisch, ohne Beschoenigung. Kein "Du schaffst das schon"-Gerede.
@@ -643,10 +650,11 @@ router.get('/snapshot', (req, res) => {
 // --- POST /load ---
 router.post('/load', async (req, res) => {
   try {
-    const { zusatz = [], extra_files = [], restore = false } = req.body as {
+    const { zusatz = [], extra_files = [], restore = false, lite = true } = req.body as {
       zusatz?: string[];
       extra_files?: string[];
       restore?: boolean;
+      lite?: boolean;  // default: true — only load file tree + inbox list, no file contents (READ-on-demand via marker loop)
     };
 
     const yaml = loadContextYaml();
@@ -656,70 +664,91 @@ router.post('/load', async (req, res) => {
     const TEMPLATE_OVERHEAD = 500;
     let budget = SYSTEM_PROMPT_TOKEN_LIMIT - TEMPLATE_OVERHEAD;
 
-    // 1. Persona kern
+    // 1. Persona kern (full mode only)
     const personaSections: string[] = [];
     const kernExcluded: string[] = [];
     let filesLoaded = 0;
     let totalTokens = 0;
 
-    for (const relPath of yaml.kern_files) {
-      const content = readFileContent(relPath);
-      if (!content) {
-        console.warn(`[PrivatAngel] Kern-file not found: ${relPath}`);
-        continue;
+    if (!lite) {
+      for (const relPath of yaml.kern_files) {
+        const content = readFileContent(relPath);
+        if (!content) {
+          console.warn(`[PrivatAngel] Kern-file not found: ${relPath}`);
+          continue;
+        }
+        const tokens = estimateTokens(content);
+        if (tokens > budget) {
+          kernExcluded.push(relPath);
+          continue;
+        }
+        personaSections.push(`### ${relPath}\n\n${content}`);
+        filesLoaded++;
+        totalTokens += tokens;
+        budget -= tokens;
       }
-      const tokens = estimateTokens(content);
-      if (tokens > budget) {
-        kernExcluded.push(relPath);
-        continue;
-      }
-      personaSections.push(`### ${relPath}\n\n${content}`);
-      filesLoaded++;
-      totalTokens += tokens;
-      budget -= tokens;
     }
 
-    // 2. Recent diary (rolling N days)
+    // 2. Recent diary (rolling N days) — file-list always, content only in full mode
     const diary = readRecentDiary(days);
     const diarySections: string[] = [];
     const diaryFileNames: string[] = [];
     for (const d of diary) {
-      const tokens = estimateTokens(d.content);
-      if (tokens > budget) continue;
-      diarySections.push(`### ${d.name}\n\n${d.content}`);
       diaryFileNames.push(d.name);
-      filesLoaded++;
-      totalTokens += tokens;
-      budget -= tokens;
+      if (!lite) {
+        const tokens = estimateTokens(d.content);
+        if (tokens > budget) continue;
+        diarySections.push(`### ${d.name}\n\n${d.content}`);
+        filesLoaded++;
+        totalTokens += tokens;
+        budget -= tokens;
+      }
     }
 
-    // 3. Inbox
+    // 3. Inbox — file-list always, content only in full mode
     const inboxFiles = readInboxFiles(inboxDir);
     const inboxSections: string[] = [];
     const inboxExcluded: string[] = [];
-    for (const f of inboxFiles) {
-      const tokens = estimateTokens(f.content);
-      if (tokens > budget) {
-        inboxExcluded.push(f.name);
-        continue;
+    if (!lite) {
+      for (const f of inboxFiles) {
+        const tokens = estimateTokens(f.content);
+        if (tokens > budget) {
+          inboxExcluded.push(f.name);
+          continue;
+        }
+        inboxSections.push(`### ${f.name}\n\n${f.content}`);
+        filesLoaded++;
+        totalTokens += tokens;
+        budget -= tokens;
       }
-      inboxSections.push(`### ${f.name}\n\n${f.content}`);
-      filesLoaded++;
-      totalTokens += tokens;
-      budget -= tokens;
     }
 
-    // 4. Zusatz categories + extra_files
+    // 4. Zusatz + extra_files (full mode only — lite always ignores)
     const zusatzSections: string[] = [];
-    const loadedPaths = new Set<string>(yaml.kern_files);
+    const loadedPaths = new Set<string>(lite ? [] : yaml.kern_files);
 
-    for (const key of zusatz) {
-      const paths = yaml.zusatz_kategorien[key];
-      if (!paths) {
-        console.warn(`[PrivatAngel] Unknown zusatz category: ${key}`);
-        continue;
+    if (!lite) {
+      for (const key of zusatz) {
+        const paths = yaml.zusatz_kategorien[key];
+        if (!paths) {
+          console.warn(`[PrivatAngel] Unknown zusatz category: ${key}`);
+          continue;
+        }
+        for (const relPath of paths) {
+          if (loadedPaths.has(relPath)) continue;
+          const content = readFileContent(relPath);
+          if (!content) continue;
+          const tokens = estimateTokens(content);
+          if (tokens > budget) continue;
+          zusatzSections.push(`### ${relPath}\n\n${content}`);
+          loadedPaths.add(relPath);
+          filesLoaded++;
+          totalTokens += tokens;
+          budget -= tokens;
+        }
       }
-      for (const relPath of paths) {
+
+      for (const relPath of extra_files) {
         if (loadedPaths.has(relPath)) continue;
         const content = readFileContent(relPath);
         if (!content) continue;
@@ -731,19 +760,6 @@ router.post('/load', async (req, res) => {
         totalTokens += tokens;
         budget -= tokens;
       }
-    }
-
-    for (const relPath of extra_files) {
-      if (loadedPaths.has(relPath)) continue;
-      const content = readFileContent(relPath);
-      if (!content) continue;
-      const tokens = estimateTokens(content);
-      if (tokens > budget) continue;
-      zusatzSections.push(`### ${relPath}\n\n${content}`);
-      loadedPaths.add(relPath);
-      filesLoaded++;
-      totalTokens += tokens;
-      budget -= tokens;
     }
 
     const excluded = [...kernExcluded, ...inboxExcluded];
@@ -769,7 +785,37 @@ router.post('/load', async (req, res) => {
       else personaIdentity.push(section);
     }
 
-    const contextMessage = `<documents>
+    let contextMessage: string;
+
+    if (lite) {
+      // Lite-Mode: only file tree + recent diary list + inbox list — no contents.
+      // Engel laedt Files gezielt via <<<READ>>> wenn er sie braucht.
+      const recentDiaryList = diaryFileNames.length > 0
+        ? diaryFileNames.map(n => `- ${n}`).join('\n')
+        : '(keine Tagebuch-Eintraege in den letzten ' + days + ' Tagen)';
+      const inboxList = inboxFiles.length > 0
+        ? inboxFiles.map(f => `- inbox/${f.name}`).join('\n')
+        : '(leer)';
+
+      contextMessage = `<workspace_overview>
+
+<dateibaum description="Aktuelle Ordnerstruktur von ${PRIVAT_DIR}. Lade Inhalte gezielt via <<<READ>>>.">
+${fileTreeText}
+</dateibaum>
+
+<recent_diary description="Tagebuch-Eintraege der letzten ${days} Tage (Datei-Liste, Inhalt via <<<READ>>>)">
+${recentDiaryList}
+</recent_diary>
+
+<inbox description="Frische Inputs fuer diese Session (Voice-Transkripte, Notizen). Inhalt via <<<READ>>>.">
+${inboxList}
+</inbox>
+
+</workspace_overview>
+
+Workspace geladen (Lite-Mode: ${diary.length} Tagebuch-Tage gelistet, ${inboxFiles.length} Inbox-Files gelistet, KEIN Datei-Inhalt vorgeladen).`;
+    } else {
+      contextMessage = `<documents>
 
 <dateibaum description="Aktuelle Ordnerstruktur von ${PRIVAT_DIR} — verwende diese Pfade fuer neue/bestehende Dateien">
 ${fileTreeText}
@@ -798,6 +844,7 @@ ${zusatzSections.join('\n\n---\n\n')}
 </documents>
 
 Dokumente geladen (${filesLoaded} Dateien, ${diary.length} Tagebuch-Tage, ${inboxFiles.length} Inbox-Files). Was beschaeftigt dich?`;
+    }
 
     // Auto-archive stale active session if starting fresh
     if (!restore) {
@@ -821,9 +868,17 @@ Dokumente geladen (${filesLoaded} Dateien, ${diary.length} Tagebuch-Tage, ${inbo
     const sessionContextMessage = usePersistedContext ? persisted.context_message! : contextMessage;
     const sessionManifest = usePersistedContext && persisted!.manifest ? persisted!.manifest : freshManifest;
 
+    // Pre-seeded assistant response — different for lite vs. full mode.
+    // Lite mode: ask Rafael what he wants to discuss instead of pretending to know everything.
+    const ackMessage = lite
+      ? `Workspace gesehen. Verfuegbar: persoenliche Profile (rafael-core, philosophie, psychologie, beziehungen, biohacking, training, coaching, sexualitaet, personen-map, betriebssystem), Tagebuch (${diary.length} Tag${diary.length === 1 ? '' : 'e'} der letzten ${days}), Inbox (${inboxFiles.length} File${inboxFiles.length === 1 ? '' : 's'}), Kalender, Festival-Listen.
+
+Was beschaeftigt dich heute? Sag mir worueber du reden willst — ich lade gezielt was ich brauche.`
+      : 'Verstanden. Ich kenne deinen Kontext. Frag mich.';
+
     const initialHistory: ChatMessage[] = [
       { role: 'user', content: sessionContextMessage },
-      { role: 'assistant', content: 'Verstanden. Ich kenne deinen Kontext. Frag mich.' },
+      { role: 'assistant', content: ackMessage },
       ...restoredConversation,
     ];
 

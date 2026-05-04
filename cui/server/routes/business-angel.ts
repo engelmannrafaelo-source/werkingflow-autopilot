@@ -78,9 +78,23 @@ function sha256(s: string): string {
 
 const BUSINESS_ANGEL_SYSTEM_PROMPT = `Du bist ein strategischer Berater für WerkING Tools / Engelmann Data Energyneering.
 
-Deine erste Nachricht enthält Kontext-Dokumente in <documents> Tags.
-Lies diese Dokumente und verwende sie als einzige Wissensquelle.
-Antworte NUR auf Rafaels Fragen — gib den Inhalt der Dokumente NICHT wieder.
+Deine erste Nachricht enthaelt eine Workspace-Uebersicht:
+- <dateibaum>: Ordnerstruktur (customer-success/, sales/, marketing/, finance/, legal/, foerderung/, products/, shared/, team/, tools/)
+- <verlauf>: Liste der Tagebuch-Eintraege (Pyramide)
+- <temp_ordner>: Frische Inputs (Voice-Transkripte, Notizen)
+
+Du hast initial KEINEN Datei-Inhalt geladen — nur die Listen. Lade Files gezielt via <<<READ>>> wenn du sie brauchst.
+
+ERSTE ANTWORT (wichtig):
+- Begruesse Rafael kurz, nenne die Bereiche aus dem Dateibaum
+- Wenn <temp_ordner> Files enthaelt: erwaehne sie und biete an, sie zu lesen
+- Frage Rafael was er heute machen will, statt sofort zu antworten
+- Lade noch keine Files — warte auf seine Antwort, dann gezielt READ
+
+DANACH:
+- Rafael sagt was er will → lies relevante Files via <<<READ>>>, dann analysieren und antworten
+- Im Verlauf weitere Files nachladen via <<<READ>>>
+- Aenderungen schreiben via <<<WRITE>>> mit komplettem Datei-Inhalt
 
 REGELN:
 - Verwende AUSSCHLIESSLICH was in den <documents> steht oder was du via <<<READ>>> nachlaedst
@@ -1014,122 +1028,129 @@ router.get('/snapshot', (req, res) => {
 
 router.post('/load', async (req, res) => {
   try {
-    const { zusatz = [], extra_files = [], restore = false } = req.body as {
+    const { zusatz = [], extra_files = [], restore = false, lite = true } = req.body as {
       zusatz?: string[];
       extra_files?: string[];
       restore?: boolean;
+      lite?: boolean;  // default: true — only file tree + diary list + temp list, no contents
     };
 
     const yaml = loadContextYaml();
     const tempDir = yaml.temp_ordner || TEMP_DIR;
     const kernSet = new Set<string>(yaml.kern_files);
 
-    // Template overhead (instructions, section headers, rules)
     const TEMPLATE_OVERHEAD = 300;
     let budget = SYSTEM_PROMPT_TOKEN_LIMIT - TEMPLATE_OVERHEAD;
 
-    // 1. Collect kern content — highest priority, included first
+    // 1. Kern content — full mode only
     const kernSections: string[] = [];
     const kernExcluded: string[] = [];
     let filesLoaded = 0;
     let totalTokens = 0;
 
-    for (const relPath of yaml.kern_files) {
-      const content = readFileContent(relPath);
-      if (!content) {
-        console.warn(`[BusinessAngel] Kern-file not found: ${relPath}`);
-        continue;
-      }
-      const tokens = estimateTokens(content);
-      if (tokens > budget) {
-        kernExcluded.push(relPath);
-        console.warn(`[BusinessAngel] Kern-file excluded (budget): ${relPath} (${tokens} tokens)`);
-        continue;
-      }
-      kernSections.push(`### ${relPath}\n\n${content}`);
-      filesLoaded++;
-      totalTokens += tokens;
-      budget -= tokens;
-    }
-
-    // 2. Collect temp files — second priority (most recent context)
-    const tempFiles = readTempFiles(tempDir);
-    const tempSections: string[] = [];
-    const tempExcluded: string[] = [];
-    for (const f of tempFiles) {
-      const tokens = estimateTokens(f.content);
-      if (tokens > budget) {
-        tempExcluded.push(f.name);
-        console.warn(`[BusinessAngel] Temp-file excluded (budget): ${f.name} (${tokens} tokens)`);
-        continue;
-      }
-      tempSections.push(`### ${f.name}\n\n${f.content}`);
-      filesLoaded++;
-      totalTokens += tokens;
-      budget -= tokens;
-    }
-
-    // 3. Tagebuch-Pyramide — historischer Verlauf, automatisch aus local-storage/diary
-    const diary = loadDiaryPyramid(yaml.tagebuch);
-    const diaryEntriesIncluded: DiaryEntry[] = [];
-    // Walk newest → oldest so the most recent entries survive a tight budget.
-    const diaryByRecency = [...diary.entries].sort((a, b) => b.sortKey - a.sortKey);
-    for (const e of diaryByRecency) {
-      if (e.tokens > budget) continue;
-      diaryEntriesIncluded.push(e);
-      filesLoaded++;
-      totalTokens += e.tokens;
-      budget -= e.tokens;
-    }
-    // Re-render in chronological order for prompt readability
-    diaryEntriesIncluded.sort((a, b) => a.sortKey - b.sortKey);
-    const diarySection = renderDiarySection(diaryEntriesIncluded);
-    const diarySkippedCount = diary.entries.length - diaryEntriesIncluded.length;
-    if (diarySkippedCount > 0) {
-      console.warn(`[BusinessAngel] Tagebuch: ${diarySkippedCount} Eintrag/Einträge wegen Token-Budget übersprungen`);
-    }
-
-    // 4. Collect zusatz content (category-based) + extra_files
-    const zusatzSections: string[] = [];
-    const loadedPaths = new Set<string>(yaml.kern_files);
-
-    for (const key of zusatz) {
-      const paths = yaml.zusatz_kategorien[key];
-      if (!paths) {
-        console.warn(`[BusinessAngel] Unknown zusatz category: ${key}`);
-        continue;
-      }
-      for (const relPath of paths) {
-        if (loadedPaths.has(relPath)) continue;
+    if (!lite) {
+      for (const relPath of yaml.kern_files) {
         const content = readFileContent(relPath);
-        if (!content) continue;
+        if (!content) {
+          console.warn(`[BusinessAngel] Kern-file not found: ${relPath}`);
+          continue;
+        }
         const tokens = estimateTokens(content);
-        if (tokens > budget) continue; // silently skip if over budget
-        zusatzSections.push(`### ${relPath}\n\n${content}`);
-        loadedPaths.add(relPath);
+        if (tokens > budget) {
+          kernExcluded.push(relPath);
+          console.warn(`[BusinessAngel] Kern-file excluded (budget): ${relPath} (${tokens} tokens)`);
+          continue;
+        }
+        kernSections.push(`### ${relPath}\n\n${content}`);
         filesLoaded++;
         totalTokens += tokens;
         budget -= tokens;
       }
     }
 
-    for (const relPath of extra_files) {
-      if (loadedPaths.has(relPath)) continue;
-      const content = readFileContent(relPath);
-      if (!content) {
-        console.warn(`[BusinessAngel] Extra file not found: ${relPath}`);
-        continue;
+    // 2. Temp files — list always, content only in full mode
+    const tempFiles = readTempFiles(tempDir);
+    const tempSections: string[] = [];
+    const tempExcluded: string[] = [];
+    if (!lite) {
+      for (const f of tempFiles) {
+        const tokens = estimateTokens(f.content);
+        if (tokens > budget) {
+          tempExcluded.push(f.name);
+          console.warn(`[BusinessAngel] Temp-file excluded (budget): ${f.name} (${tokens} tokens)`);
+          continue;
+        }
+        tempSections.push(`### ${f.name}\n\n${f.content}`);
+        filesLoaded++;
+        totalTokens += tokens;
+        budget -= tokens;
       }
-      const tokens = estimateTokens(content);
-      if (tokens > budget) {
-        console.warn(`[BusinessAngel] Extra file excluded (budget): ${relPath} (${tokens} tokens)`);
-        continue;
+    }
+
+    // 3. Tagebuch-Pyramide — list always, content only in full mode
+    const diary = loadDiaryPyramid(yaml.tagebuch);
+    const diaryEntriesIncluded: DiaryEntry[] = [];
+    let diarySection = '';
+    if (!lite) {
+      const diaryByRecency = [...diary.entries].sort((a, b) => b.sortKey - a.sortKey);
+      for (const e of diaryByRecency) {
+        if (e.tokens > budget) continue;
+        diaryEntriesIncluded.push(e);
+        filesLoaded++;
+        totalTokens += e.tokens;
+        budget -= e.tokens;
       }
-      zusatzSections.push(`### ${relPath}\n\n${content}`);
-      loadedPaths.add(relPath);
-      filesLoaded++;
-      totalTokens += tokens;
-      budget -= tokens;
+      diaryEntriesIncluded.sort((a, b) => a.sortKey - b.sortKey);
+      diarySection = renderDiarySection(diaryEntriesIncluded);
+      const diarySkippedCount = diary.entries.length - diaryEntriesIncluded.length;
+      if (diarySkippedCount > 0) {
+        console.warn(`[BusinessAngel] Tagebuch: ${diarySkippedCount} Eintrag/Einträge wegen Token-Budget übersprungen`);
+      }
+    }
+
+    // 4. Zusatz + extra_files — full mode only
+    const zusatzSections: string[] = [];
+    const loadedPaths = new Set<string>(lite ? [] : yaml.kern_files);
+
+    if (!lite) {
+      for (const key of zusatz) {
+        const paths = yaml.zusatz_kategorien[key];
+        if (!paths) {
+          console.warn(`[BusinessAngel] Unknown zusatz category: ${key}`);
+          continue;
+        }
+        for (const relPath of paths) {
+          if (loadedPaths.has(relPath)) continue;
+          const content = readFileContent(relPath);
+          if (!content) continue;
+          const tokens = estimateTokens(content);
+          if (tokens > budget) continue;
+          zusatzSections.push(`### ${relPath}\n\n${content}`);
+          loadedPaths.add(relPath);
+          filesLoaded++;
+          totalTokens += tokens;
+          budget -= tokens;
+        }
+      }
+
+      for (const relPath of extra_files) {
+        if (loadedPaths.has(relPath)) continue;
+        const content = readFileContent(relPath);
+        if (!content) {
+          console.warn(`[BusinessAngel] Extra file not found: ${relPath}`);
+          continue;
+        }
+        const tokens = estimateTokens(content);
+        if (tokens > budget) {
+          console.warn(`[BusinessAngel] Extra file excluded (budget): ${relPath} (${tokens} tokens)`);
+          continue;
+        }
+        zusatzSections.push(`### ${relPath}\n\n${content}`);
+        loadedPaths.add(relPath);
+        filesLoaded++;
+        totalTokens += tokens;
+        budget -= tokens;
+      }
     }
 
     const excluded = [...kernExcluded, ...tempExcluded];
@@ -1139,8 +1160,35 @@ router.post('/load', async (req, res) => {
     const fileTreeTokens = estimateTokens(fileTreeText);
     console.log(`[BusinessAngel] File tree injected (~${fileTreeTokens} tokens)`);
 
-    // Context wrapped in <documents> tags — clearly not part of the conversation
-    const contextMessage = `<documents>
+    let contextMessage: string;
+
+    if (lite) {
+      const tempList = tempFiles.length > 0
+        ? tempFiles.map(f => `- temp/${f.name}`).join('\n')
+        : '(leer)';
+      const diaryList = diary.entries.length > 0
+        ? diary.entries.map(e => `- ${e.label}`).join('\n')
+        : '(keine Eintraege)';
+
+      contextMessage = `<workspace_overview>
+
+<dateibaum description="Aktuelle Ordnerstruktur von /root/projekte/werkingflow-business/. Lade Inhalte gezielt via <<<READ>>>.">
+${fileTreeText}
+</dateibaum>
+
+<verlauf description="Rafaels Arbeits-Tagebuch (Pyramide). Inhalte gezielt via <<<READ>>>.">
+${diaryList}
+</verlauf>
+
+<temp_ordner description="Frische Inputs (Voice-Transkripte, Notizen). Inhalte via <<<READ>>>.">
+${tempList}
+</temp_ordner>
+
+</workspace_overview>
+
+Workspace geladen (Lite-Mode: ${diary.entries.length} Tagebuch-Eintraege gelistet, ${tempFiles.length} Temp-Files gelistet, KEIN Datei-Inhalt vorgeladen).`;
+    } else {
+      contextMessage = `<documents>
 
 <dateibaum description="Aktuelle Ordnerstruktur von /root/projekte/werkingflow-business/ — verwende diese Pfade wenn du neue Dateien erstellst oder bestehende referenzierst">
 ${fileTreeText}
@@ -1165,6 +1213,7 @@ ${zusatzSections.join('\n\n---\n\n')}
 </documents>
 
 Dokumente geladen (${filesLoaded} Dateien). Bitte stelle mir deine Fragen.`;
+    }
 
     // Pre-seeded history: context in user message, minimal ack from assistant
     // On restore: append previous conversation turns after the pre-seed
@@ -1205,9 +1254,15 @@ Dokumente geladen (${filesLoaded} Dateien). Bitte stelle mir deine Fragen.`;
     const sessionContextMessage = usePersistedContext ? persisted.context_message! : contextMessage;
     const sessionManifest = usePersistedContext && persisted!.manifest ? persisted!.manifest : freshManifest;
 
+    const ackMessage = lite
+      ? `Workspace gesehen. Verfuegbar: customer-success/, sales/, marketing/, finance/, legal/, foerderung/, products/, shared/, team/, tools/. Plus Tagebuch-Pyramide (${diary.entries.length} Eintraege gelistet) und Temp-Inputs (${tempFiles.length}).
+
+Worum gehts heute? Sag mir den Bereich oder die konkrete Frage — ich lade gezielt via READ was ich brauche.`
+      : 'Verstanden. Dokumente geladen und bereit.';
+
     const initialHistory: ChatMessage[] = [
       { role: 'user', content: sessionContextMessage },
-      { role: 'assistant', content: 'Verstanden. Dokumente geladen und bereit.' },
+      { role: 'assistant', content: ackMessage },
       ...restoredConversation,
     ];
 
