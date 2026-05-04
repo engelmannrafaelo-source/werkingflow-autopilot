@@ -253,6 +253,14 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     try { return localStorage.getItem('cui-show-sub-sessions') === 'true'; } catch { return false; }
   });
   const [attentionVersion, setAttentionVersion] = useState(0); // triggers re-evaluation of attention state
+  // Ephemeral per-tab state — kept out of the persisted Tab-Config to prevent save-loops.
+  // _attention (idle/working/needs_attention) flips multiple times per second and used to be
+  // written into Tab-Config via updateNodeConfig → triggered onModelChange → POST → Echo → Loop.
+  // _route (live navigation in a CUI tab) had the same problem on every navigate.
+  // Both are now memory-only refs; setAttentionVersion(v+1) re-renders Tab-Headers when changed.
+  // Cost: navigation within a Tab is not persisted across browser reloads — Tab returns to initialSessionId.
+  const attentionByNodeRef = useRef<Map<string, string>>(new Map());
+  const routeByNodeRef = useRef<Map<string, string>>(new Map());
   const templateRef = useRef<IJsonModel | null>(null);
   const layoutRef = useRef<Layout>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(null);
@@ -285,7 +293,14 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
   const currentLayoutVersionRef = useRef<number>(0);
   // Suppress the next handleModelChange call after an external layout is applied
   // (WebSocket control:apply-layout or 409 recovery) to avoid echoing back to server.
-  const suppressNextSaveRef = useRef<boolean>(false);
+  // Time-based suppression: when set, ignore handleModelChange until this epoch ms.
+  // Boolean flag was insufficient because onModelChange fires multiple times per setModel
+  // (React Re-Renders); the first call consumed the flag, the second triggered an echo save.
+  const suppressUntilRef = useRef<number>(0);
+  // Self-echo detection: when we POST a layout, store its JSON (sans _v). When the server
+  // broadcasts our own write back to us, we recognize it and skip setModel — preventing
+  // the re-mount cascade that re-loads every Chat panel from scratch.
+  const lastSavedJsonRef = useRef<string>('');
 
   // Background refresh: fetch fresh layout from server (stale-while-revalidate)
   // Model is already loaded from localStorage cache in useState initializer above
@@ -356,7 +371,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         if (serverV > currentLayoutVersionRef.current) {
           // Server has a newer version (e.g. set via API) — apply it and suppress echo
           currentLayoutVersionRef.current = serverV;
-          suppressNextSaveRef.current = true;
+          suppressUntilRef.current = Date.now() + 800;
           if (saveTimer.current) clearTimeout(saveTimer.current);
           try { setModel(Model.fromJson(layoutJson)); } catch (e) { console.warn('[LayoutManager] Failed to parse server layout JSON:', e); }
         } else if (!hadCachedModel) {
@@ -382,6 +397,15 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     }
     return () => { cancelled = true; };
   }, [projectId, workDir]);
+
+  // Read ephemeral per-tab state. Falls back to Tab-Config so old persisted layouts
+  // (with _attention/_route saved) still work during the transition.
+  const getNodeAttention = useCallback((node: TabNode): string | undefined => {
+    return attentionByNodeRef.current.get(node.getId()) ?? (node.getConfig()?._attention as string | undefined);
+  }, []);
+  const getNodeRoute = useCallback((node: TabNode): string | undefined => {
+    return routeByNodeRef.current.get(node.getId()) ?? (node.getConfig()?._route as string | undefined);
+  }, []);
 
   // Update a tab node's config and trigger debounced layout save
   const updateNodeConfig = useCallback((nodeId: string, patch: Record<string, string>) => {
@@ -434,8 +458,8 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         return wrapPanel('Chat', <CuiLitePanel accountId={config.accountId} projectId={projectId} workDir={workDir} panelId={nodeId} isTabVisible={node.isVisible()}
           initialRoute={config._route}
           initialSessionId={config.initialSessionId}
-          onRouteChange={(route) => updateNodeConfig(nodeId, { _route: route })}
-          onStateChange={(state) => { updateNodeConfig(nodeId, { _attention: state }); setAttentionVersion(v => v + 1); }}
+          onRouteChange={(route) => { routeByNodeRef.current.set(nodeId, route); setAttentionVersion(v => v + 1); }}
+          onStateChange={(state) => { attentionByNodeRef.current.set(nodeId, state); setAttentionVersion(v => v + 1); }}
           onFinish={(sid) => {
             const m = modelRef.current;
             if (m) {
@@ -461,8 +485,8 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       case 'mission-chat':
         return wrapPanel('MissionChat', <CuiLitePanel accountId={config.accountId || 'engelmann'} projectId="mission-chat" workDir="/root/orchestrator/workspaces/mission-chat" panelId={nodeId} isTabVisible={node.isVisible()}
           initialSessionId={config.initialSessionId}
-          onRouteChange={(route) => updateNodeConfig(nodeId, { _route: route })}
-          onStateChange={(state) => { updateNodeConfig(nodeId, { _attention: state }); setAttentionVersion(v => v + 1); }}
+          onRouteChange={(route) => { routeByNodeRef.current.set(nodeId, route); setAttentionVersion(v => v + 1); }}
+          onStateChange={(state) => { attentionByNodeRef.current.set(nodeId, state); setAttentionVersion(v => v + 1); }}
           onFinish={(sid) => {
             const m = modelRef.current;
             if (m) {
@@ -555,6 +579,10 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
   const saveLayout = useCallback((m: Model) => {
     const json = m.toJson();
     const payload = { ...json, _v: currentLayoutVersionRef.current };
+    // Remember what we just sent — apply-layout handler uses this to detect self-echo
+    // (server broadcasts our own POST back to us, which would otherwise trigger setModel
+    // and re-mount every CUI panel = the "chats reload every few seconds" problem)
+    try { lastSavedJsonRef.current = JSON.stringify({ ...json }); } catch { lastSavedJsonRef.current = ''; }
     // Cache locally for instant load on next visit
     try { localStorage.setItem(`cui-layout-${projectId}`, JSON.stringify(payload)); } catch (e) { console.warn('[LayoutManager] Failed to cache layout locally:', e); }
     if (window.__cuiServerAlive === false) return;
@@ -573,7 +601,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           const data = await res.json().catch(() => ({})); // silent-ok: malformed 409 response; server-side layout version ignored
           if (data.layout) {
             currentLayoutVersionRef.current = typeof data._v === 'number' ? data._v : currentLayoutVersionRef.current;
-            suppressNextSaveRef.current = true;
+            suppressUntilRef.current = Date.now() + 800;
             if (saveTimer.current) clearTimeout(saveTimer.current);
             try {
               setModel(Model.fromJson(data.layout));
@@ -587,10 +615,10 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
 
   const handleModelChange = useCallback(
     (m: Model) => {
-      if (suppressNextSaveRef.current) {
-        suppressNextSaveRef.current = false;
-        return;
-      }
+      // Time-based suppression covers the React Re-Render wave after setModel().
+      // Self-echo of our own POSTs is handled separately in the apply-layout handler
+      // (lastSavedJsonRef compare). Together: no save loops, no Chat re-mount cascades.
+      if (Date.now() < suppressUntilRef.current) return;
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => saveLayout(m), 1500);
     },
@@ -814,12 +842,12 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     }
 
     // Primary: panel-reported attention state (from CuiLitePanel onStateChange callback)
-    const panelState = node.getConfig()?._attention as string | undefined;
+    const panelState = getNodeAttention(node);
 
     // Fallback: per-session WS state or per-account legacy state
     let sessionState = panelState || 'idle';
     if (sessionState === 'idle') {
-      const route = node.getConfig()?._route as string | undefined;
+      const route = getNodeRoute(node);
       const sessionId = route?.startsWith('/c/') ? route.slice(3) : null;
       if (sessionId) {
         const ss = sessionStatesRef.current.get(sessionId);
@@ -838,12 +866,12 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       const attentionReason = node.getConfig()?._attentionReason;
       const label = attentionReason === 'permission' ? '⚡' : attentionReason === 'error' ? '⚠' : '●';
       renderValues.leading = <span key="dot" className="cui-tab-dot cui-tab-dot--attention" title={attentionReason || 'Needs input'}>{label}</span>;
-    } else if (node.getConfig()?._route) {
+    } else if (getNodeRoute(node)) {
       // Has a conversation open but idle
       renderValues.leading = <span key="dot" className="cui-tab-dot cui-tab-dot--idle" />;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tabRenderTick]);
+  }, [tabRenderTick, getNodeAttention, getNodeRoute]);
 
   // Stable refs for Layout callbacks — prevent Layout element recreation on state changes.
   // Without these, every tabRenderTick bump recreates the <Layout> element via useMemo,
@@ -1007,14 +1035,29 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
             const serverV = typeof msg.layout._v === 'number' ? msg.layout._v : -1;
             // Only apply if server version is newer (or unversioned) — prevents processing our own echo
             if (serverV > currentLayoutVersionRef.current || serverV === -1) {
+              // Self-echo detection: server broadcasts our own POST back to us. The race
+              // condition where serverV arrives before the POST response means the version
+              // check alone fails. Instead, compare layout content (sans _v) against what we
+              // just sent. If identical, just bump version + skip setModel — no re-mount.
+              let isSelfEcho = false;
+              try {
+                const { _v, ...incomingNoV } = msg.layout;
+                if (lastSavedJsonRef.current && JSON.stringify(incomingNoV) === lastSavedJsonRef.current) {
+                  isSelfEcho = true;
+                }
+              } catch { /* compare failed; proceed normally */ }
+              if (isSelfEcho) {
+                // Server is broadcasting our own POST back; bump version, don't re-apply
+                if (serverV >= 0) currentLayoutVersionRef.current = serverV;
+                return;
+              }
               if (serverV >= 0) currentLayoutVersionRef.current = serverV;
-              const layoutData = msg.layout.layout || msg.layout;
-              suppressNextSaveRef.current = true;
+              // flexlayout's Model.fromJson expects the FULL body { global, borders, layout, popouts }.
+              suppressUntilRef.current = Date.now() + 800;
               if (saveTimer.current) clearTimeout(saveTimer.current);
-              const newModel = Model.fromJson(layoutData);
+              const newModel = Model.fromJson(msg.layout);
               setModel(newModel);
               try { localStorage.setItem(`cui-layout-${projectId}`, JSON.stringify(msg.layout)); } catch (e) { /* ignore */ }
-              console.log(`[LayoutManager] Applied server layout v${serverV} for ${projectId}`);
               setTimeout(reportPanels, 200);
             }
           } catch (err) { console.warn('[LayoutManager] apply-layout failed:', err); }
@@ -1425,13 +1468,13 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
             // Track sessions in mission-chat panels as mounted (so they don't get re-routed)
             // but NEVER add mission-chat panels to emptyPanels (they are reserved)
             if (comp === 'mission-chat') {
-              const route = tab.getConfig()?._route || '';
+              const route = getNodeRoute(tab) || '';
               const sid = route.startsWith('/c/') ? route.slice(3) : '';
               if (sid) mountedSessions.set(sid, tab.getId());
               return;
             }
             if (comp !== 'cui' && comp !== 'cui-lite') return;
-            const route = tab.getConfig()?._route || '';
+            const route = getNodeRoute(tab) || '';
             const cfgSid = tab.getConfig()?.initialSessionId || '';
             const sid = route.startsWith('/c/') ? route.slice(3) : cfgSid || '';
             if (sid) {
@@ -1540,7 +1583,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
 
           // Priority 2: Add as separate split panel — only when explicitly triggered
           if (!window.__cuiAutoLayoutActive) {
-            console.log(`[LM] auto-sync: skipping new panel creation for session ${conv.sessionId} (auto-layout disabled)`);
+            // Silent: this branch fires every 30s for every unmounted session — would flood the console
             continue;
           }
           // Find a CUI tabset to split from (prefer one with existing CUI panels)
@@ -1706,12 +1749,12 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         const tab = node as TabNode;
         const comp = tab.getComponent();
         if (comp === 'cui' || comp === 'cui-lite') {
-          const route = tab.getConfig()?._route as string | undefined;
+          const route = getNodeRoute(tab);
           const hasRoute = !!route;
           if (hasRoute) hasAnySession = true;
 
-          // Primary: panel-reported attention (_attention config)
-          let effectiveState = tab.getConfig()?._attention as string | undefined;
+          // Primary: panel-reported attention (live, ephemeral)
+          let effectiveState = getNodeAttention(tab);
 
           // Fallback: WS-tracked session state (more reliable for non-visible panels)
           const sessionId = route?.startsWith('/c/') ? route.slice(3) :

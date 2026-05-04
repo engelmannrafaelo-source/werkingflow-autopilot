@@ -62,6 +62,8 @@ interface LoadResult {
   conversation?: ChatMessage[];
   conversation_turns?: number;
   excluded?: string[];
+  ack_message?: string;
+  lite?: boolean;
 }
 
 interface ChatMessage {
@@ -78,21 +80,6 @@ interface SessionListItem {
   filename?: string;
 }
 
-interface DiffCard {
-  id: string;
-  file: string;
-  old?: string;
-  newText?: string;
-  rawHunk?: string;
-  status?: 'unchecked' | 'ok' | 'error' | 'applied' | 'already_applied' | 'skipped';
-  reason?: string;
-  oldExpanded?: boolean;
-  newExpanded?: boolean;
-  // Index of the assistant message that produced this diff. Rendered inline
-  // under that message in the chat flow. -1 = orphan (manual paste before any msg).
-  msgIdx: number;
-}
-
 // --- Helpers ---
 
 function formatTokens(n: number): string {
@@ -104,148 +91,6 @@ function tokenColor(n: number): string {
   if (n > 80000) return 'var(--tn-red, #f7768e)';
   if (n > 50000) return 'var(--tn-yellow, #e0af68)';
   return 'var(--tn-green, #9ece6a)';
-}
-
-function parseDiffsClient(text: string): Array<{ file: string; old: string; newText: string; rawHunk?: string }> {
-  const results: Array<{ file: string; old: string; newText: string; rawHunk?: string }> = [];
-
-  // ── Format 0: <<<DIFF ... >>> and <<<NEW ... >>> blocks ──────────
-  // This is the preferred snapshot-based diff format.
-  const diffBlockRe = /<<<DIFF\s+(.+?)\n([\s\S]*?)>>>/g;
-  const newBlockRe  = /<<<NEW\s+(.+?)\n([\s\S]*?)>>>/g;
-
-  let match: RegExpExecArray | null;
-
-  // Parse <<<DIFF blocks
-  while ((match = diffBlockRe.exec(text)) !== null) {
-    const filePath = match[1].trim();
-    const body = match[2];
-
-    // Extract old_string and new_string from YAML-like body
-    const oldMatch = body.match(/^old_string:\s*\|?\s*\n([\s\S]*?)(?=^new_string:)/m);
-    // NOTE: greedy [\s\S]* (not non-greedy) — the outer <<<DIFF ... >>>
-    // regex already bounds `body`. With /m, `$` matches end of any line, so
-    // non-greedy *? would stop at the first line end and capture only line 1.
-    // See rescue 2026-04-24 — this bug silently truncated apply-diff writes.
-    const newMatch = body.match(/^new_string:\s*\|?\s*\n([\s\S]*)$/m);
-
-    if (oldMatch && newMatch) {
-      // Remove leading 2-space indent from YAML block scalar
-      const dedent = (s: string) => s.replace(/^  /gm, '').replace(/\n+$/, '');
-      results.push({
-        file: filePath,
-        old: dedent(oldMatch[1]),
-        newText: dedent(newMatch[1]),
-        rawHunk: match[0],
-      });
-    }
-  }
-
-  // Parse <<<NEW blocks
-  while ((match = newBlockRe.exec(text)) !== null) {
-    const filePath = match[1].trim();
-    const body = match[2];
-
-    const contentMatch = body.match(/^content:\s*\|?\s*\n([\s\S]*)$/m);
-    if (contentMatch) {
-      const dedent = (s: string) => s.replace(/^  /gm, '').replace(/\n+$/, '');
-      results.push({
-        file: filePath,
-        old: '',
-        newText: dedent(contentMatch[1]),
-        rawHunk: match[0],
-      });
-    }
-  }
-
-  // If we found <<<DIFF/<<<NEW blocks, return them (preferred format)
-  if (results.length > 0) return results;
-
-  // ── Format 1: git unified diff ────────────────────────────────────
-  // Split on file headers (--- a/path or --- /dev/null)
-  const fileBlocks = text.split(/(?=^--- )/m).filter(s => s.trimStart().startsWith('---'));
-  for (const fileBlock of fileBlocks) {
-    const lines = fileBlock.split('\n');
-    const plusLine = lines.find(l => l.startsWith('+++'));
-    if (!plusLine) continue;
-    const filePath = plusLine.replace(/^\+\+\+\s+(?:b\/)?/, '').trim();
-    if (!filePath || filePath === '/dev/null') continue;
-
-    // Split into individual hunks by @@ headers — one DiffCard per hunk
-    const hunkParts = fileBlock.split(/(?=^@@)/m).filter(h => h.trimStart().startsWith('@@'));
-    for (const hunkPart of hunkParts) {
-      const hunkLines = hunkPart.split('\n');
-      const contentLines = hunkLines.slice(1); // skip @@ line
-      const oldLines: string[] = [];
-      const newLines: string[] = [];
-      for (const line of contentLines) {
-        if (line.startsWith('-')) {
-          oldLines.push(line.slice(1));
-        } else if (line.startsWith('+')) {
-          newLines.push(line.slice(1));
-        } else {
-          // context line: space prefix or empty
-          const content = line.startsWith(' ') ? line.slice(1) : line;
-          oldLines.push(content);
-          newLines.push(content);
-        }
-      }
-      if (oldLines.length === 0 && newLines.length === 0) continue;
-      const rawHunk = `--- a/${filePath}\n+++ b/${filePath}\n${hunkPart.trim()}`;
-      results.push({
-        file: filePath,
-        old: oldLines.join('\n').replace(/\n+$/, ''),
-        newText: newLines.join('\n').replace(/\n+$/, ''),
-        rawHunk,
-      });
-    }
-  }
-
-  // ── Format 2: legacy FILE:/OLD:/NEW: ─────────────────────────────
-  // NOTE: We split on FILE: first so each block only contains one diff.
-  // The regex /^NEW:\s*([\s\S]*?)(?=^FILE:\s*|$)/m is BROKEN — with /m,
-  // $ matches end of any line so the non-greedy match captures only line 1.
-  // Fix: parse line-by-line to correctly extract multiline OLD/NEW blocks.
-  if (results.length === 0) {
-    const blocks = text.split(/^FILE:\s*/m).filter(b => b.trim());
-    for (const block of blocks) {
-      const fileLineEnd = block.indexOf('\n');
-      if (fileLineEnd === -1) continue;
-      const filePath = block.slice(0, fileLineEnd).trim();
-      const rest = block.slice(fileLineEnd + 1);
-
-      const lines = rest.split('\n');
-      let oldLineIdx = -1, newLineIdx = -1;
-      for (let i = 0; i < lines.length; i++) {
-        if (oldLineIdx === -1 && /^OLD:\s*/.test(lines[i])) oldLineIdx = i;
-        if (newLineIdx === -1 && /^NEW:\s*/.test(lines[i])) newLineIdx = i;
-      }
-      if (oldLineIdx === -1 || newLineIdx === -1) continue;
-
-      // OLD: inline part + lines up to NEW:
-      const oldInline = lines[oldLineIdx].replace(/^OLD:\s*/, '');
-      const oldBody = lines.slice(oldLineIdx + 1, newLineIdx).join('\n');
-      const oldText = (oldInline + (oldBody ? '\n' + oldBody : '')).trimEnd();
-
-      // NEW: inline part + all remaining lines
-      // Strip trailing separator/header junk from the end (--- and ## DIFF N: patterns)
-      const newInline = lines[newLineIdx].replace(/^NEW:\s*/, '');
-      const newBodyLines = lines.slice(newLineIdx + 1);
-      while (newBodyLines.length > 0) {
-        const last = newBodyLines[newBodyLines.length - 1].trim();
-        if (last === '' || last === '---' || /^##\s+DIFF\s+\d+:/.test(last)) {
-          newBodyLines.pop();
-        } else break;
-      }
-      const newBody = newBodyLines.join('\n');
-      const newText = (newInline + (newBody ? '\n' + newBody : '')).trimEnd();
-
-      if (!filePath || !oldText) continue;
-      results.push({ file: filePath, old: oldText, newText });
-    }
-  }
-
-  return results;
 }
 
 
@@ -387,11 +232,6 @@ const S = {
     color: type === 'old' ? 'var(--tn-red, #f7768e)' : 'var(--tn-green, #9ece6a)',
   }),
   diffLabel: { fontSize: '9px', textTransform: 'uppercase' as const, letterSpacing: '0.08em', opacity: 0.6, marginBottom: '2px' },
-  statusBadge: (s: DiffCard['status']) => {
-    const bg: Record<string, string> = { unchecked: 'rgba(255,255,255,0.08)', ok: 'rgba(158,206,106,0.18)', error: 'rgba(247,118,142,0.18)', applied: 'rgba(122,162,247,0.18)', skipped: 'rgba(255,255,255,0.04)' };
-    const fg: Record<string, string> = { unchecked: 'var(--tn-text-muted)', ok: 'var(--tn-green,#9ece6a)', error: 'var(--tn-red,#f7768e)', applied: 'var(--tn-blue,#7aa2f7)', skipped: 'var(--tn-text-muted)' };
-    return { padding: '2px 6px', borderRadius: '8px', fontSize: '10px', fontWeight: 600, background: bg[s ?? 'unchecked'] ?? bg.unchecked, color: fg[s ?? 'unchecked'] ?? fg.unchecked };
-  },
 };
 
 // --- FileTree sub-component ---
@@ -524,11 +364,6 @@ export default function BusinessAngelPanel() {
   // File watcher — external changes during session
   const [changedFiles, setChangedFiles] = useState<string[]>([]);
   const watcherRef = useRef<EventSource | null>(null);
-
-  // Diffs
-  const [diffCards, setDiffCards] = useState<DiffCard[]>([]);
-  const [validating, setValidating] = useState(false);
-  const [applyError, setApplyError] = useState('');
 
   // File content cache for full-file diff view
   const [fileContents, setFileContents] = useState<Record<string, string>>({});
@@ -699,23 +534,6 @@ export default function BusinessAngelPanel() {
           },
         ];
         setChatMessages(restoredMessages);
-        // Re-inject diffs from the last assistant message that contains diffs,
-        // tagged with that message's original index in the restored list.
-        for (let i = data.conversation.length - 1; i >= 0; i--) {
-          const msg = data.conversation[i];
-          if (msg.role !== 'assistant') continue;
-          const parsed = parseDiffsClient(msg.content);
-          if (parsed.length > 0) {
-            setDiffCards(parsed.map(d => ({
-              id: Math.random().toString(36).slice(2),
-              file: d.file, old: d.old, newText: d.newText, rawHunk: d.rawHunk,
-              status: 'unchecked' as const,
-              oldExpanded: false, newExpanded: false,
-              msgIdx: i,
-            })));
-            break;
-          }
-        }
       } else {
         const initialContent = data.ack_message
           ?? `Dokumente geladen (${data.files_loaded} Dateien, ~${Math.round(data.token_count / 1000)}k Tokens).${excludedNote}\n\nIch bin dein strategischer Berater und arbeite ausschließlich mit diesen Quellen. Was brauchst du?`;
@@ -763,7 +581,6 @@ export default function BusinessAngelPanel() {
       await fetch('/api/business-angel/session/new', { method: 'POST' });
       setSession(null);
       setChatMessages([]);
-      setDiffCards([]);
       setActiveSessionInfo(null);
       setContextCollapsed(false);
       setCommittedFiles(new Set());
@@ -835,25 +652,8 @@ export default function BusinessAngelPanel() {
   //   2) which newly-selected context files to ingest (mid-session file injection)
   // Both blocks are invisible in the UI (stripped from display) but persisted in history.
   const buildMessagePrefix = async (): Promise<string> => {
-    const parts: string[] = [];
-
-    if (diffCards.length > 0) {
-      const seen = <T extends { file: string }>(arr: T[]) => [...new Set(arr.map(c => c.file))];
-      const applied = seen(diffCards.filter(c => (c.status ?? 'unchecked') === 'applied'));
-      const skipped = seen(diffCards.filter(c => (c.status ?? 'unchecked') === 'skipped'));
-      const pending = seen(diffCards.filter(c => {
-        const s = c.status ?? 'unchecked';
-        return s !== 'applied' && s !== 'skipped';
-      }));
-      const lines: string[] = [];
-      if (applied.length) lines.push(`Angewendet: ${applied.join(', ')}`);
-      if (skipped.length) lines.push(`Abgelehnt (nicht übernommen): ${skipped.join(', ')}`);
-      if (pending.length) lines.push(`Noch offen: ${pending.join(', ')}`);
-      if (lines.length) parts.push(`<diff_status>\n${lines.join('\n')}\n</diff_status>`);
-    }
-
     // Pending file injection happens via /sync-context (separate turn) before send — see sendMessage.
-    return parts.length > 0 ? parts.join('\n\n') + '\n\n' : '';
+    return '';
   };
 
   // Sync new/changed files into the conversation as a separate turn (not into the immutable
@@ -910,10 +710,6 @@ export default function BusinessAngelPanel() {
       if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
       setChatMessages(prev => [...prev, { role: 'assistant', content: data.response }]);
       setCommittedFiles(new Set(selectedFiles));
-      if (/^FILE:/m.test(data.response) || /^--- /m.test(data.response) || /<<<DIFF\s/m.test(data.response) || /<<<NEW\s/m.test(data.response)) {
-        injectDiffs(data.response, assistantIdx);
-        setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 300);
-      }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       // Session expired (server restart) — clear session so user can reload
@@ -929,161 +725,6 @@ export default function BusinessAngelPanel() {
     }
   };
 
-  // --- Generate Diffs (standard prompt injection) ---
-
-  const GENERATE_DIFFS_PROMPT = `Generiere für jede Datei die du ändern willst einen strukturierten Diff-Block.
-Beziehe dich dabei IMMER auf den ORIGINAL-Inhalt der Dateien (wie sie zu Beginn der Session geladen wurden), NICHT auf zwischenzeitliche Änderungen.
-
-Format für Änderungen:
-<<<DIFF pfad/zur/datei.md
-old_string: |
-  ...exakter Text aus dem Original...
-new_string: |
-  ...neuer Text...
->>>
-
-Format für neue Dateien:
-<<<NEW pfad/zur/neuen-datei.md
-content: |
-  ...vollständiger Inhalt...
->>>
-
-Wichtig:
-- old_string muss EXAKT im Original-Dokument vorkommen (nicht in einer bereits geänderten Version)
-- Genug Kontext-Zeilen für eindeutigen Match
-- Mehrere Diff-Blöcke pro Datei sind erlaubt`;
-
-  const generateDiffs = async () => {
-    if (!session || chatSending) return;
-    setChatSending(true);
-    setChatError('');
-    const assistantIdx = chatMessages.length + 1;
-    setChatMessages(prev => [...prev, { role: 'user', content: '📝 Generiere Diffs' }]);
-    try {
-      const prefix = await buildMessagePrefix();
-      const wireMsg = prefix + GENERATE_DIFFS_PROMPT;
-      const resp = await fetch('/api/business-angel/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: session.session_id, message: wireMsg }),
-      });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
-      setChatMessages(prev => [...prev, { role: 'assistant', content: data.response }]);
-      setCommittedFiles(new Set(selectedFiles));
-      // Auto-detect and inject diffs from response
-      const parsed = parseDiffsClient(data.response);
-      if (parsed.length > 0) {
-        injectDiffs(data.response, assistantIdx);
-        setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 300);
-      }
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes('Session not found') || msg.includes('404')) {
-        setSession(null);
-        setChatMessages([]);
-        setChatError('Session abgelaufen (Server-Neustart). Bitte Session neu laden.');
-      } else {
-        setChatError(msg);
-      }
-    } finally {
-      setChatSending(false);
-    }
-  };
-
-  // --- Diffs ---
-
-  const injectDiffs = (text: string, msgIdx: number) => {
-    const parsed = parseDiffsClient(text);
-    if (!parsed.length) return;
-    setDiffCards(prev => [
-      ...prev,
-      ...parsed.map(d => ({
-        id: Math.random().toString(36).slice(2),
-        file: d.file, old: d.old, newText: d.newText, rawHunk: d.rawHunk,
-        status: 'unchecked' as const,
-        oldExpanded: false, newExpanded: false,
-        msgIdx,
-      })),
-    ]);
-  };
-
-  const skipDiff  = (id: string) => setDiffCards(prev => prev.map(d => (d.id) === id ? { ...d, status: 'skipped' as const } : d));
-  const removeDiff = (id: string) => setDiffCards(prev => prev.filter(d => (d.id) !== id));
-
-  const validateAll = async () => {
-    const toCheck = diffCards.filter(d => (d.status ?? 'unchecked') === 'unchecked' || (d.status ?? 'unchecked') === 'error');
-    if (!toCheck.length) return;
-    setValidating(true);
-    try {
-      const resp = await fetch('/api/business-angel/apply-diffs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dry_run: true, diffs: toCheck.map(d => ({ file: d.file, old: d.old ?? '', newText: d.newText ?? '' })) }),
-      });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
-      const okSet      = new Set<string>(data.applied as string[]);
-      const alreadySet = new Set<string>((data.already_applied ?? []) as string[]);
-      const failMap    = new Map<string, string>((data.failed as Array<{ file: string; reason: string }>).map(f => [f.file, f.reason]));
-      setDiffCards(prev => prev.map(d => {
-        if (!toCheck.find(v => (v.id) === (d.id))) return d;
-        if (okSet.has(d.file))      return { ...d, status: 'ok' as const, reason: undefined };
-        if (alreadySet.has(d.file)) return { ...d, status: 'already_applied' as const, reason: undefined };
-        if (failMap.has(d.file))    return { ...d, status: 'error' as const, reason: failMap.get(d.file) };
-        return d;
-      }));
-    } catch (e: unknown) { setApplyError(e instanceof Error ? e.message : String(e)); }
-    finally { setValidating(false); }
-  };
-
-  const applyOne = async (id: string) => {
-    const card = diffCards.find(d => (d.id) === id);
-    if (!card) return;
-    const resp = await fetch('/api/business-angel/apply-diffs', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        diffs: [{ file: card.file, old: card.old ?? '', newText: card.newText ?? '' }],
-        ...(session?.session_id ? { session_id: session.session_id } : {}),
-      }),
-    });
-    const data = await resp.json();
-    const appliedList      = (data.applied ?? []) as string[];
-    const alreadyList      = (data.already_applied ?? []) as string[];
-    const failedList       = (data.failed ?? []) as Array<{ file: string; reason: string }>;
-
-    if (appliedList.includes(card.file)) {
-      setDiffCards(prev => prev.map(d => (d.id) === id ? { ...d, status: 'applied' as const } : d));
-      // Invalidate disk-content cache so VORHER re-fetches current state on next render
-      setFileContents(prev => { const n = { ...prev }; delete n[card.file]; return n; });
-      if (session?.session_id) fetchSnapshot(session.session_id);
-    } else if (alreadyList.includes(card.file)) {
-      setDiffCards(prev => prev.map(d => (d.id) === id ? { ...d, status: 'already_applied' as const, reason: undefined } : d));
-    } else {
-      const reason = failedList.find(f => f.file === card.file)?.reason ?? 'Unknown';
-      setDiffCards(prev => prev.map(d => (d.id) === id ? { ...d, status: 'error' as const, reason } : d));
-    }
-  };
-
-  const revertFile = async (file: string) => {
-    if (!session?.session_id) return;
-    try {
-      const resp = await fetch('/api/business-angel/revert', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ file, session_id: session.session_id }),
-      });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
-      // Mark all diff cards for this file as skipped (they're now stale)
-      setDiffCards(prev => prev.map(d => d.file === file ? { ...d, status: 'skipped' as const } : d));
-      // Refresh snapshot so it reflects the reverted state
-      fetchSnapshot(session.session_id);
-    } catch (e: unknown) {
-      setApplyError(e instanceof Error ? e.message : String(e));
-    }
-  };
 
   // --- Render ---
 
@@ -1119,262 +760,6 @@ Wichtig:
     return <div style={{ fontFamily: 'monospace', fontSize: 10, lineHeight: 1.6, color: '#c0caf5', whiteSpace: 'pre-wrap' as const, wordBreak: 'break-word' as const }}>{previewContent}</div>;
   }
 
-  const okCount = diffCards.filter(d => (d.status ?? 'unchecked') === 'ok').length;
-  const pendingCount = diffCards.filter(d => (d.status ?? 'unchecked') === 'unchecked').length;
-  const appliedCount = diffCards.filter(d => (d.status ?? 'unchecked') === 'applied').length;
-
-  const statusLabel = (s: DiffCard['status']) =>
-    ({ unchecked: '⬜', ok: '✓ ok', error: '✗', applied: '✓ applied', already_applied: '↩ bereits applied', skipped: '—' })[s ?? 'unchecked'] ?? s;
-
-  // Helper: render a single file's diff group (header + side-by-side preview).
-  // Used inline in the chat flow, one invocation per (message, file) pair.
-  const renderFileDiffGroup = (file: string, fileCards: DiffCard[], keyPrefix: string) => {
-    const rawFileContent = fileContents[file];
-    const snapshotContent = snapshotFiles[file];
-    // Prefer current disk content (rawFileContent) over session snapshot for VORHER display.
-    // Snapshot is for Angel context; diff view needs actual current state.
-    const fullFile = (rawFileContent && rawFileContent.length > 0 ? rawFileContent : undefined) ?? snapshotContent;
-    const isNewFile = !fullFile && fileCards.every(c => !(c.old ?? '').trim());
-    const allDone = fileCards.every(c => (c.status ?? 'unchecked') === 'applied' || (c.status ?? 'unchecked') === 'already_applied' || (c.status ?? 'unchecked') === 'skipped');
-    const isLoadingContent = !fullFile && !isNewFile;
-
-    // Baseline → final text after applying all hunks for this file
-    const normalize = (s: string) => s.replace(/\r\n/g, '\n').split('\n').map(l => l.trimEnd()).join('\n');
-    // With full-replace strategy: card.old is always empty; card.newText is the complete file.
-    // isNewFile = file doesn't exist on disk yet (no snapshot, no cached content).
-    const isFullReplace = fileCards.every(c => !(c.old ?? '').trim());
-    const leftFull = isNewFile ? '' : (fullFile ?? '');
-    const rightFull = isNewFile || isFullReplace
-      ? (fileCards[fileCards.length - 1]?.newText ?? '')
-      : (() => {
-          if (!fullFile) return fileCards.map(c => c.newText ?? '').join('\n');
-          let result = normalize(fullFile);
-          for (const card of fileCards) {
-            if ((card.old ?? '').trim()) {
-              const nOld = normalize(card.old ?? '');
-              const nNew = normalize(card.newText ?? '');
-              if (result.includes(nOld)) result = result.replace(nOld, nNew);
-            } else {
-              result = normalize(card.newText ?? '');
-            }
-          }
-          return result;
-        })();
-
-    // Per-line highlight sets (1-indexed)
-    const leftRemovedLines = new Set<number>();
-    const rightAddedLines = new Set<number>();
-    {
-      let leftLn = 1, rightLn = 1;
-      const chunks = diffLines(leftFull, rightFull);
-      for (const chunk of chunks) {
-        const raw = chunk.value;
-        const lineCount = raw.length === 0 ? 0 : raw.split('\n').length - (raw.endsWith('\n') ? 1 : 0);
-        if (chunk.removed) {
-          for (let i = 0; i < lineCount; i++) leftRemovedLines.add(leftLn + i);
-          leftLn += lineCount;
-        } else if (chunk.added) {
-          for (let i = 0; i < lineCount; i++) rightAddedLines.add(rightLn + i);
-          rightLn += lineCount;
-        } else {
-          leftLn += lineCount;
-          rightLn += lineCount;
-        }
-      }
-    }
-    const hasChanges = leftRemovedLines.size > 0 || rightAddedLines.size > 0;
-
-    const colHdr = (label: string, clr: string) => (
-      <div style={{ padding: '3px 8px', fontSize: '9px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' as const, color: clr, borderBottom: `1px solid ${clr}22`, display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0, position: 'sticky' as const, top: 0, zIndex: 1, background: 'var(--tn-bg,#1a1b26)' }}>
-        {label}
-      </div>
-    );
-
-    const makeHighlightedComponents = (highlightSet: Set<number>, bg: string, border: string) => {
-      const isHit = (node: any): boolean => {
-        const start = node?.position?.start?.line;
-        const end = node?.position?.end?.line ?? start;
-        if (!start) return false;
-        for (let ln = start; ln <= end; ln++) if (highlightSet.has(ln)) return true;
-        return false;
-      };
-      const hlBlock: React.CSSProperties = { background: bg, borderLeft: `3px solid ${border}`, paddingLeft: '10px', marginLeft: '-13px', borderRadius: '0 2px 2px 0' };
-      const merge = (node: any, base: React.CSSProperties): React.CSSProperties =>
-        isHit(node) ? { ...base, ...hlBlock } : base;
-      return {
-        ...markdownComponents,
-        h1: ({ node, ...props }: any) => <h1 style={merge(node, { fontSize: '20px', fontWeight: 700, color: 'var(--tn-text)', marginTop: '16px', marginBottom: '8px' })} {...props} />,
-        h2: ({ node, ...props }: any) => <h2 style={merge(node, { fontSize: '17px', fontWeight: 600, color: 'var(--tn-text)', marginTop: '12px', marginBottom: '6px' })} {...props} />,
-        h3: ({ node, ...props }: any) => <h3 style={merge(node, { fontSize: '15px', fontWeight: 600, color: 'var(--tn-blue)', marginTop: '10px', marginBottom: '5px' })} {...props} />,
-        h4: ({ node, ...props }: any) => <h4 style={merge(node, { fontSize: '14px', fontWeight: 600, color: 'var(--tn-text)', marginTop: '8px', marginBottom: '4px' })} {...props} />,
-        p: ({ node, ...props }: any) => <p style={merge(node, { marginBottom: '8px', lineHeight: '1.6' })} {...props} />,
-        li: ({ node, ...props }: any) => <li style={merge(node, { marginBottom: '3px' })} {...props} />,
-        blockquote: ({ node, ...props }: any) => <blockquote style={merge(node, { borderLeft: '3px solid var(--tn-blue)', paddingLeft: '12px', marginBottom: '8px', color: 'var(--tn-text-muted)', fontStyle: 'italic' })} {...props} />,
-        hr: ({ node, ...props }: any) => <hr style={merge(node, { border: 'none', borderTop: '1px solid var(--tn-border)', margin: '12px 0' })} {...props} />,
-        pre: ({ node, children, ...props }: any) => <pre style={merge(node, { margin: 0 })} {...props}>{children}</pre>,
-        tr: ({ node, children, ...props }: any) => (
-          <tr style={isHit(node) ? { background: bg, boxShadow: `inset 3px 0 0 ${border}` } : undefined} {...props}>{children}</tr>
-        ),
-      };
-    };
-    const leftComponents = makeHighlightedComponents(leftRemovedLines, 'rgba(247,118,142,0.18)', 'rgba(247,118,142,0.7)');
-    const rightComponents = makeHighlightedComponents(rightAddedLines, 'rgba(158,206,106,0.18)', 'rgba(158,206,106,0.7)');
-
-    const fileAppliedCount      = fileCards.filter(c => (c.status ?? 'unchecked') === 'applied').length;
-    const fileAlreadyCount      = fileCards.filter(c => (c.status ?? 'unchecked') === 'already_applied').length;
-    const fileOkCount           = fileCards.filter(c => (c.status ?? 'unchecked') === 'ok').length;
-    const fileErrorCount        = fileCards.filter(c => (c.status ?? 'unchecked') === 'error').length;
-    const filePendingCount      = fileCards.filter(c => (c.status ?? 'unchecked') === 'unchecked').length;
-    const headerBorderColor = fileErrorCount > 0 ? 'rgba(247,118,142,0.35)'
-      : fileOkCount > 0 ? 'rgba(158,206,106,0.35)'
-      : allDone ? 'rgba(122,162,247,0.25)'
-      : 'rgba(255,255,255,0.08)';
-
-    return (
-      <div key={`${keyPrefix}-${file}`} style={{
-        marginTop: '10px',
-        border: `1px solid rgba(255,255,255,0.08)`,
-        borderRadius: '8px', overflow: 'hidden',
-        opacity: allDone ? 0.45 : 1,
-        transition: 'opacity 0.2s',
-      }}>
-        {/* File header + controls */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: '8px',
-          padding: '7px 12px',
-          background: 'rgba(255,255,255,0.04)',
-          borderBottom: `1px solid ${headerBorderColor}`,
-        }}>
-          <span style={{
-            fontFamily: 'monospace', fontSize: '11px', flex: 1,
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
-            color: 'var(--tn-blue,#7aa2f7)',
-          }} title={file}>
-            {file}
-            {fileCards.length > 1 && (
-              <span style={{ color: 'var(--tn-text-muted)', fontSize: '10px', marginLeft: '6px' }}>
-                ({fileCards.length} Änderungen)
-              </span>
-            )}
-          </span>
-          {fileErrorCount > 0 && (
-            <span style={{ fontSize: '10px', color: 'var(--tn-red,#f7768e)', flexShrink: 0 }}>
-              ⚠ {fileErrorCount} Fehler
-            </span>
-          )}
-          {fileAlreadyCount > 0 && fileAlreadyCount < fileCards.length && (
-            <span style={{ fontSize: '10px', color: 'rgba(122,162,247,0.7)', flexShrink: 0 }}>
-              ↩ {fileAlreadyCount} bereits applied
-            </span>
-          )}
-          {fileAppliedCount > 0 && fileAppliedCount < fileCards.length && (
-            <span style={{ fontSize: '10px', color: 'var(--tn-blue,#7aa2f7)', flexShrink: 0 }}>
-              {fileAppliedCount}/{fileCards.length} applied
-            </span>
-          )}
-          <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0 }}>
-            <button
-              title={allDone ? 'Alle angewendet' : fileOkCount > 0 ? 'Alle akzeptierten anwenden' : 'Alle prüfen'}
-              style={{
-                ...S.btn,
-                padding: '3px 12px', fontSize: '12px', borderRadius: '6px',
-                background: allDone ? 'rgba(122,162,247,0.2)' : fileOkCount > 0 ? 'rgba(158,206,106,0.2)' : 'rgba(255,255,255,0.06)',
-                color: allDone ? 'var(--tn-blue,#7aa2f7)' : fileOkCount > 0 ? 'var(--tn-green,#9ece6a)' : 'var(--tn-text-muted)',
-                border: `1px solid ${allDone ? 'rgba(122,162,247,0.3)' : fileOkCount > 0 ? 'rgba(158,206,106,0.4)' : 'rgba(255,255,255,0.12)'}`,
-              }}
-              onClick={() => {
-                if (fileOkCount > 0) fileCards.filter(c => (c.status ?? 'unchecked') === 'ok').forEach(c => applyOne(c.id));
-                else if (filePendingCount > 0 || fileErrorCount > 0) validateAll();
-              }}
-            >
-              {allDone ? '✓ Applied' : fileOkCount > 0 ? `✓ Apply${fileCards.length > 1 ? ` (${fileOkCount})` : ''}` : filePendingCount > 0 ? '⬜ Prüfen' : '✗ Fehler'}
-            </button>
-            {!allDone && (
-              <button style={{ ...S.btn, ...S.btnGhost, padding: '3px 7px', fontSize: '11px', opacity: 0.6 }}
-                title="Alle überspringen"
-                onClick={() => fileCards.forEach(c => { if ((c.status ?? 'unchecked') !== 'applied' && (c.status ?? 'unchecked') !== 'skipped') skipDiff(c.id); })}>—</button>
-            )}
-            <button style={{ ...S.btn, ...S.btnGhost, padding: '3px 7px', fontSize: '11px', color: 'rgba(247,118,142,0.6)' }}
-              title="Alle entfernen"
-              onClick={() => fileCards.forEach(c => removeDiff(c.id))}>✕</button>
-            {fileAppliedCount > 0 && session?.session_id && (
-              <button style={{ ...S.btn, ...S.btnGhost, padding: '3px 7px', fontSize: '11px', color: 'rgba(224,175,104,0.7)' }}
-                title="Datei auf Snapshot-Stand zurücksetzen"
-                onClick={() => revertFile(file)}>↶</button>
-            )}
-          </div>
-        </div>
-        {/* Error details */}
-        {fileCards.some(c => (c.status ?? 'unchecked') === 'error' || (c.status ?? 'unchecked') === 'already_applied') && (
-          <div style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-            {fileCards.map((card, hunkIdx) => {
-              const s = card.status ?? 'unchecked';
-              if (s === 'error' && card.reason)
-                return (
-                  <div key={card.id} style={{ padding: '4px 12px', fontSize: '10px', color: 'var(--tn-red,#f7768e)' }}>
-                    Hunk {hunkIdx + 1}: ⚠ {card.reason}
-                  </div>
-                );
-              if (s === 'already_applied')
-                return (
-                  <div key={card.id} style={{ padding: '4px 12px', fontSize: '10px', color: 'rgba(122,162,247,0.8)', background: 'rgba(122,162,247,0.06)' }}>
-                    Hunk {hunkIdx + 1}: ↩ Bereits applied — Änderung ist schon in der Datei, kein Schreibvorgang nötig.
-                  </div>
-                );
-              return null;
-            })}
-          </div>
-        )}
-        {/* Side-by-side full-file preview with line highlights */}
-        {isLoadingContent ? (
-          <div style={{ padding: '16px', fontSize: '11px', color: 'rgba(255,255,255,0.3)', fontFamily: 'monospace', textAlign: 'center' as const }}>
-            Lade Dateiinhalt…
-          </div>
-        ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', height: '60vh' }}>
-            <div style={{ borderRight: '1px solid rgba(255,255,255,0.07)', overflowY: 'auto' as const, display: 'flex', flexDirection: 'column' as const, background: 'rgba(247,118,142,0.02)', minHeight: 0 }}>
-              {colHdr(snapshotContent ? 'Vorher (Snapshot)' : 'Vorher', 'rgba(247,118,142,0.55)')}
-              <div style={{ padding: '12px 18px', fontSize: '12px', lineHeight: 1.6 }}>
-                {leftFull.trim() ? (
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={leftComponents}>{leftFull}</ReactMarkdown>
-                ) : (
-                  <div style={{ color: 'var(--tn-text-muted)', fontSize: '11px', fontStyle: 'italic' }}>(neue Datei — keine Vorher-Version)</div>
-                )}
-              </div>
-            </div>
-            <div style={{ overflowY: 'auto' as const, display: 'flex', flexDirection: 'column' as const, background: 'rgba(158,206,106,0.02)', minHeight: 0 }}>
-              {colHdr(hasChanges ? 'Nachher' : 'Nachher (identisch)', 'rgba(158,206,106,0.55)')}
-              <div style={{ padding: '12px 18px', fontSize: '12px', lineHeight: 1.6 }}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]} components={rightComponents}>{rightFull}</ReactMarkdown>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // Render all file-grouped diffs attached to a given message.
-  const renderDiffsForMessage = (msgIdx: number) => {
-    const cards = diffCards.filter(c => c.msgIdx === msgIdx);
-    if (!cards.length) return null;
-    const fileGroups = new Map<string, DiffCard[]>();
-    cards.forEach(c => {
-      const g = fileGroups.get(c.file) || [];
-      g.push(c);
-      fileGroups.set(c.file, g);
-    });
-    // Trigger lazy file-content fetch
-    fileGroups.forEach((_, file) => {
-      if (fileContents[file] === undefined) fetchFileContent(file);
-    });
-    return (
-      <div style={{ marginTop: '8px' }}>
-        {Array.from(fileGroups.entries()).map(([file, fcs]) =>
-          renderFileDiffGroup(file, fcs, `m${msgIdx}`))}
-      </div>
-    );
-  };
 
   if (ctxLoading) return (
     <div style={{ ...S.root, padding: '20px', alignItems: 'center', justifyContent: 'center' }}>
@@ -1396,11 +781,6 @@ Wichtig:
       <div style={S.header}>
         <h2 style={S.h2}>🤝 Business Angel</h2>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: '4px', alignItems: 'center' }}>
-          {session && diffCards.length > 0 && (
-            <span style={{ fontSize: '10px', color: 'var(--tn-cyan,#7dcfff)', padding: '2px 8px', borderRadius: '4px', background: 'rgba(125,207,255,0.1)', border: '1px solid rgba(125,207,255,0.2)' }}>
-              📝 {diffCards.length} Diff{diffCards.length !== 1 ? 's' : ''} inline
-            </span>
-          )}
           {session && (() => {
             const pendingFiles = [...selectedFiles].filter(f => !committedFiles.has(f));
             if (pendingFiles.length === 0) return null;
@@ -1841,7 +1221,6 @@ Wichtig:
                         <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{displayContent}</ReactMarkdown>
                       ) : (displayContent)}
                     </div>
-                    {(msg.role) === 'assistant' && renderDiffsForMessage(i)}
                   </Fragment>
                 );
               })}
@@ -1882,17 +1261,6 @@ Wichtig:
                 onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
                 disabled={chatSending}
               />
-              <button
-                style={{
-                  ...S.btn,
-                  background: 'var(--tn-cyan, #7dcfff)', color: '#1a1b26',
-                  padding: '6px 10px', fontSize: '11px', fontWeight: 700,
-                  opacity: chatSending ? 0.5 : 1,
-                }}
-                onClick={generateDiffs}
-                disabled={chatSending}
-                title="Standard-Prompt injizieren: Generiere strukturierte Diffs basierend auf dem Snapshot"
-              >Diffs</button>
               <button
                 style={{ ...S.btn, ...S.btnPrimary, opacity: chatSending || !chatInput.trim() ? 0.6 : 1 }}
                 onClick={sendMessage} disabled={chatSending || !chatInput.trim()}
