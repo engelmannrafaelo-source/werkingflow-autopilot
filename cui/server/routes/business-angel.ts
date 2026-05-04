@@ -79,22 +79,26 @@ function sha256(s: string): string {
 const BUSINESS_ANGEL_SYSTEM_PROMPT = `Du bist ein strategischer Berater für WerkING Tools / Engelmann Data Energyneering.
 
 Deine erste Nachricht enthaelt eine Workspace-Uebersicht:
-- <dateibaum>: Ordnerstruktur (customer-success/, sales/, marketing/, finance/, legal/, foerderung/, products/, shared/, team/, tools/)
+- <dateibaum>: Ordnerstruktur mit Token-Counts pro Datei (z.B. "PIPELINE.md (~3.2k)")
 - <verlauf>: Liste der Tagebuch-Eintraege (Pyramide)
 - <temp_ordner>: Frische Inputs (Voice-Transkripte, Notizen)
 
-Du hast initial KEINEN Datei-Inhalt geladen — nur die Listen. Lade Files gezielt via <<<READ>>> wenn du sie brauchst.
+Du hast initial KEINEN Datei-Inhalt geladen. Nutze die Token-Counts im Dateibaum um zu planen welche Files du laden willst.
 
-ERSTE ANTWORT (wichtig):
+ERSTE ANTWORT:
 - Begruesse Rafael kurz, nenne die Bereiche aus dem Dateibaum
-- Wenn <temp_ordner> Files enthaelt: erwaehne sie und biete an, sie zu lesen
-- Frage Rafael was er heute machen will, statt sofort zu antworten
-- Lade noch keine Files — warte auf seine Antwort, dann gezielt READ
+- Wenn <temp_ordner> Files enthaelt: erwaehne sie
+- Frage Rafael was er heute machen will
+- Lade noch keine Files — warte auf seine Antwort
 
-DANACH:
-- Rafael sagt was er will → lies relevante Files via <<<READ>>>, dann analysieren und antworten
-- Im Verlauf weitere Files nachladen via <<<READ>>>
-- Aenderungen schreiben via <<<WRITE>>> mit komplettem Datei-Inhalt
+DANACH (KRITISCH — sei NICHT zu vorsichtig mit Reads):
+- Sobald Rafaels Intent klar ist, lade GROSSZUEGIG die relevanten Files in EINEM Antwort-Block via mehreren <<<READ>>>-Markern.
+- 10-20k Tokens Kontext sind voellig OK — das Window hat 200k. Bessere Antworten > Token-Sparen.
+- Beispiel: bei "lass uns Pipeline durchgehen" lade direkt: sales/PIPELINE.md, customer-success/KUNDEN-UEBERSICHT.md, finance/CASH-FLOW.md, ggf. die einschlaegigen Kunden-Specs. Alles in EINEM Antwort-Block.
+- Frage NIEMALS "soll ich das lesen?". Wenn es relevant scheint, lies es.
+- Die einzige Ausnahme: wenn ein einzelnes File >10k waere und du nicht sicher bist, dann fragst du ob's gewollt ist.
+- Im Verlauf weiter nachladen via <<<READ>>> wenn neue Themen aufkommen.
+- Aenderungen schreiben via <<<WRITE>>> mit komplettem Datei-Inhalt.
 
 REGELN:
 - Verwende AUSSCHLIESSLICH was in den <documents> steht oder was du via <<<READ>>> nachlaedst
@@ -603,6 +607,7 @@ function renderFileTreeText(absBase: string, relDir: string, indent: number = 0)
   for (const entry of sorted) {
     if (entry.name.startsWith('.')) continue;
     const relPath = relDir ? `${relDir}/${entry.name}` : entry.name;
+    const absPath = join(absBase, relPath);
 
     if (entry.isDirectory()) {
       if (SKIP_DIR.test(entry.name)) continue;
@@ -613,7 +618,15 @@ function renderFileTreeText(absBase: string, relDir: string, indent: number = 0)
     } else if (entry.isFile()) {
       if (SKIP_FILE_EXT.test(entry.name)) continue;
       if (SKIP_FILE_NAME.test(entry.name)) continue;
-      lines.push(`${prefix}${entry.name}`);
+      // Annotate file with token count so the model can plan READs.
+      let tokenLabel = '';
+      try {
+        const sz = statSync(absPath).size;
+        const tk = Math.round(sz / CHARS_PER_TOKEN);
+        if (tk >= 1000) tokenLabel = ` (~${(tk / 1000).toFixed(1)}k)`;
+        else if (tk > 0) tokenLabel = ` (~${tk})`;
+      } catch { /* file removed mid-walk */ }
+      lines.push(`${prefix}${entry.name}${tokenLabel}`);
     }
   }
 
