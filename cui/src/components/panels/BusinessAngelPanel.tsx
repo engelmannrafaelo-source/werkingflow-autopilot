@@ -717,10 +717,9 @@ export default function BusinessAngelPanel() {
           }
         }
       } else {
-        setChatMessages([{
-          role: 'assistant',
-          content: `Dokumente geladen (${data.files_loaded} Dateien, ~${Math.round(data.token_count / 1000)}k Tokens).${excludedNote}\n\nIch bin dein strategischer Berater und arbeite ausschließlich mit diesen Quellen. Was brauchst du?`,
-        }]);
+        const initialContent = data.ack_message
+          ?? `Dokumente geladen (${data.files_loaded} Dateien, ~${Math.round(data.token_count / 1000)}k Tokens).${excludedNote}\n\nIch bin dein strategischer Berater und arbeite ausschließlich mit diesen Quellen. Was brauchst du?`;
+        setChatMessages([{ role: 'assistant', content: initialContent }]);
       }
     } catch (e: unknown) {
       setStartError(e instanceof Error ? e.message : String(e));

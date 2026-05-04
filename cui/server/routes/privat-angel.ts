@@ -930,6 +930,8 @@ Was beschaeftigt dich heute? Sag mir worueber du reden willst — ich lade gezie
       restored: restore && restoredConversation.length > 0,
       conversation_turns: restoredConversation.length,
       conversation: restore && restoredConversation.length > 0 ? restoredConversation : undefined,
+      ack_message: ackMessage,
+      lite,
     });
   } catch (err: any) {
     console.error('[PrivatAngel] /load error:', err.message);

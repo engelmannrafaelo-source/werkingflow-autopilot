@@ -1332,6 +1332,8 @@ Worum gehts heute? Sag mir den Bereich oder die konkrete Frage — ich lade gezi
         tokens: diaryEntriesIncluded.reduce((s, e) => s + e.tokens, 0),
         latest_daily: diary.stats.latest_daily,
       },
+      ack_message: ackMessage,
+      lite,
     });
   } catch (err: any) {
     console.error('[BusinessAngel] /load error:', err.message);
