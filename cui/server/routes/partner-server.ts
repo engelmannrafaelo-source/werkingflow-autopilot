@@ -17,7 +17,7 @@
  */
 
 import { Router } from 'express';
-import { existsSync, readFileSync, mkdirSync, readdirSync } from 'fs';
+import { existsSync, readFileSync, mkdirSync, readdirSync, statSync } from 'fs';
 import { join, basename } from 'path';
 import { signJwt } from '../auth/jwt.js';
 import { getUsers, findUser } from '../auth/users.js';
@@ -45,6 +45,40 @@ const inFlight = new Set<string>();
 function cellKey(userId: string, workspace: string) {
   return `${userId}__${workspace}`;
 }
+
+// Restore captures Map from disk on startup. Without this, every server restart
+// makes the matrix endpoint return null screenshotUrls until each cell is captured
+// again — even though the PNGs still exist on disk. Frontend then shows
+// "No screenshot yet" everywhere.
+function restoreCapturesFromDisk(): void {
+  if (!existsSync(SCREENSHOT_DIR)) return;
+  let restored = 0;
+  for (const fileName of readdirSync(SCREENSHOT_DIR)) {
+    if (!fileName.endsWith('.png')) continue;
+    const base = fileName.slice(0, -4); // strip .png
+    const sep = base.indexOf('__');
+    if (sep < 0) continue;
+    const userId = base.slice(0, sep);
+    const workspace = base.slice(sep + 2);
+    if (!userId || !workspace) continue;
+    const filePath = join(SCREENSHOT_DIR, fileName);
+    try {
+      const st = statSync(filePath);
+      captures.set(cellKey(userId, workspace), {
+        userId,
+        workspace,
+        capturedAt: st.mtime.toISOString(),
+        filePath,
+        status: 'success',
+      });
+      restored++;
+    } catch { /* skip unreadable file */ }
+  }
+  if (restored > 0) {
+    console.log(`[Partner-Server] Restored ${restored} captures from ${SCREENSHOT_DIR}`);
+  }
+}
+restoreCapturesFromDisk();
 
 function listLayoutWorkspaces(): string[] {
   if (!existsSync(LAYOUTS_DIR_LOCAL)) return [];
