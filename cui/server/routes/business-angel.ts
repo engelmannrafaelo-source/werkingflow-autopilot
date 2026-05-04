@@ -18,6 +18,8 @@ import { PATHS } from '../config/paths.js';
 import { parseDiffs } from '../lib/diff-parser.js';
 import { autoApplyNewFiles, summarizeApplyResult } from '../lib/auto-apply-new.js';
 import { bridgeChat } from '../lib/bridge-fetch.js';
+import { parseMarkers, stripMarkers } from '../lib/marker-parser.js';
+import { executeMarkers, formatExecResultAsUserMessage, formatExecSummary } from '../lib/marker-executor.js';
 
 const router = Router();
 
@@ -81,18 +83,28 @@ Lies diese Dokumente und verwende sie als einzige Wissensquelle.
 Antworte NUR auf Rafaels Fragen — gib den Inhalt der Dokumente NICHT wieder.
 
 REGELN:
-- Verwende AUSSCHLIESSLICH was in den <documents> steht
+- Verwende AUSSCHLIESSLICH was in den <documents> steht oder was du via <<<READ>>> nachlaedst
 - Erfinde keine Zahlen, Konditionen, Personen oder Deals
-- Wenn du etwas nicht weißt: sag es direkt
-- Wenn Rafael sagt "bau die Diffs" oder "Generiere Diffs": schreibe Diff-Blöcke im folgenden Format:
-  FORMAT (für neue UND bestehende Dateien — immer gleich):
-    FILE: <relativer Pfad ab business/>
-    NEW:
-    <VOLLSTÄNDIGER neuer Inhalt der Datei>
-- KRITISCH: Schreibe IMMER den KOMPLETTEN Dateiinhalt in NEW — nie nur den geänderten Abschnitt
-- Mehrere FILE/NEW Blöcke pro Antwort sind erlaubt
-- Falls ein [KONTEXT-UPDATE] in der Konversation erscheint: Verwende diesen aktuellen Stand als Basis für weitere Änderungen
-- PFADE: Der <dateibaum> Block enthält die aktuelle Ordnerstruktur. Verwende IMMER existierende Pfade und Namenskonventionen daraus. Für neue Dateien: orientiere dich am Namensschema der Nachbar-Dateien im gleichen Ordner.
+- Wenn du etwas nicht weisst: sag es direkt
+- Falls ein [KONTEXT-UPDATE] in der Konversation erscheint: Verwende diesen aktuellen Stand als Basis fuer weitere Aenderungen
+
+DATEI-ZUGRIFF (du kannst lesen und schreiben):
+
+LESEN — wenn du den aktuellen Inhalt einer Datei brauchst, schreib in deine Antwort:
+    <<<READ pfad/zur/datei.md>>>
+Ich lese die Datei und gib dir den Inhalt in der naechsten User-Nachricht zurueck. Mehrere READ-Marker pro Antwort sind moeglich.
+
+SCHREIBEN — wenn du eine Datei aendern oder neu erzeugen willst:
+    <<<WRITE pfad/zur/datei.md
+    [VOLLSTAENDIGER neuer Inhalt der Datei — niemals nur ein Ausschnitt]
+    >>>
+Ich backupe und ueberschreibe komplett. Niemals Diffs, niemals nur Aenderungen — immer der ganze Datei-Inhalt.
+
+WICHTIG:
+- Wenn du eine bestehende Datei aendern willst: erst <<<READ pfad>>> um den aktuellen Stand zu sehen, dann <<<WRITE pfad ...>>> mit dem neuen Vollinhalt.
+- Mehrere WRITE-Bloecke pro Antwort sind erlaubt.
+- PFADE: Der <dateibaum> Block enthaelt die aktuelle Ordnerstruktur. Verwende existierende Pfade und Namenskonventionen.
+- Schreib niemals FILE/OLD/NEW Bloecke, <<<DIFF>>> oder old_string/new_string — diese Formate sind veraltet und werden ignoriert.
 
 ANTWORT-FORMAT (KRITISCH):
 - Antworte direkt in Prosa. KEINE Speaker-Labels — kein "H:", "A:", "User:", "Assistant:", "Sprecher 1:".
@@ -1383,18 +1395,17 @@ router.post('/sync-context', (req, res) => {
 });
 
 // --- POST /chat ---
+// Marker-Loop: assistant antwortet mit <<<READ>>> oder <<<WRITE>>> Markern,
+// Backend fuehrt aus, Ergebnis geht als naechste user message zurueck zum
+// Modell, bis es ohne Marker antwortet (= final answer).
+const MAX_MARKER_LOOPS_BA = 10;
+
 router.post('/chat', async (req, res) => {
   try {
     const { session_id, message } = req.body as { session_id: string; message: string };
 
-    if (!session_id) {
-      res.status(400).json({ error: 'session_id required' });
-      return;
-    }
-    if (!message?.trim()) {
-      res.status(400).json({ error: 'message required' });
-      return;
-    }
+    if (!session_id) { res.status(400).json({ error: 'session_id required' }); return; }
+    if (!message?.trim()) { res.status(400).json({ error: 'message required' }); return; }
 
     const session = getOrRestoreSession(session_id);
     if (!session) {
@@ -1402,39 +1413,65 @@ router.post('/chat', async (req, res) => {
       return;
     }
 
-    // Build messages for Bridge call
-    const messages: ChatMessage[] = [
-      ...session.history,
-      { role: 'user', content: message.trim() },
-    ];
+    session.history.push({ role: 'user', content: message.trim() });
 
     console.log(`[BusinessAngel] /chat session=${session_id.slice(0, 8)} history=${session.history.length} msg_len=${message.length} sys_len=${session.system_prompt.length}`);
 
-    const responseText = await bridgeChat({
-      model: 'claude-sonnet-4-6',
-      messages: [
-        { role: 'system', content: session.system_prompt },
-        ...messages,
-      ],
-    });
+    let finalResponse = '';
+    let totalReads = 0;
+    let totalWrites = 0;
+    let loops = 0;
+    const writtenPathsAccum: string[] = [];
 
-    // Auto-apply <<<NEW>>> blocks (only safe new-file writes, never overwrites).
-    const applyResult = autoApplyNewFiles(responseText, BUSINESS_DIR);
-    const finalResponse = responseText + summarizeApplyResult(applyResult);
-    if (applyResult.written.length > 0) {
-      console.log(`[BusinessAngel] auto-applied ${applyResult.written.length} new file(s): ${applyResult.written.join(', ')}`);
+    for (loops = 0; loops < MAX_MARKER_LOOPS_BA; loops++) {
+      const responseText = await bridgeChat({
+        model: 'claude-sonnet-4-6',
+        messages: [
+          { role: 'system', content: session.system_prompt },
+          ...session.history,
+        ],
+      });
+
+      const markers = parseMarkers(responseText);
+
+      if (markers.length === 0) {
+        finalResponse = responseText;
+        session.history.push({ role: 'assistant', content: responseText });
+        break;
+      }
+
+      const exec = executeMarkers(markers, BUSINESS_DIR, BACKUP_DIR);
+      totalReads  += exec.reads.length;
+      totalWrites += exec.writes.length;
+      for (const w of exec.writes) {
+        if (w.ok) writtenPathsAccum.push(w.path);
+      }
+      console.log(`[BusinessAngel] loop ${loops + 1}: ${exec.reads.length} read(s), ${exec.writes.length} write(s)`);
+
+      session.history.push({ role: 'assistant', content: responseText });
+      session.history.push({ role: 'user', content: formatExecResultAsUserMessage(exec) });
+
+      const stripped = stripMarkers(responseText);
+      finalResponse = stripped + formatExecSummary(exec);
     }
 
-    // Update history
-    session.history.push({ role: 'user', content: message.trim() });
-    session.history.push({ role: 'assistant', content: finalResponse });
+    if (loops >= MAX_MARKER_LOOPS_BA) {
+      console.warn(`[BusinessAngel] /chat hit MAX_MARKER_LOOPS (${MAX_MARKER_LOOPS_BA}) — returning last partial response`);
+      finalResponse += `\n\n⚠️ Marker-Loop-Limit (${MAX_MARKER_LOOPS_BA}) erreicht. Bitte erneut anstossen falls noch was offen ist.`;
+    }
 
-    // Persist to disk after every message
     writePersistedSession(session);
 
-    console.log(`[BusinessAngel] /chat response: ${finalResponse.length} chars`);
+    console.log(`[BusinessAngel] /chat done: ${loops + 1} loop(s), ${totalReads} read(s), ${totalWrites} write(s), resp_len=${finalResponse.length}`);
 
-    res.json({ ok: true, response: finalResponse, session_id });
+    res.json({
+      ok: true,
+      response: finalResponse,
+      session_id,
+      reads: totalReads,
+      writes: totalWrites,
+      written_paths: writtenPathsAccum,
+    });
   } catch (err: any) {
     console.error('[BusinessAngel] /chat error:', err.message);
     res.status(500).json({ error: err.message });

@@ -23,6 +23,8 @@ import { load as yamlLoad } from 'js-yaml';
 import { parseDiffs } from '../lib/diff-parser.js';
 import { autoApplyNewFiles, summarizeApplyResult } from '../lib/auto-apply-new.js';
 import { bridgeChat } from '../lib/bridge-fetch.js';
+import { parseMarkers, stripMarkers } from '../lib/marker-parser.js';
+import { executeMarkers, formatExecResultAsUserMessage, formatExecSummary } from '../lib/marker-executor.js';
 
 const router = Router();
 
@@ -347,24 +349,23 @@ COACHING-PRINZIPIEN (aus rafael-coaching.md ableiten und anwenden):
 - Keine Floskeln, keine F-Typen-Sprache. NT-Niveau (Logik + Intuition).
 - Wenn du etwas nicht weisst: sag es direkt. Nichts erfinden.
 
-DIFF-OUTPUT (wenn Rafael sagt "bau die Diffs", "Generiere Diffs", "schreib das ins Tagebuch", "update Betriebssystem"):
-- BEVORZUGTES Format fuer Aenderungen an bestehenden Dateien:
-    <<<DIFF pfad/zur/datei.md
-    old_string: |
-      ...exakter Text aus dem Original-Dokument...
-    new_string: |
-      ...neuer Text...
+DATEI-ZUGRIFF (du kannst lesen und schreiben):
+
+LESEN — wenn du den aktuellen Inhalt einer Datei brauchst, schreib in deine Antwort:
+    <<<READ pfad/zur/datei.md>>>
+Ich lese die Datei und gib dir den Inhalt in der naechsten User-Nachricht zurueck. Mehrere READ-Marker pro Antwort sind moeglich. Du kannst danach weiter antworten oder weitere Marker setzen.
+
+SCHREIBEN — wenn du eine Datei aendern oder neu erzeugen willst, schreib:
+    <<<WRITE pfad/zur/datei.md
+    [VOLLSTAENDIGER neuer Inhalt der Datei — niemals nur ein Ausschnitt]
     >>>
-- Format fuer NEUE Dateien (z.B. neuer Tagebuch-Eintrag):
-    <<<NEW pfad/zur/neuen-datei.md
-    content: |
-      ...vollstaendiger Inhalt...
-    >>>
-- KRITISCH: old_string bezieht sich IMMER auf den ORIGINAL-Inhalt der Dateien (wie zu Session-Start geladen), NICHT auf zwischenzeitliche Aenderungen
-- Genug Kontext-Zeilen fuer eindeutigen Match
-- Mehrere Diff-Bloecke pro Datei sind erlaubt
-- Nur betroffene Abschnitte liefern, nicht das gesamte Dokument
-- PFADE: Der <dateibaum> Block enthaelt die aktuelle Ordnerstruktur. Verwende existierende Pfade. Tagebuch-Eintraege folgen dem Schema tagebuch/YYYY-MM/YYYY-MM-DD.md.
+Ich backupe und ueberschreibe komplett. Bei neuen Dateien wird die Datei angelegt. Niemals Diffs, niemals nur Aenderungen — immer der ganze Datei-Inhalt.
+
+WICHTIG:
+- Wenn du eine bestehende Datei aendern willst: erst <<<READ pfad>>> um den aktuellen Stand zu sehen, dann <<<WRITE pfad ...>>> mit dem neuen Vollinhalt.
+- Mehrere WRITE-Bloecke pro Antwort sind erlaubt (verschiedene Dateien).
+- Pfade: Der <dateibaum> Block enthaelt die Struktur. Tagebuch folgt dem Schema tagebuch/YYYY-MM/YYYY-MM-DD.md.
+- Schreib niemals Diffs, FILE/OLD/NEW Bloecke, oder old_string/new_string — diese Formate sind veraltet und werden ignoriert.
 
 ANTWORT-FORMAT (KRITISCH):
 - Antworte direkt in Prosa. KEINE Speaker-Labels — kein "H:", "A:", "User:", "Assistant:", "Sprecher 1:".
@@ -1144,6 +1145,11 @@ router.post('/sync-context', (req, res) => {
 });
 
 // --- POST /chat ---
+// Marker-Loop: assistant antwortet mit <<<READ>>> oder <<<WRITE>>> Markern,
+// Backend fuehrt aus, Ergebnis geht als naechste user message zurueck zum
+// Modell, bis es ohne Marker antwortet (= final answer).
+const MAX_MARKER_LOOPS = 10;
+
 router.post('/chat', async (req, res) => {
   try {
     const { session_id, message } = req.body as { session_id: string; message: string };
@@ -1156,33 +1162,73 @@ router.post('/chat', async (req, res) => {
       return;
     }
 
-    const messages: ChatMessage[] = [
-      ...session.history,
-      { role: 'user', content: message.trim() },
-    ];
+    // Append the user's message to history once. Subsequent loop turns push
+    // synthetic [user: marker-results] / [assistant: response-with-markers]
+    // pairs into history so the LLM sees the full read/write trail.
+    session.history.push({ role: 'user', content: message.trim() });
 
     console.log(`[PrivatAngel] /chat session=${session_id.slice(0, 8)} history=${session.history.length} msg_len=${message.length}`);
 
-    const responseText = await bridgeChat({
-      messages: [
-        { role: 'system', content: session.system_prompt },
-        ...messages,
-      ],
-      attribution: { appId: 'cui', userId: 'rafael', agentId: 'privat-angel' },
-    });
+    let finalResponse = '';
+    let totalReads = 0;
+    let totalWrites = 0;
+    let loops = 0;
+    const writtenPathsAccum: string[] = [];
 
-    // Auto-apply <<<NEW>>> blocks (only safe new-file writes, never overwrites).
-    const applyResult = autoApplyNewFiles(responseText, PRIVAT_DIR);
-    const finalResponse = responseText + summarizeApplyResult(applyResult);
-    if (applyResult.written.length > 0) {
-      console.log(`[PrivatAngel] auto-applied ${applyResult.written.length} new file(s): ${applyResult.written.join(', ')}`);
+    for (loops = 0; loops < MAX_MARKER_LOOPS; loops++) {
+      const responseText = await bridgeChat({
+        messages: [
+          { role: 'system', content: session.system_prompt },
+          ...session.history,
+        ],
+        attribution: { appId: 'cui', userId: 'rafael', agentId: 'privat-angel' },
+      });
+
+      const markers = parseMarkers(responseText);
+
+      if (markers.length === 0) {
+        // Final answer — no markers, done.
+        finalResponse = responseText;
+        session.history.push({ role: 'assistant', content: responseText });
+        break;
+      }
+
+      // Execute markers and feed results back as the next user turn.
+      const exec = executeMarkers(markers, PRIVAT_DIR, BACKUP_DIR);
+      totalReads  += exec.reads.length;
+      totalWrites += exec.writes.length;
+      for (const w of exec.writes) {
+        if (w.ok) writtenPathsAccum.push(w.path);
+      }
+      console.log(`[PrivatAngel] loop ${loops + 1}: ${exec.reads.length} read(s), ${exec.writes.length} write(s)`);
+
+      session.history.push({ role: 'assistant', content: responseText });
+      session.history.push({ role: 'user', content: formatExecResultAsUserMessage(exec) });
+
+      // Compose user-facing answer from this turn (stripped) + summary, in case
+      // the model never produces a final marker-less reply (loop cap or model
+      // keeps issuing markers). Latest stripped reply wins.
+      const stripped = stripMarkers(responseText);
+      finalResponse = stripped + formatExecSummary(exec);
     }
 
-    session.history.push({ role: 'user', content: message.trim() });
-    session.history.push({ role: 'assistant', content: finalResponse });
+    if (loops >= MAX_MARKER_LOOPS) {
+      console.warn(`[PrivatAngel] /chat hit MAX_MARKER_LOOPS (${MAX_MARKER_LOOPS}) — returning last partial response`);
+      finalResponse += `\n\n⚠️ Marker-Loop-Limit (${MAX_MARKER_LOOPS}) erreicht. Bitte erneut anstossen falls noch was offen ist.`;
+    }
+
     writePersistedSession(session);
 
-    res.json({ ok: true, response: finalResponse, session_id });
+    console.log(`[PrivatAngel] /chat done: ${loops + 1} loop(s), ${totalReads} read(s), ${totalWrites} write(s)`);
+
+    res.json({
+      ok: true,
+      response: finalResponse,
+      session_id,
+      reads: totalReads,
+      writes: totalWrites,
+      written_paths: writtenPathsAccum,
+    });
   } catch (err: any) {
     console.error('[PrivatAngel] /chat error:', err.message);
     res.status(500).json({ error: err.message });
