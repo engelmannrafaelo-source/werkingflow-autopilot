@@ -15,8 +15,10 @@ import { load as yamlLoad } from 'js-yaml';
 import chokidar from 'chokidar';
 import { PATHS } from '../config/paths.js';
 import { bridgeChat } from '../lib/bridge-fetch.js';
-import { parseMarkers, stripMarkers } from '../lib/marker-parser.js';
-import { executeMarkers, formatExecResultAsUserMessage, formatExecSummary } from '../lib/marker-executor.js';
+import { runAgentLoop, type AgentMessage } from '../lib/agent-loop.js';
+import { executeAgentTool, formatToolSummaryForUI } from '../lib/agent-tools.js';
+import { buildAgentProtocolBlock } from '../lib/agent-prompt.js';
+import { buildDisplayHistory } from '../lib/agent-history.js';
 
 const router = Router();
 
@@ -89,43 +91,28 @@ ERSTE ANTWORT:
 - Lade noch keine Files — warte auf seine Antwort
 
 DANACH (KRITISCH — sei NICHT zu vorsichtig mit Reads):
-- Sobald Rafaels Intent klar ist, lade GROSSZUEGIG die relevanten Files in EINEM Antwort-Block via mehreren <<<READ>>>-Markern.
+- Sobald Rafaels Intent klar ist, lade GROSSZUEGIG die relevanten Files via tool_calls (mehrere read_file in einem Turn).
 - 10-20k Tokens Kontext sind voellig OK — das Window hat 200k. Bessere Antworten > Token-Sparen.
-- Beispiel: bei "lass uns Pipeline durchgehen" lade direkt: sales/PIPELINE.md, customer-success/KUNDEN-UEBERSICHT.md, finance/CASH-FLOW.md, ggf. die einschlaegigen Kunden-Specs. Alles in EINEM Antwort-Block.
+- Beispiel: bei "lass uns Pipeline durchgehen" lade direkt: sales/PIPELINE.md, customer-success/KUNDEN-UEBERSICHT.md, finance/CASH-FLOW.md, ggf. die einschlaegigen Kunden-Specs. Alles in EINEM tool_calls-Block.
 - Frage NIEMALS "soll ich das lesen?". Wenn es relevant scheint, lies es.
 - Die einzige Ausnahme: wenn ein einzelnes File >10k waere und du nicht sicher bist, dann fragst du ob's gewollt ist.
-- Im Verlauf weiter nachladen via <<<READ>>> wenn neue Themen aufkommen.
-- Aenderungen schreiben via <<<WRITE>>> mit komplettem Datei-Inhalt.
+- Im Verlauf weiter nachladen via read_file wenn neue Themen aufkommen.
+- Aenderungen schreiben via write_file mit komplettem Datei-Inhalt.
 
 REGELN:
-- Verwende AUSSCHLIESSLICH was in den <documents> steht oder was du via <<<READ>>> nachlaedst
+- Verwende AUSSCHLIESSLICH was in den <documents> steht oder was du via read_file nachlaedst
 - Erfinde keine Zahlen, Konditionen, Personen oder Deals
 - Wenn du etwas nicht weisst: sag es direkt
 - Falls ein [KONTEXT-UPDATE] in der Konversation erscheint: Verwende diesen aktuellen Stand als Basis fuer weitere Aenderungen
 
-DATEI-ZUGRIFF (du kannst lesen und schreiben):
-
-LESEN — wenn du den aktuellen Inhalt einer Datei brauchst, schreib in deine Antwort:
-    <<<READ pfad/zur/datei.md>>>
-Ich lese die Datei und gib dir den Inhalt in der naechsten User-Nachricht zurueck. Mehrere READ-Marker pro Antwort sind moeglich.
-
-SCHREIBEN — wenn du eine Datei aendern oder neu erzeugen willst:
-    <<<WRITE pfad/zur/datei.md
-    [VOLLSTAENDIGER neuer Inhalt der Datei — niemals nur ein Ausschnitt]
-    >>>
-Ich backupe und ueberschreibe komplett. Niemals Diffs, niemals nur Aenderungen — immer der ganze Datei-Inhalt.
-
-WICHTIG:
-- Wenn du eine bestehende Datei aendern willst: erst <<<READ pfad>>> um den aktuellen Stand zu sehen, dann <<<WRITE pfad ...>>> mit dem neuen Vollinhalt.
-- Mehrere WRITE-Bloecke pro Antwort sind erlaubt.
-- PFADE: Der <dateibaum> Block enthaelt die aktuelle Ordnerstruktur. Verwende existierende Pfade und Namenskonventionen.
-- Schreib niemals FILE/OLD/NEW Bloecke, <<<DIFF>>> oder old_string/new_string — diese Formate sind veraltet und werden ignoriert.
-
-ANTWORT-FORMAT (KRITISCH):
-- Antworte direkt in Prosa. KEINE Speaker-Labels — kein "H:", "A:", "User:", "Assistant:", "Sprecher 1:".
+ANTWORT-STIL (gilt fuer das "response"-Feld in deinem JSON):
+- Antworte in Prosa. KEINE Speaker-Labels — kein "H:", "A:", "User:", "Assistant:", "Sprecher 1:".
 - Erfinde NIE eine User-Antwort. Antworte nicht auf Sätze, die Rafael nicht gesagt hat.
 - Wenn Rafael Audio-Transkripte mit "Sprecher 1/2" oder "H:/A:" einfügt: Referenziere sie als "du sagtest X" — übernimm das Format NICHT in deine eigene Antwort.
-- Stoppe nach deiner Antwort. Kein Cliffhanger, keine fiktiven Folge-Turns, kein "H: ..." am Ende.`;
+- Stoppe nach deiner Antwort. Kein Cliffhanger, keine fiktiven Folge-Turns, kein "H: ..." am Ende.
+- PFADE: Der <dateibaum> Block enthaelt die aktuelle Ordnerstruktur. Verwende existierende Pfade und Namenskonventionen.
+
+` + buildAgentProtocolBlock();
 
 const ACTIVE_SESSION_PATH = '/root/projekte/local-storage/report-builder/business-angel-active.json';
 const SESSION_LOG_DIR     = '/root/projekte/local-storage/report-builder/business-angel-logs';
@@ -925,7 +912,7 @@ router.post('/session/load/:id', (req, res) => {
       title: found.title || deriveSessionTitle(found.conversation),
       created_at: found.created_at,
       updated_at: found.updated_at,
-      conversation: found.conversation,
+      conversation: buildDisplayHistory(found.conversation),
       conversation_turns: found.conversation.length,
       token_count: found.token_count,
       files_loaded: found.files_loaded,
@@ -1183,15 +1170,15 @@ router.post('/load', async (req, res) => {
 
       contextMessage = `<workspace_overview>
 
-<dateibaum description="Aktuelle Ordnerstruktur von /root/projekte/werkingflow-business/. Lade Inhalte gezielt via <<<READ>>>.">
+<dateibaum description="Aktuelle Ordnerstruktur von /root/projekte/werkingflow-business/. Lade Inhalte gezielt via read_file.">
 ${fileTreeText}
 </dateibaum>
 
-<verlauf description="Rafaels Arbeits-Tagebuch (Pyramide). Inhalte gezielt via <<<READ>>>.">
+<verlauf description="Rafaels Arbeits-Tagebuch (Pyramide). Inhalte gezielt via read_file.">
 ${diaryList}
 </verlauf>
 
-<temp_ordner description="Frische Inputs (Voice-Transkripte, Notizen). Inhalte via <<<READ>>>.">
+<temp_ordner description="Frische Inputs (Voice-Transkripte, Notizen). Inhalte via read_file.">
 ${tempList}
 </temp_ordner>
 
@@ -1333,7 +1320,7 @@ Worum gehts heute? Sag mir den Bereich oder die konkrete Frage — ich lade gezi
       token_limit: SYSTEM_PROMPT_TOKEN_LIMIT,
       restored: restore && restoredConversation.length > 0,
       conversation_turns: restoredConversation.length,
-      conversation: restore && restoredConversation.length > 0 ? restoredConversation : undefined,
+      conversation: restore && restoredConversation.length > 0 ? buildDisplayHistory(restoredConversation) : undefined,
       tagebuch: {
         loaded_daily:   diaryEntriesIncluded.filter(e => e.type === 'daily').length,
         loaded_weekly:  diaryEntriesIncluded.filter(e => e.type === 'weekly').length,
@@ -1463,10 +1450,11 @@ router.post('/sync-context', (req, res) => {
 });
 
 // --- POST /chat ---
-// Marker-Loop: assistant antwortet mit <<<READ>>> oder <<<WRITE>>> Markern,
-// Backend fuehrt aus, Ergebnis geht als naechste user message zurueck zum
-// Modell, bis es ohne Marker antwortet (= final answer).
-const MAX_MARKER_LOOPS_BA = 10;
+// Multi-turn agent loop: assistant antwortet mit JSON {tool_calls, response}.
+// Tools (read_file, write_file, list_files) werden ausgefuehrt, Ergebnisse als
+// user-Nachricht zurueckgespielt. Loop endet wenn AI nur "response" liefert
+// (keine tool_calls) oder MAX_AGENT_TURNS erreicht.
+const MAX_AGENT_TURNS_BA = 15;
 
 router.post('/chat', async (req, res) => {
   try {
@@ -1481,64 +1469,57 @@ router.post('/chat', async (req, res) => {
       return;
     }
 
-    session.history.push({ role: 'user', content: message.trim() });
-
     console.log(`[BusinessAngel] /chat session=${session_id.slice(0, 8)} history=${session.history.length} msg_len=${message.length} sys_len=${session.system_prompt.length}`);
 
-    let finalResponse = '';
-    let totalReads = 0;
-    let totalWrites = 0;
-    let loops = 0;
     const writtenPathsAccum: string[] = [];
 
-    for (loops = 0; loops < MAX_MARKER_LOOPS_BA; loops++) {
-      const responseText = await bridgeChat({
+    const result = await runAgentLoop({
+      systemPrompt: session.system_prompt,
+      history: session.history as AgentMessage[],
+      userMessage: message.trim(),
+      maxTurns: MAX_AGENT_TURNS_BA,
+      logPrefix: '[BusinessAngel]',
+      callBridge: (messages) => bridgeChat({
         model: 'claude-sonnet-4-6',
-        messages: [
-          { role: 'system', content: session.system_prompt },
-          ...session.history,
-        ],
-      });
+        messages,
+        attribution: { appId: 'cui', userId: 'rafael', agentId: 'business-angel' },
+      }),
+      onToolCall: (call) => executeAgentTool(call, {
+        baseDir: BUSINESS_DIR,
+        backupDir: BACKUP_DIR,
+        writtenPaths: writtenPathsAccum,
+      }),
+    });
 
-      const markers = parseMarkers(responseText);
-
-      if (markers.length === 0) {
-        finalResponse = responseText;
-        session.history.push({ role: 'assistant', content: responseText });
-        break;
-      }
-
-      const exec = executeMarkers(markers, BUSINESS_DIR, BACKUP_DIR);
-      totalReads  += exec.reads.length;
-      totalWrites += exec.writes.length;
-      for (const w of exec.writes) {
-        if (w.ok) writtenPathsAccum.push(w.path);
-      }
-      console.log(`[BusinessAngel] loop ${loops + 1}: ${exec.reads.length} read(s), ${exec.writes.length} write(s)`);
-
-      session.history.push({ role: 'assistant', content: responseText });
-      session.history.push({ role: 'user', content: formatExecResultAsUserMessage(exec) });
-
-      const stripped = stripMarkers(responseText);
-      finalResponse = stripped + formatExecSummary(exec);
-    }
-
-    if (loops >= MAX_MARKER_LOOPS_BA) {
-      console.warn(`[BusinessAngel] /chat hit MAX_MARKER_LOOPS (${MAX_MARKER_LOOPS_BA}) — returning last partial response`);
-      finalResponse += `\n\n⚠️ Marker-Loop-Limit (${MAX_MARKER_LOOPS_BA}) erreicht. Bitte erneut anstossen falls noch was offen ist.`;
-    }
-
+    session.history = result.newHistory as ChatMessage[];
     writePersistedSession(session);
 
-    console.log(`[BusinessAngel] /chat done: ${loops + 1} loop(s), ${totalReads} read(s), ${totalWrites} write(s), resp_len=${finalResponse.length}`);
+    const reads  = result.toolResults.filter(r => r.name === 'read_file').length;
+    const writes = result.toolResults.filter(r => r.name === 'write_file').length;
+    const lists  = result.toolResults.filter(r => r.name === 'list_files').length;
+    console.log(`[BusinessAngel] /chat done: ${result.turns} turn(s), ${reads} read(s), ${writes} write(s), ${lists} list(s)`);
+
+    let finalResponse = result.finalResponse;
+    if (result.toolResults.length > 0) {
+      finalResponse += formatToolSummaryForUI(result.toolResults);
+    }
+    if (result.hitMaxTurns) {
+      finalResponse += `\n\n⚠️ Agent-Turn-Limit (${MAX_AGENT_TURNS_BA}) erreicht. Bitte erneut anstossen falls noch was offen ist.`;
+    }
 
     res.json({
       ok: true,
       response: finalResponse,
       session_id,
-      reads: totalReads,
-      writes: totalWrites,
+      reads,
+      writes,
       written_paths: writtenPathsAccum,
+      tool_calls: result.toolResults.map(r => ({
+        name: r.name,
+        args: r.args,
+        ok: r.ok,
+        error: r.error,
+      })),
     });
   } catch (err: any) {
     console.error('[BusinessAngel] /chat error:', err.message);

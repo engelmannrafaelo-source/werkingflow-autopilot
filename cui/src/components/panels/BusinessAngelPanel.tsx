@@ -622,31 +622,6 @@ export default function BusinessAngelPanel() {
       .replace(/^\s+/, '');
   };
 
-  // Compact rendering for marker-loop messages (see PrivatAngelPanel for details).
-  const renderMarkerMessage = (text: string, role: 'user' | 'assistant'): string => {
-    if (role === 'user') {
-      const reads = [...text.matchAll(/<<<READ-RESULT\s+([^\n>]+?)\s*>>>/g)].map(m => m[1].trim());
-      const readErrs = [...text.matchAll(/<<<READ-ERROR\s+([^>]+?)>>>/g)].map(m => m[1].trim());
-      const writes = [...text.matchAll(/<<<WRITE-OK\s+([^>]+?)>>>/g)].map(m => m[1].trim());
-      const writeErrs = [...text.matchAll(/<<<WRITE-ERROR\s+([^>]+?)>>>/g)].map(m => m[1].trim());
-      if (reads.length === 0 && readErrs.length === 0 && writes.length === 0 && writeErrs.length === 0) {
-        return text;
-      }
-      const parts: string[] = [];
-      if (reads.length > 0)     parts.push(`📖 Gelesen: ${reads.join(', ')}`);
-      if (readErrs.length > 0)  parts.push(`⚠️ Lese-Fehler: ${readErrs.join(' / ')}`);
-      if (writes.length > 0)    parts.push(`✏️ Geschrieben: ${writes.join(', ')}`);
-      if (writeErrs.length > 0) parts.push(`⚠️ Schreib-Fehler: ${writeErrs.join(' / ')}`);
-      return parts.join('\n');
-    } else {
-      return text
-        .replace(/<<<READ\s+[^\n>]+?\s*>>>/g, '')
-        .replace(/<<<WRITE\s+[^\n]+?\n[\s\S]*?\n?>>>/g, '')
-        .replace(/\n{3,}/g, '\n\n')
-        .trim();
-    }
-  };
-
   // Build a prefix for the next outgoing message that tells the AI:
   //   1) which of the previously-proposed diffs Rafael applied/skipped/left pending
   //   2) which newly-selected context files to ingest (mid-session file injection)
@@ -1211,8 +1186,9 @@ export default function BusinessAngelPanel() {
                 </div>
               )}
               {chatMessages.map((msg, i) => {
-                const stripped = (msg.role) === 'user' ? stripInvisibleTags(msg.content) : msg.content;
-                const displayContent = renderMarkerMessage(stripped, msg.role);
+                // Backend liefert bereits clean (response-Feld extrahiert, Tool-Summary angehängt).
+                // Nur user-side prefixes (diff_status, new_context) müssen für die UI stripped werden.
+                const displayContent = (msg.role) === 'user' ? stripInvisibleTags(msg.content) : msg.content;
                 if (!displayContent.trim()) return null;
                 return (
                   <Fragment key={i}>

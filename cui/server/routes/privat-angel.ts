@@ -11,7 +11,7 @@
 // GET  /api/privat-angel/context     → YAML config + token estimates
 // GET  /api/privat-angel/files       → file tree of privat dir
 // POST /api/privat-angel/load        → assemble lite context, create session
-// POST /api/privat-angel/chat        → marker-loop chat (READ/WRITE markers)
+// POST /api/privat-angel/chat        → multi-turn agent loop with tool_calls
 // =============================================================================
 
 import { Router } from 'express';
@@ -20,8 +20,10 @@ import { randomUUID, createHash } from 'crypto';
 import { join, basename, dirname, relative } from 'path';
 import { load as yamlLoad } from 'js-yaml';
 import { bridgeChat } from '../lib/bridge-fetch.js';
-import { parseMarkers, stripMarkers } from '../lib/marker-parser.js';
-import { executeMarkers, formatExecResultAsUserMessage, formatExecSummary } from '../lib/marker-executor.js';
+import { runAgentLoop, type AgentMessage } from '../lib/agent-loop.js';
+import { executeAgentTool, formatToolSummaryForUI } from '../lib/agent-tools.js';
+import { buildAgentProtocolBlock } from '../lib/agent-prompt.js';
+import { buildDisplayHistory } from '../lib/agent-history.js';
 
 const router = Router();
 
@@ -351,13 +353,13 @@ ERSTE ANTWORT:
 - Lade noch keine Files — warte auf seine Antwort
 
 DANACH (KRITISCH — sei NICHT zu vorsichtig mit Reads):
-- Sobald Rafaels Intent klar ist, lade GROSSZUEGIG die relevanten Files in EINEM Antwort-Block via mehreren <<<READ>>>-Markern.
+- Sobald Rafaels Intent klar ist, lade GROSSZUEGIG die relevanten Files via tool_calls (mehrere read_file in einem Turn).
 - 10-20k Tokens Kontext sind voellig OK — das Window hat 200k. Bessere Antworten > Token-Sparen.
-- Beispiel: bei "lass uns ueber Anouk reden" lade direkt: rafael-personen-map.md, rafael-beziehungen.md, rafael-psychologie.md, die letzten 5-7 Tagebuch-Eintraege, ggf. inbox/. Alles in EINEM Antwort-Block mit mehreren READs.
+- Beispiel: bei "lass uns ueber Anouk reden" lade direkt: rafael-personen-map.md, rafael-beziehungen.md, rafael-psychologie.md, die letzten 5-7 Tagebuch-Eintraege, ggf. inbox/. Alles in EINEM tool_calls-Block.
 - Frage NIEMALS "soll ich das lesen?". Wenn es relevant scheint, lies es.
-- Die einzige Ausnahme: wenn ein einzelnes File >5k waere und du nicht sicher bist, dann fragst du ob's gewollt ist. Sonst: einfach READ.
-- Im Verlauf weiter nachladen via <<<READ>>> wenn neue Themen aufkommen.
-- Aenderungen schreiben via <<<WRITE>>> mit komplettem Datei-Inhalt.
+- Die einzige Ausnahme: wenn ein einzelnes File >5k waere und du nicht sicher bist, dann fragst du ob's gewollt ist. Sonst: einfach read_file.
+- Im Verlauf weiter nachladen via read_file wenn neue Themen aufkommen.
+- Aenderungen schreiben via write_file mit komplettem Datei-Inhalt.
 
 COACHING-PRINZIPIEN (aus rafael-coaching.md ableiten und anwenden):
 - Direkt, analytisch, ohne Beschoenigung. Kein "Du schaffst das schon"-Gerede.
@@ -366,29 +368,14 @@ COACHING-PRINZIPIEN (aus rafael-coaching.md ableiten und anwenden):
 - Keine Floskeln, keine F-Typen-Sprache. NT-Niveau (Logik + Intuition).
 - Wenn du etwas nicht weisst: sag es direkt. Nichts erfinden.
 
-DATEI-ZUGRIFF (du kannst lesen und schreiben):
-
-LESEN — wenn du den aktuellen Inhalt einer Datei brauchst, schreib in deine Antwort:
-    <<<READ pfad/zur/datei.md>>>
-Ich lese die Datei und gib dir den Inhalt in der naechsten User-Nachricht zurueck. Mehrere READ-Marker pro Antwort sind moeglich. Du kannst danach weiter antworten oder weitere Marker setzen.
-
-SCHREIBEN — wenn du eine Datei aendern oder neu erzeugen willst, schreib:
-    <<<WRITE pfad/zur/datei.md
-    [VOLLSTAENDIGER neuer Inhalt der Datei — niemals nur ein Ausschnitt]
-    >>>
-Ich backupe und ueberschreibe komplett. Bei neuen Dateien wird die Datei angelegt. Niemals Diffs, niemals nur Aenderungen — immer der ganze Datei-Inhalt.
-
-WICHTIG:
-- Wenn du eine bestehende Datei aendern willst: erst <<<READ pfad>>> um den aktuellen Stand zu sehen, dann <<<WRITE pfad ...>>> mit dem neuen Vollinhalt.
-- Mehrere WRITE-Bloecke pro Antwort sind erlaubt (verschiedene Dateien).
-- Pfade: Der <dateibaum> Block enthaelt die Struktur. Tagebuch folgt dem Schema tagebuch/YYYY-MM/YYYY-MM-DD.md.
-- Schreib niemals Diffs, FILE/OLD/NEW Bloecke, oder old_string/new_string — diese Formate sind veraltet und werden ignoriert.
-
-ANTWORT-FORMAT (KRITISCH):
-- Antworte direkt in Prosa. KEINE Speaker-Labels — kein "H:", "A:", "User:", "Assistant:", "Sprecher 1:".
+ANTWORT-STIL (gilt fuer das "response"-Feld in deinem JSON):
+- Antworte in Prosa. KEINE Speaker-Labels — kein "H:", "A:", "User:", "Assistant:", "Sprecher 1:".
 - Erfinde NIE eine User-Antwort. Antworte nicht auf Saetze, die Rafael nicht gesagt hat.
 - Wenn Rafael Audio-Transkripte mit "Sprecher 1/2" oder "H:/A:" einfuegt: Referenziere sie als "du sagtest X" — uebernimm das Format NICHT in deine eigene Antwort.
-- Stoppe nach deiner Antwort. Kein Cliffhanger, keine fiktiven Folge-Turns, kein "H: ..." am Ende.`;
+- Stoppe nach deiner Antwort. Kein Cliffhanger, keine fiktiven Folge-Turns, kein "H: ..." am Ende.
+- Pfade: Der <dateibaum> im ersten User-Message enthaelt die Struktur. Tagebuch folgt dem Schema tagebuch/YYYY-MM/YYYY-MM-DD.md.
+
+` + buildAgentProtocolBlock();
 
 // --- GET /context ---
 router.get('/context', (_req, res) => {
@@ -578,7 +565,7 @@ router.post('/session/load/:id', (req, res) => {
       title: found.title || deriveSessionTitle(found.conversation),
       created_at: found.created_at,
       updated_at: found.updated_at,
-      conversation: found.conversation,
+      conversation: buildDisplayHistory(found.conversation),
       conversation_turns: found.conversation.length,
       token_count: found.token_count,
       files_loaded: found.files_loaded,
@@ -799,7 +786,7 @@ router.post('/load', async (req, res) => {
 
     if (lite) {
       // Lite-Mode: only file tree + recent diary list + inbox list — no contents.
-      // Engel laedt Files gezielt via <<<READ>>> wenn er sie braucht.
+      // Engel laedt Files gezielt via read_file wenn er sie braucht.
       const recentDiaryList = diaryFileNames.length > 0
         ? diaryFileNames.map(n => `- ${n}`).join('\n')
         : '(keine Tagebuch-Eintraege in den letzten ' + days + ' Tagen)';
@@ -809,15 +796,15 @@ router.post('/load', async (req, res) => {
 
       contextMessage = `<workspace_overview>
 
-<dateibaum description="Aktuelle Ordnerstruktur von ${PRIVAT_DIR}. Lade Inhalte gezielt via <<<READ>>>.">
+<dateibaum description="Aktuelle Ordnerstruktur von ${PRIVAT_DIR}. Lade Inhalte gezielt via read_file.">
 ${fileTreeText}
 </dateibaum>
 
-<recent_diary description="Tagebuch-Eintraege der letzten ${days} Tage (Datei-Liste, Inhalt via <<<READ>>>)">
+<recent_diary description="Tagebuch-Eintraege der letzten ${days} Tage (Datei-Liste, Inhalt via read_file)">
 ${recentDiaryList}
 </recent_diary>
 
-<inbox description="Frische Inputs fuer diese Session (Voice-Transkripte, Notizen). Inhalt via <<<READ>>>.">
+<inbox description="Frische Inputs fuer diese Session (Voice-Transkripte, Notizen). Inhalt via read_file.">
 ${inboxList}
 </inbox>
 
@@ -939,7 +926,7 @@ Was beschaeftigt dich heute? Sag mir worueber du reden willst — ich lade gezie
       token_limit: SYSTEM_PROMPT_TOKEN_LIMIT,
       restored: restore && restoredConversation.length > 0,
       conversation_turns: restoredConversation.length,
-      conversation: restore && restoredConversation.length > 0 ? restoredConversation : undefined,
+      conversation: restore && restoredConversation.length > 0 ? buildDisplayHistory(restoredConversation) : undefined,
       ack_message: ackMessage,
       lite,
     });
@@ -1212,10 +1199,11 @@ router.post('/sync-context', (req, res) => {
 });
 
 // --- POST /chat ---
-// Marker-Loop: assistant antwortet mit <<<READ>>> oder <<<WRITE>>> Markern,
-// Backend fuehrt aus, Ergebnis geht als naechste user message zurueck zum
-// Modell, bis es ohne Marker antwortet (= final answer).
-const MAX_MARKER_LOOPS = 10;
+// Multi-turn agent loop: assistant antwortet mit JSON {tool_calls, response}.
+// Tools (read_file, write_file, list_files) werden ausgefuehrt, Ergebnisse als
+// user-Nachricht zurueckgespielt. Loop endet wenn AI nur "response" liefert
+// (keine tool_calls) oder MAX_AGENT_TURNS erreicht.
+const MAX_AGENT_TURNS = 15;
 
 router.post('/chat', async (req, res) => {
   try {
@@ -1229,72 +1217,58 @@ router.post('/chat', async (req, res) => {
       return;
     }
 
-    // Append the user's message to history once. Subsequent loop turns push
-    // synthetic [user: marker-results] / [assistant: response-with-markers]
-    // pairs into history so the LLM sees the full read/write trail.
-    session.history.push({ role: 'user', content: message.trim() });
-
     console.log(`[PrivatAngel] /chat session=${session_id.slice(0, 8)} history=${session.history.length} msg_len=${message.length}`);
 
-    let finalResponse = '';
-    let totalReads = 0;
-    let totalWrites = 0;
-    let loops = 0;
     const writtenPathsAccum: string[] = [];
 
-    for (loops = 0; loops < MAX_MARKER_LOOPS; loops++) {
-      const responseText = await bridgeChat({
-        messages: [
-          { role: 'system', content: session.system_prompt },
-          ...session.history,
-        ],
+    const result = await runAgentLoop({
+      systemPrompt: session.system_prompt,
+      history: session.history as AgentMessage[],
+      userMessage: message.trim(),
+      maxTurns: MAX_AGENT_TURNS,
+      logPrefix: '[PrivatAngel]',
+      callBridge: (messages) => bridgeChat({
+        messages,
         attribution: { appId: 'cui', userId: 'rafael', agentId: 'privat-angel' },
-      });
+      }),
+      onToolCall: (call) => executeAgentTool(call, {
+        baseDir: PRIVAT_DIR,
+        backupDir: BACKUP_DIR,
+        writtenPaths: writtenPathsAccum,
+      }),
+    });
 
-      const markers = parseMarkers(responseText);
-
-      if (markers.length === 0) {
-        // Final answer — no markers, done.
-        finalResponse = responseText;
-        session.history.push({ role: 'assistant', content: responseText });
-        break;
-      }
-
-      // Execute markers and feed results back as the next user turn.
-      const exec = executeMarkers(markers, PRIVAT_DIR, BACKUP_DIR);
-      totalReads  += exec.reads.length;
-      totalWrites += exec.writes.length;
-      for (const w of exec.writes) {
-        if (w.ok) writtenPathsAccum.push(w.path);
-      }
-      console.log(`[PrivatAngel] loop ${loops + 1}: ${exec.reads.length} read(s), ${exec.writes.length} write(s)`);
-
-      session.history.push({ role: 'assistant', content: responseText });
-      session.history.push({ role: 'user', content: formatExecResultAsUserMessage(exec) });
-
-      // Compose user-facing answer from this turn (stripped) + summary, in case
-      // the model never produces a final marker-less reply (loop cap or model
-      // keeps issuing markers). Latest stripped reply wins.
-      const stripped = stripMarkers(responseText);
-      finalResponse = stripped + formatExecSummary(exec);
-    }
-
-    if (loops >= MAX_MARKER_LOOPS) {
-      console.warn(`[PrivatAngel] /chat hit MAX_MARKER_LOOPS (${MAX_MARKER_LOOPS}) — returning last partial response`);
-      finalResponse += `\n\n⚠️ Marker-Loop-Limit (${MAX_MARKER_LOOPS}) erreicht. Bitte erneut anstossen falls noch was offen ist.`;
-    }
-
+    // Persist updated history (includes assistant JSON turns + tool-result user turns).
+    // The loop only adds 'user' / 'assistant' turns — 'system' lives in systemPrompt.
+    session.history = result.newHistory as ChatMessage[];
     writePersistedSession(session);
 
-    console.log(`[PrivatAngel] /chat done: ${loops + 1} loop(s), ${totalReads} read(s), ${totalWrites} write(s)`);
+    const reads  = result.toolResults.filter(r => r.name === 'read_file').length;
+    const writes = result.toolResults.filter(r => r.name === 'write_file').length;
+    const lists  = result.toolResults.filter(r => r.name === 'list_files').length;
+    console.log(`[PrivatAngel] /chat done: ${result.turns} turn(s), ${reads} read(s), ${writes} write(s), ${lists} list(s)`);
+
+    let finalResponse = result.finalResponse;
+    if (result.toolResults.length > 0) {
+      finalResponse += formatToolSummaryForUI(result.toolResults);
+    }
+    if (result.hitMaxTurns) {
+      finalResponse += `\n\n⚠️ Agent-Turn-Limit (${MAX_AGENT_TURNS}) erreicht. Bitte erneut anstossen falls noch was offen ist.`;
+    }
 
     res.json({
       ok: true,
       response: finalResponse,
       session_id,
-      reads: totalReads,
-      writes: totalWrites,
+      reads,
+      writes,
       written_paths: writtenPathsAccum,
+      tool_calls: result.toolResults.map(r => ({
+        name: r.name,
+        args: r.args,
+        ok: r.ok,
+        error: r.error,
+      })),
     });
   } catch (err: any) {
     console.error('[PrivatAngel] /chat error:', err.message);
