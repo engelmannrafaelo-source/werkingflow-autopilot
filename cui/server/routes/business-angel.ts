@@ -1091,6 +1091,7 @@ router.post('/load', async (req, res) => {
     const diary = loadDiaryPyramid(yaml.tagebuch);
     const diaryEntriesIncluded: DiaryEntry[] = [];
     let diarySection = '';
+    let diarySkippedCount = 0;
     if (!lite) {
       const diaryByRecency = [...diary.entries].sort((a, b) => b.sortKey - a.sortKey);
       for (const e of diaryByRecency) {
@@ -1102,7 +1103,7 @@ router.post('/load', async (req, res) => {
       }
       diaryEntriesIncluded.sort((a, b) => a.sortKey - b.sortKey);
       diarySection = renderDiarySection(diaryEntriesIncluded);
-      const diarySkippedCount = diary.entries.length - diaryEntriesIncluded.length;
+      diarySkippedCount = diary.entries.length - diaryEntriesIncluded.length;
       if (diarySkippedCount > 0) {
         console.warn(`[BusinessAngel] Tagebuch: ${diarySkippedCount} Eintrag/Einträge wegen Token-Budget übersprungen`);
       }
