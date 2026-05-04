@@ -777,6 +777,37 @@ export default function PrivatAngelPanel() {
       .replace(/^\s+/, '');
   };
 
+  // Compact rendering for marker-loop messages.
+  // user message containing <<<READ-RESULT>>> / <<<WRITE-OK>>> / <<<WRITE-ERROR>>> →
+  //   collapse to a one-line file list (full content stays in history for the LLM).
+  // assistant message containing <<<READ pfad>>> / <<<WRITE pfad ...>>> markers →
+  //   strip the markers, keep prose; optionally show a short status footer.
+  const renderMarkerMessage = (text: string, role: 'user' | 'assistant'): string => {
+    if (role === 'user') {
+      // Pattern: <<<READ-RESULT path>>>\n[content]\n<<</READ-RESULT>>>  and  <<<WRITE-OK path>>>  /  <<<WRITE-ERROR path: reason>>>  /  <<<READ-ERROR path: reason>>>
+      const reads = [...text.matchAll(/<<<READ-RESULT\s+([^\n>]+?)\s*>>>/g)].map(m => m[1].trim());
+      const readErrs = [...text.matchAll(/<<<READ-ERROR\s+([^>]+?)>>>/g)].map(m => m[1].trim());
+      const writes = [...text.matchAll(/<<<WRITE-OK\s+([^>]+?)>>>/g)].map(m => m[1].trim());
+      const writeErrs = [...text.matchAll(/<<<WRITE-ERROR\s+([^>]+?)>>>/g)].map(m => m[1].trim());
+      if (reads.length === 0 && readErrs.length === 0 && writes.length === 0 && writeErrs.length === 0) {
+        return text;
+      }
+      const parts: string[] = [];
+      if (reads.length > 0)     parts.push(`📖 Gelesen: ${reads.join(', ')}`);
+      if (readErrs.length > 0)  parts.push(`⚠️ Lese-Fehler: ${readErrs.join(' / ')}`);
+      if (writes.length > 0)    parts.push(`✏️ Geschrieben: ${writes.join(', ')}`);
+      if (writeErrs.length > 0) parts.push(`⚠️ Schreib-Fehler: ${writeErrs.join(' / ')}`);
+      return parts.join('\n');
+    } else {
+      // assistant: strip the action markers, keep prose
+      return text
+        .replace(/<<<READ\s+[^\n>]+?\s*>>>/g, '')
+        .replace(/<<<WRITE\s+[^\n]+?\n[\s\S]*?\n?>>>/g, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+    }
+  };
+
   // Build a prefix for the next outgoing message that tells the AI:
   //   1) which of the previously-proposed diffs Rafael applied/skipped/left pending
   //   2) which newly-selected context files to ingest (mid-session file injection)
@@ -1729,7 +1760,9 @@ Wichtig:
                 </div>
               )}
               {chatMessages.map((msg, i) => {
-                const displayContent = (msg.role) === 'user' ? stripInvisibleTags(msg.content) : msg.content;
+                const stripped = (msg.role) === 'user' ? stripInvisibleTags(msg.content) : msg.content;
+                const displayContent = renderMarkerMessage(stripped, msg.role);
+                if (!displayContent.trim()) return null;
                 return (
                   <Fragment key={i}>
                     <div style={(msg.role) === 'user' ? S.msgUser : S.msgAssistant}>
