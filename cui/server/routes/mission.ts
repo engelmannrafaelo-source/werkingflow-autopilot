@@ -131,6 +131,34 @@ function classifySubStatus(sid: string): { status: 'ready' | 'quota_blocked' | '
       } catch { /* skip malformed */ }
     }
 
+    // 2b. SILENT-DEAD: last assistant message did NOT terminate cleanly with
+    // stop_reason='end_turn' — process died mid-flow (server crash, OOM, manual
+    // kill, mid-tool-call). Walk back ALL lines (queue-op/attachment/ai-title
+    // entries pad the tail) and find the most recent assistant. Gate on
+    // mtime > 2min so live long-running tools aren't flagged.
+    try {
+      for (let i = lines.length - 1; i >= 0; i--) {
+        let obj: any;
+        try { obj = JSON.parse(lines[i]); } catch { continue; }
+        if (obj.type !== 'assistant') continue;
+        const sr = obj.message?.stop_reason;
+        // Healthy terminations: end_turn (normal) or stop_sequence (handled in 2a as quota).
+        if (sr === 'end_turn' || sr === 'stop_sequence') break;
+        // Anything else (tool_use, pause_turn, max_tokens, null) without a fresh
+        // assistant follow-up = sub didn't complete. Confirm via mtime.
+        try {
+          const ageMs = Date.now() - statSync(found.path).mtimeMs;
+          if (ageMs > 120_000) {
+            return {
+              status: 'stalled',
+              signals: [`silent-dead: stop_reason=${sr || 'null'}, idle ${Math.round(ageMs / 1000)}s`],
+            };
+          }
+        } catch { /* fail-soft */ }
+        break;
+      }
+    } catch { /* fall through */ }
+
     const turns = lines.length;
     if (turns <= 50) return { status: 'progress', signals: [`${turns} turns`] };
 
@@ -154,6 +182,15 @@ function classifySubStatus(sid: string): { status: 'ready' | 'quota_blocked' | '
             const cmd = (b.input?.command as string) || '';
             if (/\bgit\s+commit\b/.test(cmd)) {
               gitCommitCalls++;
+            } else if (
+              // Write patterns used by Subs without Edit/Write tool access (e.g. SSH-remote work):
+              /<<-?\s*['"]?[A-Za-z_]\w*['"]?\b/.test(cmd) ||                                   // heredoc
+              /\btee\s+(?:-a\s+)?[\w./~-]+/.test(cmd) ||                                        // tee FILE
+              /\b(?:scp|rsync)\s+\S+\s+\S+:/.test(cmd) ||                                       // scp/rsync to remote
+              /\bsed\s+-i\b/.test(cmd) ||                                                       // sed -i in-place
+              (/(?:^|[^&\d])>>?\s*['"]?[\w./~-]+/.test(cmd) && !/>\s*\/dev\/null/.test(cmd))   // redirect to file
+            ) {
+              editWriteCalls++;
             } else {
               readOnlyCalls++;
             }
@@ -171,6 +208,35 @@ function classifySubStatus(sid: string): { status: 'ready' | 'quota_blocked' | '
     // Edit-quote gate: subs with substantive edits (≥10% of recent tool-calls) are NOT stalled,
     // even without commits — they may be in the edit-batch phase before a commit lands.
     if (gitCommitCalls === 0 && readOnlyPct > 0.7 && editPct < 0.1) {
+      // Global override: a sub that has ALREADY committed/edited substantively earlier
+      // (now in verification/cleanup tail) is not stalled — it's wrapping up. Scan all
+      // lines for any commit or edit-marker.
+      let totalCommits = 0, totalEdits = 0;
+      for (const line of lines) {
+        try {
+          const obj = JSON.parse(line);
+          if (obj.type !== 'assistant' || !obj.message?.content) continue;
+          const parts = Array.isArray(obj.message.content) ? obj.message.content : [];
+          for (const b of parts) {
+            if (b.type !== 'tool_use') continue;
+            const n = b.name as string;
+            if (n === 'Edit' || n === 'Write' || n === 'NotebookEdit') { totalEdits++; continue; }
+            if (n !== 'Bash') continue;
+            const cmd = (b.input?.command as string) || '';
+            if (/\bgit\s+commit\b/.test(cmd)) { totalCommits++; continue; }
+            if (
+              /<<-?\s*['"]?[A-Za-z_]\w*['"]?\b/.test(cmd) ||
+              /\btee\s+(?:-a\s+)?[\w./~-]+/.test(cmd) ||
+              /\b(?:scp|rsync)\s+\S+\s+\S+:/.test(cmd) ||
+              /\bsed\s+-i\b/.test(cmd) ||
+              (/(?:^|[^&\d])>>?\s*['"]?[\w./~-]+/.test(cmd) && !/>\s*\/dev\/null/.test(cmd))
+            ) totalEdits++;
+          }
+        } catch { /* skip */ }
+      }
+      if (totalCommits >= 1 || totalEdits >= 3) {
+        return { status: 'progress', signals: [`${turns}t / ${totalCommits}c+${totalEdits}e total (verification tail)`] };
+      }
       return {
         status: 'stalled',
         signals: [`${turns} turns / 0 commits / 0 edits / ${Math.round(readOnlyPct * 100)}% explore-only`],
