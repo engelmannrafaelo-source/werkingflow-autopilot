@@ -578,6 +578,100 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     }
   }, [projectId, workDir]);
 
+  // ============================================================================
+  // mergeServerLayout — apply server's layout WITHOUT setModel when possible.
+  //
+  // Why: setModel(Model.fromJson(...)) re-mounts every panel because React sees a
+  // new Model instance + new tab nodeIds → every CuiLite panel's WebSocket drops
+  // and reconnects → "reload storm" the user sees.
+  //
+  // Race-condition that triggers this: multiple browser tabs on the same workspace
+  // run independent syncConversations() loops every 30s. Both autonomously call
+  // Actions.addNode(...) for the same conversation, each generating a different
+  // random nodeId. POST → one wins, the other gets 409 → 409-handler runs setModel
+  // with the winner's layout (different nodeIds for semantically identical tabs).
+  //
+  // Strategy: match tabs by SEMANTIC IDENTITY (component + key config field) rather
+  // than nodeId. If both layouts have the same tab-set, just patch configs/names
+  // via updateNodeAttributes (no re-mount). If tab-sets differ, fall back to
+  // setModel (rare — only when panes were truly added/removed/restructured).
+  // ============================================================================
+  const tabIdentity = useCallback((tab: { component?: string; name?: string; config?: Record<string, unknown> }): string => {
+    const cfg = (tab.config || {}) as Record<string, string | undefined>;
+    if (cfg.initialSessionId) return `s|${cfg.initialSessionId}`;
+    if (cfg.url) return `u|${cfg.url}`;
+    if (cfg.watchPath) return `p|${cfg.watchPath}`;
+    return `c|${tab.component || ''}|${tab.name || ''}`;
+  }, []);
+
+  // Walk JSON layout (server format) → flat list of {identity, name, component, config}
+  const collectJsonTabs = useCallback((node: unknown, out: Array<{ identity: string; name: string; component: string; config: Record<string, unknown> }>): void => {
+    if (!node || typeof node !== 'object') return;
+    const n = node as { type?: string; component?: string; name?: string; config?: Record<string, unknown>; children?: unknown[] };
+    if (n.type === 'tab') {
+      out.push({
+        identity: tabIdentity(n),
+        name: n.name || '',
+        component: n.component || '',
+        config: n.config || {},
+      });
+      return;
+    }
+    for (const child of n.children || []) collectJsonTabs(child, out);
+  }, [tabIdentity]);
+
+  // Walk current Model → flat list of live tabs (with their actual nodeId for in-place updates)
+  const collectModelTabs = useCallback((m: Model): Array<{ identity: string; nodeId: string; name: string; component: string; config: Record<string, unknown> }> => {
+    const out: Array<{ identity: string; nodeId: string; name: string; component: string; config: Record<string, unknown> }> = [];
+    m.visitNodes((node) => {
+      if (node.getType() !== 'tab') return;
+      const tab = node as TabNode;
+      const config = (tab.getConfig?.() || {}) as Record<string, unknown>;
+      out.push({
+        identity: tabIdentity({ component: tab.getComponent(), name: tab.getName(), config }),
+        nodeId: tab.getId(),
+        name: tab.getName(),
+        component: tab.getComponent() || '',
+        config,
+      });
+    });
+    return out;
+  }, [tabIdentity]);
+
+  // Try to merge server's layout into the current Model in-place.
+  // Returns true if successful (no setModel needed). False → caller falls back to setModel.
+  const tryMergeServerLayout = useCallback((m: Model | null, serverLayoutJson: { layout?: unknown } | null): boolean => {
+    if (!m || !serverLayoutJson?.layout) return false;
+    const serverTabs: Array<{ identity: string; name: string; component: string; config: Record<string, unknown> }> = [];
+    collectJsonTabs(serverLayoutJson.layout, serverTabs);
+    const localTabs = collectModelTabs(m);
+
+    // If tab-sets differ in identity, the diff is too complex (panes added/removed/restructured)
+    // → bail out, caller will setModel.
+    const serverIds = new Set(serverTabs.map(t => t.identity));
+    const localIds = new Set(localTabs.map(t => t.identity));
+    if (serverIds.size !== serverTabs.length || localIds.size !== localTabs.length) return false; // duplicate identities — can't safely match
+    if (serverIds.size !== localIds.size) return false;
+    for (const id of serverIds) if (!localIds.has(id)) return false;
+
+    // Same tab-set — patch any per-tab attributes that drifted (config / name)
+    const localByIdentity = new Map(localTabs.map(t => [t.identity, t]));
+    for (const sTab of serverTabs) {
+      const lTab = localByIdentity.get(sTab.identity);
+      if (!lTab) continue;
+      const configDiffers = JSON.stringify(lTab.config) !== JSON.stringify(sTab.config);
+      const nameDiffers = lTab.name !== sTab.name;
+      if (!configDiffers && !nameDiffers) continue;
+      try {
+        const attrs: Record<string, unknown> = {};
+        if (configDiffers) attrs.config = sTab.config;
+        if (nameDiffers) attrs.name = sTab.name;
+        m.doAction(Actions.updateNodeAttributes(lTab.nodeId, attrs));
+      } catch (e) { console.warn('[LM merge] updateNodeAttributes failed for', lTab.nodeId, ':', e); }
+    }
+    return true;
+  }, [collectJsonTabs, collectModelTabs]);
+
   const saveLayout = useCallback((m: Model) => {
     const json = m.toJson();
     const payload = { ...json, _v: currentLayoutVersionRef.current };
@@ -617,10 +711,16 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
               // onChange wave fires another saveLayout → 409 → loop.
               suppressUntilRef.current = Date.now() + 2500;
               if (saveTimer.current) clearTimeout(saveTimer.current);
-              try {
-                setModel(Model.fromJson(data.layout));
-                localStorage.setItem(`cui-layout-${projectId}`, JSON.stringify(data.layout));
-              } catch (e) { console.warn('[LayoutManager] Failed to apply conflict layout:', e); }
+              // Try to merge in-place first (no re-mount). Only fall back to setModel if tab-sets differ.
+              const merged = tryMergeServerLayout(modelRef.current, data.layout as { layout?: unknown });
+              if (merged) {
+                try { localStorage.setItem(`cui-layout-${projectId}`, JSON.stringify(data.layout)); } catch { /* ignore */ }
+              } else {
+                try {
+                  setModel(Model.fromJson(data.layout));
+                  localStorage.setItem(`cui-layout-${projectId}`, JSON.stringify(data.layout));
+                } catch (e) { console.warn('[LayoutManager] Failed to apply conflict layout:', e); }
+              }
             }
           }
         }
@@ -1067,13 +1167,17 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
                 return;
               }
               if (serverV >= 0) currentLayoutVersionRef.current = serverV;
-              // flexlayout's Model.fromJson expects the FULL body { global, borders, layout, popouts }.
               // Suppression must outlast handleModelChange's 1500ms debounce (otherwise post-setModel
               // onChange wave fires saveLayout → 409 → re-mount loop, with WS disconnect storm).
               suppressUntilRef.current = Date.now() + 2500;
               if (saveTimer.current) clearTimeout(saveTimer.current);
-              const newModel = Model.fromJson(msg.layout);
-              setModel(newModel);
+              // Try in-place merge first — preserves child panels' WS connections (no re-mount).
+              // Falls back to setModel only when tab-sets truly differ (panes added/removed/restructured).
+              const merged = tryMergeServerLayout(modelRef.current, msg.layout as { layout?: unknown });
+              if (!merged) {
+                const newModel = Model.fromJson(msg.layout);
+                setModel(newModel);
+              }
               try { localStorage.setItem(`cui-layout-${projectId}`, JSON.stringify(msg.layout)); } catch (e) { /* ignore */ }
               setTimeout(reportPanels, 200);
             }
