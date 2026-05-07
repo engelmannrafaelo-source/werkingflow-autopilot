@@ -420,10 +420,21 @@ export default function createPartnerServerRoutes() {
     }
     try {
       const result = await runJourney({ userId, workspace, app, port, email, password, baseDir: STORAGE_BASE });
-      res.json({ success: true, journeyId: result.journeyId, dirPath: result.dirPath });
+      // success ONLY when the user actually got past the login screen.
+      // Pipeline-completion alone (4 PNGs written) is NOT success.
+      const success = result.loginSuccess;
+      const status = success ? 200 : 502;
+      res.status(status).json({
+        success,
+        journeyId: result.journeyId,
+        dirPath: result.dirPath,
+        loginSuccess: result.loginSuccess,
+        postLoginUrl: result.postLoginUrl,
+        failureReason: result.failureReason,
+      });
     } catch (err: any) {
       console.error('[partner-server] journey/run failed:', err.message);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ success: false, error: err.message });
     }
   });
 

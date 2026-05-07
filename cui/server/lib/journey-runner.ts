@@ -30,6 +30,9 @@ export interface JourneyResult {
   dirPath: string;
   screenshots: string[];
   log: string;
+  loginSuccess: boolean;
+  postLoginUrl: string;
+  failureReason?: string;
 }
 
 async function loadPlaywright(): Promise<any> {
@@ -114,8 +117,20 @@ export async function runJourney({
     // 4: Dashboard / project list
     logLines.push('## Step 4: Projekte / Dashboard');
     const postLoginUrl = page.url();
-    if (postLoginUrl.includes('/login')) {
-      // Login did not redirect — try root
+    let loginSuccess = !postLoginUrl.includes('/login');
+    let failureReason: string | undefined;
+
+    if (!loginSuccess) {
+      // Login did NOT redirect — capture page error if visible, then try root as forensic
+      const errSelectors = [
+        '[role="alert"]', '.error', '[class*="error" i]', '[data-testid*="error" i]',
+      ];
+      for (const sel of errSelectors) {
+        const txt = await page.locator(sel).first().textContent({ timeout: 500 }).catch(() => null);
+        if (txt && txt.trim()) { failureReason = txt.trim().slice(0, 300); break; }
+      }
+      if (!failureReason) failureReason = `URL stayed on ${postLoginUrl} — login likely rejected (no redirect)`;
+      logLines.push(`- ❌ LOGIN FAILED: ${failureReason}`);
       await page.goto(`${baseUrl}/`, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
     }
     await page.waitForTimeout(2000);
@@ -124,13 +139,18 @@ export async function runJourney({
     logLines.push(`- URL: ${page.url()}`, '- Screenshot: 04-projekte.png', '');
 
     const finishedAt = new Date();
-    logLines.push('', `Finished: ${finishedAt.toISOString()}`, `Duration: ${finishedAt.getTime() - startedAt.getTime()}ms`);
+    logLines.push(
+      '',
+      `loginSuccess: ${loginSuccess}`,
+      `Finished: ${finishedAt.toISOString()}`,
+      `Duration: ${finishedAt.getTime() - startedAt.getTime()}ms`,
+    );
+
+    const log = logLines.join('\n');
+    writeFileSync(join(dirPath, 'journey.md'), log, 'utf8');
+
+    return { journeyId: id, dirPath, screenshots, log, loginSuccess, postLoginUrl, failureReason };
   } finally {
     await browser.close();
   }
-
-  const log = logLines.join('\n');
-  writeFileSync(join(dirPath, 'journey.md'), log, 'utf8');
-
-  return { journeyId: id, dirPath, screenshots, log };
 }
