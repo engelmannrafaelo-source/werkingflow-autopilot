@@ -6,6 +6,19 @@ import { existsSync } from 'fs';
 import { basename } from 'path';
 import type { FileChangeEvent, WatcherConfig } from './types/knowledge.js';
 
+function toIgnoreMatcher(pattern: string): (path: string) => boolean {
+  // Translate a chokidar v3 glob into a regex.
+  // Supports: `**` (any depth incl. zero), `*` (segment chars), literal `.`,
+  // and a leading `**/` that should also match the segment at the root.
+  const escaped = pattern
+    .replace(/[.+^$(){}|[\]\\]/g, '\\$&')
+    .replace(/\*\*\//g, '(?:.*/)?')
+    .replace(/\*\*/g, '.*')
+    .replace(/\*/g, '[^/]*');
+  const re = new RegExp('(^|/)' + escaped + '(/|$)');
+  return (p: string) => re.test(p);
+}
+
 export class KnowledgeWatcher {
   private watcher: chokidar.FSWatcher | null = null;
   private changeQueue: FileChangeEvent[] = [];
@@ -22,8 +35,16 @@ export class KnowledgeWatcher {
       return;
     }
 
+    // chokidar v4+ no longer accepts glob strings in `ignored`. Convert glob-like
+    // patterns to a predicate function. Without this, every pattern silently
+    // matches nothing — the watcher then walks `.claude/worktrees/`,
+    // `node_modules/`, `_archiv/` etc. and exhausts the file-descriptor pool
+    // (EMFILE), which kills new TCP/WebSocket connections to the CUI server.
+    const compiledIgnores = this.config.ignore_patterns.map(toIgnoreMatcher);
+    const ignoredFn = (path: string) => compiledIgnores.some((m) => m(path));
+
     this.watcher = chokidar.watch(this.config.base_path, {
-      ignored: this.config.ignore_patterns,
+      ignored: ignoredFn,
       persistent: true,
       ignoreInitial: true, // Don't trigger on startup
       awaitWriteFinish: {

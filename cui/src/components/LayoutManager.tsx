@@ -369,9 +369,11 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         try { localStorage.setItem(cacheKey, JSON.stringify(layoutJson)); } catch (e) { console.warn('[LayoutManager] Failed to cache layout:', e); }
         const serverV = typeof layoutJson._v === 'number' ? layoutJson._v : -1;
         if (serverV > currentLayoutVersionRef.current) {
-          // Server has a newer version (e.g. set via API) — apply it and suppress echo
+          // Server has a newer version (e.g. set via API) — apply it and suppress echo.
+          // Suppression must outlast handleModelChange's 1500ms debounce, otherwise the post-setModel
+          // onChange wave fires saveLayout → 409 → re-mount loop with WS disconnect storm.
           currentLayoutVersionRef.current = serverV;
-          suppressUntilRef.current = Date.now() + 800;
+          suppressUntilRef.current = Date.now() + 2500;
           if (saveTimer.current) clearTimeout(saveTimer.current);
           try { setModel(Model.fromJson(layoutJson)); } catch (e) { console.warn('[LayoutManager] Failed to parse server layout JSON:', e); }
         } else if (!hadCachedModel) {
@@ -601,12 +603,25 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           const data = await res.json().catch(() => ({})); // silent-ok: malformed 409 response; server-side layout version ignored
           if (data.layout) {
             currentLayoutVersionRef.current = typeof data._v === 'number' ? data._v : currentLayoutVersionRef.current;
-            suppressUntilRef.current = Date.now() + 800;
-            if (saveTimer.current) clearTimeout(saveTimer.current);
+            // Self-echo: if server's layout equals what we just sent, only bump version — don't setModel.
+            // setModel would re-mount every child panel (WS disconnect storm), so skip when content is identical.
+            let isSelfEcho = false;
             try {
-              setModel(Model.fromJson(data.layout));
-              localStorage.setItem(`cui-layout-${projectId}`, JSON.stringify(data.layout));
-            } catch (e) { console.warn('[LayoutManager] Failed to apply conflict layout:', e); }
+              const { _v: _vIn, ...incomingNoV } = data.layout;
+              if (lastSavedJsonRef.current && JSON.stringify(incomingNoV) === lastSavedJsonRef.current) {
+                isSelfEcho = true;
+              }
+            } catch { /* compare failed; fall through to setModel */ }
+            if (!isSelfEcho) {
+              // Suppression must outlast handleModelChange's 1500ms debounce, otherwise the post-setModel
+              // onChange wave fires another saveLayout → 409 → loop.
+              suppressUntilRef.current = Date.now() + 2500;
+              if (saveTimer.current) clearTimeout(saveTimer.current);
+              try {
+                setModel(Model.fromJson(data.layout));
+                localStorage.setItem(`cui-layout-${projectId}`, JSON.stringify(data.layout));
+              } catch (e) { console.warn('[LayoutManager] Failed to apply conflict layout:', e); }
+            }
           }
         }
       }).catch((err) => { console.warn('[LayoutManager] saveLayout fetch failed:', err); });
@@ -1053,7 +1068,9 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
               }
               if (serverV >= 0) currentLayoutVersionRef.current = serverV;
               // flexlayout's Model.fromJson expects the FULL body { global, borders, layout, popouts }.
-              suppressUntilRef.current = Date.now() + 800;
+              // Suppression must outlast handleModelChange's 1500ms debounce (otherwise post-setModel
+              // onChange wave fires saveLayout → 409 → re-mount loop, with WS disconnect storm).
+              suppressUntilRef.current = Date.now() + 2500;
               if (saveTimer.current) clearTimeout(saveTimer.current);
               const newModel = Model.fromJson(msg.layout);
               setModel(newModel);
