@@ -42,6 +42,8 @@ interface JourneyListItem {
   journeyId: string;
   capturedAt: string;
   screenshotCount: number;
+  loginSuccess: boolean | null;
+  failureReason: string | null;
 }
 
 interface JourneyDetail {
@@ -556,6 +558,15 @@ export default function PartnerServerPanel() {
                             <div style={{ padding: '6px 10px', display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid var(--tn-border, #292e42)', fontSize: 12 }}>
                               <span style={{ fontWeight: 500 }}>{c.workspace}</span>
                               {!supported && <span style={{ fontSize: 10, color: 'var(--tn-text-muted, #565f89)' }}>(no journey)</span>}
+                              {last && last.loginSuccess === true && (
+                                <span style={{ fontSize: 10, color: 'var(--tn-green, #9ece6a)' }}>✓ login</span>
+                              )}
+                              {last && last.loginSuccess === false && (
+                                <span style={{ fontSize: 10, color: 'var(--tn-red, #f7768e)' }} title={last.failureReason || 'Login fehlgeschlagen'}>✗ login fail</span>
+                              )}
+                              {last && last.loginSuccess === null && (
+                                <span style={{ fontSize: 10, color: 'var(--tn-text-muted, #565f89)' }} title="Vor failure-detection — Status unbekannt">? unknown</span>
+                              )}
                               <span style={{ flex: 1 }} />
                               <button
                                 onClick={() => runJourney(c.userId, c.workspace)}
@@ -574,21 +585,39 @@ export default function PartnerServerPanel() {
                                   <div style={{ marginBottom: 4 }}>
                                     Letzte: {new Date(last.capturedAt).toLocaleString('de-DE')} · {last.screenshotCount} Screenshots
                                   </div>
+                                  {last.loginSuccess === false && last.failureReason && (
+                                    <div style={{ marginBottom: 6, padding: '4px 6px', background: 'rgba(247,118,142,0.1)', color: 'var(--tn-red, #f7768e)', borderRadius: 3, fontSize: 10 }}>
+                                      ❌ {last.failureReason}
+                                    </div>
+                                  )}
                                   <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                                    {wsList.slice(0, 5).map(j => (
-                                      <button
-                                        key={j.journeyId}
-                                        onClick={() => openJourneyDetail(j.userId, j.workspace, j.journeyId)}
-                                        style={{
-                                          ...miniBtnStyle,
-                                          textAlign: 'left',
-                                          fontSize: 10,
-                                          padding: '2px 6px',
-                                        }}
-                                      >
-                                        {j.journeyId} ({j.screenshotCount} 📸)
-                                      </button>
-                                    ))}
+                                    {wsList.slice(0, 5).map(j => {
+                                      const icon = j.loginSuccess === true ? '✓'
+                                        : j.loginSuccess === false ? '✗'
+                                        : '?';
+                                      const color = j.loginSuccess === true ? 'var(--tn-green, #9ece6a)'
+                                        : j.loginSuccess === false ? 'var(--tn-red, #f7768e)'
+                                        : 'var(--tn-text-muted, #565f89)';
+                                      return (
+                                        <button
+                                          key={j.journeyId}
+                                          onClick={() => openJourneyDetail(j.userId, j.workspace, j.journeyId)}
+                                          style={{
+                                            ...miniBtnStyle,
+                                            textAlign: 'left',
+                                            fontSize: 10,
+                                            padding: '2px 6px',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: 6,
+                                          }}
+                                          title={j.failureReason || ''}
+                                        >
+                                          <span style={{ color }}>{icon}</span>
+                                          <span>{j.journeyId} ({j.screenshotCount} 📸)</span>
+                                        </button>
+                                      );
+                                    })}
                                   </div>
                                 </>
                               )}

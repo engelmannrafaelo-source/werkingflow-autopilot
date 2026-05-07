@@ -455,6 +455,8 @@ export default function createPartnerServerRoutes() {
       journeyId: string;
       capturedAt: string;
       screenshotCount: number;
+      loginSuccess: boolean | null;
+      failureReason: string | null;
     }> = [];
     for (const ws of readdirSync(userDir)) {
       const wsDir = join(userDir, ws);
@@ -472,7 +474,20 @@ export default function createPartnerServerRoutes() {
         const capturedAt = m
           ? new Date(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}`).toISOString()
           : statSync(jDir).mtime.toISOString();
-        items.push({ userId, workspace: ws, journeyId: jid, capturedAt, screenshotCount: pngs.length });
+        // Parse journey.md for loginSuccess + failureReason. Older runs predate
+        // failure-detection: leave both null so the UI can show "unknown" instead
+        // of falsely greenlighting them.
+        let loginSuccess: boolean | null = null;
+        let failureReason: string | null = null;
+        const mdPath = join(jDir, 'journey.md');
+        if (existsSync(mdPath)) {
+          const md = readFileSync(mdPath, 'utf8');
+          const ls = md.match(/^loginSuccess:\s*(true|false)\s*$/m);
+          if (ls) loginSuccess = ls[1] === 'true';
+          const fr = md.match(/❌ LOGIN FAILED:\s*(.+)/);
+          if (fr) failureReason = fr[1].trim();
+        }
+        items.push({ userId, workspace: ws, journeyId: jid, capturedAt, screenshotCount: pngs.length, loginSuccess, failureReason });
       }
     }
     items.sort((a, b) => b.capturedAt.localeCompare(a.capturedAt));
