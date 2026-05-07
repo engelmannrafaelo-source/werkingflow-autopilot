@@ -412,50 +412,37 @@ interface PartnerCuiUser {
   name: string;
   username: string;
   password: string;
+  workspaces: string[];
 }
 
-interface PartnerCuiLogin {
+interface PartnerCuiCredentials {
   _note?: string;
   url: string;
   users: PartnerCuiUser[];
 }
 
-interface CredentialsEntry {
-  name?: string;
-  partnerCuiLogin?: PartnerCuiLogin;
-  [key: string]: unknown;
-}
-
 function generatePartnerSection(): string | null {
-  const credPath = join(__dirname, '../data/credentials.json');
-  if (!existsSync(credPath)) return null;
+  const ssotPath = join(GH, 'werkingflow-production/config/partner-cui-credentials.json');
+  if (!existsSync(ssotPath)) {
+    console.warn(`  ⚠️  partner-cui-credentials.json not found at ${ssotPath}`);
+    return null;
+  }
 
   try {
-    const data = JSON.parse(readFileSync(credPath, 'utf8')) as Record<string, CredentialsEntry>;
-    const partnerUsers: { name: string; username: string; password: string; workspace: string }[] = [];
-    let partnerUrl = '';
+    const data = JSON.parse(readFileSync(ssotPath, 'utf8')) as PartnerCuiCredentials;
+    if (!data.users?.length) return null;
 
-    for (const [wsId, entry] of Object.entries(data)) {
-      if (!entry.partnerCuiLogin?.users?.length) continue;
-      if (!partnerUrl) partnerUrl = entry.partnerCuiLogin.url;
-      const wsName = entry.name || wsId;
-      for (const u of entry.partnerCuiLogin.users) {
-        partnerUsers.push({ name: u.name, username: u.username, password: u.password, workspace: wsName });
-      }
-    }
-
-    if (partnerUsers.length === 0) return null;
-
-    let md = `## Partner CUI Login (${partnerUrl})\n\n`;
+    let md = `## Partner CUI Login (${data.url})\n\n`;
     md += `| Partner | Username | Password | Workspace |\n`;
     md += `|---------|----------|----------|-----------|\n`;
-    for (const u of partnerUsers) {
-      md += `| ${u.name} | \`${u.username}\` | \`${u.password}\` | ${u.workspace} |\n`;
+    for (const u of data.users) {
+      const workspace = u.workspaces.join(', ');
+      md += `| ${u.name} | \`${u.username}\` | \`${u.password}\` | ${workspace} |\n`;
     }
     md += `\n---\n\n`;
     return md;
-  } catch {
-    console.warn('  ⚠️  Could not read partnerCuiLogin from credentials.json');
+  } catch (e) {
+    console.warn(`  ⚠️  Could not read partner-cui-credentials.json: ${e instanceof Error ? e.message : e}`);
     return null;
   }
 }
