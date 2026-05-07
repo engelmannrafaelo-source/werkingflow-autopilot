@@ -36,10 +36,34 @@ interface ChatMessage {
   content: string;
 }
 
+interface JourneyListItem {
+  userId: string;
+  workspace: string;
+  journeyId: string;
+  capturedAt: string;
+  screenshotCount: number;
+}
+
+interface JourneyDetail {
+  markdown: string;
+  screenshots: Array<{ name: string; url: string }>;
+}
+
 const API = '/api/partner-server';
 const AUDIT_API = '/api/partner-audit';
 
-type Tab = 'screenshots' | 'audit';
+// Maps a CUI workspace name to the actual app name expected by the journey API.
+// Workspaces not in this map cannot run a journey (no seed-login configured).
+const WORKSPACE_TO_APP: Record<string, string> = {
+  'werking-energy': 'werking-energy',
+  'werking-report': 'werking-report',
+  'werkingsafety': 'werking-safety',
+  'engelmann-ai-hub': 'engelmann',
+  'engelmann-developer': 'engelmann',
+  'engelmann-dashboards': 'engelmann',
+};
+
+type Tab = 'screenshots' | 'audit' | 'journey';
 
 export default function PartnerServerPanel() {
   const [activeTab, setActiveTab] = useState<Tab>('screenshots');
@@ -60,6 +84,69 @@ export default function PartnerServerPanel() {
   const [auditError, setAuditError] = useState<string | null>(null);
   const [auditLoaded, setAuditLoaded] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Journey tab state
+  const [journeyBusy, setJourneyBusy] = useState<Set<string>>(new Set());
+  const [journeyByUser, setJourneyByUser] = useState<Record<string, JourneyListItem[]>>({});
+  const [journeyDetail, setJourneyDetail] = useState<{ userId: string; workspace: string; journeyId: string; data: JourneyDetail } | null>(null);
+  const [journeyError, setJourneyError] = useState<string | null>(null);
+
+  const loadJourneyList = useCallback(async (userId: string) => {
+    try {
+      const r = await fetch(`${API}/journey/list?userId=${encodeURIComponent(userId)}`);
+      if (!r.ok) throw new Error(`list ${r.status}`);
+      const arr: JourneyListItem[] = await r.json();
+      setJourneyByUser(prev => ({ ...prev, [userId]: arr }));
+    } catch (e: any) {
+      setJourneyError(`list ${userId}: ${e.message}`);
+    }
+  }, []);
+
+  const runJourney = useCallback(async (userId: string, workspace: string) => {
+    const app = WORKSPACE_TO_APP[workspace];
+    if (!app) {
+      setJourneyError(`Workspace ${workspace} hat kein Journey-Mapping`);
+      return;
+    }
+    const key = `${userId}__${workspace}`;
+    setJourneyBusy(prev => new Set(prev).add(key));
+    setJourneyError(null);
+    try {
+      const r = await fetch(`${API}/journey/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, workspace, app }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j.success) throw new Error(j.error || `run ${r.status}`);
+      await loadJourneyList(userId);
+    } catch (e: any) {
+      setJourneyError(`run ${userId}/${workspace}: ${e.message}`);
+    } finally {
+      setJourneyBusy(prev => { const n = new Set(prev); n.delete(key); return n; });
+    }
+  }, [loadJourneyList]);
+
+  const openJourneyDetail = useCallback(async (userId: string, workspace: string, journeyId: string) => {
+    setJourneyError(null);
+    try {
+      const r = await fetch(`${API}/journey/${encodeURIComponent(userId)}/${encodeURIComponent(workspace)}/${encodeURIComponent(journeyId)}`);
+      if (!r.ok) throw new Error(`detail ${r.status}`);
+      const data: JourneyDetail = await r.json();
+      setJourneyDetail({ userId, workspace, journeyId, data });
+    } catch (e: any) {
+      setJourneyError(`detail: ${e.message}`);
+    }
+  }, []);
+
+  // Auto-load journey lists for all users when entering the tab
+  useEffect(() => {
+    if (activeTab !== 'journey' || !data) return;
+    data.users.forEach(u => {
+      if (!journeyByUser[u.id]) loadJourneyList(u.id);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, data]);
 
   // Restore persisted audit chat history on mount
   useEffect(() => {
@@ -211,7 +298,7 @@ export default function PartnerServerPanel() {
         ) : null}
         <span style={{ flex: 1 }} />
         <div style={{ display: 'flex', gap: 4 }}>
-          {(['screenshots', 'audit'] as Tab[]).map(tab => (
+          {(['screenshots', 'audit', 'journey'] as Tab[]).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -221,7 +308,7 @@ export default function PartnerServerPanel() {
                 color: activeTab === tab ? '#1a1b26' : 'var(--tn-text, #c0caf5)',
               }}
             >
-              {tab === 'screenshots' ? 'Screenshots' : 'Audit-Chat'}
+              {tab === 'screenshots' ? 'Screenshots' : tab === 'audit' ? 'Audit-Chat' : 'Journey'}
             </button>
           ))}
         </div>
@@ -423,6 +510,150 @@ export default function PartnerServerPanel() {
             >
               {sending ? '...' : 'Senden'}
             </button>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'journey' && (
+        <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
+          {loading ? (
+            <div style={{ color: 'var(--tn-text-muted)' }}>Lade Partner-Matrix...</div>
+          ) : !data ? (
+            <div style={{ color: 'var(--tn-text-muted)' }}>Keine Daten</div>
+          ) : (
+            <>
+              <div style={{ fontSize: 11, color: 'var(--tn-text-muted, #a9b1d6)', marginBottom: 12 }}>
+                Klick auf "▶ Run Journey" startet einen Auto-Login + 4 Screenshots gegen die laufende App.
+                Klick auf einen historischen Eintrag zeigt Markdown + Screenshots.
+              </div>
+              {journeyError && (
+                <div style={{ color: 'var(--tn-red, #f7768e)', fontSize: 12, marginBottom: 12, padding: '6px 10px', background: 'rgba(247,118,142,0.1)', borderRadius: 4 }}>
+                  Fehler: {journeyError}
+                </div>
+              )}
+              {Array.from(grouped.entries()).map(([userId, cells]) => {
+                const list = journeyByUser[userId] || [];
+                return (
+                  <div key={userId} style={{ marginBottom: 24 }}>
+                    <div style={{ fontWeight: 600, marginBottom: 8, paddingBottom: 4, borderBottom: '1px solid var(--tn-border, #292e42)' }}>
+                      {cells[0].userName} <span style={{ fontSize: 11, color: 'var(--tn-text-muted, #a9b1d6)' }}>· {cells[0].role} · {userId}</span>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
+                      {cells.map(c => {
+                        const key = `${c.userId}__${c.workspace}`;
+                        const isBusy = journeyBusy.has(key);
+                        const supported = !!WORKSPACE_TO_APP[c.workspace];
+                        const wsList = list.filter(j => j.workspace === c.workspace);
+                        const last = wsList[0];
+                        return (
+                          <div key={key} style={{
+                            border: '1px solid var(--tn-border, #292e42)',
+                            borderRadius: 6,
+                            background: 'var(--tn-bg-elevated, #1f2335)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                          }}>
+                            <div style={{ padding: '6px 10px', display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid var(--tn-border, #292e42)', fontSize: 12 }}>
+                              <span style={{ fontWeight: 500 }}>{c.workspace}</span>
+                              {!supported && <span style={{ fontSize: 10, color: 'var(--tn-text-muted, #565f89)' }}>(no journey)</span>}
+                              <span style={{ flex: 1 }} />
+                              <button
+                                onClick={() => runJourney(c.userId, c.workspace)}
+                                style={miniBtnStyle}
+                                disabled={isBusy || !supported}
+                                title={supported ? 'Run journey' : 'Workspace nicht gemappt'}
+                              >
+                                {isBusy ? '...' : '▶ Run Journey'}
+                              </button>
+                            </div>
+                            <div style={{ padding: '8px 10px', fontSize: 11, color: 'var(--tn-text-muted, #a9b1d6)' }}>
+                              {wsList.length === 0 ? (
+                                <span>Noch keine Journey</span>
+                              ) : (
+                                <>
+                                  <div style={{ marginBottom: 4 }}>
+                                    Letzte: {new Date(last.capturedAt).toLocaleString('de-DE')} · {last.screenshotCount} Screenshots
+                                  </div>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                    {wsList.slice(0, 5).map(j => (
+                                      <button
+                                        key={j.journeyId}
+                                        onClick={() => openJourneyDetail(j.userId, j.workspace, j.journeyId)}
+                                        style={{
+                                          ...miniBtnStyle,
+                                          textAlign: 'left',
+                                          fontSize: 10,
+                                          padding: '2px 6px',
+                                        }}
+                                      >
+                                        {j.journeyId} ({j.screenshotCount} 📸)
+                                      </button>
+                                    ))}
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Journey detail modal */}
+      {journeyDetail && (
+        <div
+          onClick={() => setJourneyDetail(null)}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 9999,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'zoom-out',
+            padding: 20,
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: 'var(--tn-bg, #1a1b26)',
+              border: '1px solid var(--tn-border, #292e42)',
+              borderRadius: 8,
+              maxWidth: '90%',
+              maxHeight: '90%',
+              width: 1100,
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+              cursor: 'default',
+            }}
+          >
+            <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--tn-border, #292e42)', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontWeight: 600, color: 'var(--tn-text, #c0caf5)' }}>
+                Journey: {journeyDetail.userId} · {journeyDetail.workspace} · {journeyDetail.journeyId}
+              </span>
+              <span style={{ flex: 1 }} />
+              <button onClick={() => setJourneyDetail(null)} style={miniBtnStyle}>Close</button>
+            </div>
+            <div style={{ flex: 1, overflow: 'auto', padding: 16, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+              <div style={{ color: 'var(--tn-text, #c0caf5)', fontSize: 12, lineHeight: 1.6 }}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {journeyDetail.data.markdown}
+                </ReactMarkdown>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {journeyDetail.data.screenshots.map(s => (
+                  <div key={s.name} style={{ border: '1px solid var(--tn-border, #292e42)', borderRadius: 4, overflow: 'hidden' }}>
+                    <div style={{ padding: '4px 8px', fontSize: 10, color: 'var(--tn-text-muted, #a9b1d6)', background: 'var(--tn-bg-elevated, #1f2335)' }}>
+                      {s.name}
+                    </div>
+                    <img src={s.url} alt={s.name} style={{ width: '100%', display: 'block' }} />
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
       )}
