@@ -23,11 +23,21 @@ import { signJwt } from '../auth/jwt.js';
 import { getUsers, findUser } from '../auth/users.js';
 import { PATHS } from '../config/paths.js';
 import { isForwardMode, adminOrInternal, forwardToPartner } from '../lib/partner-forward.js';
+import { runJourney } from '../lib/journey-runner.js';
 import type { CuiUser } from '../auth/types.js';
 
+const APP_PORTS: Record<string, number> = {
+  'werking-energy': 3007,
+  'werking-report': 3008,
+  'werking-safety': 3006,
+  'engelmann': 3009,
+};
+
 const SCREENSHOT_DIR = join(PATHS.dataDir, 'partner-checks', 'screenshots');
+const STORAGE_BASE = join(PATHS.dataDir, 'partner-checks', 'journeys');
 const LAYOUTS_DIR_LOCAL = join(PATHS.dataDir, 'layouts');
 mkdirSync(SCREENSHOT_DIR, { recursive: true });
+mkdirSync(STORAGE_BASE, { recursive: true });
 
 interface CaptureMeta {
   userId: string;
@@ -375,6 +385,124 @@ export default function createPartnerServerRoutes() {
     res.setHeader('Content-Type', 'image/png');
     res.setHeader('Cache-Control', 'no-cache');
     res.send(readFileSync(meta.filePath));
+  });
+
+  // ── Journey endpoints ────────────────────────────────────────────────────
+
+  router.post('/journey/run', async (req, res) => {
+    const { userId, workspace, app } = req.body as { userId?: string; workspace?: string; app?: string };
+    if (!userId || !workspace || !app) {
+      res.status(400).json({ error: 'userId, workspace, and app required' });
+      return;
+    }
+    const port = APP_PORTS[app];
+    if (!port) {
+      res.status(400).json({ error: `Unknown app: ${app}. Known: ${Object.keys(APP_PORTS).join(', ')}` });
+      return;
+    }
+    const credPath = `/home/${userId}/projekte/werkingflow-production/apps/${app}/config/test-credentials.json`;
+    if (!existsSync(credPath)) {
+      res.status(404).json({ error: `test-credentials.json not found: ${credPath}` });
+      return;
+    }
+    let email: string;
+    let password: string;
+    try {
+      const creds = JSON.parse(readFileSync(credPath, 'utf8'));
+      const defaultKey: string = creds.default_user;
+      const user = creds.users?.[defaultKey];
+      if (!user?.email || !user?.password) throw new Error(`No credentials for default_user="${defaultKey}"`);
+      email = user.email;
+      password = user.password;
+    } catch (err: any) {
+      res.status(500).json({ error: `Failed to read credentials: ${err.message}` });
+      return;
+    }
+    try {
+      const result = await runJourney({ userId, workspace, app, port, email, password, baseDir: STORAGE_BASE });
+      res.json({ success: true, journeyId: result.journeyId, dirPath: result.dirPath });
+    } catch (err: any) {
+      console.error('[partner-server] journey/run failed:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.get('/journey/list', (req, res) => {
+    const userId = String(req.query.userId || '');
+    if (!userId) {
+      res.status(400).json({ error: 'userId query param required' });
+      return;
+    }
+    const userDir = join(STORAGE_BASE, userId);
+    if (!existsSync(userDir)) {
+      res.json([]);
+      return;
+    }
+    const items: Array<{
+      userId: string;
+      workspace: string;
+      journeyId: string;
+      capturedAt: string;
+      screenshotCount: number;
+    }> = [];
+    for (const ws of readdirSync(userDir)) {
+      const wsDir = join(userDir, ws);
+      try {
+        if (!statSync(wsDir).isDirectory()) continue;
+      } catch { continue; }
+      for (const jid of readdirSync(wsDir)) {
+        const jDir = join(wsDir, jid);
+        try {
+          if (!statSync(jDir).isDirectory()) continue;
+        } catch { continue; }
+        const pngs = readdirSync(jDir).filter(f => f.endsWith('.png'));
+        // journeyId format: YYYYMMDD-HHMMSS → parse to ISO
+        const m = jid.match(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$/);
+        const capturedAt = m
+          ? new Date(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}`).toISOString()
+          : statSync(jDir).mtime.toISOString();
+        items.push({ userId, workspace: ws, journeyId: jid, capturedAt, screenshotCount: pngs.length });
+      }
+    }
+    items.sort((a, b) => b.capturedAt.localeCompare(a.capturedAt));
+    res.json(items);
+  });
+
+  router.get('/journey/:userId/:workspace/:journeyId', (req, res) => {
+    const { userId, workspace, journeyId } = req.params;
+    const jDir = join(STORAGE_BASE, userId, workspace, journeyId);
+    if (!existsSync(jDir)) {
+      res.status(404).json({ error: 'Journey not found' });
+      return;
+    }
+    let markdown = '';
+    const mdPath = join(jDir, 'journey.md');
+    if (existsSync(mdPath)) markdown = readFileSync(mdPath, 'utf8');
+    const screenshots = readdirSync(jDir)
+      .filter(f => f.endsWith('.png'))
+      .sort()
+      .map(name => ({
+        name,
+        url: `/api/partner-server/journey/file/${encodeURIComponent(userId)}/${encodeURIComponent(workspace)}/${encodeURIComponent(journeyId)}/${encodeURIComponent(name)}`,
+      }));
+    res.json({ markdown, screenshots });
+  });
+
+  router.get('/journey/file/:userId/:workspace/:journeyId/:filename', (req, res) => {
+    const { userId, workspace, journeyId, filename } = req.params;
+    // Reject path traversal and non-PNG files
+    if (!filename.endsWith('.png') || filename.includes('/') || filename.includes('..')) {
+      res.status(400).send('Invalid filename');
+      return;
+    }
+    const filePath = join(STORAGE_BASE, userId, workspace, journeyId, filename);
+    if (!existsSync(filePath)) {
+      res.status(404).send('Not found');
+      return;
+    }
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.send(readFileSync(filePath));
   });
 
   return router;
