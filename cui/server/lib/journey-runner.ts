@@ -82,7 +82,7 @@ export async function runJourney({
 
     // 1: Login page
     logLines.push('## Step 1: Login page');
-    await page.goto(`${baseUrl}/login`, { waitUntil: 'networkidle', timeout: 30000 });
+    await page.goto(`${baseUrl}/login`, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.screenshot({ path: join(dirPath, '01-login.png'), type: 'png' });
     screenshots.push('01-login.png');
     logLines.push(`- URL: ${page.url()}`, '- Screenshot: 01-login.png', '');
@@ -101,7 +101,7 @@ export async function runJourney({
     // 3: Submit + wait for redirect
     logLines.push('## Step 3: After login');
     await Promise.all([
-      page.waitForNavigation({ waitUntil: 'networkidle', timeout: 30000 }).catch(() => {}),
+      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {}),
       page.click(
         'button[type="submit"], button:has-text("Login"), button:has-text("Anmelden"), button:has-text("Einloggen")',
       ),
@@ -116,7 +116,7 @@ export async function runJourney({
     const postLoginUrl = page.url();
     if (postLoginUrl.includes('/login')) {
       // Login did not redirect — try root
-      await page.goto(`${baseUrl}/`, { waitUntil: 'networkidle', timeout: 20000 }).catch(() => {});
+      await page.goto(`${baseUrl}/`, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
     }
     await page.waitForTimeout(2000);
     await page.screenshot({ path: join(dirPath, '04-projekte.png'), type: 'png', fullPage: true });
