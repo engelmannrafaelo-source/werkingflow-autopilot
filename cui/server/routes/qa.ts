@@ -668,6 +668,14 @@ function getPyramidStatusFromCli(appId: string): {
     total: number; pass: number; fail: number; pending: number;
     orange?: number; stale: number; bridge_failures?: number;
   };
+  real_world?: {
+    total: number; pass: number; fail: number; pending: number;
+    scenarios: Array<{ id: string; status: string; score: number | null }>;
+  };
+  wizard_e2e?: {
+    total: number; pass: number; fail: number; pending: number;
+    scenarios: Array<{ id: string; status: string; score: number | null }>;
+  };
 } | null {
   try {
     const out = execSync(
@@ -1004,10 +1012,20 @@ function getPyramidData(appId: string) {
     timestamp: coverageData.timestamp ?? null,
   } : null;
 
+  // Out-of-pyramid test suites (real-world cases + wizard end-to-end walks).
+  // Sourced from pyramid_status.py SSoT — these tests don't count in layer
+  // totals or block the pyramid gate, but the dashboard surfaces them in a
+  // dedicated section so they're not invisible.
+  const outOfPyramid = ssot ? {
+    real_world: ssot.real_world ?? { total: 0, pass: 0, fail: 0, pending: 0, scenarios: [] },
+    wizard_e2e: ssot.wizard_e2e ?? { total: 0, pass: 0, fail: 0, pending: 0, scenarios: [] },
+  } : null;
+
   return {
     app: appId,
     layers,
     coverage,
+    outOfPyramid,
     ssot_source: ssot ? 'pyramid_status.py' : 'local-fallback',
     timestamp: new Date().toISOString(),
   };

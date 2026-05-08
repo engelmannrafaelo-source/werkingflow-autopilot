@@ -56,11 +56,31 @@ interface CoverageSummary {
   timestamp?: string | null;
 }
 
+interface OutOfPyramidScenario {
+  id: string;
+  status: string;
+  score: number | null;
+}
+
+interface OutOfPyramidGroup {
+  total: number;
+  pass: number;
+  fail: number;
+  pending: number;
+  scenarios: OutOfPyramidScenario[];
+}
+
+interface OutOfPyramidData {
+  real_world: OutOfPyramidGroup;
+  wizard_e2e: OutOfPyramidGroup;
+}
+
 interface PyramidData {
   app: string;
   layers: PyramidLayer[];
   timestamp?: string;
   coverage?: CoverageSummary | null;
+  outOfPyramid?: OutOfPyramidData | null;
 }
 
 // Staleness types
@@ -883,7 +903,7 @@ function TestRow({ test, staleIds, staleMap, retesting, onLoadReport, onRetest, 
 export default function PyramidTab() {
   const [selectedApp, setSelectedApp] = useState(APP_IDS[0]);
   const [pyramid, setPyramid] = useState<PyramidData | null>(null);
-  const [expandedLayer, setExpandedLayer] = useState<number | null>(null);
+  const [expandedLayer, setExpandedLayer] = useState<number | string | null>(null);
   const [reportContent, setReportContent] = useState<string | null>(null);
   const [reportTitle, setReportTitle] = useState('');
   const [loading, setLoading] = useState(true);
@@ -1364,6 +1384,111 @@ export default function PyramidTab() {
                                 sidebarTestId={sidebarTest?.id ?? null} />
                             ))
                           )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Out-of-Pyramid Tests (real-world + wizard-e2e) — separate from layer scoring */}
+          {pyramid?.outOfPyramid && (
+            (pyramid.outOfPyramid.real_world.total + pyramid.outOfPyramid.wizard_e2e.total) > 0
+          ) && (
+            <div style={{ marginTop: 24 }}>
+              <h3 style={{ fontSize: 13, fontWeight: 700, color: 'var(--tn-text)', marginBottom: 4 }}>
+                Out-of-Pyramid Tests
+              </h3>
+              <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginBottom: 12 }}>
+                Tests that walk full flows or customer cases — scored separately, do not block pyramid gates.
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 700 }}>
+                {([
+                  { key: 'wizard_e2e', label: 'Wizard E2E Walks', desc: 'Full multi-step wizard flow (FE↔BE compat) — backend + frontend variants', color: 'rgb(110,200,220)' },
+                  { key: 'real_world', label: 'Real-World Cases', desc: 'Customer-derived end-to-end scenarios (Plasser, Steinhauser, …)', color: 'rgb(180,180,200)' },
+                ] as const).map(group => {
+                  const data = pyramid.outOfPyramid![group.key];
+                  if (data.total === 0) return null;
+                  const isOpen = expandedLayer === `oop-${group.key}`;
+                  return (
+                    <div key={group.key} style={{ display: 'flex', flexDirection: 'column' }}>
+                      <button
+                        onClick={() => setExpandedLayer(isOpen ? null : `oop-${group.key}`)}
+                        style={{
+                          background: `linear-gradient(135deg, ${group.color}14, ${group.color}07)`,
+                          border: `1px dashed ${group.color}88`,
+                          borderRadius: 6,
+                          padding: '10px 14px',
+                          textAlign: 'left',
+                          cursor: 'pointer',
+                          color: 'var(--tn-text)',
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div>
+                            <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1, color: group.color }}>
+                              Out-of-Pyramid
+                            </div>
+                            <div style={{ fontSize: 13, fontWeight: 700, marginTop: 2, color: 'var(--tn-text)' }}>
+                              {group.label}
+                            </div>
+                            <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginTop: 2 }}>
+                              {group.desc}
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
+                            <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--tn-green)' }}>{data.pass}</span>
+                            <span style={{ fontSize: 8, color: 'var(--tn-green)', opacity: 0.7, fontWeight: 600 }}>P</span>
+                            <span style={{ fontSize: 10, color: 'var(--tn-text-muted)', opacity: 0.4 }}>/</span>
+                            <span style={{ fontSize: 11, fontWeight: 700, color: data.fail > 0 ? 'var(--tn-red)' : 'var(--tn-text-muted)' }}>{data.fail}</span>
+                            <span style={{ fontSize: 8, color: data.fail > 0 ? 'var(--tn-red)' : 'var(--tn-text-muted)', opacity: 0.7, fontWeight: 600 }}>F</span>
+                            {data.pending > 0 && (
+                              <>
+                                <span style={{ fontSize: 10, color: 'var(--tn-text-muted)', opacity: 0.4 }}>/</span>
+                                <span style={{ fontSize: 11, color: 'var(--tn-text-muted)' }}>{data.pending}</span>
+                                <span style={{ fontSize: 8, color: 'var(--tn-text-muted)', opacity: 0.7, fontWeight: 600 }}>U</span>
+                              </>
+                            )}
+                            <span style={{ fontSize: 9, color: 'var(--tn-text-muted)', opacity: 0.5, marginLeft: 4 }}>/ {data.total}</span>
+                          </div>
+                        </div>
+                      </button>
+                      {isOpen && (
+                        <div style={{
+                          background: 'var(--tn-bg-dark)',
+                          border: `1px solid ${group.color}44`,
+                          borderTop: 'none',
+                          borderRadius: '0 0 6px 6px',
+                          padding: 0,
+                          overflow: 'hidden',
+                        }}>
+                          {data.scenarios.map(s => (
+                            <div key={s.id} style={{
+                              display: 'flex', alignItems: 'center', gap: 8,
+                              padding: '6px 12px', fontSize: 11,
+                              borderBottom: '1px solid var(--tn-border)',
+                            }}>
+                              <span style={{
+                                width: 8, height: 8, borderRadius: '50%',
+                                background: s.status === 'PASS' ? 'var(--tn-green)' : s.status === 'FAIL' ? 'var(--tn-red)' : 'var(--tn-text-muted)',
+                                flexShrink: 0,
+                              }} />
+                              <span style={{ fontFamily: 'monospace', flex: 1, color: 'var(--tn-text)' }}>{s.id}</span>
+                              <span style={{
+                                fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 3,
+                                background: s.status === 'PASS' ? 'rgba(100,255,100,0.15)' : s.status === 'FAIL' ? 'rgba(255,100,100,0.15)' : 'rgba(150,150,150,0.1)',
+                                color: s.status === 'PASS' ? 'var(--tn-green)' : s.status === 'FAIL' ? 'var(--tn-red)' : 'var(--tn-text-muted)',
+                                textTransform: 'uppercase',
+                              }}>{s.status}</span>
+                              {s.score != null && s.score > 0 && (
+                                <span style={{ fontWeight: 700, color: scoreColor(s.score), fontSize: 11, minWidth: 32, textAlign: 'right' }}>
+                                  {s.score.toFixed(1)}
+                                </span>
+                              )}
+                            </div>
+                          ))}
                         </div>
                       )}
                     </div>
