@@ -19,11 +19,9 @@ import { IS_LOCAL_MODE, getRestoredWorkingSessions } from './state.js';
 import { hasIncompleteToolUse, getOriginalCwd } from './shared/jsonl.js';
 
 // --- Account Configuration ---
-// Account mapping (ID = label = consistent):
-//   engelmann → .cui-account1 → rafael@engelmann.at
-//   office    → .cui-account2 → office@data-energyneering.at
-//   gmail     → .cui-account3 → engelmann.rafaelo@gmail.com
-//   werking   → .cui-account4 → office@werking.tools
+// Per-server mapping (set via env: PARTNER_CUI=1 or PARTNER_MODE=1 picks PARTNER branch):
+//   Dev    : engelmann → .cui-account1, office → .cui-account2, gmail → .cui-account3, werking → .cui-account4
+//   Partner: sahori → .cui-account1, kurt → .cui-account2 (only 2 accounts; cui-account3/4 unused)
 
 export interface AccountConfig {
   id: string;
@@ -34,8 +32,15 @@ export interface AccountConfig {
 
 import { PATHS } from '../config/paths.js';
 
+const IS_PARTNER = process.env.PARTNER_MODE === '1' || process.env.PARTNER_CUI === '1';
+
 export const ACCOUNT_CONFIG: AccountConfig[] = IS_LOCAL_MODE
   ? [{ id: 'local', home: process.env.HOME || '/Users/rafael', label: 'Local', color: '#7aa2f7' }]
+  : IS_PARTNER
+  ? [
+      { id: 'sahori', home: `${PATHS.claudeUserHome}/.cui-account1`, label: 'Sahori', color: '#bb9af7' },
+      { id: 'kurt',   home: `${PATHS.claudeUserHome}/.cui-account2`, label: 'Kurt',   color: '#9ece6a' },
+    ]
   : [
       { id: 'engelmann',    home: `${PATHS.claudeUserHome}/.cui-account1`, label: 'Engelmann', color: '#bb9af7' },
       { id: 'office', home: `${PATHS.claudeUserHome}/.cui-account2`, label: 'Office',    color: '#9ece6a' },
