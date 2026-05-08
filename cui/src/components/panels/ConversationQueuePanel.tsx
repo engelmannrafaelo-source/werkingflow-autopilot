@@ -77,7 +77,9 @@ const REASON_LABELS: Record<string, string> = {
 };
 
 function getConvColor(conv: Conversation): typeof STATE_COLORS[keyof typeof STATE_COLORS] {
-  if (conv.manualFinished || conv.status === 'completed') return STATE_COLORS.finished;
+  // Single source of truth for "active": only manualFinished decides — server's
+  // status='completed' fires after every Claude reply and does NOT mean done.
+  if (conv.manualFinished) return STATE_COLORS.finished;
   if (conv.attentionState === 'needs_attention' && conv.attentionReason !== 'done') {
     if (conv.attentionReason === 'rate_limit') return STATE_COLORS.rate_limit;
     return STATE_COLORS.needs_input;
@@ -232,7 +234,7 @@ export default function ConversationQueuePanel({ projectId: _projectId }: { proj
     if (accountFilter !== 'all' && (c.accountId) !== accountFilter) return false;
     if (projectFilter !== 'all' && (c.projectName ?? '') !== projectFilter) return false;
     if (statusFilter !== 'all') {
-      const isActive = !c.manualFinished && c.status === 'ongoing';
+      const isActive = !c.manualFinished;
       if (!isActive) return false;
       if (statusFilter === 'working' && c.attentionState !== 'working' && !(c.streamingId)) return false;
       if (statusFilter === 'needs_input' && c.attentionState !== 'needs_attention') return false;
@@ -254,20 +256,20 @@ export default function ConversationQueuePanel({ projectId: _projectId }: { proj
     return d !== 0 ? d : new Date(b.updatedAt ?? '').getTime() - new Date(a.updatedAt ?? '').getTime();
   });
 
-  const ongoing = useMemo(() => sortP(filtered.filter(c => c.status === 'ongoing' && !c.manualFinished)), [filtered]);
-  const completed = useMemo(() => filtered.filter(c => c.status === 'completed' || c.manualFinished).sort((a, b) => new Date(b.updatedAt ?? '').getTime() - new Date(a.updatedAt ?? '').getTime()), [filtered]);
+  const ongoing = useMemo(() => sortP(filtered.filter(c => !c.manualFinished)), [filtered]);
+  const completed = useMemo(() => filtered.filter(c => c.manualFinished).sort((a, b) => new Date(b.updatedAt ?? '').getTime() - new Date(a.updatedAt ?? '').getTime()), [filtered]);
   const projectNames = useMemo(() => [...new Set(enriched.map(c => c.projectName ?? ''))].sort(), [enriched]);
 
   // Stats
   const stats = useMemo(() => {
-    const active = enriched.filter(c => c.status === 'ongoing' && !c.manualFinished);
+    const active = enriched.filter(c => !c.manualFinished);
     return {
       working: active.filter(c => c.attentionState === 'working' || !!(c.streamingId)).length,
       needsInput: active.filter(c => c.attentionState === 'needs_attention' && c.attentionReason !== 'done' && c.attentionReason !== 'rate_limit').length,
       rateLimited: active.filter(c => c.attentionReason === 'rate_limit').length,
       idle: active.filter(c => c.attentionState === 'idle').length,
       unknown: active.filter(c => !c.attentionState && !(c.streamingId)).length,
-      finished: enriched.filter(c => c.status === 'completed' || c.manualFinished).length,
+      finished: enriched.filter(c => c.manualFinished).length,
     };
   }, [enriched]);
 

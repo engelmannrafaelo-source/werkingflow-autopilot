@@ -1613,10 +1613,12 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
             }
           }
         });
-        // Determine which conversations should be active
-        const active = conversations.filter((c: any) =>
-          c.status === "ongoing" || !c.manualFinished
-        );
+        // Determine which conversations should be active.
+        // Single source of truth: only manualFinished decides. The server's
+        // status='completed' fires after every Claude reply (between turns) and
+        // therefore must NOT be used to evict tabs — would constantly remove
+        // tabs that the user is actively working in.
+        const active = conversations.filter((c: any) => !c.manualFinished);
         const activeSessionIds = new Set(active.map((c: any) => c.sessionId));
 
         // Cleanup: remove tabs whose session is no longer active (finished or too old)
