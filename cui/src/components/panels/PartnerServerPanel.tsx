@@ -44,11 +44,31 @@ interface JourneyListItem {
   screenshotCount: number;
   loginSuccess: boolean | null;
   failureReason: string | null;
+  rating: number | null;
+  worksE2e: boolean | null;
+  summary: string | null;
+}
+
+interface JourneyEvaluation {
+  rating: number;
+  works_e2e: boolean;
+  summary: string;
+  findings: string[];
+  blockers: string[];
+  model: string;
+  evaluated_at: string;
 }
 
 interface JourneyDetail {
   markdown: string;
   screenshots: Array<{ name: string; url: string }>;
+  evaluation: JourneyEvaluation | null;
+}
+
+function renderStars(rating: number | null): string {
+  if (rating === null) return '';
+  const full = Math.max(0, Math.min(5, Math.round(rating)));
+  return '★'.repeat(full) + '☆'.repeat(5 - full);
 }
 
 const API = '/api/partner-server';
@@ -140,6 +160,20 @@ export default function PartnerServerPanel() {
       setJourneyError(`detail: ${e.message}`);
     }
   }, []);
+
+  const triggerEvaluate = useCallback(async (userId: string, workspace: string, journeyId: string) => {
+    setJourneyError(null);
+    try {
+      const r = await fetch(`${API}/journey/${encodeURIComponent(userId)}/${encodeURIComponent(workspace)}/${encodeURIComponent(journeyId)}/evaluate`, { method: 'POST' });
+      const j = await r.json();
+      if (!r.ok || !j.ok) throw new Error(j.error || `evaluate ${r.status}`);
+      // Reload modal data + list to pick up new evaluation
+      await openJourneyDetail(userId, workspace, journeyId);
+      await loadJourneyList(userId);
+    } catch (e: any) {
+      setJourneyError(`evaluate: ${e.message}`);
+    }
+  }, [loadJourneyList, openJourneyDetail]);
 
   // Auto-load journey lists for all users when entering the tab
   useEffect(() => {
@@ -567,6 +601,18 @@ export default function PartnerServerPanel() {
                               {last && last.loginSuccess === null && (
                                 <span style={{ fontSize: 10, color: 'var(--tn-text-muted, #565f89)' }} title="Vor failure-detection — Status unbekannt">? unknown</span>
                               )}
+                              {last && last.rating !== null && (
+                                <span
+                                  style={{
+                                    fontSize: 11,
+                                    color: last.worksE2e ? 'var(--tn-yellow, #e0af68)' : 'var(--tn-orange, #ff9e64)',
+                                    letterSpacing: 1,
+                                  }}
+                                  title={last.summary || ''}
+                                >
+                                  {renderStars(last.rating)}
+                                </span>
+                              )}
                               <span style={{ flex: 1 }} />
                               <button
                                 onClick={() => runJourney(c.userId, c.workspace)}
@@ -611,10 +657,15 @@ export default function PartnerServerPanel() {
                                             alignItems: 'center',
                                             gap: 6,
                                           }}
-                                          title={j.failureReason || ''}
+                                          title={j.summary || j.failureReason || ''}
                                         >
                                           <span style={{ color }}>{icon}</span>
                                           <span>{j.journeyId} ({j.screenshotCount} 📸)</span>
+                                          {j.rating !== null && (
+                                            <span style={{ marginLeft: 'auto', color: j.worksE2e ? 'var(--tn-yellow, #e0af68)' : 'var(--tn-orange, #ff9e64)' }}>
+                                              {renderStars(j.rating)}
+                                            </span>
+                                          )}
                                         </button>
                                       );
                                     })}
@@ -668,6 +719,57 @@ export default function PartnerServerPanel() {
             </div>
             <div style={{ flex: 1, overflow: 'auto', padding: 16, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
               <div style={{ color: 'var(--tn-text, #c0caf5)', fontSize: 12, lineHeight: 1.6 }}>
+                {journeyDetail.data.evaluation && (
+                  <div style={{
+                    marginBottom: 16,
+                    padding: 12,
+                    background: 'var(--tn-bg-elevated, #1f2335)',
+                    border: `1px solid ${journeyDetail.data.evaluation.works_e2e ? 'var(--tn-green, #9ece6a)' : 'var(--tn-orange, #ff9e64)'}`,
+                    borderRadius: 6,
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                      <span style={{ fontWeight: 600, fontSize: 13 }}>KI-Bewertung</span>
+                      <span style={{
+                        fontSize: 16,
+                        letterSpacing: 2,
+                        color: journeyDetail.data.evaluation.works_e2e ? 'var(--tn-yellow, #e0af68)' : 'var(--tn-orange, #ff9e64)',
+                      }}>
+                        {renderStars(journeyDetail.data.evaluation.rating)}
+                      </span>
+                      <span style={{ fontSize: 10, color: 'var(--tn-text-muted, #a9b1d6)' }}>
+                        ({journeyDetail.data.evaluation.rating}/5 · works_e2e: {String(journeyDetail.data.evaluation.works_e2e)})
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 12, marginBottom: 8 }}>{journeyDetail.data.evaluation.summary}</div>
+                    {journeyDetail.data.evaluation.blockers.length > 0 && (
+                      <div style={{ marginBottom: 6 }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--tn-red, #f7768e)' }}>Blocker:</div>
+                        <ul style={{ margin: '2px 0 0 20px', padding: 0, fontSize: 11, color: 'var(--tn-red, #f7768e)' }}>
+                          {journeyDetail.data.evaluation.blockers.map((b, i) => <li key={i}>{b}</li>)}
+                        </ul>
+                      </div>
+                    )}
+                    {journeyDetail.data.evaluation.findings.length > 0 && (
+                      <div>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--tn-text-muted, #a9b1d6)' }}>Findings:</div>
+                        <ul style={{ margin: '2px 0 0 20px', padding: 0, fontSize: 11, color: 'var(--tn-text-muted, #a9b1d6)' }}>
+                          {journeyDetail.data.evaluation.findings.map((f, i) => <li key={i}>{f}</li>)}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {!journeyDetail.data.evaluation && (
+                  <div style={{ marginBottom: 12, padding: '6px 10px', fontSize: 11, color: 'var(--tn-text-muted, #565f89)', background: 'rgba(86,95,137,0.1)', borderRadius: 4 }}>
+                    Keine KI-Bewertung verfügbar (alte Journey oder Bridge-Fehler).{' '}
+                    <button
+                      onClick={() => triggerEvaluate(journeyDetail.userId, journeyDetail.workspace, journeyDetail.journeyId)}
+                      style={{ ...miniBtnStyle, fontSize: 10, padding: '1px 6px' }}
+                    >
+                      Jetzt bewerten
+                    </button>
+                  </div>
+                )}
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
                   {journeyDetail.data.markdown}
                 </ReactMarkdown>

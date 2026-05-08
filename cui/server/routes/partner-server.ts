@@ -431,6 +431,8 @@ export default function createPartnerServerRoutes() {
         loginSuccess: result.loginSuccess,
         postLoginUrl: result.postLoginUrl,
         failureReason: result.failureReason,
+        evaluation: result.evaluation,
+        evaluationError: result.evaluationError,
       });
     } catch (err: any) {
       console.error('[partner-server] journey/run failed:', err.message);
@@ -457,6 +459,9 @@ export default function createPartnerServerRoutes() {
       screenshotCount: number;
       loginSuccess: boolean | null;
       failureReason: string | null;
+      rating: number | null;
+      worksE2e: boolean | null;
+      summary: string | null;
     }> = [];
     for (const ws of readdirSync(userDir)) {
       const wsDir = join(userDir, ws);
@@ -487,7 +492,21 @@ export default function createPartnerServerRoutes() {
           const fr = md.match(/❌ LOGIN FAILED:\s*(.+)/);
           if (fr) failureReason = fr[1].trim();
         }
-        items.push({ userId, workspace: ws, journeyId: jid, capturedAt, screenshotCount: pngs.length, loginSuccess, failureReason });
+        // AI evaluation (written by journey-evaluator.ts after the run).
+        // Older runs and runs where the Bridge call failed have no file → null.
+        let rating: number | null = null;
+        let worksE2e: boolean | null = null;
+        let summary: string | null = null;
+        const evalPath = join(jDir, 'evaluation.json');
+        if (existsSync(evalPath)) {
+          try {
+            const ev = JSON.parse(readFileSync(evalPath, 'utf8'));
+            if (typeof ev.rating === 'number') rating = ev.rating;
+            if (typeof ev.works_e2e === 'boolean') worksE2e = ev.works_e2e;
+            if (typeof ev.summary === 'string') summary = ev.summary;
+          } catch { /* corrupt eval — show as null */ }
+        }
+        items.push({ userId, workspace: ws, journeyId: jid, capturedAt, screenshotCount: pngs.length, loginSuccess, failureReason, rating, worksE2e, summary });
       }
     }
     items.sort((a, b) => b.capturedAt.localeCompare(a.capturedAt));
@@ -504,6 +523,11 @@ export default function createPartnerServerRoutes() {
     let markdown = '';
     const mdPath = join(jDir, 'journey.md');
     if (existsSync(mdPath)) markdown = readFileSync(mdPath, 'utf8');
+    let evaluation: any = null;
+    const evalPath = join(jDir, 'evaluation.json');
+    if (existsSync(evalPath)) {
+      try { evaluation = JSON.parse(readFileSync(evalPath, 'utf8')); } catch { evaluation = null; }
+    }
     const screenshots = readdirSync(jDir)
       .filter(f => f.endsWith('.png'))
       .sort()
@@ -511,7 +535,26 @@ export default function createPartnerServerRoutes() {
         name,
         url: `/api/partner-server/journey/file/${encodeURIComponent(userId)}/${encodeURIComponent(workspace)}/${encodeURIComponent(journeyId)}/${encodeURIComponent(name)}`,
       }));
-    res.json({ markdown, screenshots });
+    res.json({ markdown, screenshots, evaluation });
+  });
+
+  // Re-trigger evaluation for an existing journey (without rerunning Playwright).
+  // Useful when the evaluator is updated or an old journey has no evaluation.
+  router.post('/journey/:userId/:workspace/:journeyId/evaluate', async (req, res) => {
+    const { userId, workspace, journeyId } = req.params;
+    const jDir = join(STORAGE_BASE, userId, workspace, journeyId);
+    if (!existsSync(jDir)) {
+      res.status(404).json({ error: 'Journey not found' });
+      return;
+    }
+    try {
+      const { evaluateJourney } = await import('../lib/journey-evaluator.js');
+      const evaluation = await evaluateJourney(jDir);
+      res.json({ ok: true, evaluation });
+    } catch (err: any) {
+      console.error('[partner-server] evaluate failed:', err.message);
+      res.status(500).json({ ok: false, error: err.message });
+    }
   });
 
   router.get('/journey/file/:userId/:workspace/:journeyId/:filename', (req, res) => {

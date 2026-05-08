@@ -14,6 +14,7 @@
 import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { createRequire } from 'module';
+import { evaluateJourney, JourneyEvaluation } from './journey-evaluator.js';
 
 export interface JourneyOptions {
   userId: string;
@@ -33,6 +34,8 @@ export interface JourneyResult {
   loginSuccess: boolean;
   postLoginUrl: string;
   failureReason?: string;
+  evaluation?: JourneyEvaluation;
+  evaluationError?: string;
 }
 
 async function loadPlaywright(): Promise<any> {
@@ -149,8 +152,23 @@ export async function runJourney({
     const log = logLines.join('\n');
     writeFileSync(join(dirPath, 'journey.md'), log, 'utf8');
 
-    return { journeyId: id, dirPath, screenshots, log, loginSuccess, postLoginUrl, failureReason };
-  } finally {
+    // Browser must close before we kick off the AI evaluation — keeps the
+    // process tree clean even if the Bridge call hangs.
     await browser.close();
+
+    // Vision-based evaluation. Failures here must not break the journey itself.
+    let evaluation: JourneyEvaluation | undefined;
+    let evaluationError: string | undefined;
+    try {
+      evaluation = await evaluateJourney(dirPath);
+    } catch (e: any) {
+      evaluationError = e?.message || String(e);
+      console.error(`[journey-runner] evaluation failed for ${id}: ${evaluationError}`);
+    }
+
+    return { journeyId: id, dirPath, screenshots, log, loginSuccess, postLoginUrl, failureReason, evaluation, evaluationError };
+  } finally {
+    // Defensive close in case we threw before the explicit close above.
+    try { await browser.close(); } catch { /* already closed */ }
   }
 }

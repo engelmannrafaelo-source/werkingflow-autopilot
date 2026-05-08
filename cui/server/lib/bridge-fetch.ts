@@ -17,10 +17,17 @@ export interface BridgeAttribution {
   jobId?: string;
 }
 
+// Multimodal content block — used to attach images alongside text.
+// Format follows the OpenAI vision schema, which the Bridge passes through
+// to Anthropic-backed workers transparently.
+export type BridgeContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
 export interface BridgeChatOptions {
   model?: string;
   max_tokens?: number;
-  messages: Array<{ role: string; content: string }>;
+  messages: Array<{ role: string; content: string | BridgeContentBlock[] }>;
   privacy?: 'none' | 'standard' | 'strict';  // default: 'none'
   timeout?: number;  // ms, default: 300000 (5min)
   attribution?: BridgeAttribution;
