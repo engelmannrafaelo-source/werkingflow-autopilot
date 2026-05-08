@@ -5,6 +5,7 @@ import mermaid from 'mermaid';
 import { resilientFetch } from '../../utils/resilientFetch';
 import { getPathConfig, buildQuickDirs, loadPathConfig } from '../../utils/paths';
 import { validateApiResponse } from '../../lib/validateApiResponse';
+import { HtmlEditor } from './HtmlEditor';
 
 // Initialize mermaid once with dark theme
 mermaid.initialize({
@@ -202,6 +203,8 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
   const [editingContent, setEditingContent] = useState<string | null>(null);
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState('');
+  // Edit-Modus-View: 'source' = textarea, 'visual' = TinyMCE (nur bei .html)
+  const [editView, setEditView] = useState<'source' | 'visual'>('source');
 
   // CLAUDE mode state
   const [mode, setMode] = useState<'browse' | 'claude'>('browse');
@@ -238,6 +241,7 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
     // Reset Edit-Mode beim File-Wechsel
     setEditingContent(null);
     setEditError('');
+    setEditView('source');
     const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
     const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'ico'];
     const pdfExts = ['pdf'];
@@ -496,10 +500,12 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
     const mimeType = selectedFile.mimeType;
     const ext = selectedFile.ext ?? '';
 
-    // Edit-Mode: textarea-Editor statt normalen Renderer
+    // Edit-Mode: Source-Editor (textarea) oder Visual-Editor (TinyMCE bei HTML)
     if (editingContent !== null && SAVABLE_EXTENSIONS.has(ext.toLowerCase())) {
       const dirty = editingContent !== content;
       const sizeKb = (new Blob([editingContent]).size / 1024).toFixed(1);
+      const isHtml = ext === '.html' || ext === '.htm';
+      const showVisual = isHtml && editView === 'visual';
       return (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           {editError && (
@@ -515,25 +521,64 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
             fontSize: 10, color: 'var(--tn-text-muted)',
             background: 'var(--tn-bg)', borderBottom: '1px solid var(--tn-border)',
           }}>
+            {/* View-Toggle nur bei HTML-Files */}
+            {isHtml && (
+              <>
+                <button
+                  onClick={() => setEditView('source')}
+                  title="HTML-Source-Code direkt bearbeiten"
+                  style={{
+                    padding: '2px 8px', fontSize: 10, borderRadius: 3, cursor: 'pointer',
+                    background: editView === 'source' ? 'var(--tn-bg-highlight)' : 'transparent',
+                    border: editView === 'source' ? '1px solid var(--tn-border)' : '1px solid transparent',
+                    color: editView === 'source' ? 'var(--tn-blue)' : 'var(--tn-text-muted)',
+                    fontWeight: editView === 'source' ? 600 : 400,
+                  }}
+                >
+                  Source
+                </button>
+                <button
+                  onClick={() => setEditView('visual')}
+                  title="WYSIWYG-Editor (TinyMCE)"
+                  style={{
+                    padding: '2px 8px', fontSize: 10, borderRadius: 3, cursor: 'pointer',
+                    background: editView === 'visual' ? 'var(--tn-bg-highlight)' : 'transparent',
+                    border: editView === 'visual' ? '1px solid var(--tn-border)' : '1px solid transparent',
+                    color: editView === 'visual' ? 'var(--tn-blue)' : 'var(--tn-text-muted)',
+                    fontWeight: editView === 'visual' ? 600 : 400,
+                  }}
+                >
+                  Visual
+                </button>
+                <span style={{ width: 1, height: 12, background: 'var(--tn-border)' }} />
+              </>
+            )}
             <span style={{ color: dirty ? 'var(--tn-orange)' : 'var(--tn-text-muted)' }}>
               {dirty ? '● Ungespeicherte Änderungen' : 'Keine Änderungen'}
             </span>
             <span style={{ marginLeft: 'auto' }}>{sizeKb} KB · {editingContent.length} Zeichen</span>
           </div>
-          <textarea
-            value={editingContent}
-            onChange={(e) => setEditingContent(e.target.value)}
-            spellCheck={false}
-            style={{
-              flex: 1, width: '100%', resize: 'none',
-              padding: '12px 16px', boxSizing: 'border-box',
-              fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
-              fontSize, lineHeight: 1.5,
-              background: 'var(--tn-bg-dark)', color: 'var(--tn-text)',
-              border: 'none', outline: 'none',
-              tabSize: 2,
-            }}
-          />
+          {showVisual ? (
+            <HtmlEditor
+              content={editingContent}
+              onChange={(newContent) => setEditingContent(newContent)}
+            />
+          ) : (
+            <textarea
+              value={editingContent}
+              onChange={(e) => setEditingContent(e.target.value)}
+              spellCheck={false}
+              style={{
+                flex: 1, width: '100%', resize: 'none',
+                padding: '12px 16px', boxSizing: 'border-box',
+                fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
+                fontSize, lineHeight: 1.5,
+                background: 'var(--tn-bg-dark)', color: 'var(--tn-text)',
+                border: 'none', outline: 'none',
+                tabSize: 2,
+              }}
+            />
+          )}
         </div>
       );
     }
