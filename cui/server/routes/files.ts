@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { resolve, extname, join, basename } from 'path';
-import { readFileSync, readdirSync, statSync, existsSync, mkdirSync, renameSync, copyFileSync, realpathSync } from 'fs';
+import { readFileSync, readdirSync, statSync, existsSync, mkdirSync, renameSync, copyFileSync, realpathSync, writeFileSync } from 'fs';
 import { homedir, platform } from 'os';
 import { execFile } from 'child_process';
 import mime from 'mime-types';
@@ -379,6 +379,61 @@ export default function createFilesRouter(deps: FilesDeps): Router {
       else { copyFileSync(resolvedSource, resolvedTarget); }
       res.json({ ok: true, targetPath: resolvedTarget, operation: op });
     } catch (err: any) { res.status(500).json({ error: `File operation failed: ${err.message}` }); }
+  });
+
+  // --- File Save Endpoint (textbasierte Files überschreiben) ---
+  // Whitelist editierbarer Extensions — bewusst restriktiv
+  const SAVABLE_EXTENSIONS = new Set([
+    '.html', '.htm', '.md', '.txt', '.json', '.yaml', '.yml',
+    '.css', '.js', '.ts', '.tsx', '.jsx', '.py', '.sh',
+    '.csv', '.mmd', '.merm', '.toml', '.cfg', '.ini', '.env', '.log',
+    '.xml', '.svg',
+  ]);
+  const MAX_SAVE_SIZE = 20 * 1024 * 1024; // 20 MB
+
+  router.post('/api/file/save', async (req: Request, res: Response) => {
+    const { path: filePath, content } = req.body as { path?: string; content?: string };
+    if (!filePath || typeof filePath !== 'string') {
+      res.status(400).json({ error: 'path required' });
+      return;
+    }
+    if (typeof content !== 'string') {
+      res.status(400).json({ error: 'content (string) required' });
+      return;
+    }
+    if (Buffer.byteLength(content, 'utf8') > MAX_SAVE_SIZE) {
+      res.status(413).json({ error: `content too large (max ${MAX_SAVE_SIZE / 1024 / 1024} MB)` });
+      return;
+    }
+
+    const resolved = resolvePath(filePath);
+    if (!validatePath(resolved)) {
+      res.status(403).json({ error: 'path outside allowed directories' });
+      return;
+    }
+    const ext = extname(resolved).toLowerCase();
+    if (!SAVABLE_EXTENSIONS.has(ext)) {
+      res.status(415).json({ error: `extension '${ext}' not in savable whitelist` });
+      return;
+    }
+    if (!existsSync(resolved)) {
+      // Datei muss existieren — kein Neu-Anlegen über diesen Endpoint
+      res.status(404).json({ error: 'file does not exist (save only overwrites existing files)' });
+      return;
+    }
+
+    try {
+      writeFileSync(resolved, content, 'utf8');
+      const stats = statSync(resolved);
+      res.json({
+        ok: true,
+        path: resolved,
+        size: stats.size,
+        mtime: stats.mtime.toISOString(),
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: `Save failed: ${err.message}` });
+    }
   });
 
   // --- File Download Endpoint ---

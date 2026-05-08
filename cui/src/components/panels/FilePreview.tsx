@@ -22,6 +22,14 @@ mermaid.initialize({
   securityLevel: 'loose',
 });
 
+/** Whitelist editierbarer File-Extensions (muss zu Backend SAVABLE_EXTENSIONS passen) */
+const SAVABLE_EXTENSIONS = new Set([
+  '.html', '.htm', '.md', '.txt', '.json', '.yaml', '.yml',
+  '.css', '.js', '.ts', '.tsx', '.jsx', '.py', '.sh',
+  '.csv', '.mmd', '.merm', '.toml', '.cfg', '.ini', '.env', '.log',
+  '.xml', '.svg',
+]);
+
 /** Renders Mermaid source to SVG with source/rendered toggle */
 function MermaidRenderer({ source }: { source: string }) {
   const [view, setView] = useState<'rendered' | 'source'>('rendered');
@@ -190,6 +198,11 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
   const [mdHtml, setMdHtml] = useState<string>('');
   const [mdHtmlLoading, setMdHtmlLoading] = useState(false);
 
+  // Edit mode state — null = nicht im Edit-Mode, string = Editor offen mit diesem Inhalt
+  const [editingContent, setEditingContent] = useState<string | null>(null);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState('');
+
   // CLAUDE mode state
   const [mode, setMode] = useState<'browse' | 'claude'>('browse');
   const [claudeMap, setClaudeMap] = useState<ClaudeMapGroup[]>([]);
@@ -222,6 +235,9 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
     // Reset rendered HTML cache when loading a new file
     setMdHtml('');
     setMdView('preview');
+    // Reset Edit-Mode beim File-Wechsel
+    setEditingContent(null);
+    setEditError('');
     const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
     const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'ico'];
     const pdfExts = ['pdf'];
@@ -479,6 +495,48 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
     const content = selectedFile.content;
     const mimeType = selectedFile.mimeType;
     const ext = selectedFile.ext ?? '';
+
+    // Edit-Mode: textarea-Editor statt normalen Renderer
+    if (editingContent !== null && SAVABLE_EXTENSIONS.has(ext.toLowerCase())) {
+      const dirty = editingContent !== content;
+      const sizeKb = (new Blob([editingContent]).size / 1024).toFixed(1);
+      return (
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          {editError && (
+            <div style={{
+              padding: '6px 12px', fontSize: 11, color: 'var(--tn-red)',
+              background: 'rgba(229,62,62,0.1)', borderBottom: '1px solid var(--tn-red)',
+            }}>
+              Fehler: {editError}
+            </div>
+          )}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px',
+            fontSize: 10, color: 'var(--tn-text-muted)',
+            background: 'var(--tn-bg)', borderBottom: '1px solid var(--tn-border)',
+          }}>
+            <span style={{ color: dirty ? 'var(--tn-orange)' : 'var(--tn-text-muted)' }}>
+              {dirty ? '● Ungespeicherte Änderungen' : 'Keine Änderungen'}
+            </span>
+            <span style={{ marginLeft: 'auto' }}>{sizeKb} KB · {editingContent.length} Zeichen</span>
+          </div>
+          <textarea
+            value={editingContent}
+            onChange={(e) => setEditingContent(e.target.value)}
+            spellCheck={false}
+            style={{
+              flex: 1, width: '100%', resize: 'none',
+              padding: '12px 16px', boxSizing: 'border-box',
+              fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
+              fontSize, lineHeight: 1.5,
+              background: 'var(--tn-bg-dark)', color: 'var(--tn-text)',
+              border: 'none', outline: 'none',
+              tabSize: 2,
+            }}
+          />
+        </div>
+      );
+    }
 
     if (mimeType === 'image') {
       return (
@@ -833,6 +891,90 @@ export default function FilePreview({ watchPath, stageDir }: FilePreviewProps) {
                   title="Schrift groesser"
                 >A</button>
               </div>
+              {/* Edit-Button — nur bei textbasierten Files mit erlaubter Extension */}
+              {(() => {
+                const ext = (selectedFile.ext || '').toLowerCase();
+                const editable = SAVABLE_EXTENSIONS.has(ext);
+                if (!editable) return null;
+                if (editingContent !== null) {
+                  // Edit-Mode aktiv → Save + Discard buttons
+                  const onSave = async () => {
+                    setEditSaving(true);
+                    setEditError('');
+                    try {
+                      const res = await resilientFetch(`${API}/file/save`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ path: selectedFile.path, content: editingContent }),
+                      });
+                      if (!res.ok) {
+                        const err = await res.json().catch(() => ({ error: 'unknown' }));
+                        throw new Error(err.error || `HTTP ${res.status}`);
+                      }
+                      // Erfolg → Reload Datei + Edit-Mode beenden
+                      setEditingContent(null);
+                      await loadFile(selectedFile.path);
+                    } catch (err: any) {
+                      setEditError(err.message || 'Save failed');
+                    } finally {
+                      setEditSaving(false);
+                    }
+                  };
+                  const onDiscard = () => {
+                    if (editingContent !== selectedFile.content) {
+                      if (!confirm('Änderungen verwerfen?')) return;
+                    }
+                    setEditingContent(null);
+                    setEditError('');
+                  };
+                  return (
+                    <>
+                      <button
+                        onClick={onSave}
+                        disabled={editSaving}
+                        style={{
+                          padding: '2px 8px', fontSize: 10, borderRadius: 3,
+                          background: 'var(--tn-green)', color: 'white', border: 'none',
+                          cursor: editSaving ? 'wait' : 'pointer', opacity: editSaving ? 0.6 : 1,
+                          fontWeight: 600,
+                        }}
+                        title="Speichern"
+                      >
+                        {editSaving ? 'Speichert…' : 'Speichern'}
+                      </button>
+                      <button
+                        onClick={onDiscard}
+                        disabled={editSaving}
+                        style={{
+                          padding: '2px 8px', fontSize: 10, borderRadius: 3,
+                          background: 'transparent', color: 'var(--tn-text-muted)',
+                          border: '1px solid var(--tn-border)', cursor: 'pointer',
+                        }}
+                        title="Änderungen verwerfen"
+                      >
+                        Abbrechen
+                      </button>
+                    </>
+                  );
+                }
+                // Kein Edit-Mode → Bearbeiten-Button
+                return (
+                  <button
+                    onClick={() => {
+                      setEditingContent(selectedFile.content);
+                      setEditError('');
+                    }}
+                    style={{
+                      padding: '2px 8px', fontSize: 10, borderRadius: 3,
+                      background: 'var(--tn-blue)', color: 'white', border: 'none',
+                      cursor: 'pointer',
+                    }}
+                    title="Datei im Source-Editor bearbeiten"
+                  >
+                    Bearbeiten
+                  </button>
+                );
+              })()}
               <a
                 href={`${API}/file/download?path=${encodeURIComponent(selectedFile.path)}`}
                 download
