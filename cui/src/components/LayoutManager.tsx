@@ -2,6 +2,7 @@ import { useCallback, useRef, useState, useEffect, useMemo, lazy, Suspense } fro
 import { Layout, Model, TabNode, TabSetNode, BorderNode, IJsonModel, ITabSetRenderValues, ITabRenderValues, Actions, DockLocation, Rect, Action } from 'flexlayout-react';
 import type { CuiStates } from '../types';
 import { copyToClipboard } from '../utils/clipboard';
+import { logCuiTelemetry } from '../lib/cuiTelemetry';
 import { devPortUrl } from '../lib/devPortUrl';
 import { useAuth } from '../contexts/AuthContext';
 import { ACCOUNTS } from '../types';
@@ -713,6 +714,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
               if (saveTimer.current) clearTimeout(saveTimer.current);
               // Try to merge in-place first (no re-mount). Only fall back to setModel if tab-sets differ.
               const merged = tryMergeServerLayout(modelRef.current, data.layout as { layout?: unknown });
+              logCuiTelemetry({ ts: Date.now(), kind: '409-conflict-applied', projectId, merged });
               if (merged) {
                 try { localStorage.setItem(`cui-layout-${projectId}`, JSON.stringify(data.layout)); } catch { /* ignore */ }
               } else {
@@ -1174,6 +1176,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
               // Try in-place merge first — preserves child panels' WS connections (no re-mount).
               // Falls back to setModel only when tab-sets truly differ (panes added/removed/restructured).
               const merged = tryMergeServerLayout(modelRef.current, msg.layout as { layout?: unknown });
+              logCuiTelemetry({ ts: Date.now(), kind: 'ws-apply-layout', projectId, merged, serverV });
               if (!merged) {
                 const newModel = Model.fromJson(msg.layout);
                 setModel(newModel);
@@ -1640,6 +1643,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           }
           if (removed > 0) {
             saveLayoutRef.current(m);
+            logCuiTelemetry({ ts: Date.now(), kind: 'lm-cleanup', projectId, removed, autoLayoutActive: !!window.__cuiAutoLayoutActive });
             console.log(`[LM] Cleanup: removed ${removed} stale tabs`);
           }
         }
@@ -1699,6 +1703,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
                 m.doAction(Actions.updateNodeAttributes(reuseNodeId, {
                   config: { ...existingCfg, initialSessionId: conv.sessionId, accountId: conv.accountId }
                 }));
+                logCuiTelemetry({ ts: Date.now(), kind: 'lm-reuse-empty-panel', projectId, panelId: reuseNodeId, sessionId: conv.sessionId?.slice(0, 8) });
                 newlyMounted.push({ panelId: reuseNodeId, sessionId: conv.sessionId });
                 mounted++;
                 continue;
@@ -1740,6 +1745,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
             : DockLocation.CENTER;
 
           try {
+            logCuiTelemetry({ ts: Date.now(), kind: 'lm-addnode-split', projectId, sessionId: conv.sessionId?.slice(0, 8), targetTabsetId, tabsetCount });
             m.doAction(Actions.addNode(
               { type: 'tab', name: 'Chat', component: 'cui',
                 config: { initialSessionId: conv.sessionId, accountId: conv.accountId } },
@@ -1767,6 +1773,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
 
         if (mounted > 0) {
           saveLayoutRef.current(m);
+          logCuiTelemetry({ ts: Date.now(), kind: 'lm-sync-done', projectId, mounted, removed, autoLayoutActive: !!window.__cuiAutoLayoutActive });
           console.log(`[LM] Auto-sync: mounted ${mounted} conversations`);
         }
       } catch (err) { console.warn('[LM] auto-sync error:', err); }
@@ -1812,6 +1819,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail?.projectId && detail.projectId !== projectId) return;
+      logCuiTelemetry({ ts: Date.now(), kind: 'lm-layout-button-clicked', projectId });
       window.__cuiAutoLayoutActive = true;
       syncNowRef.current?.();
       setTimeout(() => { window.__cuiAutoLayoutActive = false; }, 3000);

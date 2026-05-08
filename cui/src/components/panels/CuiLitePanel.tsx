@@ -863,6 +863,11 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
           if (raw.includes('session-claimed') && currentSid) {
             const claimMsg = JSON.parse(raw);
             if (claimMsg.type === 'session-claimed' && claimMsg.evictPanelId === panelId && claimMsg.sessionId === currentSid) {
+              log('session-claimed-evict', {
+                claimedBy: claimMsg.claimedByPanelId,
+                evictPanel: panelId,
+                evictSession: currentSid.slice(0, 8),
+              });
               console.log(`[CuiLite] Session ${currentSid.slice(0, 8)} claimed by ${claimMsg.claimedByPanelId} — closing chat`);
               setSessionId(null);
               setShowQueue(true);
