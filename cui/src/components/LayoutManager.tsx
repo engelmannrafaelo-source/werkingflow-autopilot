@@ -1586,7 +1586,8 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         // mountedSessions tracks ONLY cui/cui-lite tabs — these are the ones the cleanup
         // loop is allowed to delete. mission-chat panels are tracked separately so we
         // don't double-mount sessions there, but they are NEVER candidates for deletion.
-        const mountedSessions = new Map<string, string>(); // sessionId -> cui/cui-lite nodeId
+        const mountedSessions = new Map<string, string>(); // sessionId -> cui/cui-lite nodeId (canonical = first)
+        const allMountsBySid = new Map<string, string[]>(); // sessionId -> ALL nodeIds (for duplicate detection)
         const sessionsInMissionChat = new Set<string>();    // sessions currently shown in a mission-chat panel
         const emptyPanels: string[] = [];
         m.visitNodes((node) => {
@@ -1604,7 +1605,10 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
             const cfgSid = tab.getConfig()?.initialSessionId || '';
             const sid = route.startsWith('/c/') ? route.slice(3) : cfgSid || '';
             if (sid) {
-              mountedSessions.set(sid, tab.getId());
+              if (!mountedSessions.has(sid)) mountedSessions.set(sid, tab.getId());
+              const arr = allMountsBySid.get(sid) || [];
+              arr.push(tab.getId());
+              allMountsBySid.set(sid, arr);
               // Ensure config has initialSessionId (triggers useEffect in CuiLitePanel to un-stuck Queue)
               if (!cfgSid) {
                 try {
@@ -1625,6 +1629,32 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         // tabs that the user is actively working in.
         const active = conversations.filter((c: any) => !c.manualFinished);
         const activeSessionIds = new Set(active.map((c: any) => c.sessionId));
+
+        // Duplicate-cleanup: same sessionId mounted on multiple cui tabs.
+        // Happens when server-persisted layout drifts (apply-layout merge edge cases,
+        // user-driven tab splits, race conditions in addNode). Always remove duplicates,
+        // not gated on __cuiAutoLayoutActive — duplicates make the chat appear twice
+        // and confuse session-claim eviction.
+        let duplicatesRemoved = 0;
+        for (const [sid, ids] of allMountsBySid) {
+          if (ids.length <= 1) continue;
+          // Keep the FIRST (canonical = the one mountedSessions points to).
+          // Delete the rest.
+          for (let i = 1; i < ids.length; i++) {
+            try {
+              m.doAction(Actions.deleteTab(ids[i]));
+              duplicatesRemoved++;
+            } catch (err) { console.warn('[LM] duplicate deleteTab failed:', err); }
+          }
+          logCuiTelemetry({
+            ts: Date.now(), kind: 'lm-duplicate-detected', projectId,
+            sessionId: sid.slice(0, 8), totalMounts: ids.length, kept: ids[0], removed: ids.slice(1)
+          });
+        }
+        if (duplicatesRemoved > 0) {
+          saveLayoutRef.current(m);
+          console.log(`[LM] Removed ${duplicatesRemoved} duplicate cui tabs`);
+        }
 
         // Cleanup: remove tabs whose session is no longer active (finished or too old)
         // ONLY when user explicitly clicked Layout button (prevents sessions from disappearing)
@@ -1676,8 +1706,13 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         // Report missing sessions count to parent (for Layout button indicator)
         onMissingSessionsRef.current?.(missing.length);
 
-        if (missing.length === 0 && removed === 0) return;
-        if (missing.length === 0) return;
+        if (missing.length === 0 && removed === 0 && duplicatesRemoved === 0) return;
+        if (missing.length === 0) {
+          if (duplicatesRemoved > 0) {
+            logCuiTelemetry({ ts: Date.now(), kind: 'lm-sync-done', projectId, mounted: 0, removed, duplicatesRemoved, autoLayoutActive: !!window.__cuiAutoLayoutActive });
+          }
+          return;
+        }
 
         let mounted = 0;
         const newlyMounted: Array<{ panelId: string; sessionId: string }> = [];
