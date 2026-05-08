@@ -503,6 +503,23 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     onStateChange?.(attention);
   }, [attention, onStateChange]);
 
+  // Debounce isTabVisible to filter out transient flickers during FlexLayout
+  // mount/restructure. node.isVisible() (LayoutManager.tsx:460) is evaluated per
+  // render — a brief false→true wobble would otherwise tear down + rebuild the
+  // entire effect chain (WebSocket, polling, panel-removed), producing the
+  // "closed before connection established" reconnect storm in the console.
+  // Threshold: 250ms — long enough to absorb FlexLayout re-render flicker,
+  // short enough that real tab-switches still feel instant.
+  const [isTabVisibleStable, setIsTabVisibleStable] = useState(isTabVisible);
+  useEffect(() => {
+    if (isTabVisible) {
+      setIsTabVisibleStable(true); // becoming visible: immediate (don't delay UI)
+      return;
+    }
+    const t = setTimeout(() => setIsTabVisibleStable(false), 250);
+    return () => clearTimeout(t);
+  }, [isTabVisible]);
+
   const [currentTool, setCurrentTool] = useState<{ toolName: string; toolDetail?: string; startedAt: number } | null>(null);
   const [permissions, setPermissions] = useState<Permission[]>([]);
   const [rateLimitMessage, setRateLimitMessage] = useState<string | null>(null);
@@ -990,13 +1007,28 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     return () => {
       disposed = true;
       window.removeEventListener('cui-reconnected', onServerReconnected);
-      // CRITICAL: close the WebSocket to prevent connection leak
+      // CRITICAL: close the WebSocket to prevent connection leak.
+      // BUT: calling .close() while the socket is still CONNECTING produces a
+      // "WebSocket is closed before the connection is established" console warning
+      // AND aborts the handshake; if the cleanup is caused by a transient render
+      // flicker (e.g. node.isVisible() momentarily false during FlexLayout
+      // re-mount), the next effect-run kicks off another connect → storm.
+      // Solution: if still CONNECTING, defer the close to onopen so the handshake
+      // completes cleanly first.
       const ws = panelWsRef.current;
-      if (ws) { ws.onclose = null; ws.close(); }
+      if (ws) {
+        ws.onclose = null;
+        ws.onerror = null;
+        if (ws.readyState === WebSocket.CONNECTING) {
+          ws.onopen = () => { try { ws.close(); } catch { /* ignore */ } };
+        } else {
+          try { ws.close(); } catch { /* ignore */ }
+        }
+      }
       panelWsRef.current = null;
       if (reconnectTimer) clearTimeout(reconnectTimer);
     };
-  }, [selectedId, isTabVisible]); // sessionId via ref (no reconnection on navigate), pollNow/loadTemplates are stable callbacks
+  }, [selectedId, isTabVisibleStable]); // sessionId via ref (no reconnection on navigate), pollNow/loadTemplates are stable callbacks
 
   // Auto-scroll only when user is near bottom (not scrolled up reading)
   useEffect(() => {
