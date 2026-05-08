@@ -19,24 +19,11 @@ export default function BrowserPanel({ initialUrl = '', panelId, onUrlChange }: 
   const [inputValue, setInputValue] = useState(restoredUrl);
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
-  const [isDomVisible, setIsDomVisible] = useState(true);
   // Incrementing key destroys + recreates iframe/webview = guaranteed fresh load
   const [reloadKey, setReloadKey] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const webviewRef = useRef<HTMLWebViewElement | null>(null);
-
-  // Unload iframe/webview when hidden behind other tabs (same pattern as CuiPanel)
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => setIsDomVisible(entry.isIntersecting && entry.intersectionRatio > 0),
-      { threshold: 0.01 }
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
 
   // Listen for global nuclear-refresh event (from toolbar button)
   useEffect(() => {
@@ -211,7 +198,7 @@ export default function BrowserPanel({ initialUrl = '', panelId, onUrlChange }: 
           </button>
         )}
       </div>
-      {url && isDomVisible ? (
+      {url ? (
         isElectron ? (
           <webview
             ref={webviewRef as any}
@@ -227,10 +214,6 @@ export default function BrowserPanel({ initialUrl = '', panelId, onUrlChange }: 
             style={{ flex: 1, border: 'none', width: '100%', minHeight: 0, background: '#fff' }}
           />
         )
-      ) : url && !isDomVisible ? (
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--tn-text-muted)', fontSize: 11, opacity: 0.5 }}>
-          Pausiert (Tab nicht sichtbar)
-        </div>
       ) : (
         <div
           style={{
