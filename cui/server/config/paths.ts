@@ -42,8 +42,11 @@ export const PATHS = {
   werkingflowProductionDir: process.env.CUI_WERKINGFLOW_PRODUCTION_DIR || '/root/projekte/werkingflow-production',
 
   // --- QA / Testing ---
-  unifiedTesterRoot: process.env.CUI_UNIFIED_TESTER_ROOT || '/root/projekte/werkingflow/tests/unified-tester',
-  testsRoot: process.env.CUI_TESTS_ROOT || '/root/projekte/werkingflow/tests',
+  // Canonical path is the monorepo (werkingflow-production/tests/) since the
+  // 2026-05-08 migration. The legacy werkingflow/tests/ path is being phased
+  // out — symlinked back to monorepo so old hardcoded references resolve.
+  unifiedTesterRoot: process.env.CUI_UNIFIED_TESTER_ROOT || '/root/projekte/werkingflow-production/tests/unified-tester',
+  testsRoot: process.env.CUI_TESTS_ROOT || '/root/projekte/werkingflow-production/tests',
   scenarioRegistry: process.env.CUI_SCENARIO_REGISTRY || '/root/projekte/orchestrator/data/scenario_registry.json',
   archTestResultsDir: process.env.CUI_ARCH_TEST_RESULTS_DIR || '/root/projekte/orchestrator/data/arch-test-results',
   pyramidCacheDir: process.env.CUI_PYRAMID_CACHE_DIR || '/root/projekte/orchestrator/data/pyramid_cache',

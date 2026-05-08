@@ -229,7 +229,7 @@ curl -X POST http://localhost:4005/api/repo-dashboard/refresh
 ```
 
 ### Test Location
-Create new scenarios in: `/root/projekte/werkingflow/tests/unified-tester/scenarios/cui/repo-dashboard/`
+Create new scenarios in: `/root/projekte/werkingflow-production/tests/unified-tester/scenarios/cui/repo-dashboard/`
 
 ## Color Heatmap Reference
 
