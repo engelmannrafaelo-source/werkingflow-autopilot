@@ -477,11 +477,15 @@ ${journeyMd.slice(0, 800)}
           model: 'sonnet',
           message,
         });
-        // Self-call needs auth: forge a short-lived admin JWT (process boundary,
-        // partner-server.ts already imports signJwt for the matrix endpoint).
+        // Self-call needs auth: forge a short-lived JWT. sub MUST be the
+        // userId we're spawning for — resolveUserWorkDir uses it to map
+        // /opt/cui-workspace-data/workspaces/<ws> → /home/<sub>/projekte/...
+        // A synthetic sub like "partner-server-journey" would have no
+        // /home dir → resolver returns workDir unchanged → registered-workspace
+        // validation rejects it.
         const internalJwt = signJwt({
-          sub: 'partner-server-journey',
-          name: 'Journey Spawner',
+          sub: userId,
+          name: `Journey Spawner (${userId})`,
           role: 'admin',
           claudeAccountId: JOURNEY_SUB_ACCOUNT,
         });
