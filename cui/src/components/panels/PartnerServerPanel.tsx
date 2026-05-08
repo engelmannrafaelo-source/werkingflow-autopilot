@@ -63,6 +63,17 @@ interface JourneyDetail {
   markdown: string;
   screenshots: Array<{ name: string; url: string }>;
   evaluation: JourneyEvaluation | null;
+  meta?: {
+    subSessionId?: string | null;
+    subSessionError?: string | null;
+    subSessionAccount?: string;
+  } | null;
+}
+
+interface JourneyChatMessage {
+  role: 'user' | 'assistant' | 'system';
+  text?: string;
+  timestamp?: string | null;
 }
 
 function renderStars(rating: number | null): string {
@@ -112,6 +123,11 @@ export default function PartnerServerPanel() {
   const [journeyByUser, setJourneyByUser] = useState<Record<string, JourneyListItem[]>>({});
   const [journeyDetail, setJourneyDetail] = useState<{ userId: string; workspace: string; journeyId: string; data: JourneyDetail } | null>(null);
   const [journeyError, setJourneyError] = useState<string | null>(null);
+  // Detail-modal sub-tab + chat state (chat tab loads jsonl from sub-session)
+  const [detailTab, setDetailTab] = useState<'screenshots' | 'chat'>('screenshots');
+  const [chatMessages, setChatMessages] = useState<JourneyChatMessage[] | null>(null);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [chatLoading, setChatLoading] = useState(false);
 
   const loadJourneyList = useCallback(async (userId: string) => {
     try {
@@ -151,6 +167,9 @@ export default function PartnerServerPanel() {
 
   const openJourneyDetail = useCallback(async (userId: string, workspace: string, journeyId: string) => {
     setJourneyError(null);
+    setDetailTab('screenshots');
+    setChatMessages(null);
+    setChatError(null);
     try {
       const r = await fetch(`${API}/journey/${encodeURIComponent(userId)}/${encodeURIComponent(workspace)}/${encodeURIComponent(journeyId)}`);
       if (!r.ok) throw new Error(`detail ${r.status}`);
@@ -160,6 +179,50 @@ export default function PartnerServerPanel() {
       setJourneyError(`detail: ${e.message}`);
     }
   }, []);
+
+  const loadJourneyChat = useCallback(async (userId: string, workspace: string, journeyId: string) => {
+    setChatLoading(true);
+    setChatError(null);
+    setChatMessages(null);
+    try {
+      const r = await fetch(`${API}/journey/${encodeURIComponent(userId)}/${encodeURIComponent(workspace)}/${encodeURIComponent(journeyId)}/chat`);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || `chat ${r.status}`);
+      // Normalise messages to {role, text, timestamp} shape regardless of jsonl flavour.
+      const raw = Array.isArray(j.messages) ? j.messages : [];
+      const norm: JourneyChatMessage[] = raw.map((m: any) => {
+        const role: 'user' | 'assistant' | 'system' =
+          m.role === 'assistant' ? 'assistant' : m.role === 'user' ? 'user' : 'system';
+        let text = '';
+        if (typeof m.text === 'string') text = m.text;
+        else if (typeof m.content === 'string') text = m.content;
+        else if (Array.isArray(m.content)) {
+          text = m.content
+            .map((b: any) =>
+              typeof b === 'string' ? b
+              : b?.type === 'text' ? (b.text || '')
+              : b?.type === 'tool_use' ? `🛠 ${b.name}(${JSON.stringify(b.input || {}).slice(0, 200)})`
+              : b?.type === 'tool_result' ? `↩ ${typeof b.content === 'string' ? b.content.slice(0, 400) : '[tool result]'}`
+              : ''
+            ).filter(Boolean).join('\n');
+        }
+        return { role, text, timestamp: m.timestamp || null };
+      }).filter((m: JourneyChatMessage) => m.text && m.text.trim().length > 0);
+      setChatMessages(norm);
+    } catch (e: any) {
+      setChatError(e.message);
+    } finally {
+      setChatLoading(false);
+    }
+  }, []);
+
+  // Auto-load chat when switching to chat tab
+  useEffect(() => {
+    if (detailTab === 'chat' && journeyDetail && chatMessages === null && !chatLoading) {
+      loadJourneyChat(journeyDetail.userId, journeyDetail.workspace, journeyDetail.journeyId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detailTab, journeyDetail]);
 
   const triggerEvaluate = useCallback(async (userId: string, workspace: string, journeyId: string) => {
     setJourneyError(null);
@@ -715,6 +778,27 @@ export default function PartnerServerPanel() {
                 Journey: {journeyDetail.userId} · {journeyDetail.workspace} · {journeyDetail.journeyId}
               </span>
               <span style={{ flex: 1 }} />
+              <button
+                onClick={() => setDetailTab('screenshots')}
+                style={{
+                  ...miniBtnStyle,
+                  background: detailTab === 'screenshots' ? 'var(--tn-bg-elevated, #1f2335)' : 'transparent',
+                  fontWeight: detailTab === 'screenshots' ? 600 : 400,
+                }}
+              >
+                Screenshots
+              </button>
+              <button
+                onClick={() => setDetailTab('chat')}
+                style={{
+                  ...miniBtnStyle,
+                  background: detailTab === 'chat' ? 'var(--tn-bg-elevated, #1f2335)' : 'transparent',
+                  fontWeight: detailTab === 'chat' ? 600 : 400,
+                }}
+                title={journeyDetail.data.meta?.subSessionId ? `Sub-Session ${journeyDetail.data.meta.subSessionId.slice(0, 8)}` : 'Keine Sub-Session für diese Journey'}
+              >
+                Chat-Verlauf {journeyDetail.data.meta?.subSessionId ? '✓' : ''}
+              </button>
               <button onClick={() => setJourneyDetail(null)} style={miniBtnStyle}>Close</button>
             </div>
             <div style={{ flex: 1, overflow: 'auto', padding: 16, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
@@ -774,16 +858,57 @@ export default function PartnerServerPanel() {
                   {journeyDetail.data.markdown}
                 </ReactMarkdown>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                {journeyDetail.data.screenshots.map(s => (
-                  <div key={s.name} style={{ border: '1px solid var(--tn-border, #292e42)', borderRadius: 4, overflow: 'hidden' }}>
-                    <div style={{ padding: '4px 8px', fontSize: 10, color: 'var(--tn-text-muted, #a9b1d6)', background: 'var(--tn-bg-elevated, #1f2335)' }}>
-                      {s.name}
+              {detailTab === 'screenshots' ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {journeyDetail.data.screenshots.map(s => (
+                    <div key={s.name} style={{ border: '1px solid var(--tn-border, #292e42)', borderRadius: 4, overflow: 'hidden' }}>
+                      <div style={{ padding: '4px 8px', fontSize: 10, color: 'var(--tn-text-muted, #a9b1d6)', background: 'var(--tn-bg-elevated, #1f2335)' }}>
+                        {s.name}
+                      </div>
+                      <img src={s.url} alt={s.name} style={{ width: '100%', display: 'block' }} />
                     </div>
-                    <img src={s.url} alt={s.name} style={{ width: '100%', display: 'block' }} />
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 }}>
+                  {chatLoading && (
+                    <div style={{ padding: 16, color: 'var(--tn-text-muted, #565f89)' }}>Lade Chat-Verlauf…</div>
+                  )}
+                  {chatError && (
+                    <div style={{ padding: 12, background: 'rgba(247,118,142,0.1)', border: '1px solid var(--tn-red, #f7768e)', borderRadius: 4, color: 'var(--tn-red, #f7768e)' }}>
+                      {chatError}
+                    </div>
+                  )}
+                  {!chatLoading && !chatError && chatMessages !== null && chatMessages.length === 0 && (
+                    <div style={{ padding: 16, color: 'var(--tn-text-muted, #565f89)' }}>
+                      Keine Nachrichten in der Sub-Session — vielleicht noch nicht beantwortet?
+                    </div>
+                  )}
+                  {chatMessages !== null && chatMessages.map((m, i) => (
+                    <div
+                      key={i}
+                      style={{
+                        padding: '8px 12px',
+                        background: m.role === 'user'
+                          ? 'rgba(86,95,137,0.15)'
+                          : m.role === 'assistant'
+                          ? 'rgba(125,207,255,0.1)'
+                          : 'rgba(86,95,137,0.05)',
+                        borderLeft: `3px solid ${m.role === 'user' ? 'var(--tn-text-muted, #a9b1d6)' : m.role === 'assistant' ? 'var(--tn-blue, #7dcfff)' : 'var(--tn-text-muted, #565f89)'}`,
+                        borderRadius: 4,
+                      }}
+                    >
+                      <div style={{ fontSize: 10, color: 'var(--tn-text-muted, #a9b1d6)', marginBottom: 4, fontWeight: 600 }}>
+                        {m.role.toUpperCase()}
+                        {m.timestamp && <span style={{ marginLeft: 8, fontWeight: 400 }}>{new Date(m.timestamp).toLocaleTimeString('de-DE')}</span>}
+                      </div>
+                      <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: 'var(--tn-text, #c0caf5)' }}>
+                        {m.text}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>

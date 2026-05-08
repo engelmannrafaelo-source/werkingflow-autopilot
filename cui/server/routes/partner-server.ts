@@ -17,14 +17,18 @@
  */
 
 import { Router } from 'express';
-import { existsSync, readFileSync, mkdirSync, readdirSync, statSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'fs';
 import { join, basename } from 'path';
 import { signJwt } from '../auth/jwt.js';
 import { getUsers, findUser } from '../auth/users.js';
 import { PATHS } from '../config/paths.js';
 import { isForwardMode, adminOrInternal, forwardToPartner } from '../lib/partner-forward.js';
 import { runJourney } from '../lib/journey-runner.js';
+import { findJsonlPathAllAccounts, readConversationMessages } from './shared/jsonl.js';
 import type { CuiUser } from '../auth/types.js';
+
+const IS_PARTNER = process.env.PARTNER_MODE === '1' || process.env.PARTNER_CUI === '1';
+const JOURNEY_SUB_ACCOUNT = IS_PARTNER ? 'sahori' : 'engelmann';
 
 const APP_PORTS: Record<string, number> = {
   'werking-energy': 3007,
@@ -423,6 +427,89 @@ export default function createPartnerServerRoutes() {
       // success ONLY when the user actually got past the login screen.
       // Pipeline-completion alone (4 PNGs written) is NOT success.
       const success = result.loginSuccess;
+
+      // Spawn a Claude sub-session to walk through what the user would see.
+      // It receives screenshots + journey log, narrates the experience, judges
+      // works_e2e. Output: jsonl that the panel renders as a chat tab.
+      // Best-effort — failures here do NOT fail the journey.
+      let subSessionId: string | null = null;
+      let subSessionError: string | null = null;
+      try {
+        const wsForMission = IS_PARTNER
+          ? `${PATHS.dataDir}/workspaces/${workspace}`
+          : `/root/orchestrator/workspaces/${workspace}`;
+        const screenshotList = readdirSync(result.dirPath).filter(f => f.endsWith('.png')).sort();
+        const journeyMd = existsSync(join(result.dirPath, 'journey.md'))
+          ? readFileSync(join(result.dirPath, 'journey.md'), 'utf8')
+          : '';
+        const message = `Du simulierst einen neuen User der sich gerade frisch in die App eingeloggt hat.
+
+**Deine Identitaet:** ${userId} (Rolle laut Workspace: ${workspace})
+**App:** ${app} (Port ${port})
+**Login-Email:** ${email}
+**Journey-Verzeichnis:** ${result.dirPath}
+
+Im Verzeichnis liegen ${screenshotList.length} Screenshots und ein Log:
+${screenshotList.map(s => `- ${s}`).join('\n')}
+- journey.md
+
+**Deine Aufgabe:**
+1. Lies das Journey-Log via Read tool: ${join(result.dirPath, 'journey.md')}
+2. Schau die Screenshots an (Read auf die PNG-Dateien — die kommen als Vision rein).
+3. Beantworte aus User-Sicht (frischer Login, will erkunden was die App kann):
+   - Was sehe ich nach dem Login?
+   - Was kann ich hier offensichtlich machen?
+   - Was waere ein erster sinnvoller Klick?
+   - Funktioniert alles oder ist was kaputt/leer/unklar?
+4. Schliesse mit einem klaren Urteil: works_e2e=true|false und 1-2 Saetze Begruendung.
+
+Halte dich kurz — 4-6 Absaetze reichen. KEIN Edit/Write. Nur Read + Text-Antwort.
+
+Journey-Log Auszug (zum Kontext):
+\`\`\`
+${journeyMd.slice(0, 800)}
+\`\`\`
+`;
+        const startBody = JSON.stringify({
+          accountId: JOURNEY_SUB_ACCOUNT,
+          workDir: wsForMission,
+          subject: `Journey: ${userId} / ${workspace}`,
+          model: 'sonnet',
+          message,
+        });
+        const startRes = await fetch('http://127.0.0.1:4005/api/mission/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: startBody,
+        });
+        const startJson: any = await startRes.json().catch(() => ({}));
+        if (startRes.ok && startJson?.sessionId) {
+          subSessionId = startJson.sessionId;
+        } else {
+          subSessionError = startJson?.error || `HTTP ${startRes.status}`;
+        }
+      } catch (e: any) {
+        subSessionError = e?.message || String(e);
+      }
+
+      // Persist meta.json (sessionId + bookkeeping). Always written, even on
+      // sub-spawn failure, so the panel can show the error.
+      try {
+        const metaPath = join(result.dirPath, 'meta.json');
+        writeFileSync(metaPath, JSON.stringify({
+          journeyId: result.journeyId,
+          userId,
+          workspace,
+          app,
+          createdAt: new Date().toISOString(),
+          subSessionId,
+          subSessionError,
+          subSessionAccount: JOURNEY_SUB_ACCOUNT,
+        }, null, 2), 'utf8');
+      } catch (e: any) {
+        console.error('[partner-server] meta.json write failed:', e.message);
+      }
+
       const status = success ? 200 : 502;
       res.status(status).json({
         success,
@@ -433,6 +520,8 @@ export default function createPartnerServerRoutes() {
         failureReason: result.failureReason,
         evaluation: result.evaluation,
         evaluationError: result.evaluationError,
+        subSessionId,
+        subSessionError,
       });
     } catch (err: any) {
       console.error('[partner-server] journey/run failed:', err.message);
@@ -528,6 +617,11 @@ export default function createPartnerServerRoutes() {
     if (existsSync(evalPath)) {
       try { evaluation = JSON.parse(readFileSync(evalPath, 'utf8')); } catch { evaluation = null; }
     }
+    let meta: any = null;
+    const metaPath = join(jDir, 'meta.json');
+    if (existsSync(metaPath)) {
+      try { meta = JSON.parse(readFileSync(metaPath, 'utf8')); } catch { meta = null; }
+    }
     const screenshots = readdirSync(jDir)
       .filter(f => f.endsWith('.png'))
       .sort()
@@ -535,7 +629,39 @@ export default function createPartnerServerRoutes() {
         name,
         url: `/api/partner-server/journey/file/${encodeURIComponent(userId)}/${encodeURIComponent(workspace)}/${encodeURIComponent(journeyId)}/${encodeURIComponent(name)}`,
       }));
-    res.json({ markdown, screenshots, evaluation });
+    res.json({ markdown, screenshots, evaluation, meta });
+  });
+
+  // Returns the chat history of the sub-session that walked through this journey.
+  // Reads jsonl via findJsonlPathAllAccounts (cross-account search) and parses it.
+  router.get('/journey/:userId/:workspace/:journeyId/chat', (req, res) => {
+    const { userId, workspace, journeyId } = req.params;
+    const jDir = join(STORAGE_BASE, userId, workspace, journeyId);
+    const metaPath = join(jDir, 'meta.json');
+    if (!existsSync(metaPath)) {
+      res.status(404).json({ error: 'No meta.json — journey predates sub-session feature' });
+      return;
+    }
+    let meta: any;
+    try { meta = JSON.parse(readFileSync(metaPath, 'utf8')); } catch (e: any) {
+      res.status(500).json({ error: `meta.json parse failed: ${e.message}` });
+      return;
+    }
+    if (!meta.subSessionId) {
+      res.status(404).json({ error: meta.subSessionError || 'No sub-session for this journey' });
+      return;
+    }
+    const found = findJsonlPathAllAccounts(meta.subSessionId);
+    if (!found) {
+      res.status(404).json({ error: `jsonl not found for sub-session ${meta.subSessionId}` });
+      return;
+    }
+    try {
+      const { messages } = readConversationMessages(found.path);
+      res.json({ sessionId: meta.subSessionId, accountDir: found.accountId, messages });
+    } catch (e: any) {
+      res.status(500).json({ error: `Failed to read jsonl: ${e.message}` });
+    }
   });
 
   // Re-trigger evaluation for an existing journey (without rerunning Playwright).
