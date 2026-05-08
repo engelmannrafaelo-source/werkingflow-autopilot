@@ -137,7 +137,11 @@ export async function runJourney({
       await page.goto(`${baseUrl}/`, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
     }
     await page.waitForTimeout(2000);
-    await page.screenshot({ path: join(dirPath, '04-projekte.png'), type: 'png', fullPage: true });
+    // Viewport-only (not fullPage) — fullPage screenshots blow past the
+    // Bridge 1MB request limit on dashboards with long lists. The viewport
+    // captures the above-the-fold state, which is what the user sees first
+    // and what the evaluator needs to judge "did the post-login screen render".
+    await page.screenshot({ path: join(dirPath, '04-projekte.png'), type: 'png' });
     screenshots.push('04-projekte.png');
     logLines.push(`- URL: ${page.url()}`, '- Screenshot: 04-projekte.png', '');
 
