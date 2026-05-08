@@ -6,6 +6,7 @@ import { ACCOUNTS } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
 import QueueOverlay from './QueueOverlay';
 import { validateApiResponse } from '../../lib/validateApiResponse';
+import { logCuiTelemetry } from '../../lib/cuiTelemetry';
 
 // --- Types ---
 interface AgentSessionState {
@@ -512,15 +513,13 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   // short enough that real tab-switches still feel instant.
   const [isTabVisibleStable, setIsTabVisibleStable] = useState(isTabVisible);
   useEffect(() => {
-    const tel = (window as unknown as { __cuiTelemetry?: Array<Record<string, unknown>> });
-    if (!tel.__cuiTelemetry) tel.__cuiTelemetry = [];
-    tel.__cuiTelemetry.push({ ts: Date.now(), kind: 'isTabVisible-change', panelId, raw: isTabVisible });
+    logCuiTelemetry({ ts: Date.now(), kind: 'isTabVisible-change', panelId, raw: isTabVisible });
     if (isTabVisible) {
       setIsTabVisibleStable(true); // becoming visible: immediate (don't delay UI)
       return;
     }
     const t = setTimeout(() => {
-      tel.__cuiTelemetry!.push({ ts: Date.now(), kind: 'isTabVisible-debounced-false', panelId });
+      logCuiTelemetry({ ts: Date.now(), kind: 'isTabVisible-debounced-false', panelId });
       setIsTabVisibleStable(false);
     }, 250);
     return () => clearTimeout(t);
@@ -762,11 +761,9 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   // thinks the panel is gone and broadcasts cascading invalidations).
   useEffect(() => {
     if (!isTabVisibleStable) {
-      try {
-        (window as any).__cuiTelemetry?.push({
-          ts: Date.now(), kind: 'panel-removed-POST', panelId, projectId, reason: 'isTabVisibleStable=false',
-        });
-      } catch { /* ignore */ }
+      logCuiTelemetry({
+        ts: Date.now(), kind: 'panel-removed-POST', panelId, projectId, reason: 'isTabVisibleStable=false',
+      });
       fetch(`/api/mission/panel-removed`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -784,18 +781,14 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
     let connectAttempts = 0; // telemetry: count attempts in this effect-instance
     const effectInstanceId = Math.random().toString(36).slice(2, 8);
 
-    // Telemetry buffer: accessible via window.__cuiTelemetry in DevTools.
-    // Tracks WS lifecycle to diagnose reconnect-storms. Cap at 500 entries.
-    const tel = (window as unknown as { __cuiTelemetry?: Array<Record<string, unknown>> });
-    if (!tel.__cuiTelemetry) tel.__cuiTelemetry = [];
+    // Telemetry: events flow into window.__cuiTelemetry (in-memory ringbuffer for
+    // DevTools inspection) AND POST to /api/mission/telemetry/cui-ws so the
+    // assistant can read the diagnostic log from disk without asking the user.
     const log = (kind: string, extra: Record<string, unknown> = {}) => {
-      try {
-        tel.__cuiTelemetry!.push({
-          ts: Date.now(), kind, panelId, sessionId: sessionIdRef.current?.slice(0, 8),
-          accountId: selectedId, effectInstanceId, ...extra,
-        });
-        if (tel.__cuiTelemetry!.length > 500) tel.__cuiTelemetry!.splice(0, tel.__cuiTelemetry!.length - 500);
-      } catch { /* ignore */ }
+      logCuiTelemetry({
+        ts: Date.now(), kind, panelId, sessionId: sessionIdRef.current?.slice(0, 8),
+        accountId: selectedId, effectInstanceId, ...extra,
+      });
     };
     log('effect-run');
 

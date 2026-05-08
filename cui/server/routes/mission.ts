@@ -2719,6 +2719,30 @@ router.get('/sub-sessions', async (req, res) => {
   }
 });
 
+// CUI WebSocket / panel lifecycle telemetry — append-only diagnostic log.
+// Frontend's lib/cuiTelemetry.ts batches events and POSTs every 3s.
+// File: <DATA_DIR>/cui-ws-telemetry.jsonl, capped at ~10MB with .1 rotation.
+router.post('/telemetry/cui-ws', (req, res) => {
+  const events = Array.isArray(req.body?.events) ? req.body.events.slice(0, 200) : [];
+  if (events.length === 0) { res.json({ ok: true, written: 0 }); return; }
+  const file = join(DATA_DIR, 'cui-ws-telemetry.jsonl');
+  try {
+    if (existsSync(file) && statSync(file).size > 10 * 1024 * 1024) {
+      const rotated = file + '.1';
+      try { if (existsSync(rotated)) unlinkSync(rotated); } catch { /* ignore */ }
+      try { writeFileSync(rotated, readFileSync(file)); writeFileSync(file, ''); } catch { /* ignore rotation failure */ }
+    }
+  } catch { /* ignore stat failure */ }
+  const serverTs = Date.now();
+  const out = events.map((e: Record<string, unknown>) => JSON.stringify({ ...e, server_ts: serverTs })).join('\n') + '\n';
+  try {
+    appendFileSync(file, out);
+    res.json({ ok: true, written: events.length });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: (err as Error).message });
+  }
+});
+
 // 6b. Input log: retrieve all logged user inputs
 router.get('/input-log', (_req, res) => {
   if (!existsSync(INPUT_LOG_FILE)) { res.json({ entries: [] }); return; }
