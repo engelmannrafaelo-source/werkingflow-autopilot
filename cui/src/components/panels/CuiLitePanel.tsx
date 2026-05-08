@@ -512,13 +512,19 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   // short enough that real tab-switches still feel instant.
   const [isTabVisibleStable, setIsTabVisibleStable] = useState(isTabVisible);
   useEffect(() => {
+    const tel = (window as unknown as { __cuiTelemetry?: Array<Record<string, unknown>> });
+    if (!tel.__cuiTelemetry) tel.__cuiTelemetry = [];
+    tel.__cuiTelemetry.push({ ts: Date.now(), kind: 'isTabVisible-change', panelId, raw: isTabVisible });
     if (isTabVisible) {
       setIsTabVisibleStable(true); // becoming visible: immediate (don't delay UI)
       return;
     }
-    const t = setTimeout(() => setIsTabVisibleStable(false), 250);
+    const t = setTimeout(() => {
+      tel.__cuiTelemetry!.push({ ts: Date.now(), kind: 'isTabVisible-debounced-false', panelId });
+      setIsTabVisibleStable(false);
+    }, 250);
     return () => clearTimeout(t);
-  }, [isTabVisible]);
+  }, [isTabVisible, panelId]);
 
   const [currentTool, setCurrentTool] = useState<{ toolName: string; toolDetail?: string; startedAt: number } | null>(null);
   const [permissions, setPermissions] = useState<Permission[]>([]);
@@ -690,8 +696,8 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
 
   // Adaptive polling with recursive setTimeout (interval adjusts to failure count)
   useEffect(() => {
-    if (!sessionId || !isTabVisible) {
-      if (!isTabVisible) { /* paused: tab not visible */ }
+    if (!sessionId || !isTabVisibleStable) {
+      if (!isTabVisibleStable) { /* paused: tab not visible */ }
       return;
     }
     let cancelled = false;
@@ -717,7 +723,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
       cancelled = true;
       if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
     };
-  }, [sessionId, selectedId, isTabVisible, pollNow, pollInterval]);
+  }, [sessionId, selectedId, isTabVisibleStable, pollNow, pollInterval]);
 
   // --- Fetch Prompt Templates (retry on failure — server may be restarting) ---
   const loadTemplates = useCallback(() => {
@@ -751,39 +757,69 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
   }, [sessionId, selectedId, panelId, projectId]);
 
   // --- Notify server when tab becomes hidden (clear visibility immediately) ---
+  // Uses STABLE flag — raw isTabVisible flickers during FlexLayout re-mount,
+  // which would otherwise produce spurious panel-removed POSTs (server then
+  // thinks the panel is gone and broadcasts cascading invalidations).
   useEffect(() => {
-    if (!isTabVisible) {
-      // Tab hidden — tell server to remove this panel from visibility registry
+    if (!isTabVisibleStable) {
+      try {
+        (window as any).__cuiTelemetry?.push({
+          ts: Date.now(), kind: 'panel-removed-POST', panelId, projectId, reason: 'isTabVisibleStable=false',
+        });
+      } catch { /* ignore */ }
       fetch(`/api/mission/panel-removed`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ panelId, projectId }),
       }).catch(() => {}); // silent-ok: panel-removed notification is best-effort
     }
-  }, [isTabVisible, panelId, projectId]);
+  }, [isTabVisibleStable, panelId, projectId]);
 
   // --- WS for realtime attention events (auto-reconnect) ---
   useEffect(() => {
-    if (!isTabVisible) return;
+    if (!isTabVisibleStable) return;
     let disposed = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let backoff = 1000; // start at 1s, doubles up to 30s max
+    let connectAttempts = 0; // telemetry: count attempts in this effect-instance
+    const effectInstanceId = Math.random().toString(36).slice(2, 8);
+
+    // Telemetry buffer: accessible via window.__cuiTelemetry in DevTools.
+    // Tracks WS lifecycle to diagnose reconnect-storms. Cap at 500 entries.
+    const tel = (window as unknown as { __cuiTelemetry?: Array<Record<string, unknown>> });
+    if (!tel.__cuiTelemetry) tel.__cuiTelemetry = [];
+    const log = (kind: string, extra: Record<string, unknown> = {}) => {
+      try {
+        tel.__cuiTelemetry!.push({
+          ts: Date.now(), kind, panelId, sessionId: sessionIdRef.current?.slice(0, 8),
+          accountId: selectedId, effectInstanceId, ...extra,
+        });
+        if (tel.__cuiTelemetry!.length > 500) tel.__cuiTelemetry!.splice(0, tel.__cuiTelemetry!.length - 500);
+      } catch { /* ignore */ }
+    };
+    log('effect-run');
 
     const connect = () => {
       if (disposed) return;
       // Don't hammer WS when server is down — wait for App WS to restore __cuiServerAlive
       if (window.__cuiServerAlive === false) {
+        log('connect-deferred-server-dead');
         reconnectTimer = setTimeout(connect, Math.min(backoff, 10000));
         return;
       }
       const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
       const ws = new WebSocket(`${protocol}://${window.location.host}/ws`);
+      const connectStartedAt = Date.now();
+      connectAttempts += 1;
+      log('ws-connect-start', { attempt: connectAttempts });
       panelWsRef.current = ws;
-      ws.onerror = () => {}; // Suppress console noise during server restarts
+      ws.onerror = () => { log('ws-error', { dur: Date.now() - connectStartedAt, readyState: ws.readyState }); };
 
       ws.onopen = () => {
+        const dur = Date.now() - connectStartedAt;
+        log('ws-open', { dur });
         backoff = 1000; // reset backoff on successful connection
-        console.log('[CuiLite WS] Connected');
+        console.log(`[CuiLite WS] Connected (panel=${panelId.slice(0,8)} dur=${dur}ms attempt=${connectAttempts})`);
         // Server is back — reset circuit breaker and poll immediately
         circuitOpenRef.current = false;
         pollFailCountRef.current = 0;
@@ -815,9 +851,10 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
           }).catch(() => {}); // silent-ok: state re-sync on WS reconnect is non-critical; events will update state
         }
       };
-      ws.onclose = () => {
+      ws.onclose = (ev) => {
+        log('ws-close', { dur: Date.now() - connectStartedAt, code: ev.code, reason: ev.reason, readyStateBefore: ws.readyState, disposed });
         if (!disposed) {
-          if (backoff <= 1000) console.log('[CuiLite WS] Disconnected, reconnecting...');
+          if (backoff <= 1000) console.log(`[CuiLite WS] Disconnected, reconnecting... (panel=${panelId.slice(0,8)} code=${ev.code})`);
           reconnectTimer = setTimeout(() => {
             backoff = Math.min(backoff * 2, 30000);
             connect();
@@ -1006,6 +1043,7 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
 
     return () => {
       disposed = true;
+      log('effect-cleanup', { reconnectAttempts: connectAttempts });
       window.removeEventListener('cui-reconnected', onServerReconnected);
       // CRITICAL: close the WebSocket to prevent connection leak.
       // BUT: calling .close() while the socket is still CONNECTING produces a
@@ -1020,8 +1058,10 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
         ws.onclose = null;
         ws.onerror = null;
         if (ws.readyState === WebSocket.CONNECTING) {
+          log('ws-deferred-close-while-connecting');
           ws.onopen = () => { try { ws.close(); } catch { /* ignore */ } };
         } else {
+          log('ws-close-on-cleanup', { readyState: ws.readyState });
           try { ws.close(); } catch { /* ignore */ }
         }
       }

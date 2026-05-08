@@ -1579,19 +1579,21 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         const data = await res.json();
         const conversations: any[] = data.conversations || [];
 
-        // Inventory mounted CUI tabs (and mission-chat tabs to avoid routing sessions there)
-        const mountedSessions = new Map<string, string>(); // sessionId -> nodeId
+        // Inventory mounted CUI tabs (and mission-chat tabs to avoid routing sessions there).
+        // mountedSessions tracks ONLY cui/cui-lite tabs — these are the ones the cleanup
+        // loop is allowed to delete. mission-chat panels are tracked separately so we
+        // don't double-mount sessions there, but they are NEVER candidates for deletion.
+        const mountedSessions = new Map<string, string>(); // sessionId -> cui/cui-lite nodeId
+        const sessionsInMissionChat = new Set<string>();    // sessions currently shown in a mission-chat panel
         const emptyPanels: string[] = [];
         m.visitNodes((node) => {
           if (node.getType() === 'tab') {
             const tab = node as TabNode;
             const comp = tab.getComponent?.();
-            // Track sessions in mission-chat panels as mounted (so they don't get re-routed)
-            // but NEVER add mission-chat panels to emptyPanels (they are reserved)
             if (comp === 'mission-chat') {
               const route = getNodeRoute(tab) || '';
               const sid = route.startsWith('/c/') ? route.slice(3) : '';
-              if (sid) mountedSessions.set(sid, tab.getId());
+              if (sid) sessionsInMissionChat.add(sid);
               return;
             }
             if (comp !== 'cui' && comp !== 'cui-lite') return;
@@ -1665,7 +1667,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
             }
           } catch {} // silent-ok: sub-sessions fetch failure; sub-session tabs stay mounted temporarily
         }
-        const missing = active.filter((c: any) => !mountedSessions.has(c.sessionId) && (showSubs || !c.isSubSession));
+        const missing = active.filter((c: any) => !mountedSessions.has(c.sessionId) && !sessionsInMissionChat.has(c.sessionId) && (showSubs || !c.isSubSession));
 
         // Report missing sessions count to parent (for Layout button indicator)
         onMissingSessionsRef.current?.(missing.length);
