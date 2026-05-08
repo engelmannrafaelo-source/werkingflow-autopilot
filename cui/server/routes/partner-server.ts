@@ -477,9 +477,20 @@ ${journeyMd.slice(0, 800)}
           model: 'sonnet',
           message,
         });
+        // Self-call needs auth: forge a short-lived admin JWT (process boundary,
+        // partner-server.ts already imports signJwt for the matrix endpoint).
+        const internalJwt = signJwt({
+          sub: 'partner-server-journey',
+          name: 'Journey Spawner',
+          role: 'admin',
+          claudeAccountId: JOURNEY_SUB_ACCOUNT,
+        });
         const startRes = await fetch('http://127.0.0.1:4005/api/mission/start', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${internalJwt}`,
+          },
           body: startBody,
         });
         const startJson: any = await startRes.json().catch(() => ({}));
