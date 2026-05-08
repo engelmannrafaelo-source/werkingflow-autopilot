@@ -188,16 +188,18 @@ export default function PartnerServerPanel() {
       const r = await fetch(`${API}/journey/${encodeURIComponent(userId)}/${encodeURIComponent(workspace)}/${encodeURIComponent(journeyId)}/chat`);
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || `chat ${r.status}`);
-      // Normalise messages to {role, text, timestamp} shape regardless of jsonl flavour.
+      // jsonl-Schema von readConversationMessages: {message: {role, content}, timestamp}
+      // Tolerant gegen flat-shape (m.role direkt) und nested (m.message.role).
       const raw = Array.isArray(j.messages) ? j.messages : [];
       const norm: JourneyChatMessage[] = raw.map((m: any) => {
+        const inner = m.message && typeof m.message === 'object' ? m.message : m;
         const role: 'user' | 'assistant' | 'system' =
-          m.role === 'assistant' ? 'assistant' : m.role === 'user' ? 'user' : 'system';
+          inner.role === 'assistant' ? 'assistant' : inner.role === 'user' ? 'user' : 'system';
         let text = '';
-        if (typeof m.text === 'string') text = m.text;
-        else if (typeof m.content === 'string') text = m.content;
-        else if (Array.isArray(m.content)) {
-          text = m.content
+        const content = inner.content;
+        if (typeof content === 'string') text = content;
+        else if (Array.isArray(content)) {
+          text = content
             .map((b: any) =>
               typeof b === 'string' ? b
               : b?.type === 'text' ? (b.text || '')
