@@ -96,7 +96,11 @@ function parseEvaluation(raw: string): Omit<JourneyEvaluation, 'model' | 'evalua
 }
 
 export async function evaluateJourney(dirPath: string, model = 'claude-sonnet-4-5-20250929'): Promise<JourneyEvaluation> {
-  const screenshots = ['01-login.png', '02-form-filled.png', '03-after-login.png', '04-projekte.png']
+  // Bridge has a 1MB request body limit (nginx default). Each full-page PNG
+  // is ~300KB binary, ~400KB base64 — sending all 4 blows the limit. The
+  // only screenshots that change the verdict are post-submit ones; before
+  // that the model just sees an empty form. Send 03 + 04 only.
+  const screenshots = ['03-after-login.png', '04-projekte.png']
     .map(n => join(dirPath, n));
   const content = buildContent(join(dirPath, 'journey.md'), screenshots);
 
