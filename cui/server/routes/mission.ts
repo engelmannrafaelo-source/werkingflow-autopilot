@@ -2523,7 +2523,8 @@ router.post('/start', async (req, res) => {
     }
   }
 
-  const result = await claudeCli.startConversation(accountId, enrichedMessage, resolvedWorkDir, undefined, resolvedModel);
+  const userIdForToken = (req as any).user?.sub;
+  const result = await claudeCli.startConversation(accountId, enrichedMessage, resolvedWorkDir, undefined, resolvedModel, userIdForToken);
   if (!result.ok) {
     logUserInput({ type: 'start', accountId, workDir, subject, message, result: 'error', error: result.error });
     res.status(502).json({ error: result.error || 'CLI spawn failed' });

@@ -17,6 +17,7 @@ import { createInterface } from 'readline';
 import type { ConvAttentionState, AttentionReason, SessionState, ToolExecutionInfo } from './shared/types.js';
 import { IS_LOCAL_MODE, getRestoredWorkingSessions } from './state.js';
 import { hasIncompleteToolUse, getOriginalCwd } from './shared/jsonl.js';
+import { signJwt } from '../auth/jwt.js';
 
 // --- Account Configuration ---
 // Per-server mapping (set via env: PARTNER_CUI=1 or PARTNER_MODE=1 picks PARTNER branch):
@@ -518,6 +519,7 @@ export async function startConversation(
   workDir: string,
   resumeSessionId?: string,
   model?: string,
+  userId?: string,
 ): Promise<StartResult> {
   if (!_initialized) return { sessionId: '', ok: false, error: 'Not initialized' };
 
@@ -618,6 +620,18 @@ export async function startConversation(
     XDG_CONFIG_HOME: `${config.home}/.config`,
     CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: 'true',
   };
+
+  // Per-user API token so the session can call back into the CUI server
+  // (e.g. POST /api/qa/po-scenarios/.../run) without forging its own JWT.
+  // Short-lived (1 day), scoped to the user that started the session. If
+  // userId is omitted (internal / system spawns), no token is set.
+  if (userId) {
+    try {
+      env.CUI_USER_TOKEN = signJwt({ sub: userId }, 1);
+    } catch (err) {
+      console.warn(`[ClaudeCLI] Failed to mint CUI_USER_TOKEN for ${userId}:`, err);
+    }
+  }
   if (IS_LOCAL_MODE) {
     env.PATH = process.env.PATH || env.PATH;
     if (process.env.SHELL) env.SHELL = process.env.SHELL;
