@@ -228,13 +228,17 @@ export default function PartnerServerPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detailTab, journeyDetail]);
 
-  const runAllJourneys = useCallback(async () => {
+  const runAllJourneys = useCallback(async (userId?: string) => {
     if (journeyBulkRunning) return;
     setJourneyBulkRunning(true);
     setJourneyError(null);
     setJourneyBulkProgress({ spawned: 0, total: 0 });
     try {
-      const r = await fetch(`${API}/journey/run-all`, { method: 'POST' });
+      const r = await fetch(`${API}/journey/run-all`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(userId ? { userId } : {}),
+      });
       if (!r.ok || !r.body) throw new Error(`run-all ${r.status}`);
       const reader = r.body.getReader();
       const dec = new TextDecoder();
@@ -674,7 +678,7 @@ export default function PartnerServerPanel() {
             <>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
                 <button
-                  onClick={runAllJourneys}
+                  onClick={() => runAllJourneys()}
                   disabled={journeyBulkRunning}
                   style={{
                     ...btnStyle,
@@ -706,8 +710,19 @@ export default function PartnerServerPanel() {
                 const list = journeyByUser[userId] || [];
                 return (
                   <div key={userId} style={{ marginBottom: 24 }}>
-                    <div style={{ fontWeight: 600, marginBottom: 8, paddingBottom: 4, borderBottom: '1px solid var(--tn-border, #292e42)' }}>
-                      {cells[0].userName} <span style={{ fontSize: 11, color: 'var(--tn-text-muted, #a9b1d6)' }}>· {cells[0].role} · {userId}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, paddingBottom: 4, borderBottom: '1px solid var(--tn-border, #292e42)' }}>
+                      <span style={{ fontWeight: 600 }}>
+                        {cells[0].userName} <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--tn-text-muted, #a9b1d6)' }}>· {cells[0].role} · {userId}</span>
+                      </span>
+                      <span style={{ flex: 1 }} />
+                      <button
+                        onClick={() => runAllJourneys(userId)}
+                        disabled={journeyBulkRunning}
+                        style={{ ...miniBtnStyle, fontSize: 10 }}
+                        title={`Spawnt eine Sub-Session pro Workspace von ${cells[0].userName}`}
+                      >
+                        ▶ Alle Journeys von {cells[0].userName.split(' ')[0]} spawnen
+                      </button>
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
                       {cells.map(c => {

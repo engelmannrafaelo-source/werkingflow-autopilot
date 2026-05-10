@@ -599,8 +599,15 @@ export default function createPartnerServerRoutes() {
   // Bulk: spawns one journey-sub per user × mapped workspace. Streams NDJSON
   // so the panel sees progress in real-time. Each sub does its work async —
   // the response returns once all subs are SPAWNED, not when they finish.
-  router.post('/journey/run-all', async (_req, res) => {
-    const users = getUsers().filter(u => u.role !== 'admin');
+  // Optional body { userId }: restrict to a single user.
+  router.post('/journey/run-all', async (req, res) => {
+    const { userId: filterUserId } = (req.body || {}) as { userId?: string };
+    let users = getUsers().filter(u => u.role !== 'admin');
+    if (filterUserId) users = users.filter(u => u.id === filterUserId);
+    if (filterUserId && users.length === 0) {
+      res.status(404).json({ error: `User not found: ${filterUserId}` });
+      return;
+    }
     res.setHeader('Content-Type', 'application/x-ndjson');
     res.setHeader('Cache-Control', 'no-cache');
     res.flushHeaders?.();
