@@ -13,6 +13,7 @@ import { logUserInput as sharedLogUserInput, atomicWriteFileSync } from './share
 import { findJsonlPath, findJsonlPathAllAccounts, ensureJsonlForAccount, readJsonlMetadata, clearMetaCache, readConversationMessages, getOriginalCwd, extractConversationContext, unstickConversation, deepRepairJsonl, compactJsonlForResume, diagnoseSessionHealth, purgeSubSessionReminders } from './shared/jsonl.js';
 import * as convMeta from './shared/conv-metadata.js';
 import { updateAutoInjectSession, disableAutoInject } from './autoinject.js';
+import { detectWaitState, shouldAutoRecover, type ChildInfo, type JsonlEntry, type TesterLog, type DiagnosisReason } from './shared/sub-state.js';
 
 /** Validates that a workDir is under an allowed root path.
  *  Bare /root/projekte is blocked — sessions must use a registered workspace subdirectory. */
@@ -78,6 +79,75 @@ const _lastSubNudgeSentAt = new Map<string, number>();
 const _subNudgeCount = new Map<string, number>();
 const SUB_NUDGE_INTERVAL_MS = 600_000; // 10min, mirrors autoinject MIN_INJECT_INTERVAL_MS
 const MAX_AUTO_NUDGES = 3;
+
+// Auto-Recovery state for sessions stuck on rate_limit / overloaded.
+// Per-session attempt counter + lastAttempt timestamp drive backoff via shouldAutoRecover().
+const _autoRecoveryAttempts = new Map<string, number>();
+const _autoRecoveryLastAttemptMs = new Map<string, number>();
+const AUTO_RECOVERY_INTERVAL_MS = 5 * 60_000;
+
+const TESTER_RUNS_DIR = '/tmp/tester-runs';
+
+/**
+ * Gather wait-state inputs for a sub from disk + convMeta state.
+ *
+ * Wraps detectWaitState (pure logic in shared/sub-state.ts) with the IO
+ * needed to look at the sub's children, its own JSONL tail, and any
+ * tester-runs log files. Failures collapse to "no wait-state" so a corrupted
+ * read can never wedge the reminder loop.
+ */
+function gatherWaitStateForSub(sessionId: string): ReturnType<typeof detectWaitState> {
+  try {
+    // 1. Children
+    const subChildren: ChildInfo[] = [];
+    const allSubs = convMeta.getAllSubSessions();
+    for (const childSid of Object.keys(allSubs)) {
+      if (childSid === sessionId) continue;
+      if (convMeta.getParentSessionId(childSid) !== sessionId) continue;
+      let mtimeMs: number | null = null;
+      const f = findJsonlPathAllAccounts(childSid);
+      if (f) {
+        try { mtimeMs = statSync(f.path).mtimeMs; } catch { /* ignore */ }
+      }
+      subChildren.push({
+        sessionId: childSid,
+        finished: convMeta.isFinished(childSid),
+        cliActive: claudeCli.isActive(childSid),
+        jsonlMtimeMs: mtimeMs,
+      });
+    }
+
+    // 2. JSONL entries — last 60 lines (covers both wakeup + tester scans).
+    const jsonlEntries: JsonlEntry[] = [];
+    const found = findJsonlPathAllAccounts(sessionId);
+    if (found) {
+      try {
+        const raw = readFileSync(found.path, 'utf8');
+        const lines = raw.split('\n').filter(Boolean);
+        const tail = lines.slice(-60);
+        for (const line of tail) {
+          try { jsonlEntries.push(JSON.parse(line)); } catch { /* skip bad line */ }
+        }
+      } catch { /* ignore */ }
+    }
+
+    // 3. Tester logs
+    const testerLogs: TesterLog[] = [];
+    try {
+      for (const filename of readdirSync(TESTER_RUNS_DIR)) {
+        if (!filename.endsWith('.log')) continue;
+        try {
+          const mtimeMs = statSync(`${TESTER_RUNS_DIR}/${filename}`).mtimeMs;
+          testerLogs.push({ filename, mtimeMs });
+        } catch { /* ignore */ }
+      }
+    } catch { /* dir missing — fine */ }
+
+    return detectWaitState({ subChildren, jsonlEntries, testerLogs, now: Date.now() });
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Heuristic classification of a sub-session's current state for the parent reminder.
@@ -838,7 +908,17 @@ export function initMissionRouter(deps: MissionDeps) {
           const cls = classifySubStatus(sessionId);
           const sigStr = cls.signals.length > 0 ? ` (${cls.signals.join(', ')})` : '';
 
-          if (cls.status === 'ready' || isCompleted) {
+          // Wait-state gate: even if cls says 'ready' or the CLI process exited (isCompleted),
+          // skip the FINISH hint when the sub is legitimately waiting on grandchildren,
+          // a pending ScheduleWakeup, or a running unified-tester run. Telling the parent
+          // to /finish here would kill in-flight work (regression: 2026-05-09 incident).
+          const waitState = gatherWaitStateForSub(sessionId);
+
+          if (waitState) {
+            const waitSigs = waitState.signals.length > 0 ? ` (${waitState.signals.join(', ')})` : '';
+            lines.push(`- ${sid8} [IN PROGRESS — wait-state: ${waitState.reason}] "${title}"${waitSigs} — → noch arbeiten lassen`);
+            killCmds.push(`curl -s -X POST http://localhost:${PORT}/api/mission/conversation/${sessionId}/kill`);
+          } else if (cls.status === 'ready' || isCompleted) {
             lines.push(`- ${sid8} [READY TO FINISH] "${title}"${sigStr} — → review + /finish`);
           } else if (cls.status === 'quota_blocked') {
             lines.push(`- ${sid8} [QUOTA BLOCKED] "${title}"${sigStr} — Account exhausted, /finish + respawn auf anderem Account (accountId:'auto')`);
@@ -921,6 +1001,119 @@ export function initMissionRouter(deps: MissionDeps) {
       }
     }
   }, SUB_REMINDER_INTERVAL_MS);
+
+  // ===========================================================================
+  // Auto-Recovery worker: every 5 min, look for ongoing sessions whose CLI
+  // process has exited but whose JSONL says they're stuck on rate_limit /
+  // overloaded. Respawn them when conditions allow. Crash + incomplete_tool_use
+  // are NOT auto-recovered here — silent-exit auto-continue (above) handles
+  // those, and respawning a crashed session can corrupt JSONL state.
+  //
+  // Why: 2026-05-09 — an acro Sub died silently when the CUI server restarted
+  // killed its ScheduleWakeup. Without a periodic recheck the Sub stayed dead.
+  // ===========================================================================
+  const _autoRecoveryRunning = { value: false };
+  setInterval(async () => {
+    if (_autoRecoveryRunning.value) return; // skip if previous tick still running
+    _autoRecoveryRunning.value = true;
+    try {
+      const allAssignments = convMeta.getAllAssignments();
+      const sessionIds = Object.keys(allAssignments);
+      if (sessionIds.length === 0) return;
+
+      // One best-account fetch per tick — shared across all rate_limit candidates.
+      type BestAccountEntry = { accountId: string; available: boolean };
+      let bestAccountAccounts: BestAccountEntry[] | null = null;
+      const fetchBestAccountsOnce = async () => {
+        if (bestAccountAccounts !== null) return;
+        try {
+          const resp = await fetch(`http://localhost:${process.env.PORT || PORT || 4005}/api/claude-code/best-account`, { signal: AbortSignal.timeout(3000) });
+          // best-account returns 503 when ALL accounts are critical, but the body still
+          // carries the accounts array — read it either way.
+          if (resp.status === 200 || resp.status === 503) {
+            const data = await resp.json() as any;
+            bestAccountAccounts = (data?.accounts || []) as BestAccountEntry[];
+          } else {
+            bestAccountAccounts = [];
+          }
+        } catch {
+          bestAccountAccounts = [];
+        }
+      };
+
+      for (const sessionId of sessionIds) {
+        if (convMeta.isFinished(sessionId)) continue;
+        if (claudeCli.isActive(sessionId)) continue;
+        // Don't respawn a sub whose parent is gone — orphan-cleanup handles it.
+        if (convMeta.isSubSession(sessionId)) {
+          const parent = convMeta.getParentSessionId(sessionId);
+          if (parent && convMeta.isFinished(parent)) continue;
+        }
+
+        const diagnosis = diagnoseSessionHealth(sessionId);
+        if (!diagnosis.needsRecovery) continue;
+
+        const reason = diagnosis.reason as DiagnosisReason;
+        const attempts = _autoRecoveryAttempts.get(sessionId) || 0;
+        const lastAttemptMs = _autoRecoveryLastAttemptMs.get(sessionId) || 0;
+
+        // For rate_limit we need to know whether the assigned account has
+        // recovered before deciding. Fetch on-demand so a tick with zero
+        // rate_limit candidates costs no HTTP.
+        let accountAvailable: boolean | undefined;
+        if (reason === 'rate_limit') {
+          await fetchBestAccountsOnce();
+          const accountId = convMeta.getAssignment(sessionId);
+          const accs: BestAccountEntry[] = bestAccountAccounts ?? [];
+          const acc = accs.find((a) => a.accountId === accountId);
+          accountAvailable = !!acc?.available;
+        }
+
+        const decision = shouldAutoRecover({
+          reason,
+          attempts,
+          lastAttemptMs,
+          now: Date.now(),
+          accountAvailable,
+        });
+        if (!decision.recover) {
+          // Useful diagnostics at debug, not info — we hit this path constantly.
+          if (process.env.AUTO_RECOVERY_DEBUG === '1') {
+            console.log(`[AutoRecovery] ${sessionId.slice(0, 8)}: skip (${decision.skipReason})`);
+          }
+          continue;
+        }
+
+        _autoRecoveryAttempts.set(sessionId, attempts + 1);
+        _autoRecoveryLastAttemptMs.set(sessionId, Date.now());
+
+        const accountId = convMeta.getAssignment(sessionId) || (await resolveBestAccount()) || claudeCli.ACCOUNT_CONFIG[0]?.id || 'werking';
+        const workDir = convMeta.getWorkDir(sessionId) || '';
+        const model = convMeta.getModel(sessionId) || '';
+
+        const wakeupMsg = reason === 'rate_limit'
+          ? `[Auto-Recovery] Wakeup nach Quota-Recovery — fahre fort. (Account ${accountId} wieder verfuegbar, attempt ${attempts + 1})`
+          : `[Auto-Recovery] Wakeup nach API-Recovery (${reason}) — fahre fort. (attempt ${attempts + 1})`;
+
+        console.log(`[AutoRecovery] ${sessionId.slice(0, 8)}: respawning, reason=${reason}, attempt=${attempts + 1}`);
+
+        try {
+          // Sanitize before resume — avoids CLI rejecting a half-written JSONL
+          unstickConversation(sessionId);
+          const result = await claudeCli.startConversation(accountId, wakeupMsg, workDir, sessionId, model);
+          if (result.ok) {
+            broadcast({ type: 'conv-auto-recovered', sessionId, reason, attempt: attempts + 1 });
+          } else {
+            console.warn(`[AutoRecovery] ${sessionId.slice(0, 8)}: respawn failed: ${result.error || 'unknown'}`);
+          }
+        } catch (err) {
+          console.warn(`[AutoRecovery] ${sessionId.slice(0, 8)}: error: ${(err as Error).message}`);
+        }
+      }
+    } finally {
+      _autoRecoveryRunning.value = false;
+    }
+  }, AUTO_RECOVERY_INTERVAL_MS);
 
   // Warm up conversation cache on startup (async, non-blocking)
   setTimeout(async () => {
