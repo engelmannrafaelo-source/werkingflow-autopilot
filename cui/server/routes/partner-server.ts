@@ -725,6 +725,11 @@ export default function createPartnerServerRoutes() {
         // of falsely greenlighting them.
         let loginSuccess: boolean | null = null;
         let failureReason: string | null = null;
+        // Verdict comes from journey.md (sub-written) first; falls back to
+        // evaluation.json (Bridge-Vision auto-eval) for legacy runs.
+        let rating: number | null = null;
+        let worksE2e: boolean | null = null;
+        let summary: string | null = null;
         const mdPath = join(jDir, 'journey.md');
         if (existsSync(mdPath)) {
           const md = readFileSync(mdPath, 'utf8');
@@ -732,19 +737,20 @@ export default function createPartnerServerRoutes() {
           if (ls) loginSuccess = ls[1] === 'true';
           const fr = md.match(/❌ LOGIN FAILED:\s*(.+)/);
           if (fr) failureReason = fr[1].trim();
+          const we = md.match(/^works_e2e:\s*(true|false)\s*$/m);
+          if (we) worksE2e = we[1] === 'true';
+          const rt = md.match(/^rating:\s*(\d+)/m);
+          if (rt) rating = parseInt(rt[1], 10);
+          const sm = md.match(/^summary:\s*(.+)$/m);
+          if (sm) summary = sm[1].trim();
         }
-        // AI evaluation (written by journey-evaluator.ts after the run).
-        // Older runs and runs where the Bridge call failed have no file → null.
-        let rating: number | null = null;
-        let worksE2e: boolean | null = null;
-        let summary: string | null = null;
         const evalPath = join(jDir, 'evaluation.json');
         if (existsSync(evalPath)) {
           try {
             const ev = JSON.parse(readFileSync(evalPath, 'utf8'));
-            if (typeof ev.rating === 'number') rating = ev.rating;
-            if (typeof ev.works_e2e === 'boolean') worksE2e = ev.works_e2e;
-            if (typeof ev.summary === 'string') summary = ev.summary;
+            if (rating === null && typeof ev.rating === 'number') rating = ev.rating;
+            if (worksE2e === null && typeof ev.works_e2e === 'boolean') worksE2e = ev.works_e2e;
+            if (summary === null && typeof ev.summary === 'string') summary = ev.summary;
           } catch { /* corrupt eval — show as null */ }
         }
         items.push({ userId, workspace: ws, journeyId: jid, capturedAt, screenshotCount: pngs.length, loginSuccess, failureReason, rating, worksE2e, summary });

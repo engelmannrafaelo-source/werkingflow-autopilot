@@ -697,6 +697,33 @@ export default function PartnerServerPanel() {
                   </span>
                 )}
               </div>
+              {(() => {
+                let works = 0, broken = 0, loginOk = 0, fail = 0, none = 0;
+                for (const [, cells] of grouped.entries()) {
+                  for (const c of cells) {
+                    if (!WORKSPACE_TO_APP[c.workspace]) continue;
+                    const last = (journeyByUser[c.userId] || []).filter(j => j.workspace === c.workspace)[0];
+                    if (!last) { none++; continue; }
+                    if (last.loginSuccess === false) { fail++; continue; }
+                    if (last.worksE2e === true) { works++; continue; }
+                    if (last.worksE2e === false) { broken++; continue; }
+                    if (last.loginSuccess === true) { loginOk++; continue; }
+                    none++;
+                  }
+                }
+                const total = works + broken + loginOk + fail + none;
+                return total > 0 ? (
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 12, fontSize: 11, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span style={{ color: 'var(--tn-text-muted)' }}>Gesamt-Status:</span>
+                    {works > 0 && <span style={{ padding: '2px 8px', borderRadius: 4, background: 'var(--tn-green, #9ece6a)', color: '#1a1b26', fontWeight: 600 }}>🟢 {works} works</span>}
+                    {broken > 0 && <span style={{ padding: '2px 8px', borderRadius: 4, background: 'var(--tn-red, #f7768e)', color: '#fff', fontWeight: 600 }}>🔴 {broken} broken</span>}
+                    {loginOk > 0 && <span style={{ padding: '2px 8px', borderRadius: 4, background: 'var(--tn-yellow, #e0af68)', color: '#1a1b26', fontWeight: 600 }}>🟡 {loginOk} login-only</span>}
+                    {fail > 0 && <span style={{ padding: '2px 8px', borderRadius: 4, background: 'var(--tn-red, #f7768e)', color: '#fff', fontWeight: 600 }}>🔴 {fail} login fail</span>}
+                    {none > 0 && <span style={{ padding: '2px 8px', borderRadius: 4, background: 'var(--tn-bg-elevated, #1f2335)', color: 'var(--tn-text-muted, #a9b1d6)', border: '1px solid var(--tn-border, #292e42)' }}>— {none} no run</span>}
+                    <span style={{ color: 'var(--tn-text-muted)', marginLeft: 4 }}>· {total} cells gesamt</span>
+                  </div>
+                ) : null;
+              })()}
               <div style={{ fontSize: 11, color: 'var(--tn-text-muted, #a9b1d6)', marginBottom: 12 }}>
                 "▶ Run Journey" pro Zelle spawnt eine Sub-Session, die wie ein neuer User die App durchklickt
                 (Login → Sidebar → 3-5 Hauptaktionen). Rechts im Detail-Modal siehst du den Chat-Verlauf.
@@ -731,6 +758,22 @@ export default function PartnerServerPanel() {
                         const supported = !!WORKSPACE_TO_APP[c.workspace];
                         const wsList = list.filter(j => j.workspace === c.workspace);
                         const last = wsList[0];
+                        // Verdict logic: works_e2e=true → green WORKS;
+                        //                works_e2e=false → red BROKEN;
+                        //                login=true but no works verdict yet → yellow LOGIN;
+                        //                login=false → red LOGIN FAIL;
+                        //                no run yet → grey —
+                        const verdict = !last
+                            ? { label: '—', color: 'var(--tn-text-muted, #565f89)', bg: 'transparent', tooltip: 'Noch kein Run' }
+                            : last.loginSuccess === false
+                            ? { label: '🔴 LOGIN FAIL', color: '#fff', bg: 'var(--tn-red, #f7768e)', tooltip: last.failureReason || 'Login fehlgeschlagen' }
+                            : last.worksE2e === true
+                            ? { label: '🟢 WORKS', color: '#1a1b26', bg: 'var(--tn-green, #9ece6a)', tooltip: last.summary || 'Sub urteilt: works_e2e=true' }
+                            : last.worksE2e === false
+                            ? { label: '🔴 BROKEN', color: '#fff', bg: 'var(--tn-red, #f7768e)', tooltip: last.summary || 'Sub urteilt: works_e2e=false' }
+                            : last.loginSuccess === true
+                            ? { label: '🟡 LOGIN', color: '#1a1b26', bg: 'var(--tn-yellow, #e0af68)', tooltip: 'Login ok, Sub-Verdict steht aus' }
+                            : { label: '? unknown', color: 'var(--tn-text-muted)', bg: 'transparent', tooltip: 'Status unbekannt (älterer Run)' };
                         return (
                           <div key={key} style={{
                             border: '1px solid var(--tn-border, #292e42)',
@@ -742,20 +785,25 @@ export default function PartnerServerPanel() {
                             <div style={{ padding: '6px 10px', display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid var(--tn-border, #292e42)', fontSize: 12 }}>
                               <span style={{ fontWeight: 500 }}>{c.workspace}</span>
                               {!supported && <span style={{ fontSize: 10, color: 'var(--tn-text-muted, #565f89)' }}>(no journey)</span>}
-                              {last && last.loginSuccess === true && (
-                                <span style={{ fontSize: 10, color: 'var(--tn-green, #9ece6a)' }}>✓ login</span>
-                              )}
-                              {last && last.loginSuccess === false && (
-                                <span style={{ fontSize: 10, color: 'var(--tn-red, #f7768e)' }} title={last.failureReason || 'Login fehlgeschlagen'}>✗ login fail</span>
-                              )}
-                              {last && last.loginSuccess === null && (
-                                <span style={{ fontSize: 10, color: 'var(--tn-text-muted, #565f89)' }} title="Vor failure-detection — Status unbekannt">? unknown</span>
-                              )}
+                              <span
+                                style={{
+                                  fontSize: 10,
+                                  padding: '2px 8px',
+                                  borderRadius: 4,
+                                  background: verdict.bg,
+                                  color: verdict.color,
+                                  fontWeight: 600,
+                                  whiteSpace: 'nowrap',
+                                }}
+                                title={verdict.tooltip}
+                              >
+                                {verdict.label}
+                              </span>
                               {last && last.rating !== null && (
                                 <span
                                   style={{
-                                    fontSize: 11,
-                                    color: last.worksE2e ? 'var(--tn-yellow, #e0af68)' : 'var(--tn-orange, #ff9e64)',
+                                    fontSize: 10,
+                                    color: 'var(--tn-text-muted, #a9b1d6)',
                                     letterSpacing: 1,
                                   }}
                                   title={last.summary || ''}
