@@ -123,6 +123,8 @@ export default function PartnerServerPanel() {
   const [journeyByUser, setJourneyByUser] = useState<Record<string, JourneyListItem[]>>({});
   const [journeyDetail, setJourneyDetail] = useState<{ userId: string; workspace: string; journeyId: string; data: JourneyDetail } | null>(null);
   const [journeyError, setJourneyError] = useState<string | null>(null);
+  const [journeyBulkRunning, setJourneyBulkRunning] = useState(false);
+  const [journeyBulkProgress, setJourneyBulkProgress] = useState<{ spawned: number; total: number; current?: string } | null>(null);
   // Detail-modal sub-tab + chat state (chat tab loads jsonl from sub-session)
   const [detailTab, setDetailTab] = useState<'screenshots' | 'chat'>('screenshots');
   const [chatMessages, setChatMessages] = useState<JourneyChatMessage[] | null>(null);
@@ -225,6 +227,53 @@ export default function PartnerServerPanel() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detailTab, journeyDetail]);
+
+  const runAllJourneys = useCallback(async () => {
+    if (journeyBulkRunning) return;
+    setJourneyBulkRunning(true);
+    setJourneyError(null);
+    setJourneyBulkProgress({ spawned: 0, total: 0 });
+    try {
+      const r = await fetch(`${API}/journey/run-all`, { method: 'POST' });
+      if (!r.ok || !r.body) throw new Error(`run-all ${r.status}`);
+      const reader = r.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      let spawned = 0, total = 0;
+      const reloadedFor = new Set<string>();
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() || '';
+        for (const ln of lines) {
+          if (!ln.trim()) continue;
+          try {
+            const j = JSON.parse(ln);
+            if (j.done) {
+              spawned = j.spawned ?? spawned;
+              total = j.total ?? total;
+            } else {
+              total += 1;
+              if (j.subSessionId) spawned += 1;
+              setJourneyBulkProgress({ spawned, total, current: `${j.userId}/${j.workspace}` });
+              if (!reloadedFor.has(j.userId)) {
+                reloadedFor.add(j.userId);
+                loadJourneyList(j.userId);
+              }
+            }
+          } catch { /* ignore malformed line */ }
+        }
+      }
+      // Final refresh of all touched users
+      reloadedFor.forEach(uid => loadJourneyList(uid));
+    } catch (e: any) {
+      setJourneyError(`run-all: ${e.message}`);
+    } finally {
+      setJourneyBulkRunning(false);
+    }
+  }, [journeyBulkRunning, loadJourneyList]);
 
   const triggerEvaluate = useCallback(async (userId: string, workspace: string, journeyId: string) => {
     setJourneyError(null);
@@ -623,9 +672,30 @@ export default function PartnerServerPanel() {
             <div style={{ color: 'var(--tn-text-muted)' }}>Keine Daten</div>
           ) : (
             <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
+                <button
+                  onClick={runAllJourneys}
+                  disabled={journeyBulkRunning}
+                  style={{
+                    ...btnStyle,
+                    background: journeyBulkRunning ? 'var(--tn-bg-elevated, #1f2335)' : 'var(--tn-blue, #7aa2f7)',
+                    color: journeyBulkRunning ? 'var(--tn-text-muted, #a9b1d6)' : '#1a1b26',
+                    fontWeight: 600,
+                  }}
+                  title="Spawnt eine Sub-Session pro User × gemapptem Workspace, die selbstständig die App durchtestet"
+                >
+                  {journeyBulkRunning ? '⏳ Spawnt...' : '▶ Alle Journeys neu spawnen'}
+                </button>
+                {journeyBulkProgress && (
+                  <span style={{ fontSize: 11, color: 'var(--tn-text-muted, #a9b1d6)' }}>
+                    {journeyBulkProgress.spawned}/{journeyBulkProgress.total} spawned
+                    {journeyBulkProgress.current && ` · zuletzt: ${journeyBulkProgress.current}`}
+                  </span>
+                )}
+              </div>
               <div style={{ fontSize: 11, color: 'var(--tn-text-muted, #a9b1d6)', marginBottom: 12 }}>
-                Klick auf "▶ Run Journey" startet einen Auto-Login + 4 Screenshots gegen die laufende App.
-                Klick auf einen historischen Eintrag zeigt Markdown + Screenshots.
+                "▶ Run Journey" pro Zelle spawnt eine Sub-Session, die wie ein neuer User die App durchklickt
+                (Login → Sidebar → 3-5 Hauptaktionen). Rechts im Detail-Modal siehst du den Chat-Verlauf.
               </div>
               {journeyError && (
                 <div style={{ color: 'var(--tn-red, #f7768e)', fontSize: 12, marginBottom: 12, padding: '6px 10px', background: 'rgba(247,118,142,0.1)', borderRadius: 4 }}>

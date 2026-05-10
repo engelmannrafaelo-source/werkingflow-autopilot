@@ -23,12 +23,20 @@ import { signJwt } from '../auth/jwt.js';
 import { getUsers, findUser } from '../auth/users.js';
 import { PATHS } from '../config/paths.js';
 import { isForwardMode, adminOrInternal, forwardToPartner } from '../lib/partner-forward.js';
-import { runJourney } from '../lib/journey-runner.js';
+import { prepareJourney } from '../lib/journey-runner.js';
 import { findJsonlPathAllAccounts, readConversationMessages } from './shared/jsonl.js';
 import type { CuiUser } from '../auth/types.js';
 
 const IS_PARTNER = process.env.PARTNER_MODE === '1' || process.env.PARTNER_CUI === '1';
-const JOURNEY_SUB_ACCOUNT = IS_PARTNER ? 'sahori' : 'engelmann';
+
+// Per-user → Anthropic-account mapping. On partner-server only `sahori` and
+// `kurt` are valid (other accountIds resolve to "unknown account"). Kurt's
+// account is reserved for kurt-engelmann; everyone else routes through sahori.
+function journeyAccountFor(userId: string): string {
+  if (!IS_PARTNER) return 'engelmann';
+  if (userId === 'kurt-engelmann') return 'kurt';
+  return 'sahori';
+}
 
 const APP_PORTS: Record<string, number> = {
   'werking-energy': 3007,
@@ -36,6 +44,19 @@ const APP_PORTS: Record<string, number> = {
   'werking-safety': 3006,
   'engelmann': 3009,
 };
+
+// Workspace → backend app name (must match APP_PORTS keys + filesystem path
+// under apps/<app>/config/test-credentials.json).
+const WORKSPACE_APP_MAP: Record<string, string> = {
+  'werking-energy': 'werking-energy',
+  'werking-report': 'werking-report',
+  'werkingsafety': 'werking-safety',
+  'engelmann-ai-hub': 'engelmann',
+  'engelmann-developer': 'engelmann',
+  'engelmann-dashboards': 'engelmann',
+};
+
+const HELPER_PATH = join(process.cwd(), 'server/lib/journey-action.mjs');
 
 const SCREENSHOT_DIR = join(PATHS.dataDir, 'partner-checks', 'screenshots');
 const STORAGE_BASE = join(PATHS.dataDir, 'partner-checks', 'journeys');
@@ -196,6 +217,116 @@ async function capturePlaywright(
     return { durationMs: Date.now() - t0 };
   } finally {
     await browser.close();
+  }
+}
+
+/**
+ * Spawn a Sub-Session that drives `journey-action.mjs` to log into the app
+ * and click around like a real user. Returns immediately with sessionId
+ * (or null + error) — the Sub does its work asynchronously.
+ */
+async function spawnJourneySub(opts: {
+  userId: string;
+  workspace: string;
+  app: string;
+  port: number;
+  email: string;
+  password: string;
+  journeyDir: string;
+  journeyId: string;
+  user: { name: string; role: string };
+}): Promise<{ subSessionId: string | null; subSessionError: string | null; subSessionAccount: string }> {
+  const { userId, workspace, app, port, email, password, journeyDir, user } = opts;
+  const accountId = journeyAccountFor(userId);
+  const wsForMission = IS_PARTNER
+    ? `${PATHS.dataDir}/workspaces/${workspace}`
+    : `/root/orchestrator/workspaces/${workspace}`;
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const message = `Du bist **${user.name}** (${user.role}) und loggst dich gerade frisch in die App **${app}** ein, um sie auszuprobieren wie ein neuer User.
+
+**Identität:** ${userId} (${user.name}, ${user.role})
+**App:** ${app} auf ${baseUrl}
+**Test-Login:** ${email}  /  ${password}
+**Journey-Verzeichnis:** ${journeyDir}
+
+**Browser-Helper** (du hast Bash + Read + Write — sonst nichts):
+\`\`\`bash
+node ${HELPER_PATH} ${journeyDir} <action> [args...]
+\`\`\`
+
+Actions (jede speichert/lädt Cookies in auth.json):
+- \`login <baseUrl> <email> <password>\` → schreibt 01-login.png, 02-form-filled.png, 03-after-login.png. Antwort: \`{ ok, login_success, url, failure_reason? }\`
+- \`goto <absoluteUrl> [--screenshot=<name.png>]\` → Navigation
+- \`click <selector> [--screenshot=<name.png>] [--wait-ms=<n>]\` → CSS-Klick
+- \`fill <selector> <value...>\` → Eingabe
+- \`screenshot <name.png>\` → Nur Screenshot
+- \`text <selector>\` → \`{ ok, text }\` — Element-Text
+- \`dump\` → \`{ ok, url, title, headings, buttons_links, visible_text_excerpt }\`
+
+**Deine Aufgabe — wie ein echter neuer User:**
+
+1. **Login**: \`node ${HELPER_PATH} ${journeyDir} login ${baseUrl} ${email} ${password}\`
+   Wenn \`login_success: false\` → schreibe Ergebnis in \`${journeyDir}/journey.md\` (Format unten) und HÖRE AUF.
+2. **Übersicht**: \`node ${HELPER_PATH} ${journeyDir} dump\` — schau Headings + Buttons an.
+3. **Klick durch 3-5 Hauptaktionen** (Sidebar-Items, "Neues Projekt", "Anlegen", erste Detail-Ansicht). Nach jedem Klick Screenshot mit \`--screenshot=04-...png\`, dann 05, 06, ...
+4. Wenn ein Klick einen Fehler/Leere/etwas Unerwartetes zeigt → das ist ein Finding.
+5. **Schreibe** \`${journeyDir}/journey.md\` im Pflicht-Format:
+
+\`\`\`markdown
+# Journey: ${app} / ${userId} / ${workspace}
+Started: <ISO-timestamp>
+Email: ${email}
+
+## Was ich gemacht habe
+- Schritt 1: ...
+- Schritt 2: ...
+
+## Was funktioniert
+- ...
+
+## Was nicht funktioniert / Findings
+- ...
+
+## Bewertung
+works_e2e: true|false
+rating: 1-5
+summary: <1-2 Sätze>
+
+loginSuccess: true|false
+\`\`\`
+
+Wenn Login fehlgeschlagen: zusätzlich Zeile \`❌ LOGIN FAILED: <reason>\` direkt nach \`loginSuccess: false\`.
+
+**Limits:** maximal 12 Bash-Calls + 1 Write. Kein Edit auf App-Code. Keine Sub-Sub-Sessions. Knapp + ehrlich.`;
+
+  try {
+    const internalJwt = signJwt({
+      sub: userId,
+      name: `Journey: ${user.name}`,
+      role: 'admin',
+      claudeAccountId: accountId,
+    });
+    const startRes = await fetch('http://127.0.0.1:4005/api/mission/start', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${internalJwt}`,
+      },
+      body: JSON.stringify({
+        accountId,
+        workDir: wsForMission,
+        subject: `Journey: ${user.name} / ${workspace}`,
+        model: 'sonnet',
+        message,
+      }),
+    });
+    const startJson: any = await startRes.json().catch(() => ({}));
+    if (startRes.ok && startJson?.sessionId) {
+      return { subSessionId: startJson.sessionId, subSessionError: null, subSessionAccount: accountId };
+    }
+    return { subSessionId: null, subSessionError: startJson?.error || `HTTP ${startRes.status}`, subSessionAccount: accountId };
+  } catch (e: any) {
+    return { subSessionId: null, subSessionError: e?.message || String(e), subSessionAccount: accountId };
   }
 }
 
@@ -394,14 +525,24 @@ export default function createPartnerServerRoutes() {
   // ── Journey endpoints ────────────────────────────────────────────────────
 
   router.post('/journey/run', async (req, res) => {
-    const { userId, workspace, app } = req.body as { userId?: string; workspace?: string; app?: string };
-    if (!userId || !workspace || !app) {
-      res.status(400).json({ error: 'userId, workspace, and app required' });
+    const { userId, workspace, app: appOverride } = req.body as { userId?: string; workspace?: string; app?: string };
+    if (!userId || !workspace) {
+      res.status(400).json({ error: 'userId and workspace required' });
+      return;
+    }
+    const app = appOverride || WORKSPACE_APP_MAP[workspace];
+    if (!app) {
+      res.status(400).json({ error: `Workspace ${workspace} has no journey mapping` });
       return;
     }
     const port = APP_PORTS[app];
     if (!port) {
       res.status(400).json({ error: `Unknown app: ${app}. Known: ${Object.keys(APP_PORTS).join(', ')}` });
+      return;
+    }
+    const user = findUser(userId);
+    if (!user) {
+      res.status(404).json({ error: `User not found: ${userId}` });
       return;
     }
     const credPath = `/home/${userId}/projekte/werkingflow-production/apps/${app}/config/test-credentials.json`;
@@ -414,134 +555,123 @@ export default function createPartnerServerRoutes() {
     try {
       const creds = JSON.parse(readFileSync(credPath, 'utf8'));
       const defaultKey: string = creds.default_user;
-      const user = creds.users?.[defaultKey];
-      if (!user?.email || !user?.password) throw new Error(`No credentials for default_user="${defaultKey}"`);
-      email = user.email;
-      password = user.password;
+      const def = creds.users?.[defaultKey];
+      if (!def?.email || !def?.password) throw new Error(`No credentials for default_user="${defaultKey}"`);
+      email = def.email;
+      password = def.password;
     } catch (err: any) {
       res.status(500).json({ error: `Failed to read credentials: ${err.message}` });
       return;
     }
     try {
-      const result = await runJourney({ userId, workspace, app, port, email, password, baseDir: STORAGE_BASE });
-      // success ONLY when the user actually got past the login screen.
-      // Pipeline-completion alone (4 PNGs written) is NOT success.
-      const success = result.loginSuccess;
-
-      // Spawn a Claude sub-session to walk through what the user would see.
-      // It receives screenshots + journey log, narrates the experience, judges
-      // works_e2e. Output: jsonl that the panel renders as a chat tab.
-      // Best-effort — failures here do NOT fail the journey.
-      let subSessionId: string | null = null;
-      let subSessionError: string | null = null;
+      const { journeyId, dirPath } = prepareJourney(STORAGE_BASE, userId, workspace);
+      const spawn = await spawnJourneySub({
+        userId, workspace, app, port, email, password,
+        journeyDir: dirPath, journeyId,
+        user: { name: user.name, role: user.role },
+      });
       try {
-        const wsForMission = IS_PARTNER
-          ? `${PATHS.dataDir}/workspaces/${workspace}`
-          : `/root/orchestrator/workspaces/${workspace}`;
-        const screenshotList = readdirSync(result.dirPath).filter(f => f.endsWith('.png')).sort();
-        const journeyMd = existsSync(join(result.dirPath, 'journey.md'))
-          ? readFileSync(join(result.dirPath, 'journey.md'), 'utf8')
-          : '';
-        const message = `Du simulierst einen neuen User der sich gerade frisch in die App eingeloggt hat.
-
-**Deine Identitaet:** ${userId} (Rolle laut Workspace: ${workspace})
-**App:** ${app} (Port ${port})
-**Login-Email:** ${email}
-**Journey-Verzeichnis:** ${result.dirPath}
-
-Im Verzeichnis liegen ${screenshotList.length} Screenshots und ein Log:
-${screenshotList.map(s => `- ${s}`).join('\n')}
-- journey.md
-
-**Deine Aufgabe:**
-1. Lies das Journey-Log via Read tool: ${join(result.dirPath, 'journey.md')}
-2. Schau die Screenshots an (Read auf die PNG-Dateien — die kommen als Vision rein).
-3. Beantworte aus User-Sicht (frischer Login, will erkunden was die App kann):
-   - Was sehe ich nach dem Login?
-   - Was kann ich hier offensichtlich machen?
-   - Was waere ein erster sinnvoller Klick?
-   - Funktioniert alles oder ist was kaputt/leer/unklar?
-4. Schliesse mit einem klaren Urteil: works_e2e=true|false und 1-2 Saetze Begruendung.
-
-Halte dich kurz — 4-6 Absaetze reichen. KEIN Edit/Write. Nur Read + Text-Antwort.
-
-Journey-Log Auszug (zum Kontext):
-\`\`\`
-${journeyMd.slice(0, 800)}
-\`\`\`
-`;
-        const startBody = JSON.stringify({
-          accountId: JOURNEY_SUB_ACCOUNT,
-          workDir: wsForMission,
-          subject: `Journey: ${userId} / ${workspace}`,
-          model: 'sonnet',
-          message,
-        });
-        // Self-call needs auth: forge a short-lived JWT. sub MUST be the
-        // userId we're spawning for — resolveUserWorkDir uses it to map
-        // /opt/cui-workspace-data/workspaces/<ws> → /home/<sub>/projekte/...
-        // A synthetic sub like "partner-server-journey" would have no
-        // /home dir → resolver returns workDir unchanged → registered-workspace
-        // validation rejects it.
-        const internalJwt = signJwt({
-          sub: userId,
-          name: `Journey Spawner (${userId})`,
-          role: 'admin',
-          claudeAccountId: JOURNEY_SUB_ACCOUNT,
-        });
-        const startRes = await fetch('http://127.0.0.1:4005/api/mission/start', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${internalJwt}`,
-          },
-          body: startBody,
-        });
-        const startJson: any = await startRes.json().catch(() => ({}));
-        if (startRes.ok && startJson?.sessionId) {
-          subSessionId = startJson.sessionId;
-        } else {
-          subSessionError = startJson?.error || `HTTP ${startRes.status}`;
-        }
-      } catch (e: any) {
-        subSessionError = e?.message || String(e);
-      }
-
-      // Persist meta.json (sessionId + bookkeeping). Always written, even on
-      // sub-spawn failure, so the panel can show the error.
-      try {
-        const metaPath = join(result.dirPath, 'meta.json');
-        writeFileSync(metaPath, JSON.stringify({
-          journeyId: result.journeyId,
-          userId,
-          workspace,
-          app,
+        writeFileSync(join(dirPath, 'meta.json'), JSON.stringify({
+          journeyId, userId, workspace, app,
           createdAt: new Date().toISOString(),
-          subSessionId,
-          subSessionError,
-          subSessionAccount: JOURNEY_SUB_ACCOUNT,
+          subSessionId: spawn.subSessionId,
+          subSessionError: spawn.subSessionError,
+          subSessionAccount: spawn.subSessionAccount,
         }, null, 2), 'utf8');
       } catch (e: any) {
         console.error('[partner-server] meta.json write failed:', e.message);
       }
-
-      const status = success ? 200 : 502;
+      const status = spawn.subSessionId ? 200 : 502;
       res.status(status).json({
-        success,
-        journeyId: result.journeyId,
-        dirPath: result.dirPath,
-        loginSuccess: result.loginSuccess,
-        postLoginUrl: result.postLoginUrl,
-        failureReason: result.failureReason,
-        evaluation: result.evaluation,
-        evaluationError: result.evaluationError,
-        subSessionId,
-        subSessionError,
+        success: !!spawn.subSessionId,
+        journeyId,
+        dirPath,
+        subSessionId: spawn.subSessionId,
+        subSessionError: spawn.subSessionError,
+        subSessionAccount: spawn.subSessionAccount,
       });
     } catch (err: any) {
       console.error('[partner-server] journey/run failed:', err.message);
       res.status(500).json({ success: false, error: err.message });
     }
+  });
+
+  // Bulk: spawns one journey-sub per user × mapped workspace. Streams NDJSON
+  // so the panel sees progress in real-time. Each sub does its work async —
+  // the response returns once all subs are SPAWNED, not when they finish.
+  router.post('/journey/run-all', async (_req, res) => {
+    const users = getUsers().filter(u => u.role !== 'admin');
+    res.setHeader('Content-Type', 'application/x-ndjson');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.flushHeaders?.();
+
+    const results: Array<{ userId: string; workspace: string; journeyId?: string; subSessionId?: string | null; error?: string }> = [];
+
+    for (const u of users) {
+      for (const ws of expandWorkspaces(u)) {
+        const app = WORKSPACE_APP_MAP[ws];
+        if (!app) continue;
+        const port = APP_PORTS[app];
+        if (!port) continue;
+
+        const credPath = `/home/${u.id}/projekte/werkingflow-production/apps/${app}/config/test-credentials.json`;
+        if (!existsSync(credPath)) {
+          const r = { userId: u.id, workspace: ws, error: 'no test-credentials.json' };
+          results.push(r); res.write(JSON.stringify(r) + '\n'); continue;
+        }
+        let email: string, password: string;
+        try {
+          const creds = JSON.parse(readFileSync(credPath, 'utf8'));
+          const def = creds.users?.[creds.default_user];
+          if (!def?.email || !def?.password) throw new Error('no default_user creds');
+          email = def.email; password = def.password;
+        } catch (e: any) {
+          const r = { userId: u.id, workspace: ws, error: `creds: ${e.message}` };
+          results.push(r); res.write(JSON.stringify(r) + '\n'); continue;
+        }
+
+        try {
+          const { journeyId, dirPath } = prepareJourney(STORAGE_BASE, u.id, ws);
+          const spawn = await spawnJourneySub({
+            userId: u.id, workspace: ws, app, port, email, password,
+            journeyDir: dirPath, journeyId,
+            user: { name: u.name, role: u.role },
+          });
+          try {
+            writeFileSync(join(dirPath, 'meta.json'), JSON.stringify({
+              journeyId, userId: u.id, workspace: ws, app,
+              createdAt: new Date().toISOString(),
+              subSessionId: spawn.subSessionId,
+              subSessionError: spawn.subSessionError,
+              subSessionAccount: spawn.subSessionAccount,
+            }, null, 2), 'utf8');
+          } catch { /* ignore */ }
+          const r = {
+            userId: u.id, workspace: ws, journeyId,
+            subSessionId: spawn.subSessionId,
+            error: spawn.subSessionError || undefined,
+          };
+          results.push(r);
+          res.write(JSON.stringify(r) + '\n');
+        } catch (err: any) {
+          const r = { userId: u.id, workspace: ws, error: err?.message || String(err) };
+          results.push(r);
+          res.write(JSON.stringify(r) + '\n');
+        }
+
+        // Throttle: journeyId is second-precision, so back-to-back spawns within
+        // the same second collide on the same dirPath. 1.1s between spawns also
+        // smooths out load on /api/mission/start.
+        await new Promise(r => setTimeout(r, 1100));
+      }
+    }
+
+    res.write(JSON.stringify({
+      done: true,
+      total: results.length,
+      spawned: results.filter(r => r.subSessionId).length,
+    }) + '\n');
+    res.end();
   });
 
   router.get('/journey/list', (req, res) => {
