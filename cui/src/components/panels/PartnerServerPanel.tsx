@@ -733,7 +733,12 @@ export default function PartnerServerPanel() {
                   Fehler: {journeyError}
                 </div>
               )}
-              {Array.from(grouped.entries()).map(([userId, cells]) => {
+              {Array.from(grouped.entries()).map(([userId, allCells]) => {
+                // Journey-Tab zeigt nur testbare Workspaces — Cells ohne
+                // WORKSPACE_TO_APP-Mapping (z.B. _shared, arch-worker, business)
+                // verschwinden hier, sonst dominiert der admin-User die Ansicht.
+                const cells = allCells.filter(c => WORKSPACE_TO_APP[c.workspace]);
+                if (cells.length === 0) return null;
                 const list = journeyByUser[userId] || [];
                 return (
                   <div key={userId} style={{ marginBottom: 24 }}>
