@@ -1005,12 +1005,15 @@ export function initMissionRouter(deps: MissionDeps) {
   // ===========================================================================
   // Auto-Recovery worker: every 5 min, look for ongoing sessions whose CLI
   // process has exited but whose JSONL says they're stuck on rate_limit /
-  // overloaded. Respawn them when conditions allow. Crash + incomplete_tool_use
-  // are NOT auto-recovered here — silent-exit auto-continue (above) handles
-  // those, and respawning a crashed session can corrupt JSONL state.
+  // overloaded / wakeup-overdue. Respawn them when conditions allow. Crash +
+  // incomplete_tool_use are NOT auto-recovered here — silent-exit auto-continue
+  // (above) handles those, and respawning a crashed session can corrupt JSONL.
   //
-  // Why: 2026-05-09 — an acro Sub died silently when the CUI server restarted
+  // Why (2026-05-09): an acro Sub died silently when the CUI server restarted
   // killed its ScheduleWakeup. Without a periodic recheck the Sub stayed dead.
+  // Why (2026-05-10): wakeup-overdue branch — CUI restart drops the in-memory
+  // wakeup timer; diagnoseSessionHealth now flags overdue ScheduleWakeup so the
+  // 5-min tick respawns it. Capped 3/24h via shouldAutoRecover.
   // ===========================================================================
   const _autoRecoveryRunning = { value: false };
   setInterval(async () => {
@@ -1093,6 +1096,8 @@ export function initMissionRouter(deps: MissionDeps) {
 
         const wakeupMsg = reason === 'rate_limit'
           ? `[Auto-Recovery] Wakeup nach Quota-Recovery — fahre fort. (Account ${accountId} wieder verfuegbar, attempt ${attempts + 1})`
+          : reason === 'wakeup-overdue'
+          ? `[Auto-Recovery] Wakeup overdue (CUI restart hat ScheduleWakeup verloren) — fahre fort. (attempt ${attempts + 1})`
           : `[Auto-Recovery] Wakeup nach API-Recovery (${reason}) — fahre fort. (attempt ${attempts + 1})`;
 
         console.log(`[AutoRecovery] ${sessionId.slice(0, 8)}: respawning, reason=${reason}, attempt=${attempts + 1}`);

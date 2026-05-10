@@ -611,11 +611,13 @@ export function hasIncompleteToolUse(sessionId: string): boolean {
 
 export type SessionDiagnosis = {
   needsRecovery: boolean;
-  reason: 'incomplete_tool_use' | 'api_error' | 'overloaded' | 'rate_limit' | 'crash' | 'completed' | 'unknown';
+  reason: 'incomplete_tool_use' | 'api_error' | 'overloaded' | 'rate_limit' | 'crash' | 'completed' | 'wakeup-overdue' | 'unknown';
   details: string;
   lastRole: string;
   lastTimestamp?: string;
 };
+
+const WAKEUP_OVERDUE_GRACE_MS = 60_000;
 
 export function diagnoseSessionHealth(sessionId: string): SessionDiagnosis {
   const found = findJsonlPathAllAccounts(sessionId);
@@ -681,6 +683,27 @@ export function diagnoseSessionHealth(sessionId: string): SessionDiagnosis {
       if (!msg?.role) continue;
 
       if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+        // ScheduleWakeup terminates the SDK, so the JSONL ends with a tool_use
+        // block. Treat that pattern specially: pending wakeup = benign (CUI will
+        // fire it later); overdue wakeup = the in-memory respawn timer was lost
+        // (CUI restart) → caller should recover. Without this branch the wakeup
+        // pattern would be classified as 'incomplete_tool_use' and never recovered.
+        const wakeupBlock = msg.content.find((b: any) => b?.type === 'tool_use' && b?.name === 'ScheduleWakeup');
+        if (wakeupBlock) {
+          const delaySec = Number(wakeupBlock?.input?.delaySeconds) || 0;
+          const ts = entry.timestamp ? Date.parse(entry.timestamp) : 0;
+          if (ts && delaySec) {
+            const wakeupAt = ts + delaySec * 1000;
+            const overdueByMs = Date.now() - wakeupAt;
+            if (overdueByMs > WAKEUP_OVERDUE_GRACE_MS) {
+              const overdueMin = Math.max(1, Math.round(overdueByMs / 60_000));
+              return { needsRecovery: true, reason: 'wakeup-overdue', details: `ScheduleWakeup ${overdueMin}min overdue`, lastRole: 'assistant', lastTimestamp: entry.timestamp };
+            }
+            // Future wakeup — let the wakeup-respawn timer handle it; nothing to recover.
+            const remainMin = Math.max(1, Math.round(-overdueByMs / 60_000));
+            return { needsRecovery: false, reason: 'completed', details: `ScheduleWakeup pending (${remainMin}min remaining)`, lastRole: 'assistant', lastTimestamp: entry.timestamp };
+          }
+        }
         // Check for incomplete tool_use
         const hasToolUse = msg.content.some((b: any) => b.type === 'tool_use');
         if (hasToolUse) {

@@ -150,6 +150,7 @@ export type DiagnosisReason =
   | 'rate_limit'
   | 'crash'
   | 'completed'
+  | 'wakeup-overdue'
   | 'unknown';
 
 export interface AutoRecoveryInputs {
@@ -159,6 +160,73 @@ export interface AutoRecoveryInputs {
   now: number;
   accountAvailable?: boolean;
   maxAttempts?: number;
+}
+
+// ---------------------------------------------------------------------------
+// detectOverdueWakeup — passive ScheduleWakeup that never fired
+// ---------------------------------------------------------------------------
+// Background (2026-05-10): a Drive set ScheduleWakeup at 09:05 + 300s = 09:10,
+// CUI restarted around 09:08, the in-memory wakeup-respawn timer was lost on
+// restart, and the sub stayed dead 37+ min past wakeupAt. Auto-recovery covers
+// rate_limit / overloaded but not "wakeup never fired" — this fills the gap.
+//
+// Pure: caller supplies processAlive (claudeCli.isActive check) + JSONL tail.
+// Result: overdue=true → caller may respawn. processAlive=true is always a
+// no-op (the wakeup did fire and the session is running).
+
+export const WAKEUP_OVERDUE_GRACE_MS = 60_000; // ignore <1min lag — covers tick scheduling
+
+export interface OverdueWakeupInputs {
+  jsonlEntries: JsonlEntry[]; // chronological — oldest first
+  processAlive: boolean;
+  now: number;
+}
+
+export interface OverdueWakeupResult {
+  overdue: boolean;
+  wakeupAt: number;
+  overdueByMs: number;
+  signals: string[];
+}
+
+export function detectOverdueWakeup(inputs: OverdueWakeupInputs): OverdueWakeupResult | null {
+  const { jsonlEntries, processAlive, now } = inputs;
+
+  // Live process — wakeup either fired or is still pending in-memory; nothing to recover.
+  if (processAlive) return null;
+
+  // Find most recent ScheduleWakeup tool_use (mirrors detectWaitState above).
+  const start = Math.max(0, jsonlEntries.length - SCAN_BACK_TURNS);
+  for (let i = jsonlEntries.length - 1; i >= start; i--) {
+    const obj = jsonlEntries[i];
+    if (obj?.type !== 'assistant') continue;
+    const parts = extractContentParts(obj);
+    let wakeup: { input?: { delaySeconds?: unknown } } | null = null;
+    for (const b of parts) {
+      const block = b as { type?: string; name?: string; input?: { delaySeconds?: unknown } };
+      if (block?.type === 'tool_use' && block?.name === 'ScheduleWakeup') {
+        wakeup = block;
+        break;
+      }
+    }
+    if (!wakeup) continue;
+    const delaySec = Number(wakeup.input?.delaySeconds) || 0;
+    const ts = obj.timestamp ? Date.parse(obj.timestamp) : 0;
+    if (!ts || !delaySec) return null;
+    const wakeupAt = ts + delaySec * 1000;
+    const overdueByMs = now - wakeupAt;
+    if (overdueByMs > WAKEUP_OVERDUE_GRACE_MS) {
+      const overdueMin = Math.max(1, Math.round(overdueByMs / 60_000));
+      return {
+        overdue: true,
+        wakeupAt,
+        overdueByMs,
+        signals: [`ScheduleWakeup ${overdueMin}min overdue, processDead`],
+      };
+    }
+    return null; // future or just-fired wakeup — not overdue
+  }
+  return null;
 }
 
 export interface AutoRecoveryDecision {
@@ -174,6 +242,8 @@ export const OVERLOAD_BACKOFF_MS = [
   120 * 60_000,
 ];
 export const DEFAULT_MAX_AUTO_RECOVERY_ATTEMPTS = 5;
+export const WAKEUP_OVERDUE_MAX_PER_DAY = 3;
+export const WAKEUP_OVERDUE_WINDOW_MS = 24 * 60 * 60_000;
 
 export function shouldAutoRecover(inputs: AutoRecoveryInputs): AutoRecoveryDecision {
   const {
@@ -190,6 +260,17 @@ export function shouldAutoRecover(inputs: AutoRecoveryInputs): AutoRecoveryDecis
   }
   if (reason === 'completed' || reason === 'unknown') {
     return { recover: false, skipReason: `nothing-to-recover: ${reason}` };
+  }
+
+  // wakeup-overdue: capped at 3 respawns within a 24h sliding window per session.
+  // If the most recent attempt is older than the window, attempts effectively
+  // reset (caller's counter still increments — the window check guards it).
+  if (reason === 'wakeup-overdue') {
+    const inWindow = lastAttemptMs > 0 && (now - lastAttemptMs) < WAKEUP_OVERDUE_WINDOW_MS;
+    if (inWindow && attempts >= WAKEUP_OVERDUE_MAX_PER_DAY) {
+      return { recover: false, skipReason: `wakeup-overdue-cap: ${WAKEUP_OVERDUE_MAX_PER_DAY}/24h reached` };
+    }
+    return { recover: true };
   }
 
   if (attempts >= maxAttempts) {

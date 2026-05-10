@@ -7,9 +7,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   detectWaitState,
+  detectOverdueWakeup,
   shouldAutoRecover,
   OVERLOAD_BACKOFF_MS,
   DEFAULT_MAX_AUTO_RECOVERY_ATTEMPTS,
+  WAKEUP_OVERDUE_MAX_PER_DAY,
+  WAKEUP_OVERDUE_WINDOW_MS,
   type WaitStateInputs,
   type ChildInfo,
   type JsonlEntry,
@@ -290,4 +293,78 @@ test('shouldAutoRecover: completed → skip (nothing to recover)', () => {
     now: NOW,
   });
   assert.equal(d.recover, false);
+});
+
+// ---------------------------------------------------------------------------
+// detectOverdueWakeup — the 3 mandatory cases (future / overdue+alive / overdue+dead)
+// ---------------------------------------------------------------------------
+
+test('detectOverdueWakeup: future wakeup (wakeupAt > now) → null (no recovery)', () => {
+  // delaySeconds=600, age 60s → wakeup fires at NOW + 540s
+  const result = detectOverdueWakeup({
+    jsonlEntries: [wakeupTurn({ delaySeconds: 600, ageMs: 60_000 })],
+    processAlive: false,
+    now: NOW,
+  });
+  assert.equal(result, null);
+});
+
+test('detectOverdueWakeup: overdue + processAlive=true → null (no-op)', () => {
+  // delaySeconds=60, age 600s → wakeup fired 540s ago, but process still alive
+  const result = detectOverdueWakeup({
+    jsonlEntries: [wakeupTurn({ delaySeconds: 60, ageMs: 600_000 })],
+    processAlive: true,
+    now: NOW,
+  });
+  assert.equal(result, null);
+});
+
+test('detectOverdueWakeup: overdue + processAlive=false → recover', () => {
+  // delaySeconds=300, age 37min → wakeup fired ~32min ago, process dead → overdue
+  const result = detectOverdueWakeup({
+    jsonlEntries: [wakeupTurn({ delaySeconds: 300, ageMs: 37 * 60_000 })],
+    processAlive: false,
+    now: NOW,
+  });
+  assert.ok(result, 'expected overdue result');
+  assert.equal(result.overdue, true);
+  assert.match(result.signals[0], /overdue.*processDead/);
+  // overdueByMs ≈ 37min - 5min = 32min
+  assert.ok(result.overdueByMs > 30 * 60_000 && result.overdueByMs < 35 * 60_000);
+});
+
+// ---------------------------------------------------------------------------
+// shouldAutoRecover — wakeup-overdue branch (3/24h cap)
+// ---------------------------------------------------------------------------
+
+test('shouldAutoRecover: wakeup-overdue, attempts=0 → recover', () => {
+  const d = shouldAutoRecover({
+    reason: 'wakeup-overdue',
+    attempts: 0,
+    lastAttemptMs: 0,
+    now: NOW,
+  });
+  assert.equal(d.recover, true);
+});
+
+test('shouldAutoRecover: wakeup-overdue, 3 attempts within 24h → skip (cap)', () => {
+  const d = shouldAutoRecover({
+    reason: 'wakeup-overdue',
+    attempts: WAKEUP_OVERDUE_MAX_PER_DAY,
+    lastAttemptMs: NOW - 60_000, // 1min ago, well within window
+    now: NOW,
+  });
+  assert.equal(d.recover, false);
+  assert.match(d.skipReason || '', /wakeup-overdue-cap/);
+});
+
+test('shouldAutoRecover: wakeup-overdue, 3 attempts but window expired → recover', () => {
+  // Last attempt > 24h ago → window-reset semantic
+  const d = shouldAutoRecover({
+    reason: 'wakeup-overdue',
+    attempts: WAKEUP_OVERDUE_MAX_PER_DAY + 5,
+    lastAttemptMs: NOW - (WAKEUP_OVERDUE_WINDOW_MS + 60_000),
+    now: NOW,
+  });
+  assert.equal(d.recover, true);
 });
