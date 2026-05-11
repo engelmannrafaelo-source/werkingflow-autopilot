@@ -119,9 +119,9 @@ const S = {
     height: '100%', display: 'flex', flexDirection: 'column' as const,
   },
   header: {
-    padding: '10px 14px 8px', flexShrink: 0,
+    padding: '6px 10px 5px', flexShrink: 0,
     borderBottom: '1px solid var(--tn-border, rgba(255,255,255,0.08))',
-    display: 'flex', alignItems: 'center', gap: '8px',
+    display: 'flex', alignItems: 'center', gap: '6px',
   },
   h2: { margin: 0, fontSize: '14px', color: 'var(--tn-purple, #bb9af7)', fontWeight: 600 },
   body: { flex: 1, overflowY: 'hidden' as const, padding: '10px 14px', display: 'flex', flexDirection: 'column' as const, minHeight: 0 },
@@ -323,7 +323,13 @@ export default function PrivatAngelPanel() {
   const [tempOpen, setTempOpen] = useState(false);
   const [contextCollapsed, setContextCollapsed] = useState(false);
   const [diffsCollapsed, setDiffsCollapsed] = useState(false);
-  const [chatOnly, setChatOnly] = useState(false);
+  const [chatOnly, setChatOnly] = useState(() => {
+    // Default to chat-only on viewports up to iPad-landscape size so the chat
+    // box gets the full panel height instead of being squeezed by the
+    // collapsed-but-still-rendered Kontext / Diffs / FileTree sections.
+    try { return window.matchMedia('(max-width: 1280px)').matches; }
+    catch { return false; }
+  });
 
   // Selected extra files
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
@@ -1120,11 +1126,6 @@ export default function PrivatAngelPanel() {
         {session && (
           <div style={{ ...S.section, flex: 1, display: 'flex', flexDirection: 'column' as const, minHeight: 0 }}>
             {!chatOnly && <div style={S.divider} />}
-            {!chatOnly && (
-              <div style={{ display: 'flex', alignItems: 'center', marginBottom: '6px' }}>
-                <span style={{ fontSize: '11px', fontWeight: 600 }}>Chat</span>
-              </div>
-            )}
             <div
               style={{ ...S.chatBox, WebkitOverflowScrolling: 'touch' as any }}
             >
