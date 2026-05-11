@@ -1678,30 +1678,7 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           }
         }
 
-        // Filter out sub-sessions when showSubSessions is false
-        const showSubs = localStorage.getItem('cui-show-sub-sessions') === 'true';
-        // Remove mounted sub-session tabs when sub-sessions are hidden.
-        // Use global sub-sessions list (not workspace-filtered) so [Arch-Fix] etc. from other workspaces are caught.
-        if (!showSubs) {
-          try {
-            const subRes = await fetch('/api/mission/sub-sessions', { signal: AbortSignal.timeout(3000) });
-            if (subRes.ok && !disposed) {
-              const subData = await subRes.json();
-              const allSubIds = new Set<string>((subData.sessions || []).map((s: any) => s.sessionId));
-              for (const [sid, nodeId] of mountedSessions) {
-                // Also treat any mounted session whose subject starts with a sub prefix
-                const convData = conversations.find((c: any) => c.sessionId === sid);
-                const isSub = allSubIds.has(sid) || convData?.isSubSession;
-                if (!isSub) continue;
-                try {
-                  m.doAction(Actions.deleteTab(nodeId));
-                  mountedSessions.delete(sid);
-                } catch {} // silent-ok: stale sub-session tab removal is non-critical
-              }
-            }
-          } catch {} // silent-ok: sub-sessions fetch failure; sub-session tabs stay mounted temporarily
-        }
-        const missing = active.filter((c: any) => !mountedSessions.has(c.sessionId) && !sessionsInMissionChat.has(c.sessionId) && (showSubs || !c.isSubSession));
+        const missing = active.filter((c: any) => !mountedSessions.has(c.sessionId));
 
         // Report missing sessions count to parent (for Layout button indicator)
         onMissingSessionsRef.current?.(missing.length);
@@ -1718,13 +1695,6 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         const newlyMounted: Array<{ panelId: string; sessionId: string }> = [];
 
         for (const conv of missing) {
-          // Skip mission-chat sessions — they belong only in mission-chat panels
-          if (conv.projectPath === '/root/orchestrator/workspaces/mission-chat' ||
-              conv.subject?.toLowerCase().includes('mission chat') ||
-              conv.isMissionChat) {
-            continue;
-          }
-
           // Priority 1: Reuse an empty/stale CUI panel — just update its config
           // (always allowed — needed to show sessions on load and after sync)
           if (emptyPanels.length > 0) {
