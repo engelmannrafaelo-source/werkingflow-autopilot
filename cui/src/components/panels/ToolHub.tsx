@@ -18,7 +18,7 @@ import {
   ArchitectureExplorer, ReportBuilder, PromptExplorer, BusinessAngelPanel, PrivatAngelPanel,
   MyTasksPanel, ActivityFeedPanel, PartnerInboxPanel,
   FeedbackPanel, TeamStatusPanel, BusinessDocsPanel, UploadPanel,
-  CalendarPanel, MailPanel, ErrorMonitor, PartnerServerPanel,
+  CalendarPanel, MailPanel, ErrorMonitor, PartnerServerPanel, SandboxAngelPanel,
 } from '../panelLazy';
 
 const API = '/api';
@@ -174,6 +174,8 @@ export default function ToolHub({ projectId, workDir }: ToolHubProps) {
       case 'mail': return withSuspense(<MailPanel />);
       case 'error-monitor': return withSuspense(<ErrorMonitor />);
       case 'partner-server': return withSuspense(<PartnerServerPanel />);
+      case 'sandbox-privat-angel': return withSuspense(<SandboxAngelPanel mode="private" />);
+      case 'sandbox-business-angel': return withSuspense(<SandboxAngelPanel mode="business" />);
       default: return <div style={{ padding: 20, color: 'var(--tn-text-muted)' }}>Unknown: {activeTool}</div>;
     }
   };
