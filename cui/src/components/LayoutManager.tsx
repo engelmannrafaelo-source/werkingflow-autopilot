@@ -74,7 +74,7 @@ import {
   ArchitectureExplorer, ReportBuilder, PromptExplorer, BusinessAngelPanel, PrivatAngelPanel,
   MyTasksPanel, ActivityFeedPanel, PartnerInboxPanel,
   FeedbackPanel, TeamStatusPanel, BusinessDocsPanel, UploadPanel, ToolHub,
-  CalendarPanel, MailPanel, ErrorMonitor, PartnerServerPanel,
+  CalendarPanel, MailPanel, ErrorMonitor, PartnerServerPanel, SandboxAngelPanel,
   PANEL_NAMES, PANEL_MENU_OPTIONS,
 } from './panelRegistry';
 // LayoutBuilder ist Desktop-only — bleibt hier
@@ -570,6 +570,10 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         return wrapPanel('ErrorMonitor', withSuspense(<ErrorMonitor />));
       case 'partner-server':
         return wrapPanel('Partner Server Health', withSuspense(<PartnerServerPanel />));
+      case 'sandbox-privat-angel':
+        return wrapPanel('Privat-Assistent', withSuspense(<SandboxAngelPanel mode="private" />));
+      case 'sandbox-business-angel':
+        return wrapPanel('Business-Assistent', withSuspense(<SandboxAngelPanel mode="business" />));
       default:
         return wrapPanel(`Unknown:${component}`,
           <div style={{ padding: 20, color: 'var(--tn-text-muted)' }}>

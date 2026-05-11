@@ -33,3 +33,4 @@ export const CalendarPanel = lazy(() => import('./panels/CalendarPanel'));
 export const MailPanel = lazy(() => import('./panels/MailPanel'));
 export const ErrorMonitor = lazy(() => import('./panels/ErrorMonitor/ErrorMonitor'));
 export const PartnerServerPanel = lazy(() => import('./panels/PartnerServerPanel'));
+export const SandboxAngelPanel = lazy(() => import('./panels/SandboxAngelPanel'));
