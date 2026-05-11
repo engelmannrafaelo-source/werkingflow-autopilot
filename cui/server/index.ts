@@ -318,6 +318,10 @@ app.use('/api/code-mgmt', createCodeMgmtRoutes());
 // --- Partner-Audit (BEFORE /api auth — same forward pattern as partner-server) ---
 app.use('/api/partner-audit', partnerAuditRouter);
 
+// --- Partner Feedback (BEFORE /api auth — self-authenticates via authOrInternal
+//     so dev-cui forward → partner-cui works with internal-token instead of JWT) ---
+app.use('/api/partner', createPartnerFeedbackRouter());
+
 // --- Auth middleware (no-op when users.json doesn't exist) ---
 app.use('/api', requireAuth);
 
@@ -376,9 +380,6 @@ app.use('/api/partner', partnerActivityRouter);                // /api/partner/a
 // --- Partner Docs API ---
 app.use('/api/partner', partnerDocsRouter);                    // /api/partner/docs (GET/POST/DELETE)
 app.use(partnerMessagesRouter);                             // /api/partner/messages (GET/POST)
-
-// --- Partner Feedback API ---
-app.use('/api/partner', createPartnerFeedbackRouter());     // /api/partner/feedback (GET/POST/PATCH)
 
 // --- Partner Team Status API ---
 app.use('/api/partner', createPartnerTeamStatusRouter());   // /api/partner/team-status?app=

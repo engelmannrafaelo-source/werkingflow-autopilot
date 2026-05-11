@@ -34,6 +34,22 @@ export function adminOrInternal(req: Request, res: Response, next: NextFunction)
 }
 
 /**
+ * Auth middleware: accepts ANY authenticated user JWT OR the shared internal-token.
+ * Use for routes that need authentication but role-gate internally (e.g. feedback,
+ * where admin sees all entries and fachpartner sees only their own).
+ */
+export function authOrInternal(req: Request, res: Response, next: NextFunction): void {
+  const internalToken = process.env.CUI_PARTNER_INTERNAL_TOKEN;
+  const headerToken = req.header('x-cui-internal-token');
+  if (internalToken && headerToken && headerToken === internalToken) {
+    (req as any).user = { sub: '__internal__', name: 'Internal', role: 'admin', claudeAccountId: 'internal' };
+    next();
+    return;
+  }
+  requireAuth(req, res, next);
+}
+
+/**
  * Transparent forward to the upstream partner-server. Streams the response
  * body so streaming endpoints (NDJSON, SSE) work too.
  */

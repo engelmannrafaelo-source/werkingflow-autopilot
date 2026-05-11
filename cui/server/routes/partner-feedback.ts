@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { appendFileSync, readFileSync, existsSync, mkdirSync, writeFileSync, renameSync } from 'fs';
 import { join, dirname } from 'path';
 import { PATHS } from '../config/paths.js';
-import { isForwardMode, forwardToPartner } from '../lib/partner-forward.js';
+import { isForwardMode, forwardToPartner, authOrInternal } from '../lib/partner-forward.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -63,6 +63,11 @@ export default function createPartnerFeedbackRouter(): Router {
     router.use(forwardToPartner);
     return router;
   }
+
+  // Native (partner-server) path: accept user-JWT or the internal-token header
+  // (so dev→partner forward requests authenticate without per-user JWTs).
+  // Mounted in server/index.ts BEFORE the global requireAuth.
+  router.use(authOrInternal);
 
   // POST /api/partner/feedback — Submit feedback
   router.post('/feedback', (req: Request, res: Response) => {
