@@ -82,33 +82,49 @@ function cellKey(userId: string, workspace: string) {
 }
 
 // Resolve the app login (email/password) the journey-sub should use for
-// userId × workspace. Priority:
-//   1. partner-cui-credentials.json → users[].appLogins[workspace] (per-partner SSoT,
-//      mirrors what the launch mail promised — e.g. Markus → markus.plasser@icloud.com,
-//      David Steiner → plasser-tenant for real data).
-//   2. apps/<app>/config/test-credentials.json → users[default_user] (generic fallback).
+// userId × workspace.
+//
+// Two-level lookup that keeps test-credentials.json as the only place where
+// real passwords live:
+//   1. partner-cui-credentials.json → users[].appLogins[workspace] holds a
+//      USER-KEY (e.g. "plasser", "owner", "demo"). It tells us *which* app user
+//      this partner represents — but never the password itself.
+//   2. apps/<app>/config/test-credentials.json → users[<key>] resolves that
+//      key to the real email + password.
+//   3. If no per-partner mapping exists, fall back to creds.default_user.
+//
+// Effect: editing a password requires touching exactly one file
+// (test-credentials.json). Partner-cui-credentials only ever references which
+// account a partner should land in, never duplicates the secret.
 function resolveAppLogin(userId: string, app: string, workspace: string): { email: string; password: string } {
-  const partnerCredsPath = `/home/${userId}/projekte/werkingflow-production/config/partner-cui-credentials.json`;
-  if (existsSync(partnerCredsPath)) {
-    try {
-      const pcreds = JSON.parse(readFileSync(partnerCredsPath, 'utf8'));
-      const user = pcreds.users?.find((u: any) => u.username === userId);
-      const login = user?.appLogins?.[workspace];
-      if (login?.email && login?.password) {
-        return { email: login.email, password: login.password };
-      }
-    } catch {
-      // fall through to default_user
-    }
-  }
   const credPath = `/home/${userId}/projekte/werkingflow-production/apps/${app}/config/test-credentials.json`;
   if (!existsSync(credPath)) {
     throw new Error(`test-credentials.json not found: ${credPath}`);
   }
   const creds = JSON.parse(readFileSync(credPath, 'utf8'));
-  const def = creds.users?.[creds.default_user];
+
+  let userKey: string | undefined;
+  const partnerCredsPath = `/home/${userId}/projekte/werkingflow-production/config/partner-cui-credentials.json`;
+  if (existsSync(partnerCredsPath)) {
+    try {
+      const pcreds = JSON.parse(readFileSync(partnerCredsPath, 'utf8'));
+      const user = pcreds.users?.find((u: any) => u.username === userId);
+      const entry = user?.appLogins?.[workspace];
+      if (typeof entry === 'string') {
+        userKey = entry;
+      } else if (entry?.email && entry?.password) {
+        // Legacy inline form, still honored so a half-rolled-out repo doesn't break logins.
+        return { email: entry.email, password: entry.password };
+      }
+    } catch {
+      // fall through to default_user
+    }
+  }
+
+  const resolvedKey = userKey ?? creds.default_user;
+  const def = creds.users?.[resolvedKey];
   if (!def?.email || !def?.password) {
-    throw new Error(`No credentials for default_user="${creds.default_user}"`);
+    throw new Error(`No credentials for user-key "${resolvedKey}" in ${credPath}`);
   }
   return { email: def.email, password: def.password };
 }
