@@ -249,32 +249,43 @@ async function spawnJourneySub(opts: {
 **Test-Login:** ${email}  /  ${password}
 **Journey-Verzeichnis:** ${journeyDir}
 
-**Browser-Helper** (du hast Bash + Read + Write — sonst nichts):
-\`\`\`bash
-node ${HELPER_PATH} ${journeyDir} <action> [args...]
+**WICHTIG — Sequence-Modus:** Vorher hatten Subs ein Tool-Problem: jeder Bash-Call startete einen frischen Chromium der den Login verloren hat. Jetzt schreibst du ALLE Schritte in EINE JSON-Datei und führst sie in einem Browser-Lauf aus.
+
+**Workflow:**
+
+**Schritt 1 — Sequenz planen:** Schreibe \`${journeyDir}/actions.json\` mit allen Aktionen:
+
+\`\`\`json
+[
+  { "do": "login", "baseUrl": "${baseUrl}", "email": "${email}", "password": "${password}" },
+  { "do": "dump" },
+  { "do": "click", "selector": "a:has-text('Projekte')", "screenshot": "04-projekte.png" },
+  { "do": "dump" },
+  { "do": "click", "selector": "button:has-text('Neuer Bericht'), button:has-text('Anlegen')", "screenshot": "05-neu.png" },
+  { "do": "screenshot", "name": "06-final.png" }
+]
 \`\`\`
 
-Actions (jede speichert/lädt Cookies in auth.json):
-- \`login <baseUrl> <email> <password>\` → schreibt 01-login.png, 02-form-filled.png, 03-after-login.png. Antwort: \`{ ok, login_success, url, failure_reason? }\`
-- \`goto <absoluteUrl> [--screenshot=<name.png>]\` → Navigation
-- \`click <selector> [--screenshot=<name.png>] [--wait-ms=<n>]\` → CSS-Klick
-- \`fill <selector> <value...>\` → Eingabe
-- \`screenshot <name.png>\` → Nur Screenshot
-- \`text <selector>\` → \`{ ok, text }\` — Element-Text
-- \`dump\` → \`{ ok, url, title, headings, buttons_links, visible_text_excerpt }\`
+Action-Typen:
+- \`{ "do": "login", "baseUrl", "email", "password" }\` → Login + 01/02/03-pngs
+- \`{ "do": "click", "selector", "screenshot"?, "waitMs"? }\` → CSS-Selector klicken. Selector kann mehrere Varianten mit Komma trennen
+- \`{ "do": "goto", "url", "screenshot"? }\` → nur für absolute URLs aus dump (NICHT raten!)
+- \`{ "do": "fill", "selector", "value" }\` → Input ausfüllen
+- \`{ "do": "screenshot", "name" }\` → Screenshot
+- \`{ "do": "text", "selector" }\` → Element-Text in seq-result.json
+- \`{ "do": "dump" }\` → URL, Title, Headings, Buttons, Text-Auszug in seq-result.json
+- \`{ "do": "wait", "ms" }\` → wartet
 
-**Deine Aufgabe — wie ein echter neuer User:**
+**Schritt 2 — Ausführen** (ein einziger Bash-Call!):
+\`\`\`bash
+node ${HELPER_PATH} ${journeyDir} seq ${journeyDir}/actions.json
+\`\`\`
 
-1. **Login**: \`node ${HELPER_PATH} ${journeyDir} login ${baseUrl} ${email} ${password}\`
-   Wenn \`login_success: false\` → schreibe Ergebnis in \`${journeyDir}/journey.md\` (Format unten) und HÖRE AUF.
-2. **Übersicht**: \`node ${HELPER_PATH} ${journeyDir} dump\` — schau Headings + Buttons an.
-3. **Klick durch 3-5 Hauptaktionen** indem du **echte UI-Elemente klickst**, nicht URLs ratest:
-   - Hauptnavigation: \`click "a:has-text('Projekte')" --screenshot=04-projekte.png\` (oder \`button:has-text(...)\` / \`[role=link]:has-text(...)\`)
-   - Aktions-Buttons: \`click "button:has-text('Neuer Bericht')" --screenshot=05-neuer-bericht.png\`
-   - Detail-Ansicht: \`click "[data-testid*='project'], .project-card" --screenshot=06-detail.png\`
-4. **KEIN \`goto <url>\` zum Raten von Routen.** Wenn ein Sidebar-Item nichts tut/404 produziert, ist DAS der Bug — dokumentiere ihn, aber tippe nicht selbst Routen wie \`/berichte\` ein. \`goto\` nur zur Rückkehr auf die Startseite oder explizit aus Buttons abgeleitete absolute URLs.
-5. Wenn ein Klick einen Fehler/Leere/Unerwartetes zeigt → das ist ein Finding (App-Bug). Wenn du nicht findest wie du irgendwohin kommst → auch ein Finding (UX/Navigation-Bug).
-6. **Schreibe** \`${journeyDir}/journey.md\` im Pflicht-Format:
+**Schritt 3 — Resultate lesen:** \`${journeyDir}/seq-result.json\` enthält pro Schritt \`{ idx, do, ok, url, headings, buttons_links, ... }\`. Die PNGs liegen direkt im Journey-Verzeichnis.
+
+**Schritt 4 — Optional zweite Sequenz:** Wenn du nach dem dump bessere Selectoren siehst, schreib eine zweite actions.json und führe sie nochmal aus. Storage wird automatisch persistiert.
+
+**Schritt 5 — Schreibe \`${journeyDir}/journey.md\`** im Pflicht-Format:
 
 \`\`\`markdown
 # Journey: ${app} / ${userId} / ${workspace}
@@ -299,9 +310,13 @@ summary: <1-2 Sätze>
 loginSuccess: true|false
 \`\`\`
 
-Wenn Login fehlgeschlagen: zusätzlich Zeile \`❌ LOGIN FAILED: <reason>\` direkt nach \`loginSuccess: false\`.
-
-**Limits:** maximal 12 Bash-Calls + 1 Write. Kein Edit auf App-Code. Keine Sub-Sub-Sessions. Knapp + ehrlich.`;
+**Regeln:**
+- Plane realistisch: Login + dump + 3-5 Klicks + 1-2 dumps zur Verifizierung. 8-12 Actions in der actions.json reichen.
+- Wenn ein Klick scheitert (\`ok: false\`) → das ist ein Finding. Beschreibe was du erwartet hast vs. was passiert ist.
+- Wenn du nach dem ersten dump die Nav-Struktur nicht klar siehst → schreibe das als UX-Bug.
+- **NICHT mehr** mehrere Bash-Calls für login/dump/click — Session geht sonst verloren! Immer Sequence-Modus.
+- Login fehlgeschlagen: Zeile \`❌ LOGIN FAILED: <reason>\` direkt nach \`loginSuccess: false\` in journey.md.
+- **Limits:** maximal 3 Bash-Calls (eine bis zwei Sequenzen + Read auf Result), 1 Write auf actions.json, 1 Write auf journey.md. Kein Edit/Glob/Grep. Knapp + ehrlich.`;
 
   try {
     const internalJwt = signJwt({

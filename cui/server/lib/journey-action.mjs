@@ -54,6 +54,116 @@ function flag(args, prefix) {
   return a ? a.slice(prefix.length) : null;
 }
 
+/**
+ * Sequence mode: read actions.json, run every action in ONE browser context.
+ * This is the recommended mode — single-action calls reload storage_state
+ * from disk each time, which loses Supabase / SSR-cookie sessions because
+ * the in-memory token-refresh-loop is gone after the previous browser closed.
+ */
+async function runSequence(journeyDir, seqFile) {
+  const authPath = join(journeyDir, 'auth.json');
+  const actions = JSON.parse(await fs.readFile(seqFile, 'utf8'));
+  if (!Array.isArray(actions)) throw new Error('seq file must be a JSON array of actions');
+
+  const pw = await loadPlaywright();
+  const browser = await pw.chromium.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
+  });
+  const ctxOpts = { viewport: { width: 1440, height: 900 } };
+  if (existsSync(authPath)) ctxOpts.storageState = authPath;
+  const ctx = await browser.newContext(ctxOpts);
+  const page = await ctx.newPage();
+
+  const results = [];
+  for (let i = 0; i < actions.length; i++) {
+    const a = actions[i];
+    const step = { idx: i, do: a.do, ok: true };
+    try {
+      if (a.do === 'login') {
+        await page.goto(`${a.baseUrl}/login`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await page.screenshot({ path: join(journeyDir, '01-login.png'), type: 'png' });
+        await page.fill('input[type="email"], input[name="email"], input[placeholder*="mail" i]', a.email);
+        await page.fill('input[type="password"], input[name="password"]', a.password);
+        await page.screenshot({ path: join(journeyDir, '02-form-filled.png'), type: 'png' });
+        await Promise.all([
+          page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {}),
+          page.click('button[type="submit"], button:has-text("Login"), button:has-text("Anmelden"), button:has-text("Einloggen")').catch(() => {}),
+        ]);
+        await page.waitForTimeout(2500);
+        await page.screenshot({ path: join(journeyDir, '03-after-login.png'), type: 'png' });
+        step.url = page.url();
+        step.login_success = !step.url.includes('/login');
+        if (!step.login_success) {
+          for (const sel of ['[role="alert"]', '.error', '[class*="error" i]']) {
+            const t = await page.locator(sel).first().textContent({ timeout: 500 }).catch(() => null);
+            if (t && t.trim()) { step.failure_reason = t.trim().slice(0, 300); break; }
+          }
+        }
+      } else if (a.do === 'goto') {
+        await page.goto(a.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await page.waitForTimeout(a.waitMs || 1500);
+        if (a.screenshot) await page.screenshot({ path: join(journeyDir, a.screenshot), type: 'png' });
+        step.url = page.url();
+      } else if (a.do === 'click') {
+        await page.click(a.selector, { timeout: 10000 });
+        await page.waitForTimeout(a.waitMs || 1500);
+        if (a.screenshot) await page.screenshot({ path: join(journeyDir, a.screenshot), type: 'png' });
+        step.url = page.url();
+      } else if (a.do === 'fill') {
+        await page.fill(a.selector, a.value);
+      } else if (a.do === 'screenshot') {
+        await page.screenshot({ path: join(journeyDir, a.name), type: 'png' });
+      } else if (a.do === 'text') {
+        const t = await page.locator(a.selector).first().textContent({ timeout: 5000 }).catch(() => null);
+        step.text = (t || '').slice(0, 1500);
+      } else if (a.do === 'dump') {
+        const title = await page.title().catch(() => '');
+        const headings = [];
+        for (const sel of ['h1', 'h2']) {
+          const locs = page.locator(sel);
+          const n = Math.min(await locs.count(), 8);
+          for (let j = 0; j < n; j++) {
+            const t = ((await locs.nth(j).textContent({ timeout: 500 }).catch(() => '')) || '').trim();
+            if (t) headings.push(`${sel}: ${t.slice(0, 100)}`);
+          }
+        }
+        const buttons = [];
+        for (const sel of ['button', 'a[href]', '[role="button"]']) {
+          const locs = page.locator(sel);
+          const n = Math.min(await locs.count(), 25);
+          for (let j = 0; j < n; j++) {
+            const t = ((await locs.nth(j).textContent({ timeout: 500 }).catch(() => '')) || '').trim();
+            if (t && t.length < 80) buttons.push(`${sel}: ${t}`);
+          }
+        }
+        const body = ((await page.locator('body').textContent({ timeout: 2000 }).catch(() => '')) || '').replace(/\s+/g, ' ').trim();
+        step.url = page.url();
+        step.title = title;
+        step.headings = headings;
+        step.buttons_links = buttons.slice(0, 40);
+        step.visible_text_excerpt = body.slice(0, 1500);
+      } else if (a.do === 'wait') {
+        await page.waitForTimeout(a.ms || 1000);
+      } else {
+        step.ok = false;
+        step.error = `Unknown action: ${a.do}`;
+      }
+    } catch (e) {
+      step.ok = false;
+      step.error = String(e?.message || e);
+      try { step.url = page.url(); } catch { /* ignore */ }
+    }
+    results.push(step);
+    if (!step.ok && a.stopOnError !== false) break;
+  }
+
+  try { await ctx.storageState({ path: authPath }); } catch { /* ignore */ }
+  try { await browser.close(); } catch { /* already closed */ }
+  await fs.writeFile(join(journeyDir, 'seq-result.json'), JSON.stringify({ ok: true, steps: results }, null, 2));
+  process.stdout.write(JSON.stringify({ ok: true, steps: results.length, dir: journeyDir }) + '\n');
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const [journeyDirRaw, action, ...rest] = argv;
@@ -63,6 +173,18 @@ async function main() {
   const journeyDir = resolve(journeyDirRaw);
   await fs.mkdir(journeyDir, { recursive: true });
   const authPath = join(journeyDir, 'auth.json');
+
+  // Sequence mode — preferred: one browser per Sub-Session, no session loss.
+  if (action === 'seq') {
+    const seqFile = rest[0];
+    if (!seqFile) emitFail({ ok: false, error: 'seq needs <actions.json>' }, 2);
+    try {
+      await runSequence(journeyDir, seqFile);
+      return;
+    } catch (e) {
+      emitFail({ ok: false, error: String(e?.message || e) });
+    }
+  }
 
   const pw = await loadPlaywright();
   const browser = await pw.chromium.launch({
