@@ -81,6 +81,38 @@ function cellKey(userId: string, workspace: string) {
   return `${userId}__${workspace}`;
 }
 
+// Resolve the app login (email/password) the journey-sub should use for
+// userId × workspace. Priority:
+//   1. partner-cui-credentials.json → users[].appLogins[workspace] (per-partner SSoT,
+//      mirrors what the launch mail promised — e.g. Markus → markus.plasser@icloud.com,
+//      David Steiner → plasser-tenant for real data).
+//   2. apps/<app>/config/test-credentials.json → users[default_user] (generic fallback).
+function resolveAppLogin(userId: string, app: string, workspace: string): { email: string; password: string } {
+  const partnerCredsPath = `/home/${userId}/projekte/werkingflow-production/config/partner-cui-credentials.json`;
+  if (existsSync(partnerCredsPath)) {
+    try {
+      const pcreds = JSON.parse(readFileSync(partnerCredsPath, 'utf8'));
+      const user = pcreds.users?.find((u: any) => u.username === userId);
+      const login = user?.appLogins?.[workspace];
+      if (login?.email && login?.password) {
+        return { email: login.email, password: login.password };
+      }
+    } catch {
+      // fall through to default_user
+    }
+  }
+  const credPath = `/home/${userId}/projekte/werkingflow-production/apps/${app}/config/test-credentials.json`;
+  if (!existsSync(credPath)) {
+    throw new Error(`test-credentials.json not found: ${credPath}`);
+  }
+  const creds = JSON.parse(readFileSync(credPath, 'utf8'));
+  const def = creds.users?.[creds.default_user];
+  if (!def?.email || !def?.password) {
+    throw new Error(`No credentials for default_user="${creds.default_user}"`);
+  }
+  return { email: def.email, password: def.password };
+}
+
 // Restore captures Map from disk on startup. Without this, every server restart
 // makes the matrix endpoint return null screenshotUrls until each cell is captured
 // again — even though the PNGs still exist on disk. Frontend then shows
@@ -564,22 +596,12 @@ export default function createPartnerServerRoutes() {
       res.status(404).json({ error: `User not found: ${userId}` });
       return;
     }
-    const credPath = `/home/${userId}/projekte/werkingflow-production/apps/${app}/config/test-credentials.json`;
-    if (!existsSync(credPath)) {
-      res.status(404).json({ error: `test-credentials.json not found: ${credPath}` });
-      return;
-    }
     let email: string;
     let password: string;
     try {
-      const creds = JSON.parse(readFileSync(credPath, 'utf8'));
-      const defaultKey: string = creds.default_user;
-      const def = creds.users?.[defaultKey];
-      if (!def?.email || !def?.password) throw new Error(`No credentials for default_user="${defaultKey}"`);
-      email = def.email;
-      password = def.password;
+      ({ email, password } = resolveAppLogin(userId, app, workspace));
     } catch (err: any) {
-      res.status(500).json({ error: `Failed to read credentials: ${err.message}` });
+      res.status(500).json({ error: `Failed to resolve credentials: ${err.message}` });
       return;
     }
     try {
@@ -640,17 +662,9 @@ export default function createPartnerServerRoutes() {
         const port = APP_PORTS[app];
         if (!port) continue;
 
-        const credPath = `/home/${u.id}/projekte/werkingflow-production/apps/${app}/config/test-credentials.json`;
-        if (!existsSync(credPath)) {
-          const r = { userId: u.id, workspace: ws, error: 'no test-credentials.json' };
-          results.push(r); res.write(JSON.stringify(r) + '\n'); continue;
-        }
         let email: string, password: string;
         try {
-          const creds = JSON.parse(readFileSync(credPath, 'utf8'));
-          const def = creds.users?.[creds.default_user];
-          if (!def?.email || !def?.password) throw new Error('no default_user creds');
-          email = def.email; password = def.password;
+          ({ email, password } = resolveAppLogin(u.id, app, ws));
         } catch (e: any) {
           const r = { userId: u.id, workspace: ws, error: `creds: ${e.message}` };
           results.push(r); res.write(JSON.stringify(r) + '\n'); continue;
