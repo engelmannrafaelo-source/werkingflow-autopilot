@@ -252,68 +252,77 @@ router.post("/api/claude-code/scrape-now", async (req, res) => {
   });
 });
 
+export interface RankedAccount {
+  accountId: string;
+  accountName: string;
+  weeklyPercent: number;
+  sessionPercent: number;
+  status: 'safe' | 'warning' | 'critical';
+  extraDepleted: boolean;
+  available: boolean;
+}
+
+/**
+ * Pure ranking function — usable in-process by mission.ts without a self-HTTP-fetch
+ * (the route had `Authentication required`, so internal callers always fell through
+ * to the hardcoded 'werking' fallback, which doesn't exist on partner-server).
+ */
+export function rankAccounts(): { bestAccount: string | null; accounts: RankedAccount[] } {
+  const scrapedMap: Record<string, any> = {};
+  try {
+    if (existsSync(SCRAPED_FILE)) {
+      const scraped = JSON.parse(readFileSync(SCRAPED_FILE, "utf-8"));
+      for (const entry of scraped) {
+        const key = entry.account?.toLowerCase().replace(/@.*/, "").replace(/\..+/, "");
+        if (key) scrapedMap[key] = entry;
+      }
+    }
+  } catch { /* scraped data optional */ }
+
+  const ranked: RankedAccount[] = CC_ACCOUNTS.map(acc => {
+    const scraped = scrapedMap[acc.id];
+    const weeklyPercent = scraped?.weeklyAllModels?.percent ?? 0;
+    const sessionPercent = scraped?.currentSession?.percent ?? 0;
+    const extraBalance = scraped?.extraUsage?.balance ? parseFloat(scraped.extraUsage.balance) : Infinity;
+    const extraDepleted = (scraped?.extraUsage?.percent ?? 0) >= 100 && extraBalance <= 0;
+
+    let status: 'safe' | 'warning' | 'critical' = 'safe';
+    if (weeklyPercent >= 80 || extraDepleted) status = 'critical';
+    else if (weeklyPercent >= 50) status = 'warning';
+
+    return {
+      accountId: acc.id,
+      accountName: acc.displayName,
+      weeklyPercent: Math.round(weeklyPercent * 10) / 10,
+      sessionPercent: Math.round(sessionPercent * 10) / 10,
+      status,
+      extraDepleted,
+      available: status !== 'critical',
+    };
+  }).sort((a, b) => {
+    if (a.available !== b.available) return a.available ? -1 : 1;
+    return a.weeklyPercent - b.weeklyPercent;
+  });
+
+  const best = ranked.find(a => a.available);
+  return { bestAccount: best?.accountId ?? null, accounts: ranked };
+}
+
 // GET /api/claude-code/best-account — Returns the least-loaded account for spawning new sessions
 router.get("/api/claude-code/best-account", (_req, res) => {
   try {
-    let scrapedMap: Record<string, any> = {};
-    try {
-      if (existsSync(SCRAPED_FILE)) {
-        const scraped = JSON.parse(readFileSync(SCRAPED_FILE, "utf-8"));
-        for (const entry of scraped) {
-          const key = entry.account?.toLowerCase().replace(/@.*/, "").replace(/\..+/, "");
-          if (key) scrapedMap[key] = entry;
-        }
-      }
-    } catch { /* scraped data optional */ }
-
-    // Build account list with utilization
-    const ranked = CC_ACCOUNTS.map(acc => {
-      const scraped = scrapedMap[acc.id];
-      const weeklyPercent = scraped?.weeklyAllModels?.percent ?? 0;
-      const sessionPercent = scraped?.currentSession?.percent ?? 0;
-      const extraBalance = scraped?.extraUsage?.balance ? parseFloat(scraped.extraUsage.balance) : Infinity;
-      const extraDepleted = (scraped?.extraUsage?.percent ?? 0) >= 100 && extraBalance <= 0;
-
-      let status: 'safe' | 'warning' | 'critical' = 'safe';
-      if (weeklyPercent >= 80 || extraDepleted) status = 'critical';
-      else if (weeklyPercent >= 50) status = 'warning';
-
-      // Count active sessions per account
-      const activeSessions = ACCOUNT_CONFIG.reduce((count, _) => count, 0); // placeholder — real count from claude-cli
-
-      return {
-        accountId: acc.id,
-        accountName: acc.displayName,
-        weeklyPercent: Math.round(weeklyPercent * 10) / 10,
-        sessionPercent: Math.round(sessionPercent * 10) / 10,
-        status,
-        extraDepleted,
-        available: status !== 'critical',
-      };
-    })
-    .sort((a, b) => {
-      // Sort: available first, then by lowest weekly usage
-      if (a.available !== b.available) return a.available ? -1 : 1;
-      return a.weeklyPercent - b.weeklyPercent;
-    });
-
-    const best = ranked.find(a => a.available);
-    if (!best) {
+    const { bestAccount, accounts } = rankAccounts();
+    if (!bestAccount) {
       // All accounts critical (≥80% weekly OR extra balance depleted).
       // Caller MUST handle 503 — picking the least-bad account here just guarantees a quota fail.
       res.status(503).json({
         error: "all accounts critical",
-        accounts: ranked,
+        accounts,
         timestamp: new Date().toISOString(),
       });
       return;
     }
-
-    res.json({
-      bestAccount: best.accountId,
-      accounts: ranked,
-      timestamp: new Date().toISOString(),
-    });
+    res.json({ bestAccount, accounts, timestamp: new Date().toISOString() });
   } catch (err: any) {
     console.error("[CC-Usage] Best-account error:", err.message);
     res.status(500).json({ error: err.message });

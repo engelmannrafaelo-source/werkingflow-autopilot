@@ -49,6 +49,16 @@ function resolveUserWorkDir(workDir: string | undefined, userId: string | undefi
 }
 import { IS_LOCAL_MODE, onSessionStateChange, setSessionState } from './state.js';
 import * as claudeCli from './claude-cli.js';
+import { rankAccounts } from './bridge.js';
+
+/**
+ * Partner-aware fallback when account-selection fails: returns the first
+ * configured accountId for this deployment. Replaces the hardcoded 'werking'
+ * fallback that didn't exist on partner-server (only sahori/kurt there).
+ */
+function defaultFallbackAccount(): string {
+  return claudeCli.ACCOUNT_CONFIG[0]?.id ?? '';
+}
 
 const execAsync = promisify(exec);
 
@@ -321,18 +331,12 @@ function classifySubStatus(sid: string): { status: 'ready' | 'quota_blocked' | '
 
 /**
  * Picks the best available account for a respawn/continuation when the original assignment is missing.
- * Calls the local /api/claude-code/best-account endpoint (which already weighs quota/usage).
- * Returns the first available accountId, or '' if all accounts are critical (caller decides fallback).
- * Fail-soft: returns '' on any fetch / parse error.
+ * Calls rankAccounts() directly (no HTTP-self-call) — the route requires auth which internal
+ * callers don't have. Returns '' if all accounts are critical (caller decides fallback).
  */
-async function resolveBestAccount(): Promise<string> {
+function resolveBestAccount(): string {
   try {
-    const resp = await fetch(`http://localhost:${process.env.PORT || 4005}/api/claude-code/best-account`, { signal: AbortSignal.timeout(3000) });
-    if (!resp.ok) return '';
-    const data = await resp.json() as any;
-    const accounts = (data.accounts || []) as Array<{ accountId: string; available: boolean }>;
-    const best = accounts.find(a => a.available);
-    return best?.accountId || '';
+    return rankAccounts().bestAccount || '';
   } catch {
     return '';
   }
@@ -444,7 +448,7 @@ export function initMissionRouter(deps: MissionDeps) {
       }
 
       // Inject review feedback into original session
-      const originalAccountId = convMeta.getAssignment(originalSessionId) || claudeCli.ACCOUNT_CONFIG[0]?.id || 'werking';
+      const originalAccountId = convMeta.getAssignment(originalSessionId) || defaultFallbackAccount();
       const originalWorkDir = convMeta.getWorkDir(originalSessionId) || '';
       const originalModel = convMeta.getModel(originalSessionId) || '';
       const feedbackMessage = `[Review-Ergebnis]\n\n${reviewResult}`;
@@ -514,7 +518,7 @@ export function initMissionRouter(deps: MissionDeps) {
       }
 
       // Inject sub-session result into parent session
-      const parentAccountId = convMeta.getAssignment(parentSessionId) || claudeCli.ACCOUNT_CONFIG[0]?.id || 'werking';
+      const parentAccountId = convMeta.getAssignment(parentSessionId) || defaultFallbackAccount();
       const parentWorkDir = convMeta.getWorkDir(parentSessionId) || '';
       const parentModel = convMeta.getModel(parentSessionId) || '';
       const finishCmd = `curl -s -X POST http://localhost:${PORT}/api/mission/conversation/${sessionId}/finish -H 'Content-Type: application/json' -d '{"finished":true,"confirm":true}'`;
@@ -650,18 +654,12 @@ export function initMissionRouter(deps: MissionDeps) {
 
         const currentAccountId = convMeta.getAssignment(sessionId) || currentState?.accountId || '';
 
-        // Find best available account
+        // Find best available account that's NOT the current one (direct call, no HTTP)
         let bestAccount = '';
         try {
-          const resp = await fetch(`http://localhost:${process.env.PORT || 4005}/api/claude-code/best-account`, { signal: AbortSignal.timeout(3000) });
-          if (resp.ok) {
-            const data = await resp.json() as any;
-            const accounts = data.accounts || [];
-            // Pick best account that is available AND not the current one
-            const better = accounts.find((a: any) => a.available && a.accountId !== currentAccountId);
-            if (better) bestAccount = better.accountId;
-          }
-        } catch { /* best-account API failed, skip */ }
+          const better = rankAccounts().accounts.find(a => a.available && a.accountId !== currentAccountId);
+          if (better) bestAccount = better.accountId;
+        } catch { /* rankAccounts failed, skip */ }
 
         if (!bestAccount) {
           console.log(`[AutoSwitch] ${sessionId.slice(0, 8)}: no better account available (all critical or same), waiting for rate-limit to expire`);
@@ -781,10 +779,10 @@ export function initMissionRouter(deps: MissionDeps) {
         (async () => {
           let accountId = assigned;
           if (!accountId) {
-            accountId = await resolveBestAccount();
+            accountId = resolveBestAccount() || defaultFallbackAccount();
             if (!accountId) {
-              accountId = claudeCli.ACCOUNT_CONFIG[0]?.id || 'werking';
-              console.warn(`[SubSession] resolveBestAccount returned empty for ${sessionId.slice(0, 8)} — falling back to ${accountId}`);
+              console.warn(`[SubSession] No account available for ${sessionId.slice(0, 8)} — skipping respawn`);
+              continue;
             }
           }
           try {
@@ -854,7 +852,7 @@ export function initMissionRouter(deps: MissionDeps) {
           return `- "${title}" (${sid.slice(0, 8)}, workspace: ${wdir}) — laeuft aber hat keinen Parent. Bitte pruefen und ggf. finishen: POST /api/mission/conversation/${sid}/finish {"confirm":true}`;
         });
         const orphanMsg = `[Sub-Session Warnung]\n${orphansWithProcess.length} verwaiste Sub-Session(s) ohne Parent:\n${lines.join('\n')}`;
-        const mcAccount = convMeta.getAssignment(missionChat) || claudeCli.ACCOUNT_CONFIG[0]?.id || 'werking';
+        const mcAccount = convMeta.getAssignment(missionChat) || defaultFallbackAccount();
         const mcWorkDir = convMeta.getWorkDir(missionChat) || '';
         const mcModel = convMeta.getModel(missionChat) || '';
         claudeCli.startConversation(mcAccount, orphanMsg, mcWorkDir, missionChat, mcModel).then(res => {
@@ -932,7 +930,7 @@ export function initMissionRouter(deps: MissionDeps) {
             const nudgeStatus = nudgeCount > 0 ? `, nudged ${nudgeCount}x` : '';
 
             if (cooldownOk && stillUnderCap) {
-              const subAccountId = convMeta.getAssignment(sessionId) || claudeCli.ACCOUNT_CONFIG[0]?.id || 'werking';
+              const subAccountId = convMeta.getAssignment(sessionId) || defaultFallbackAccount();
               const subWorkDir = convMeta.getWorkDir(sessionId) || '';
               const subModel = convMeta.getModel(sessionId) || '';
               const nudgeMsg = `[Auto-Nudge: STALL detected]\n${cls.signals.join(' / ')}\n\n` +
@@ -978,7 +976,7 @@ export function initMissionRouter(deps: MissionDeps) {
 
         const reminderMsg = `[Sub-Session Reminder]\nDu hast aktive Sub-Sessions:\n${lines.join('\n')}${finishBlock}${killBlock}${principle}${transparency}`;
 
-        const parentAccountId = convMeta.getAssignment(parentSessionId) || claudeCli.ACCOUNT_CONFIG[0]?.id || 'werking';
+        const parentAccountId = convMeta.getAssignment(parentSessionId) || defaultFallbackAccount();
         const parentWorkDir = convMeta.getWorkDir(parentSessionId) || '';
         const parentModel = convMeta.getModel(parentSessionId) || '';
 
@@ -1024,21 +1022,14 @@ export function initMissionRouter(deps: MissionDeps) {
       const sessionIds = Object.keys(allAssignments);
       if (sessionIds.length === 0) return;
 
-      // One best-account fetch per tick — shared across all rate_limit candidates.
+      // One account snapshot per tick — shared across all rate_limit candidates.
+      // Direct in-process call (rankAccounts), no HTTP self-fetch.
       type BestAccountEntry = { accountId: string; available: boolean };
       let bestAccountAccounts: BestAccountEntry[] | null = null;
       const fetchBestAccountsOnce = async () => {
         if (bestAccountAccounts !== null) return;
         try {
-          const resp = await fetch(`http://localhost:${process.env.PORT || PORT || 4005}/api/claude-code/best-account`, { signal: AbortSignal.timeout(3000) });
-          // best-account returns 503 when ALL accounts are critical, but the body still
-          // carries the accounts array — read it either way.
-          if (resp.status === 200 || resp.status === 503) {
-            const data = await resp.json() as any;
-            bestAccountAccounts = (data?.accounts || []) as BestAccountEntry[];
-          } else {
-            bestAccountAccounts = [];
-          }
+          bestAccountAccounts = rankAccounts().accounts as BestAccountEntry[];
         } catch {
           bestAccountAccounts = [];
         }
@@ -1090,7 +1081,7 @@ export function initMissionRouter(deps: MissionDeps) {
         _autoRecoveryAttempts.set(sessionId, attempts + 1);
         _autoRecoveryLastAttemptMs.set(sessionId, Date.now());
 
-        const accountId = convMeta.getAssignment(sessionId) || (await resolveBestAccount()) || claudeCli.ACCOUNT_CONFIG[0]?.id || 'werking';
+        const accountId = convMeta.getAssignment(sessionId) || resolveBestAccount() || defaultFallbackAccount();
         const workDir = convMeta.getWorkDir(sessionId) || '';
         const model = convMeta.getModel(sessionId) || '';
 
@@ -1900,23 +1891,15 @@ router.post('/send', async (req, res) => {
     return;
   }
 
-  // Resolve 'auto' → use existing assignment or pick best available account
+  // Resolve 'auto' → use existing assignment or pick best available account.
+  // No HTTP-self-call (the endpoint requires auth and internal callers have none).
   if (accountId === 'auto') {
     const existing = convMeta.getAssignment(sessionId);
     if (existing && existing !== 'auto' && claudeCli.getAccountConfig(existing)) {
       accountId = existing;
     } else {
-      try {
-        const bestResp = await fetch(`http://localhost:${process.env.PORT || 4005}/api/claude-code/best-account`, { signal: AbortSignal.timeout(3000) });
-        if (bestResp.ok) {
-          const bestData = await bestResp.json() as any;
-          accountId = bestData.bestAccount || 'werking';
-        } else {
-          accountId = 'werking';
-        }
-      } catch {
-        accountId = 'werking';
-      }
+      accountId = resolveBestAccount() || defaultFallbackAccount();
+      if (!accountId) { res.status(503).json({ error: 'no account available' }); return; }
       convMeta.saveAssignment(sessionId, accountId);
     }
   }
@@ -2138,17 +2121,8 @@ router.post('/conversation/:sessionId/assign', async (req, res) => {
 
   // Resolve 'auto' → pick best available account (don't persist 'auto' as assignment)
   if (accountId === 'auto') {
-    try {
-      const bestResp = await fetch(`http://localhost:${process.env.PORT || 4005}/api/claude-code/best-account`, { signal: AbortSignal.timeout(3000) });
-      if (bestResp.ok) {
-        const bestData = await bestResp.json() as any;
-        accountId = bestData.bestAccount || 'werking';
-      } else {
-        accountId = 'werking';
-      }
-    } catch {
-      accountId = 'werking';
-    }
+    accountId = resolveBestAccount() || defaultFallbackAccount();
+    if (!accountId) { res.status(503).json({ error: 'no account available' }); return; }
     console.log(`[Assign] Resolved 'auto' → ${accountId} for session ${sid.slice(0, 8)}`);
   }
 
@@ -2370,7 +2344,7 @@ Schreibe ein klares Fazit:
 
 Halte dich präzise. Deine Antwort wird automatisch als Feedback in die Originalkonversation eingefügt.`;
 
-  const accountId = convMeta.getAssignment(sid) || claudeCli.ACCOUNT_CONFIG[0]?.id || 'werking';
+  const accountId = convMeta.getAssignment(sid) || defaultFallbackAccount();
   const workDir = convMeta.getWorkDir(sid) || '';
   const model = convMeta.getModel(sid) || '';
 
@@ -2638,26 +2612,16 @@ router.post('/start', async (req, res) => {
     }
   }
 
-  // Auto account selection: pick least-loaded account
+  // Auto account selection: pick least-loaded account (direct call, no HTTP).
   if (!accountId || accountId === 'auto') {
-    try {
-      const bestResp = await fetch(`http://localhost:${process.env.PORT || 4005}/api/claude-code/best-account`, { signal: AbortSignal.timeout(3000) });
-      if (bestResp.ok) {
-        const bestData = await bestResp.json() as any;
-        const bestAccount = bestData.accounts?.find((a: any) => a.accountId === bestData.bestAccount);
-        accountId = bestData.bestAccount || 'werking';
-        const weeklyPct = bestAccount?.weeklyPercent ?? '?';
-        console.log(`[Start] Auto-selected account: ${accountId} (weekly: ${weeklyPct}%, status: ${bestAccount?.status ?? 'unknown'})`);
-        // Warn if all accounts are critical — session may fail with rate limit
-        const anyAvailable = bestData.accounts?.some((a: any) => a.available);
-        if (!anyAvailable) {
-          console.warn(`[Start] WARNING: All accounts are critical/depleted! Best pick: ${accountId} at ${weeklyPct}%. Session may fail.`);
-        }
-      } else {
-        accountId = 'werking'; // fallback
-      }
-    } catch {
-      accountId = 'werking'; // fallback on error
+    const ranking = rankAccounts();
+    accountId = ranking.bestAccount || defaultFallbackAccount();
+    if (!accountId) { res.status(503).json({ error: 'no account available' }); return; }
+    const picked = ranking.accounts.find(a => a.accountId === accountId);
+    const weeklyPct = picked?.weeklyPercent ?? '?';
+    console.log(`[Start] Auto-selected account: ${accountId} (weekly: ${weeklyPct}%, status: ${picked?.status ?? 'unknown'})`);
+    if (!ranking.bestAccount) {
+      console.warn(`[Start] WARNING: All accounts critical/depleted — falling back to ${accountId}. Session may fail.`);
     }
   }
 
@@ -2902,7 +2866,7 @@ router.get('/sub-sessions', async (req, res) => {
         subject: conv.subject || convMeta.getTitle(conv.sessionId) || conv.sessionId.slice(0, 8),
         parentSessionId,
         parentSubject,
-        accountId: conv.accountId || 'werking',
+        accountId: conv.accountId || defaultFallbackAccount(),
         workDir: conv.projectPath || '',
         attentionState,
         attentionReason,
