@@ -14,9 +14,7 @@
 //   BUSINESS_ADAPTER_TOKEN
 
 import { Router, type Request, type Response } from 'express';
-import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join, posix } from 'node:path';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 type Mode = 'private' | 'business';
@@ -60,44 +58,16 @@ async function loadAdapter(mode: Mode): Promise<Record<string, (...args: unknown
   return adapter;
 }
 
-async function seedViaDaemon(
+// CUI and the sandbox daemon run on the same host as the same user (claude-user),
+// so we seed directly into the session work-dir rather than going through the
+// daemon's /seed endpoint (which would JSON-encode 41MB+ of workspace files).
+async function seedDirect(
   adapter: Record<string, (...args: unknown[]) => unknown>,
   target: unknown,
-  sid: string,
-  token: string,
-  daemonUrl: string,
-  daemonSecret: string,
+  sessionHostPath: string,
 ): Promise<void> {
-  const tmpRoot = await mkdtemp(join(tmpdir(), 'agent-seed-'));
-  try {
-    await (adapter.seedWorkdir as (target: unknown, dir: string) => Promise<void>)(target, tmpRoot);
-
-    const payload: Record<string, string> = {};
-    async function walk(dir: string, base: string): Promise<void> {
-      const entries = await readdir(dir, { withFileTypes: true });
-      for (const e of entries) {
-        const abs = join(dir, e.name);
-        const rel = posix.join(base, e.name);
-        if (e.isDirectory()) { await walk(abs, rel); }
-        else if (e.isFile()) {
-          const info = await stat(abs);
-          if (info.size > 25 * 1024 * 1024) continue;
-          payload[rel] = (await readFile(abs)).toString('base64');
-        }
-      }
-    }
-    await walk(tmpRoot, '');
-
-    const seedUrl = `${daemonUrl}/sandbox/${encodeURIComponent(sid)}/seed?t=${encodeURIComponent(token)}`;
-    const r = await fetch(seedUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Daemon-Secret': daemonSecret },
-      body: JSON.stringify(payload),
-    });
-    if (!r.ok) throw new Error(`seed ${r.status}: ${await r.text()}`);
-  } finally {
-    await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
-  }
+  const workDir = join(sessionHostPath, 'work');
+  await (adapter.seedWorkdir as (target: unknown, dir: string) => Promise<void>)(target, workDir);
 }
 
 const router = Router();
@@ -139,11 +109,11 @@ router.post('/:mode/start', async (req: Request, res: Response) => {
     return;
   }
 
-  const { sid, token, expiresAt, proxyEnv } = await daemonRes.json() as {
-    sid: string; token: string; expiresAt: string; proxyEnv: string;
+  const { sid, token, expiresAt, proxyEnv, sessionHostPath } = await daemonRes.json() as {
+    sid: string; token: string; expiresAt: string; proxyEnv: string; sessionHostPath: string;
   };
 
-  await seedViaDaemon(adapter, target, sid, token, env.daemonUrl, env.daemonSecret);
+  await seedDirect(adapter, target, sessionHostPath);
 
   res.json({ sid, token, expiresAt, proxyEnv, sandboxEndpoint: `/api/sandbox-angel/${mode}` });
 });
