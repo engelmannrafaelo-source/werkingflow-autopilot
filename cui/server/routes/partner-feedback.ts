@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { appendFileSync, readFileSync, existsSync, mkdirSync, writeFileSync, renameSync } from 'fs';
 import { join, dirname } from 'path';
 import { PATHS } from '../config/paths.js';
+import { isForwardMode, forwardToPartner } from '../lib/partner-forward.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -54,6 +55,14 @@ function rewriteFeedbacks(entries: FeedbackEntry[]): void {
 
 export default function createPartnerFeedbackRouter(): Router {
   const router = Router();
+
+  // Forward all feedback requests to partner-cui when dev-cui is in forward mode.
+  // Without this, dev-cui reads its own (empty) feedback file while real entries
+  // live on the partner-server. Identical pattern as partner-server.ts.
+  if (isForwardMode()) {
+    router.use(forwardToPartner);
+    return router;
+  }
 
   // POST /api/partner/feedback — Submit feedback
   router.post('/feedback', (req: Request, res: Response) => {
