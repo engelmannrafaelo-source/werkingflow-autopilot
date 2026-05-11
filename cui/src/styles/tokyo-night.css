@@ -233,18 +233,21 @@ body {
 
 /* Mobile layout structure — flex item so it sits below ProjectTabs, not absolute-overlapping */
 .mobile-layout {
-  flex: 1;
-  position: relative;
-  overflow: hidden;
-  min-height: 0;
-}
-
-/* Reserve space at the bottom for the floating Top/Both/Bottom toggle so
-   panel content (especially the chat input) is never hidden behind it. */
-.mobile-layout > .mobile-layout-content {
+  /* Parent in App.tsx is { flex:1, position:relative, minHeight:0 } — NOT a
+     flex container — so flex:1 here would be ignored. Fill it via absolute
+     positioning, then run an internal flex column for content + toggle. */
   position: absolute;
   inset: 0;
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 56px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.mobile-layout > .mobile-layout-content {
+  flex: 1;
+  position: relative;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -398,13 +401,16 @@ body {
   padding-right: env(safe-area-inset-right, 0px);
 }
 
-/* Top/Both/Bottom view toggle — fixed above safe-area, always reachable.
-   Kept compact so it eats minimal vertical space on iPad. */
+/* Top/Both/Bottom view toggle — flex child of .mobile-layout (NOT fixed).
+   Fixed positioning is unreliable on iOS Safari because window.innerHeight
+   reports the full device height even when the actual rendered viewport is
+   shorter, so `bottom: 0` lands below the screen. Sitting in the flex flow
+   sidesteps the bug entirely. */
 .mobile-view-toggle {
-  position: fixed;
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 6px);
-  left: 50%;
-  transform: translateX(-50%);
+  flex-shrink: 0;
+  align-self: center;
+  margin-bottom: calc(env(safe-area-inset-bottom, 0px) + 4px);
+  margin-top: 4px;
   display: flex;
   gap: 2px;
   background: var(--tn-bg-dark);
