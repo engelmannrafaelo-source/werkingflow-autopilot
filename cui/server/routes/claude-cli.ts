@@ -15,8 +15,8 @@ import type { ChildProcess } from 'child_process';
 import { promises as fsp, createReadStream, existsSync, readFileSync, writeSync } from 'fs';
 import { createInterface } from 'readline';
 import type { ConvAttentionState, AttentionReason, SessionState, ToolExecutionInfo } from './shared/types.js';
-import { IS_LOCAL_MODE, getRestoredWorkingSessions } from './state.js';
-import { hasIncompleteToolUse, getOriginalCwd } from './shared/jsonl.js';
+import { IS_LOCAL_MODE, getRestoredWorkingSessions, getRestoredAttentionSessions } from './state.js';
+import { hasIncompleteToolUse, hasPendingInteractiveQuestion, getOriginalCwd } from './shared/jsonl.js';
 import { signJwt } from '../auth/jwt.js';
 
 // --- Account Configuration ---
@@ -144,6 +144,9 @@ export function initClaudeCli(deps: {
         cleanupOrphanedWrappers().catch(err => {
           console.warn('[ClaudeCLI] Orphan wrapper cleanup failed:', err instanceof Error ? err.message : err);
         });
+        // Revalidate stale needs_attention flags (question/plan/permission) —
+        // resets banners for sessions whose user has already answered.
+        checkRestoredAttentionStates();
         // Auto-continue sessions that were working when server went down
         // Delay to allow JSONL files to be accessible after reconnect
         setTimeout(() => checkRestoredSessionsAutoContinue(), 5_000);
@@ -447,6 +450,30 @@ function handleStdoutLine(line: string, entry: ClaudeProcess): { sessionId?: str
 }
 
 // --- Auto-Continue on Server Restart ---
+
+/**
+ * After server restart, revalidate needs_attention/{question,plan,permission}
+ * states against the on-disk JSONL. If the user has already answered (a user
+ * message follows the interactive tool_use) — or there is no interactive tool_use
+ * at all — clear the state to idle/done so the UI's "Claude hat eine Frage"
+ * banner does not survive the restart as a ghost.
+ */
+function checkRestoredAttentionStates(): void {
+  const candidates = getRestoredAttentionSessions();
+  if (candidates.length === 0) return;
+  let cleared = 0;
+  for (const { sessionId, accountId, reason } of candidates) {
+    try {
+      if (hasPendingInteractiveQuestion(sessionId)) continue; // still valid
+      console.log(`[AttentionRevalidate] ${accountId} session=${sessionId.slice(0, 8)} reason=${reason} no longer pending — clearing to idle/done`);
+      _setSessionState(sessionId, accountId, 'idle', 'done', sessionId);
+      cleared++;
+    } catch (err) {
+      console.warn(`[AttentionRevalidate] session=${sessionId.slice(0, 8)} check failed: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+  if (cleared > 0) console.log(`[AttentionRevalidate] Cleared ${cleared}/${candidates.length} stale attention flags`);
+}
 
 /**
  * After server restart, check sessions that were working->idle and auto-continue

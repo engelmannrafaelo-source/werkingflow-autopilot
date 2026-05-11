@@ -557,6 +557,54 @@ export function purgeSubSessionReminders(parentSessionId: string): number {
 // (no text with actual content). This indicates the session was interrupted
 // while Claude was still working and should be auto-continued.
 
+/**
+ * After restart, check whether a restored attention state (question/plan/permission)
+ * is still live — i.e. the last assistant tool_use of an interactive kind has not
+ * been answered by the user yet. Returns true if the state is still pending,
+ * false if it was already answered (state should be reset to idle/done).
+ *
+ * Defensive: returns false on any error so a stale needs_attention flag never
+ * survives a restart silently — fail by clearing, not by holding ghost state.
+ */
+export function hasPendingInteractiveQuestion(sessionId: string): boolean {
+  const found = findJsonlPathAllAccounts(sessionId);
+  if (!found) return false;
+  const INTERACTIVE_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode', 'EnterPlanMode', 'EnterWorktree']);
+  try {
+    const stat = statSync(found.path);
+    if (stat.size === 0) return false;
+    const TAIL_SIZE = 32 * 1024;
+    const fd = openSync(found.path, 'r');
+    const readSize = Math.min(TAIL_SIZE, stat.size);
+    const buf = Buffer.alloc(readSize);
+    readSync(fd, buf, 0, readSize, stat.size - readSize);
+    closeSync(fd);
+    const tailStr = buf.toString('utf-8');
+    const lines = tailStr.split('\n').filter(l => l.trim());
+    let lastInteractiveIdx = -1;
+    let lastUserIdx = -1;
+    for (let i = 0; i < lines.length; i++) {
+      try {
+        const obj = JSON.parse(lines[i]);
+        const role = obj.message?.role;
+        if (role === 'user') {
+          lastUserIdx = i;
+          continue;
+        }
+        if (role === 'assistant' && Array.isArray(obj.message?.content)) {
+          for (const b of obj.message.content) {
+            if (b && b.type === 'tool_use' && INTERACTIVE_TOOLS.has(b.name)) {
+              lastInteractiveIdx = i;
+              break;
+            }
+          }
+        }
+      } catch { /* boundary fragment, skip */ }
+    }
+    return lastInteractiveIdx > lastUserIdx;
+  } catch { return false; }
+}
+
 export function hasIncompleteToolUse(sessionId: string): boolean {
   const found = findJsonlPathAllAccounts(sessionId);
   if (!found) return false;

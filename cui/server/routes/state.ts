@@ -170,6 +170,16 @@ export function getRestoredWorkingSessions(): Array<{ sessionId: string; account
   return [..._restoredWorkingSessions];
 }
 
+// Sessions that were restored with needs_attention/{question,plan,permission} —
+// candidates for post-restart validation against JSONL. If the user has already
+// answered the question in the meantime (or the tool_use never closed cleanly),
+// the state must be reset to idle/done to avoid stale "Frage" banners in the UI.
+const _restoredAttentionSessions: Array<{ sessionId: string; accountId: string; reason: string }> = [];
+
+export function getRestoredAttentionSessions(): Array<{ sessionId: string; accountId: string; reason: string }> {
+  return [..._restoredAttentionSessions];
+}
+
 function restoreSessionStates() {
   if (!existsSync(SESSION_STATES_FILE)) return;
   try {
@@ -189,6 +199,17 @@ function restoreSessionStates() {
         }
       } else {
         sessionStates.set(key, val);
+        // Track needs_attention/{question,plan,permission} for JSONL revalidation —
+        // user may have answered before the restart and the in-memory state never
+        // saw the response, leaving a ghost "Claude hat eine Frage" banner.
+        if (val.state === "needs_attention" && val.accountId &&
+            (val.reason === "question" || val.reason === "plan" || val.reason === "permission")) {
+          _restoredAttentionSessions.push({
+            sessionId: val.sessionId || key,
+            accountId: val.accountId,
+            reason: val.reason,
+          });
+        }
       }
     }
     const restored = sessionStates.size;
