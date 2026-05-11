@@ -83,12 +83,19 @@ export default function SandboxAngelPanel({ mode }: Props) {
     })
       .then(async (res) => {
         if (!res.ok) throw new Error(`start ${res.status}: ${await res.text()}`);
-        return res.json() as Promise<{ sid: string; token: string }>;
+        return res.json() as Promise<{ sid: string; token: string; resumed?: boolean }>;
       })
       .then((data) => {
         if (cancelled) return;
         setSession({ sid: data.sid, token: data.token });
         setStatus('ready');
+        if (data.resumed) {
+          setMessages(prev => prev.map(m =>
+            m.id === 'welcome'
+              ? { ...m, content: 'Willkommen zurück — wir machen weiter wo wir aufgehört haben.' }
+              : m,
+          ));
+        }
       })
       .catch((e: unknown) => {
         if (cancelled) return;

@@ -14,10 +14,35 @@
 //   BUSINESS_ADAPTER_TOKEN
 
 import { Router, type Request, type Response } from 'express';
-import { join } from 'node:path';
+import { existsSync } from 'node:fs';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 type Mode = 'private' | 'business';
+
+const SESSIONS_FILE = '/root/projekte/local-storage/sandbox-angel/sessions.json';
+
+interface SessionEntry {
+  sid: string;
+  sessionHostPath: string;
+}
+
+type SessionsMap = Partial<Record<Mode, SessionEntry>>;
+
+async function loadSessions(): Promise<SessionsMap> {
+  try {
+    const raw = await readFile(SESSIONS_FILE, 'utf8');
+    return JSON.parse(raw) as SessionsMap;
+  } catch {
+    return {};
+  }
+}
+
+async function saveSessions(sessions: SessionsMap): Promise<void> {
+  await mkdir(dirname(SESSIONS_FILE), { recursive: true });
+  await writeFile(SESSIONS_FILE, JSON.stringify(sessions, null, 2));
+}
 
 const ADAPTER_PATHS: Record<Mode, string> = {
   private: '/root/projekte/werkingflow-production/packages/agent-sandbox/adapters/private-daemon.mjs',
@@ -99,23 +124,41 @@ router.post('/:mode/start', async (req: Request, res: Response) => {
     { resourceId, profileId, user: auth.user },
   );
 
+  // Load persisted sessions and resolve an existingSid if the session dir still exists.
+  const sessions = await loadSessions();
+  const storedEntry = sessions[mode];
+  const validExistingSid = storedEntry?.sid && existsSync(storedEntry.sessionHostPath)
+    ? storedEntry.sid
+    : undefined;
+
   const daemonRes = await fetch(`${env.daemonUrl}/sandbox/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Daemon-Secret': env.daemonSecret },
-    body: JSON.stringify({ target }),
+    body: JSON.stringify({ target, existingSid: validExistingSid }),
   });
   if (!daemonRes.ok) {
     res.status(502).json({ error: `daemon ${daemonRes.status}: ${await daemonRes.text()}` });
     return;
   }
 
-  const { sid, token, expiresAt, proxyEnv, sessionHostPath } = await daemonRes.json() as {
-    sid: string; token: string; expiresAt: string; proxyEnv: string; sessionHostPath: string;
+  const { sid, token, expiresAt, proxyEnv, sessionHostPath, resumed } = await daemonRes.json() as {
+    sid: string; token: string; expiresAt: string; proxyEnv: string; sessionHostPath: string; resumed: boolean;
   };
 
-  await seedDirect(adapter, target, sessionHostPath);
+  if (resumed) {
+    // Work dir already has files from the prior session — skip seed.
+    // Update persisted entry only if something changed (shouldn't happen normally).
+    if (sid !== storedEntry?.sid || sessionHostPath !== storedEntry?.sessionHostPath) {
+      sessions[mode] = { sid, sessionHostPath };
+      await saveSessions(sessions);
+    }
+  } else {
+    await seedDirect(adapter, target, sessionHostPath);
+    sessions[mode] = { sid, sessionHostPath };
+    await saveSessions(sessions);
+  }
 
-  res.json({ sid, token, expiresAt, proxyEnv, sandboxEndpoint: `/api/sandbox-angel/${mode}` });
+  res.json({ sid, token, expiresAt, proxyEnv, sandboxEndpoint: `/api/sandbox-angel/${mode}`, resumed });
 });
 
 // POST /api/sandbox-angel/:mode/exec
