@@ -726,7 +726,7 @@ export default function PartnerServerPanel() {
               })()}
               <div style={{ fontSize: 11, color: 'var(--tn-text-muted, #a9b1d6)', marginBottom: 12 }}>
                 "▶ Run Journey" pro Zelle spawnt eine Sub-Session, die wie ein neuer User die App durchklickt
-                (Login → Sidebar → 3-5 Hauptaktionen). Rechts im Detail-Modal siehst du den Chat-Verlauf.
+                (Login → Sidebar → 3-5 Hauptaktionen). Rechts im Detail-Modal siehst du den Tester-Verlauf.
               </div>
               {journeyError && (
                 <div style={{ color: 'var(--tn-red, #f7768e)', fontSize: 12, marginBottom: 12, padding: '6px 10px', background: 'rgba(247,118,142,0.1)', borderRadius: 4 }}>
@@ -937,7 +937,7 @@ export default function PartnerServerPanel() {
                 }}
                 title={journeyDetail.data.meta?.subSessionId ? `Sub-Session ${journeyDetail.data.meta.subSessionId.slice(0, 8)}` : 'Keine Sub-Session für diese Journey'}
               >
-                Chat-Verlauf {journeyDetail.data.meta?.subSessionId ? '✓' : ''}
+                Tester-Verlauf {journeyDetail.data.meta?.subSessionId ? '✓' : ''}
               </button>
               <button onClick={() => setJourneyDetail(null)} style={miniBtnStyle}>Close</button>
             </div>
@@ -1012,7 +1012,7 @@ export default function PartnerServerPanel() {
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 }}>
                   {chatLoading && (
-                    <div style={{ padding: 16, color: 'var(--tn-text-muted, #565f89)' }}>Lade Chat-Verlauf…</div>
+                    <div style={{ padding: 16, color: 'var(--tn-text-muted, #565f89)' }}>Lade Tester-Verlauf…</div>
                   )}
                   {chatError && (
                     <div style={{ padding: 12, background: 'rgba(247,118,142,0.1)', border: '1px solid var(--tn-red, #f7768e)', borderRadius: 4, color: 'var(--tn-red, #f7768e)' }}>
