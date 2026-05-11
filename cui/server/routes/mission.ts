@@ -782,7 +782,7 @@ export function initMissionRouter(deps: MissionDeps) {
             accountId = resolveBestAccount() || defaultFallbackAccount();
             if (!accountId) {
               console.warn(`[SubSession] No account available for ${sessionId.slice(0, 8)} — skipping respawn`);
-              continue;
+              return;
             }
           }
           try {
