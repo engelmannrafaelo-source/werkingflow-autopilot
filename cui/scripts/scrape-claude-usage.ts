@@ -27,12 +27,29 @@ const CURL_BIN = "/usr/local/bin/curl_chrome116";
 const CURL_LIB = "/tmp";
 const STORAGE_DIR = "/root/projekte/local-storage/backends/cui/playwright-sessions";
 
-const ACCOUNTS: { id: string; displayName: string; envVar: string }[] = [
-  { id: "engelmann", displayName: "Engelmann", envVar: "CLAUDE_SESSION_ENGELMANN" },
-  { id: "office", displayName: "Office", envVar: "CLAUDE_SESSION_OFFICE" },
-  { id: "gmail", displayName: "Gmail", envVar: "CLAUDE_SESSION_RAFAEL" },
-  { id: "werking", displayName: "Werking", envVar: "CLAUDE_SESSION_WERKING" },
-];
+// SSOT: /home/claude-user/.claude/accounts/registry.json
+// Env-Var-Fallback wird beibehalten (CLAUDE_SESSION_*), aber Account-Liste kommt aus Registry.
+const REGISTRY_PATH = "/home/claude-user/.claude/accounts/registry.json";
+const _envVarFor: Record<string, string> = {
+  engelmann: "CLAUDE_SESSION_ENGELMANN",
+  office: "CLAUDE_SESSION_OFFICE",
+  gmail: "CLAUDE_SESSION_RAFAEL",
+  werking: "CLAUDE_SESSION_WERKING",
+};
+function loadAccountsFromRegistry() {
+  if (!existsSync(REGISTRY_PATH)) {
+    throw new Error(`SSoT registry not found at ${REGISTRY_PATH}`);
+  }
+  const reg = JSON.parse(readFileSync(REGISTRY_PATH, "utf-8")) as {
+    accounts: Array<{ id: string; display_name: string }>;
+  };
+  return reg.accounts.map(a => ({
+    id: a.id,
+    displayName: a.display_name,
+    envVar: _envVarFor[a.id] ?? `CLAUDE_SESSION_${a.id.toUpperCase()}`,
+  }));
+}
+const ACCOUNTS: { id: string; displayName: string; envVar: string }[] = loadAccountsFromRegistry();
 
 // ── Output interface (backward-compatible with bridge.ts consumer) ──
 

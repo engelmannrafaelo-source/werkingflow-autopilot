@@ -20,9 +20,10 @@ import { hasIncompleteToolUse, getOriginalCwd } from './shared/jsonl.js';
 import { signJwt } from '../auth/jwt.js';
 
 // --- Account Configuration ---
-// Per-server mapping (set via env: PARTNER_CUI=1 or PARTNER_MODE=1 picks PARTNER branch):
-//   Dev    : engelmann → .cui-account1, office → .cui-account2, gmail → .cui-account3, werking → .cui-account4
-//   Partner: sahori → .cui-account1, kurt → .cui-account2 (only 2 accounts; cui-account3/4 unused)
+// SSOT: /home/claude-user/.claude/accounts/registry.json
+// Bei Aenderungen an Mapping/Tokens: registry.json updaten + verify-accounts.sh laufen lassen.
+// Partner-Modus (PARTNER_MODE=1 / PARTNER_CUI=1) hat eigene Hardcoded-Liste — wenn das auch SSOT braucht,
+// separate registry-partner.json anlegen.
 
 export interface AccountConfig {
   id: string;
@@ -35,19 +36,29 @@ import { PATHS } from '../config/paths.js';
 
 const IS_PARTNER = process.env.PARTNER_MODE === '1' || process.env.PARTNER_CUI === '1';
 
+function loadAccountsFromRegistry(): AccountConfig[] {
+  const REGISTRY_PATH = `${PATHS.claudeUserHome}/.claude/accounts/registry.json`;
+  if (!existsSync(REGISTRY_PATH)) {
+    throw new Error(`[Accounts] SSoT registry not found at ${REGISTRY_PATH}. Cannot start CUI without account config.`);
+  }
+  const raw = readFileSync(REGISTRY_PATH, 'utf-8');
+  const reg = JSON.parse(raw) as { accounts: Array<{ id: string; display_name: string; color: string; cui_home: string }> };
+  if (!Array.isArray(reg.accounts) || reg.accounts.length === 0) {
+    throw new Error(`[Accounts] Registry has no accounts array. Aborting.`);
+  }
+  return reg.accounts.map(a => ({
+    id: a.id,
+    home: a.cui_home,
+    label: a.display_name,
+    color: a.color,
+  }));
+}
+
 export const ACCOUNT_CONFIG: AccountConfig[] = IS_LOCAL_MODE
   ? [{ id: 'local', home: process.env.HOME || '/Users/rafael', label: 'Local', color: '#7aa2f7' }]
-  : IS_PARTNER
-  ? [
-      { id: 'sahori', home: `${PATHS.claudeUserHome}/.cui-account1`, label: 'Sahori', color: '#bb9af7' },
-      { id: 'kurt',   home: `${PATHS.claudeUserHome}/.cui-account2`, label: 'Kurt',   color: '#9ece6a' },
-    ]
-  : [
-      { id: 'engelmann',    home: `${PATHS.claudeUserHome}/.cui-account1`, label: 'Engelmann', color: '#bb9af7' },
-      { id: 'office', home: `${PATHS.claudeUserHome}/.cui-account2`, label: 'Office',    color: '#9ece6a' },
-      { id: 'gmail',    home: `${PATHS.claudeUserHome}/.cui-account3`, label: 'Gmail',     color: '#7aa2f7' },
-      { id: 'werking',      home: `${PATHS.claudeUserHome}/.cui-account4`, label: 'Werking',   color: '#f7768e' },
-    ];
+  : loadAccountsFromRegistry();
+// Partner-Modus wird ebenfalls aus Registry geladen — partner-server hat eigene
+// registry.json (mit sahori+kurt). Kein separater Hardcoded-Branch mehr noetig.
 
 // --- FIFO Constants ---
 const FIFO_DIR = '/run/cui-sessions';
