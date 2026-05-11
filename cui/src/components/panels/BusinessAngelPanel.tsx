@@ -327,7 +327,6 @@ export default function BusinessAngelPanel() {
   const [contextCollapsed, setContextCollapsed] = useState(false);
   const [diffsCollapsed, setDiffsCollapsed] = useState(false);
   const [chatOnly, setChatOnly] = useState(false);
-  const [chatScrollActive, setChatScrollActive] = useState(false);
 
   // Selected extra files
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
@@ -1176,9 +1175,7 @@ export default function BusinessAngelPanel() {
               </div>
             )}
             <div
-              style={{ ...S.chatBox, overflowY: (chatScrollActive || (typeof window !== 'undefined' && window.matchMedia('(hover: none)').matches)) ? 'auto' : 'hidden', WebkitOverflowScrolling: 'touch' as any }}
-              onMouseEnter={() => setChatScrollActive(true)}
-              onMouseLeave={() => setChatScrollActive(false)}
+              style={{ ...S.chatBox, WebkitOverflowScrolling: 'touch' as any }}
             >
               {chatMessages.length === 0 && (
                 <div style={{ color: 'var(--tn-text-muted)', fontSize: '11px', textAlign: 'center' as const, padding: '16px 0' }}>
