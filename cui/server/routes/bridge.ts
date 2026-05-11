@@ -1854,4 +1854,99 @@ router.get('/api/bridge/events', async (req: any, res: any) => {
   }
 });
 
+// --- Account Identity Health (Drift Detection) ---
+// Source of truth: /home/claude-user/.claude/accounts/registry.json (CUI_CLAUDE_USER_HOME override).
+// /tmp/account-drift.flag (written by scripts/verify-accounts.sh): present == drift detected.
+router.get('/api/accounts/health', (_req, res) => {
+  try {
+    const claudeUserHome = process.env.CUI_CLAUDE_USER_HOME || '/home/claude-user';
+    const registryPath = `${claudeUserHome}/.claude/accounts/registry.json`;
+    if (!existsSync(registryPath)) {
+      return res.status(500).json({ error: `Account registry not found at ${registryPath}` });
+    }
+
+    const registry = JSON.parse(readFileSync(registryPath, 'utf-8')) as {
+      accounts: Array<{ id: string; display_name: string; color: string; anthropic_org_id: string }>;
+    };
+    if (!Array.isArray(registry.accounts) || registry.accounts.length === 0) {
+      return res.status(500).json({ error: 'Registry has no accounts array' });
+    }
+
+    interface DriftResult {
+      id: string;
+      expected_org_id: string;
+      token_org_id: string;
+      cookie_org_id: string;
+      token_match: boolean;
+      cookie_match: boolean;
+      status: string;
+    }
+    interface DriftPayload {
+      timestamp?: string;
+      drifts?: string[];
+      results?: DriftResult[];
+    }
+    const DRIFT_FLAG = '/tmp/account-drift.flag';
+    let driftPayload: DriftPayload | null = null;
+    if (existsSync(DRIFT_FLAG)) {
+      try { driftPayload = JSON.parse(readFileSync(DRIFT_FLAG, 'utf-8')); }
+      catch { driftPayload = null; }
+    }
+
+    // Pick newest log path (verify-accounts.sh writes either /var/log or /tmp).
+    let lastCheck: string | null = null;
+    const candidates = ['/var/log/account-verify.log', '/tmp/account-verify.log'].filter(existsSync);
+    if (candidates.length > 0) {
+      const logPath = candidates
+        .map(p => ({ p, mtime: statSync(p).mtimeMs }))
+        .sort((a, b) => b.mtime - a.mtime)[0].p;
+      try {
+        const content = readFileSync(logPath, 'utf-8');
+        const lines = content.trim().split('\n').filter(Boolean);
+        for (let i = lines.length - 1; i >= 0; i--) {
+          const m = lines[i].match(/^\[([\d\- :]+)\]/);
+          if (m) { lastCheck = m[1]; break; }
+        }
+      } catch { /* silent — log read is best-effort */ }
+    }
+
+    const driftById: Record<string, DriftResult> = {};
+    if (driftPayload?.results) {
+      for (const r of driftPayload.results) driftById[r.id] = r;
+    }
+
+    const accounts = registry.accounts.map(a => {
+      const r = driftById[a.id];
+      let status: 'ok' | 'drift' | 'unknown' = 'unknown';
+      let tokenOrgId = '';
+      let cookieOrgId = '';
+      if (r) {
+        status = r.status === 'DRIFT' ? 'drift' : 'ok';
+        tokenOrgId = r.token_org_id || '';
+        cookieOrgId = r.cookie_org_id || '';
+      } else if (!driftPayload) {
+        status = 'ok';
+      }
+      return {
+        id: a.id,
+        display_name: a.display_name,
+        color: a.color,
+        status,
+        expected_org_id: a.anthropic_org_id,
+        token_org_id: tokenOrgId,
+        cookie_org_id: cookieOrgId,
+      };
+    });
+
+    res.json({
+      timestamp: new Date().toISOString(),
+      healthy: !driftPayload,
+      accounts,
+      last_check: lastCheck,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'unknown error' });
+  }
+});
+
 export default router;

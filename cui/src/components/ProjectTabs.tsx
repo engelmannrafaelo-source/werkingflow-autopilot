@@ -50,6 +50,13 @@ interface UsageAccount {
   } | null;
 }
 
+interface AccountHealth {
+  status: 'ok' | 'drift' | 'unknown';
+  expected_org_id?: string;
+  token_org_id?: string;
+  cookie_org_id?: string;
+}
+
 function usagePctColor(pct: number): string {
   if (pct >= 80) return 'var(--tn-red)';
   if (pct >= 50) return 'var(--tn-orange)';
@@ -73,7 +80,7 @@ function shortenReset(raw: string): string {
 }
 
 // --- Usage Pill (single account) ---
-function UsagePill({ account }: { account: UsageAccount }) {
+function UsagePill({ account, health }: { account: UsageAccount; health?: AccountHealth }) {
   const accountDef = ACCOUNTS.find(a => a.id === account.accountId);
   const color = accountDef?.color || 'var(--tn-text-muted)';
   const s = account.scraped;
@@ -86,15 +93,27 @@ function UsagePill({ account }: { account: UsageAccount }) {
   const weeklyReset = s ? shortenReset(s.weeklyAllModels.resetDate) : '';
   const sessionReset = s ? shortenReset(s.currentSession.resetIn) : '';
 
-  const tooltip = s
+  const drift = health?.status === 'drift';
+  const driftTooltipLines = drift
+    ? [
+        '',
+        '⚠ IDENTITY DRIFT',
+        `expected: ${health?.expected_org_id || '?'}`,
+        `token   : ${health?.token_org_id || '(none)'}`,
+        `cookie  : ${health?.cookie_org_id || '(none)'}`,
+      ]
+    : [];
+
+  const tooltip = (s
     ? [
         account.accountName,
         `Sitzung: ${sessionPct}% ${s.currentSession.resetIn || ''}`,
         `Weekly: ${weeklyPct}% ${s.weeklyAllModels.resetDate || ''}`,
         `Sonnet: ${s.weeklySonnet.percent}% ${s.weeklySonnet.resetDate || ''}`,
         s.extraUsage.percent > 0 ? `Extra: ${s.extraUsage.spent} / ${s.extraUsage.limit}` : null,
-      ].filter(Boolean).join('\n')
-    : `${account.accountName}: Keine Daten`;
+      ].filter(Boolean)
+    : [`${account.accountName}: Keine Daten`]
+  ).concat(driftTooltipLines).join('\n');
 
   return (
     <div
@@ -105,16 +124,26 @@ function UsagePill({ account }: { account: UsageAccount }) {
         gap: 3,
         padding: '2px 5px',
         borderRadius: 4,
-        background: account.status === 'critical'
-          ? 'rgba(247,118,142,0.12)'
-          : account.status === 'warning'
-            ? 'rgba(224,175,104,0.08)'
-            : 'rgba(255,255,255,0.03)',
-        border: `1px solid ${account.status === 'critical' ? 'rgba(247,118,142,0.4)' : 'rgba(255,255,255,0.06)'}`,
+        background: drift
+          ? 'rgba(247,118,142,0.18)'
+          : account.status === 'critical'
+            ? 'rgba(247,118,142,0.12)'
+            : account.status === 'warning'
+              ? 'rgba(224,175,104,0.08)'
+              : 'rgba(255,255,255,0.03)',
+        border: `1px solid ${drift ? '#f7768e' : account.status === 'critical' ? 'rgba(247,118,142,0.4)' : 'rgba(255,255,255,0.06)'}`,
         cursor: 'default', flexShrink: 0,
         WebkitAppRegion: 'no-drag',
       } as React.CSSProperties}
     >
+      {drift && (
+        <span
+          aria-label="Account identity drift"
+          style={{ fontSize: 9, color: '#f7768e', lineHeight: 1, marginRight: 1 }}
+        >
+          {'⚠'}
+        </span>
+      )}
       <span style={{ fontSize: 9, fontWeight: 700, color, letterSpacing: '0.02em', lineHeight: 1 }}>
         {shortName}
       </span>
@@ -156,7 +185,9 @@ function loadCachedAccounts(): UsageAccount[] {
 
 function UsageBars() {
   const [accounts, setAccounts] = useState<UsageAccount[]>(loadCachedAccounts);
+  const [health, setHealth] = useState<Record<string, AccountHealth>>({});
   const pollRef = useRef<ReturnType<typeof setInterval>>(null);
+  const healthPollRef = useRef<ReturnType<typeof setInterval>>(null);
 
   const fetchUsage = useCallback(() => {
     if (window.__cuiServerAlive !== true) return;
@@ -171,17 +202,43 @@ function UsageBars() {
       .catch(() => { /* server not ready or timeout — cached data stays visible */ });
   }, []);
 
+  const fetchHealth = useCallback(() => {
+    if (window.__cuiServerAlive !== true) return;
+    fetch('/api/accounts/health', { signal: AbortSignal.timeout(8000) })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data?.accounts || !Array.isArray(data.accounts)) return;
+        const next: Record<string, AccountHealth> = {};
+        for (const a of data.accounts) {
+          next[a.id] = {
+            status: a.status,
+            expected_org_id: a.expected_org_id,
+            token_org_id: a.token_org_id,
+            cookie_org_id: a.cookie_org_id,
+          };
+        }
+        setHealth(next);
+      })
+      .catch(() => { /* endpoint not yet built / server restart — keep last state */ });
+  }, []);
+
   useEffect(() => {
     fetchUsage();
     pollRef.current = setInterval(fetchUsage, 120_000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [fetchUsage]);
 
+  useEffect(() => {
+    fetchHealth();
+    healthPollRef.current = setInterval(fetchHealth, 60_000);
+    return () => { if (healthPollRef.current) clearInterval(healthPollRef.current); };
+  }, [fetchHealth]);
+
   if (accounts.length === 0) return null;
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginRight: 8, flexShrink: 0 }}>
-      {accounts.map(acc => <UsagePill key={acc.accountId} account={acc} />)}
+      {accounts.map(acc => <UsagePill key={acc.accountId} account={acc} health={health[acc.accountId]} />)}
     </div>
   );
 }
