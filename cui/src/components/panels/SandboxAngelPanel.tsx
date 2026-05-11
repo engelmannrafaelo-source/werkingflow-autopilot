@@ -9,6 +9,8 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Send, Loader2, Bot } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface Msg {
   id: string;
@@ -27,14 +29,42 @@ interface Props {
   mode: 'private' | 'business';
 }
 
+const CAPABILITIES_BLOCK =
+  '## Was ich kann\n' +
+  '- **Files durchsuchen** im gemounteten Workspace (Glob/Grep/Read)\n' +
+  '- **Inhalte aus vielen Files extrahieren** via `bridge-summarize` — schickt ganze Files an einen frischen Claude mit großem Context und kriegt eine fokussierte Zusammenfassung zurück. **Besser** als selber alle Files lesen weil mein Context-Window klein bleibt und der Bridge-Claude alles voll überblickt.\n' +
+  '- **Web-Recherchen** via `bridge-research` — WebSearch + WebFetch durch die Bridge\n' +
+  '- **Editieren** in erlaubten Ordnern (Schreibrechte siehe unten)\n\n' +
+  '## Vorgehen\n' +
+  'Erst klären worum es geht → Recherche-Phase (lokal/Web/Mix entscheide ich) → dann Arbeit.';
+
 const LABELS: Record<Props['mode'], { title: string; welcome: string }> = {
   private: {
     title: 'Privat-Assistent',
-    welcome: 'Hallo! Ich bin dein persönlicher Assistent mit Zugriff auf deine Wissensbase.',
+    welcome:
+      'Hi Rafael — ich bin dein **Privat-Assistent**.\n\n' +
+      '## Daten die ich kenne (`/work/sources/`)\n' +
+      '- `rafael-*.md` — dein kuratiertes Persönlichkeitsprofil (Philosophie, Psychologie, Beziehungen, Training, Biohacking, Coaching, Sexualität, Personen-Map) — **read-only**\n' +
+      '- `tagebuch/YYYY-MM/` — dein Tagebuch-Verlauf, lese- und schreibbar\n' +
+      '- `inbox/` — Rohnotizen + Voice-Transkripte, lese- und schreibbar\n' +
+      '- `kalender-*.md`, `acro-festivals-*.md`, `ashtanga-*` — Termin- und Trainingsplanung\n\n' +
+      CAPABILITIES_BLOCK +
+      '\n\nWorum gehts heute?',
   },
   business: {
     title: 'Business-Assistent',
-    welcome: 'Hallo! Ich bin dein Business-Assistent mit Zugriff auf die Business-Wissensbase.',
+    welcome:
+      'Hi Rafael — ich bin dein **Business-Assistent**.\n\n' +
+      '## Daten die ich kenne (`/work/sources/`)\n' +
+      '- `shared/strategy/` — Vision, Businessplan, Strategy Insights — **read-only**\n' +
+      '- `marketing/`, `sales/`, `customer-success/` — lesbar, Drafts schreibbar\n' +
+      '- `finance/` — **read-only**\n' +
+      '- `products/` — Engelmann, WerkING Energy/Safety/Report/Noise Konzepte\n' +
+      '- `foerderung/` — FFG-Projektbeschreibungen, Gutachter-Reviews\n' +
+      '- `team/`, `legal/`, `reports/` — internes Material\n' +
+      '- `drafts/`, `inbox/` — schreibbare Arbeitsbereiche\n\n' +
+      CAPABILITIES_BLOCK +
+      '\n\nWorum gehts heute?',
   },
 };
 
@@ -50,6 +80,7 @@ const S = {
   inputArea: { display: 'flex', gap: 8, padding: '10px 16px', borderTop: '1px solid var(--tn-border, #414868)', flexShrink: 0 },
   textarea: { flex: 1, background: 'var(--tn-surface2, #24283b)', color: 'var(--tn-text, #c0caf5)', border: '1px solid var(--tn-border, #414868)', borderRadius: 8, padding: '8px 12px', fontSize: 13, resize: 'none' as const, fontFamily: 'inherit', outline: 'none' },
   btn: { background: 'var(--tn-accent, #7aa2f7)', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, flexShrink: 0 },
+  markdown: { lineHeight: 1.5 } as React.CSSProperties,
 } as const;
 
 export default function SandboxAngelPanel({ mode }: Props) {
@@ -164,6 +195,27 @@ export default function SandboxAngelPanel({ mode }: Props) {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, statusText]);
 
+  const callExec = useCallback(async (sess: Session, prompt: string): Promise<Response> => {
+    return fetch(`${endpoint}/exec`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Sandbox-Token': sess.token },
+      body: JSON.stringify({ sid: sess.sid, t: sess.token, prompt }),
+    });
+  }, [endpoint]);
+
+  const restart = useCallback(async (): Promise<Session> => {
+    const res = await fetch(`${endpoint}/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resourceId: 'main' }),
+    });
+    if (!res.ok) throw new Error(`restart ${res.status}: ${await res.text()}`);
+    const data = await res.json() as { sid: string; token: string };
+    const next = { sid: data.sid, token: data.token };
+    setSession(next);
+    return next;
+  }, [endpoint]);
+
   const send = useCallback(async () => {
     const prompt = input.trim();
     if (!prompt || !session || status !== 'ready') return;
@@ -178,11 +230,13 @@ export default function SandboxAngelPanel({ mode }: Props) {
     setStatusText('Sende…');
 
     try {
-      const res = await fetch(`${endpoint}/exec`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Sandbox-Token': session.token },
-        body: JSON.stringify({ sid: session.sid, t: session.token, prompt }),
-      });
+      let res = await callExec(session, prompt);
+      if (res.status === 404) {
+        // Container is gone (idle-killed). Resume session and retry once.
+        setStatusText('Session abgelaufen — starte neu…');
+        const fresh = await restart();
+        res = await callExec(fresh, prompt);
+      }
       if (!res.ok) throw new Error(`exec ${res.status}: ${await res.text()}`);
       // Response comes back via SSE stream
     } catch (e: unknown) {
@@ -191,7 +245,7 @@ export default function SandboxAngelPanel({ mode }: Props) {
       setStatus('ready');
       setStatusText(null);
     }
-  }, [input, session, status, endpoint]);
+  }, [input, session, status, callExec, restart]);
 
   const onKey = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); }
@@ -212,7 +266,13 @@ export default function SandboxAngelPanel({ mode }: Props) {
       <div style={S.messages}>
         {messages.map((m) => (
           <div key={m.id} style={m.role === 'user' ? S.msgUser : S.msgAssistant}>
-            {m.content}
+            {m.role === 'user' ? (
+              m.content
+            ) : (
+              <div style={S.markdown}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+              </div>
+            )}
           </div>
         ))}
 
