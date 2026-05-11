@@ -239,6 +239,15 @@ body {
   min-height: 0;
 }
 
+/* Reserve space at the bottom for the floating Top/Both/Bottom toggle so
+   panel content (especially the chat input) is never hidden behind it. */
+.mobile-layout > .mobile-layout-content {
+  position: absolute;
+  inset: 0;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 56px);
+  overflow: hidden;
+}
+
 /* Fullscreen panel (Chat tab) */
 .mobile-panel-container {
   position: absolute;
@@ -389,18 +398,19 @@ body {
   padding-right: env(safe-area-inset-right, 0px);
 }
 
-/* Top/Both/Bottom view toggle — fixed above safe-area, always reachable */
+/* Top/Both/Bottom view toggle — fixed above safe-area, always reachable.
+   Kept compact so it eats minimal vertical space on iPad. */
 .mobile-view-toggle {
   position: fixed;
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 10px);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 6px);
   left: 50%;
   transform: translateX(-50%);
   display: flex;
-  gap: 4px;
+  gap: 2px;
   background: var(--tn-bg-dark);
   border: 1px solid var(--tn-border);
-  border-radius: 28px;
-  padding: 4px;
+  border-radius: 22px;
+  padding: 3px;
   z-index: 300;
   user-select: none;
   -webkit-user-select: none;
@@ -408,16 +418,16 @@ body {
 }
 
 .mobile-view-toggle button {
-  min-height: 48px !important;
-  min-width: 64px;
+  min-height: 36px !important;
+  min-width: 54px;
   background: transparent;
   border: 2px solid transparent;
-  border-radius: 22px;
+  border-radius: 16px;
   color: var(--tn-text-muted);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   cursor: pointer;
-  padding: 8px 14px;
+  padding: 4px 10px;
   transition: all 0.15s;
   user-select: none;
   -webkit-user-select: none;
