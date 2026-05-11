@@ -268,9 +268,13 @@ Actions (jede speichert/lädt Cookies in auth.json):
 1. **Login**: \`node ${HELPER_PATH} ${journeyDir} login ${baseUrl} ${email} ${password}\`
    Wenn \`login_success: false\` → schreibe Ergebnis in \`${journeyDir}/journey.md\` (Format unten) und HÖRE AUF.
 2. **Übersicht**: \`node ${HELPER_PATH} ${journeyDir} dump\` — schau Headings + Buttons an.
-3. **Klick durch 3-5 Hauptaktionen** (Sidebar-Items, "Neues Projekt", "Anlegen", erste Detail-Ansicht). Nach jedem Klick Screenshot mit \`--screenshot=04-...png\`, dann 05, 06, ...
-4. Wenn ein Klick einen Fehler/Leere/etwas Unerwartetes zeigt → das ist ein Finding.
-5. **Schreibe** \`${journeyDir}/journey.md\` im Pflicht-Format:
+3. **Klick durch 3-5 Hauptaktionen** indem du **echte UI-Elemente klickst**, nicht URLs ratest:
+   - Hauptnavigation: \`click "a:has-text('Projekte')" --screenshot=04-projekte.png\` (oder \`button:has-text(...)\` / \`[role=link]:has-text(...)\`)
+   - Aktions-Buttons: \`click "button:has-text('Neuer Bericht')" --screenshot=05-neuer-bericht.png\`
+   - Detail-Ansicht: \`click "[data-testid*='project'], .project-card" --screenshot=06-detail.png\`
+4. **KEIN \`goto <url>\` zum Raten von Routen.** Wenn ein Sidebar-Item nichts tut/404 produziert, ist DAS der Bug — dokumentiere ihn, aber tippe nicht selbst Routen wie \`/berichte\` ein. \`goto\` nur zur Rückkehr auf die Startseite oder explizit aus Buttons abgeleitete absolute URLs.
+5. Wenn ein Klick einen Fehler/Leere/Unerwartetes zeigt → das ist ein Finding (App-Bug). Wenn du nicht findest wie du irgendwohin kommst → auch ein Finding (UX/Navigation-Bug).
+6. **Schreibe** \`${journeyDir}/journey.md\` im Pflicht-Format:
 
 \`\`\`markdown
 # Journey: ${app} / ${userId} / ${workspace}
