@@ -582,13 +582,24 @@ export function hasPendingInteractiveQuestion(sessionId: string): boolean {
     const tailStr = buf.toString('utf-8');
     const lines = tailStr.split('\n').filter(l => l.trim());
     let lastInteractiveIdx = -1;
-    let lastUserIdx = -1;
+    let lastUserTextIdx = -1;
     for (let i = 0; i < lines.length; i++) {
       try {
         const obj = JSON.parse(lines[i]);
         const role = obj.message?.role;
         if (role === 'user') {
-          lastUserIdx = i;
+          // Only count REAL user input, not SDK-injected tool_result blocks.
+          // The SDK auto-cancels AskUserQuestion in headless mode by writing
+          // a tool_result with is_error=true — that must NOT mark the question
+          // as answered.
+          const content = obj.message?.content;
+          let hasText = false;
+          if (typeof content === 'string') {
+            hasText = content.trim().length > 0;
+          } else if (Array.isArray(content)) {
+            hasText = content.some((b: any) => b && b.type === 'text' && typeof b.text === 'string' && b.text.trim().length > 0);
+          }
+          if (hasText) lastUserTextIdx = i;
           continue;
         }
         if (role === 'assistant' && Array.isArray(obj.message?.content)) {
@@ -601,7 +612,7 @@ export function hasPendingInteractiveQuestion(sessionId: string): boolean {
         }
       } catch { /* boundary fragment, skip */ }
     }
-    return lastInteractiveIdx > lastUserIdx;
+    return lastInteractiveIdx > lastUserTextIdx;
   } catch { return false; }
 }
 

@@ -295,7 +295,36 @@ function ToolUseBlock({ block, onRespond, workDir, serverPlanText, sessionCwd }:
 }
 
 // --- Message Row (memoized: prevents re-rendering 200+ ReactMarkdown instances on poll) ---
-const MessageRow = memo(function MessageRow({ msg, onRespond, isLast, workDir, selectedId, serverPlanText, sessionCwd }: { msg: Message; onRespond?: (text: string) => void; isLast: boolean; workDir?: string; selectedId?: string; serverPlanText?: string; sessionCwd?: string }) {
+const INTERACTIVE_TOOL_NAMES = ['AskUserQuestion', 'ExitPlanMode', 'EnterPlanMode'];
+
+function isUserTextMessage(msg: Message): boolean {
+  if (msg.role !== 'user') return false;
+  if (typeof msg.content === 'string') return msg.content.trim().length > 0;
+  if (Array.isArray(msg.content)) return msg.content.some(b => b.type === 'text' && typeof b.text === 'string' && b.text.trim().length > 0);
+  return false;
+}
+
+// Index of the last assistant message containing an interactive tool_use that
+// has not been answered by a real user-text message after it. The SDK auto-
+// cancels AskUserQuestion in headless mode with an is_error tool_result, so
+// the question would never be `isLast`. Keep the box visible until the user
+// (or auto-inject loop) actually replies with text.
+function findLastUnansweredQuestionIdx(messages: Message[]): number {
+  let lastUserTextIdx = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (isUserTextMessage(messages[i])) { lastUserTextIdx = i; break; }
+  }
+  for (let i = messages.length - 1; i > lastUserTextIdx; i--) {
+    const m = messages[i];
+    if (m.role !== 'assistant' || !Array.isArray(m.content)) continue;
+    if (m.content.some((b: ContentBlock) => b.type === 'tool_use' && !!b.name && INTERACTIVE_TOOL_NAMES.includes(b.name))) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+const MessageRow = memo(function MessageRow({ msg, onRespond, isLast, forceInteractive, workDir, selectedId, serverPlanText, sessionCwd }: { msg: Message; onRespond?: (text: string) => void; isLast: boolean; forceInteractive?: boolean; workDir?: string; selectedId?: string; serverPlanText?: string; sessionCwd?: string }) {
   const blocks: ContentBlock[] = typeof msg.content === 'string'
     ? [{ type: 'text', text: msg.content }]
     : Array.isArray(msg.content) ? msg.content : [];
@@ -303,13 +332,12 @@ const MessageRow = memo(function MessageRow({ msg, onRespond, isLast, workDir, s
   const textBlocks = blocks.filter(b => b.type === 'text');
   const toolUseBlocks = blocks.filter(b => b.type === 'tool_use');
 
-  // Only show interactive tool_use buttons on the last assistant message
-  const interactiveToolNames = ['AskUserQuestion', 'ExitPlanMode', 'EnterPlanMode'];
-  const interactiveBlocks = (isLast && msg.role === 'assistant')
-    ? toolUseBlocks.filter(b => interactiveToolNames.includes(b.name || ''))
+  const showInteractive = (isLast || forceInteractive) && msg.role === 'assistant';
+  const interactiveBlocks = showInteractive
+    ? toolUseBlocks.filter(b => INTERACTIVE_TOOL_NAMES.includes(b.name || ''))
     : [];
-  const infoBlocks = (isLast && msg.role === 'assistant')
-    ? toolUseBlocks.filter(b => !interactiveToolNames.includes(b.name || ''))
+  const infoBlocks = showInteractive
+    ? toolUseBlocks.filter(b => !INTERACTIVE_TOOL_NAMES.includes(b.name || ''))
     : toolUseBlocks;
 
   const text = textBlocks.map(b => b.text || '').join('\n');
@@ -1895,9 +1923,23 @@ export default function CuiLitePanel({ accountId, projectId, workDir, panelId, i
                 {messages.length - 15} aeltere Nachrichten laden...
               </button>
             )}
-            {(showAllMessages ? messages : messages.slice(-15)).map((msg, i, arr) => (
-              <MessageRow key={msg.timestamp || i} msg={msg} onRespond={handleRespond} isLast={i === arr.length - 1} workDir={workDir} selectedId={selectedId} serverPlanText={serverPlanText} sessionCwd={sessionCwd} />
-            ))}
+            {(() => {
+              const visible = showAllMessages ? messages : messages.slice(-15);
+              const lastUnansweredIdx = findLastUnansweredQuestionIdx(visible);
+              return visible.map((msg, i, arr) => (
+                <MessageRow
+                  key={msg.timestamp || i}
+                  msg={msg}
+                  onRespond={handleRespond}
+                  isLast={i === arr.length - 1}
+                  forceInteractive={i === lastUnansweredIdx}
+                  workDir={workDir}
+                  selectedId={selectedId}
+                  serverPlanText={serverPlanText}
+                  sessionCwd={sessionCwd}
+                />
+              ));
+            })()}
             <div ref={messagesEndRef} />
           </div>
 

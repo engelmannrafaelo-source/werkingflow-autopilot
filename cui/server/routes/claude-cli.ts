@@ -396,8 +396,15 @@ function handleStdoutLine(line: string, entry: ClaudeProcess): { sessionId?: str
       result.isResult = true;
       const denials = Array.isArray(obj.permission_denials) ? obj.permission_denials : [];
       const questionDenied = denials.some((d: any) => d.tool_name === 'AskUserQuestion');
-      if (questionDenied) {
-        console.log(`[ClaudeCLI] ${entry.accountId}: result with AskUserQuestion denied - staying in question state`);
+      // SDK auto-cancels AskUserQuestion in headless mode by injecting
+      // {is_error: true, content: "Answer questions?"} as tool_result. The
+      // CLI then keeps going (Claude writes a text follow-up like "Frage
+      // offen..."), so permission_denials is empty and we'd flip to idle.
+      // Check the JSONL for an unanswered interactive tool_use to detect this.
+      const hasUnansweredQuestion = entry.sessionId ? hasPendingInteractiveQuestion(entry.sessionId) : false;
+      if (questionDenied || hasUnansweredQuestion) {
+        const reason = questionDenied ? 'denied' : 'auto-cancelled by SDK';
+        console.log(`[ClaudeCLI] ${entry.accountId}: result with pending AskUserQuestion (${reason}) - staying in question state`);
         _broadcast({ type: 'cui-state', cuiId: entry.accountId, sessionId: entry.sessionId, state: 'done' });
         _broadcast({ type: 'cui-response-ready', cuiId: entry.accountId, sessionId: entry.sessionId });
         _setSessionState(entry.sessionId, entry.accountId, 'needs_attention', 'question', entry.sessionId);
@@ -629,6 +636,9 @@ export async function startConversation(
   }
 
   // Build CLI args
+  // Team-mode disabled (Rafael 2026-05-12): kein SendMessage-Tool, kein
+  // "send to team-lead"-System-Prompt, kein [KONTEXT/TEAM]-Inject. ExitPlanMode
+  // bleibt durch --dangerously-skip-permissions abgesichert.
   const args: string[] = [
     '-p',
     '--input-format', 'stream-json',
@@ -636,10 +646,6 @@ export async function startConversation(
     '--verbose',
     '--include-partial-messages',
     '--dangerously-skip-permissions',
-    // Team mode: isTeammate()=true so ExitPlanMode auto-approves
-    '--agent-id', accountId,
-    '--agent-name', 'Cockpit',
-    '--team-name', 'werkingflow',
   ];
   // Model override (explicit model > settings.json fallback)
   if (model) {
@@ -656,7 +662,6 @@ export async function startConversation(
     TERM: 'xterm-256color',
     LANG: process.env.LANG || 'en_US.UTF-8',
     XDG_CONFIG_HOME: `${config.home}/.config`,
-    CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: 'true',
   };
 
   // Per-user API token so the session can call back into the CUI server
