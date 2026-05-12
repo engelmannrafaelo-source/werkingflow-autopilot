@@ -83,9 +83,12 @@ export default function FeedbackPanel() {
     title: '',
     description: '',
     appContext: '',
+    screenshot: '',
   });
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState('');
 
   // Admin: status edit
   const [editStatus, setEditStatus] = useState('');
@@ -142,6 +145,7 @@ export default function FeedbackPanel() {
           title: form.title,
           description: form.description,
           appContext: form.appContext || undefined,
+          screenshot: form.screenshot || undefined,
         }),
         signal: AbortSignal.timeout(15000),
       });
@@ -159,7 +163,7 @@ export default function FeedbackPanel() {
         createdAt: 'string',
       });
       setEntries(prev => [created, ...prev]);
-      setForm({ type: 'bug', title: '', description: '', appContext: '' });
+      setForm({ type: 'bug', title: '', description: '', appContext: '', screenshot: '' });
       setView('list');
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : String(err));
@@ -167,6 +171,45 @@ export default function FeedbackPanel() {
       setSubmitting(false);
     }
   }, [form, user]);
+
+  const handleScreenshotFile = useCallback(async (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      setUploadError('Nur Bilder (PNG/JPEG/GIF/WebP) werden unterstützt');
+      return;
+    }
+    const MAX_BYTES = 8 * 1024 * 1024;
+    if (file.size > MAX_BYTES) {
+      setUploadError(`Datei zu groß (${(file.size / 1024 / 1024).toFixed(1)} MB, Limit 8 MB)`);
+      return;
+    }
+    setUploading(true);
+    setUploadError('');
+    try {
+      const dataUrl: string = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => reject(new Error('FileReader failed'));
+        reader.readAsDataURL(file);
+      });
+      const res = await fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: dataUrl, filename: file.name }),
+        signal: AbortSignal.timeout(30000),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      const { url } = (await res.json()) as { url: string };
+      if (!url) throw new Error('Upload-Response enthält keine URL');
+      setForm(f => ({ ...f, screenshot: url }));
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setUploading(false);
+    }
+  }, []);
 
   const handleSaveStatus = useCallback(async () => {
     if (!selected || !editStatus) return;
@@ -380,6 +423,74 @@ export default function FeedbackPanel() {
               onChange={e => setForm(f => ({ ...f, appContext: e.target.value }))}
               style={inputStyle}
             />
+          </div>
+
+          {/* Screenshot */}
+          <div
+            style={{ marginBottom: 12 }}
+            onPaste={(e) => {
+              const item = Array.from(e.clipboardData.items).find(i => i.type.startsWith('image/'));
+              if (item) {
+                const file = item.getAsFile();
+                if (file) { e.preventDefault(); handleScreenshotFile(file); }
+              }
+            }}
+          >
+            <label style={labelStyle}>Screenshot (optional)</label>
+            {form.screenshot ? (
+              <div style={{ position: 'relative', display: 'inline-block' }}>
+                <img
+                  src={form.screenshot}
+                  alt="Screenshot Vorschau"
+                  style={{ maxWidth: '100%', maxHeight: 200, borderRadius: 4, border: '1px solid var(--tn-border)', display: 'block' }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setForm(f => ({ ...f, screenshot: '' }))}
+                  style={{
+                    position: 'absolute', top: 4, right: 4, padding: '2px 6px',
+                    background: 'rgba(0,0,0,0.7)', color: '#fff', border: '1px solid rgba(255,255,255,0.3)',
+                    borderRadius: 3, fontSize: 11, cursor: 'pointer',
+                  }}
+                >
+                  ✕ Entfernen
+                </button>
+              </div>
+            ) : (
+              <label
+                style={{
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                  padding: '14px 12px', border: '1px dashed var(--tn-border)', borderRadius: 4,
+                  background: 'var(--tn-surface)', cursor: uploading ? 'progress' : 'pointer',
+                  color: 'var(--tn-text-muted)', fontSize: 11,
+                }}
+                onDragOver={(e) => { e.preventDefault(); }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const file = e.dataTransfer.files?.[0];
+                  if (file) handleScreenshotFile(file);
+                }}
+              >
+                <input
+                  type="file"
+                  accept="image/*"
+                  style={{ display: 'none' }}
+                  disabled={uploading}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) handleScreenshotFile(file);
+                    e.target.value = '';
+                  }}
+                />
+                <span style={{ fontWeight: 600, color: 'var(--tn-text)' }}>
+                  {uploading ? 'Hochladen…' : 'Bild auswählen, hierher ziehen oder Cmd/Ctrl+V'}
+                </span>
+                <span style={{ marginTop: 4 }}>PNG, JPEG, GIF, WebP — bis 8 MB</span>
+              </label>
+            )}
+            {uploadError && (
+              <div style={{ marginTop: 6, fontSize: 11, color: '#f7768e' }}>{uploadError}</div>
+            )}
           </div>
 
           {submitError && (
