@@ -97,6 +97,7 @@ import bridgeRouter from './routes/bridge.js';
 import qaRouter from './routes/qa.js';
 import qaBackendRouter from './routes/qa-backend.js';
 import repoDashboardRouter from './routes/repo-dashboard.js';
+import gitRouter from './routes/git.js';
 import maintenanceRouter from './routes/maintenance.js';
 import panelsInspectRouter from './routes/panels-inspect.js';
 import auditRouter, { initAuditRouter } from './routes/audit.js';
@@ -338,6 +339,7 @@ app.use(bridgeRouter);                               // /api/claude-code/*, /api
 app.use(qaRouter);                                   // /api/qa/* (QA Dashboard - Unified-Tester integration)
 app.use(qaBackendRouter);                            // /api/qa/backend-pyramid (Backend-Pyramide: Manifest + pytest)
 app.use('/api/repo-dashboard', repoDashboardRouter);  // /api/repo-dashboard/repositories, /pipeline, /structure, /hierarchy
+app.use('/api/git', gitRouter);                       // /api/git/repos, /commits, /branches, /status, /diff, /refresh
 app.use('/api/maintenance', maintenanceRouter);       // /api/maintenance/status, /refresh, /run
 app.use(panelsInspectRouter);                         // /api/panels/inspect (meta: probes each panel's GET endpoints)
 app.use('/api/audit', auditRouter);                   // /api/audit/inputs, /summary, /inputs/:id/context

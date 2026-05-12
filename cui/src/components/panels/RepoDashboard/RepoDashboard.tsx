@@ -4,6 +4,7 @@ import RepositoriesTab from './tabs/RepositoriesTab';
 import PipelineTab from './tabs/PipelineTab';
 import DiskUsageTab from './tabs/DiskUsageTab';
 import HierarchyTab from './tabs/HierarchyTab';
+import GitTab from './tabs/GitTab';
 import { BuildInfo } from '../../BuildInfo';
 import { validateApiResponse } from '../../../lib/validateApiResponse';
 
@@ -26,6 +27,7 @@ interface QuickStats {
 
 export default function RepoDashboard() {
   const tabs: Tab[] = [
+    { key: 'git', label: 'Git', component: <ErrorBoundary componentName="GitTab"><GitTab /></ErrorBoundary> },
     { key: 'repos', label: 'Repositories', component: <ErrorBoundary componentName="RepositoriesTab"><RepositoriesTab /></ErrorBoundary> },
     { key: 'hierarchy', label: 'Hierarchy (Sankey)', component: <ErrorBoundary componentName="HierarchyTab"><HierarchyTab /></ErrorBoundary> },
     { key: 'pipeline', label: 'Pipeline', component: <ErrorBoundary componentName="PipelineTab"><PipelineTab /></ErrorBoundary> },
