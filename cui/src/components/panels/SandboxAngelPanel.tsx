@@ -116,15 +116,33 @@ export default function SandboxAngelPanel({ mode }: Props) {
         if (!res.ok) throw new Error(`start ${res.status}: ${await res.text()}`);
         return res.json() as Promise<{ sid: string; token: string; resumed?: boolean }>;
       })
-      .then((data) => {
+      .then(async (data) => {
         if (cancelled) return;
         setSession({ sid: data.sid, token: data.token });
         setStatus('ready');
-        if (data.resumed) {
+        if (!data.resumed) return;
+
+        // Resumed session — pull the actual conversation history from disk so
+        // the user sees what they discussed before, instead of just a stub
+        // "Willkommen zurück" with empty chat.
+        try {
+          const r = await fetch(
+            `${endpoint}/history?sid=${encodeURIComponent(data.sid)}&t=${encodeURIComponent(data.token)}`,
+          );
+          if (!r.ok) throw new Error(`history ${r.status}`);
+          const { messages: hist } = await r.json() as { messages: Array<{ role: 'user' | 'assistant'; text: string }> };
+          if (cancelled) return;
+          if (hist.length === 0) {
+            setMessages(prev => prev.map(m =>
+              m.id === 'welcome' ? { ...m, content: 'Willkommen zurück — keine alten Nachrichten gefunden.' } : m,
+            ));
+            return;
+          }
+          setMessages(hist.map((m, i) => ({ id: `h-${i}`, role: m.role, content: m.text })));
+        } catch {
+          // Fallback: show stub welcome — better than nothing.
           setMessages(prev => prev.map(m =>
-            m.id === 'welcome'
-              ? { ...m, content: 'Willkommen zurück — wir machen weiter wo wir aufgehört haben.' }
-              : m,
+            m.id === 'welcome' ? { ...m, content: 'Willkommen zurück — wir machen weiter wo wir aufgehört haben.' } : m,
           ));
         }
       })

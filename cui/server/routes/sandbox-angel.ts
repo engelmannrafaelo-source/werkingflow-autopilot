@@ -201,6 +201,23 @@ router.post('/:mode/stop', async (req: Request, res: Response) => {
   res.status(r.status).setHeader('content-type', ct).send(await r.text());
 });
 
+// GET /api/sandbox-angel/:mode/history
+router.get('/:mode/history', async (req: Request, res: Response) => {
+  let env: ReturnType<typeof requireEnv>;
+  try { env = requireEnv(); }
+  catch (e: unknown) { res.status(503).json({ error: (e as Error).message }); return; }
+
+  const { sid, t } = req.query as { sid?: string; t?: string };
+  if (!sid || !t) { res.status(400).json({ error: 'sid + t required' }); return; }
+
+  const r = await fetch(
+    `${env.daemonUrl}/sandbox/history?sid=${encodeURIComponent(sid)}&t=${encodeURIComponent(t)}`,
+    { headers: { 'X-Daemon-Secret': env.daemonSecret } },
+  );
+  const ct = r.headers.get('content-type') ?? 'application/json';
+  res.status(r.status).setHeader('content-type', ct).send(await r.text());
+});
+
 // GET /api/sandbox-angel/:mode/stream  (SSE proxy)
 router.get('/:mode/stream', async (req: Request, res: Response) => {
   let env: ReturnType<typeof requireEnv>;
