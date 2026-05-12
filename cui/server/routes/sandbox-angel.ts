@@ -269,6 +269,16 @@ router.post('/:mode/conversation/:action', async (req: Request, res: Response) =
   await proxyDaemonPost(env, `/sandbox/conversation/${action}`, req.body as Record<string, unknown>, tok, res);
 });
 
+// POST /api/sandbox-angel/:mode/approve-decision
+// Panel calls this when the user clicks approve/reject in the approval modal.
+router.post('/:mode/approve-decision', async (req: Request, res: Response) => {
+  let env: ReturnType<typeof requireEnv>;
+  try { env = requireEnv(); }
+  catch (e: unknown) { res.status(503).json({ error: (e as Error).message }); return; }
+  const tok = (req.headers['x-sandbox-token'] as string) ?? '';
+  await proxyDaemonPost(env, '/sandbox/approve-decision', req.body as Record<string, unknown>, tok, res);
+});
+
 // GET /api/sandbox-angel/:mode/stream  (SSE proxy)
 router.get('/:mode/stream', async (req: Request, res: Response) => {
   let env: ReturnType<typeof requireEnv>;

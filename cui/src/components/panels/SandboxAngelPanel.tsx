@@ -40,6 +40,18 @@ interface Conversation {
   archived: boolean;
 }
 
+interface ApprovalRequest {
+  approvalId: string;
+  tool: string;
+  input: {
+    file_path?: string;
+    content?: string;
+    old_string?: string;
+    new_string?: string;
+    edits?: Array<{ old_string: string; new_string: string }>;
+  };
+}
+
 type Status = 'idle' | 'starting' | 'ready' | 'running' | 'error';
 
 interface Props {
@@ -138,6 +150,7 @@ export default function SandboxAngelPanel({ mode }: Props) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [pendingApprovals, setPendingApprovals] = useState<ApprovalRequest[]>([]);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<Session | null>(null);
@@ -244,6 +257,18 @@ export default function SandboxAngelPanel({ mode }: Props) {
           setStatus('ready');
           setStatusText(null);
         }
+      } catch { /* ignore */ }
+    });
+
+    // PreToolUse hook inside the container asks for approval before each
+    // Write/Edit/MultiEdit on persistent paths. Daemon parks the request
+    // and pushes this event; we render a card with content preview and
+    // approve/reject buttons. User decision POSTs back to daemon.
+    es.addEventListener('approve-request', (ev) => {
+      try {
+        const data = JSON.parse((ev as MessageEvent).data) as ApprovalRequest;
+        setPendingApprovals(prev => [...prev, data]);
+        setStatusText('Warte auf deine Freigabe…');
       } catch { /* ignore */ }
     });
 
@@ -394,6 +419,20 @@ export default function SandboxAngelPanel({ mode }: Props) {
     }
   }, [endpoint, mode, fetchConversations, fetchHistory, activeConvId]);
 
+  const decideApproval = useCallback(async (approvalId: string, decision: 'approve' | 'deny') => {
+    const s = sessionRef.current; if (!s) return;
+    setPendingApprovals(prev => prev.filter(a => a.approvalId !== approvalId));
+    try {
+      await fetch(`${endpoint}/approve-decision`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Sandbox-Token': s.token },
+        body: JSON.stringify({ approvalId, decision }),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, [endpoint]);
+
   const onKey = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); }
   }, [send]);
@@ -475,6 +514,76 @@ export default function SandboxAngelPanel({ mode }: Props) {
             {statusText}
           </div>
         )}
+
+        {pendingApprovals.map((appr) => (
+          <div key={appr.approvalId} style={{
+            alignSelf: 'stretch',
+            background: 'var(--tn-surface2, #24283b)',
+            border: '1px solid var(--tn-accent, #7aa2f7)',
+            borderRadius: 10,
+            padding: '10px 12px',
+            display: 'flex', flexDirection: 'column', gap: 8,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--tn-text-muted)' }}>
+              <span style={{ fontWeight: 600, color: 'var(--tn-accent, #7aa2f7)' }}>{appr.tool}</span>
+              <span>{appr.input.file_path ?? '?'}</span>
+            </div>
+            {appr.input.content !== undefined && (
+              <div style={{
+                background: 'var(--tn-bg-dark, #16161e)',
+                border: '1px solid var(--tn-border, #414868)',
+                borderRadius: 6,
+                padding: '6px 8px',
+                fontFamily: 'monospace',
+                fontSize: 11,
+                whiteSpace: 'pre-wrap',
+                maxHeight: 240,
+                overflowY: 'auto',
+              }}>
+                {appr.input.content}
+              </div>
+            )}
+            {appr.input.new_string !== undefined && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div style={{ fontSize: 10, color: 'var(--tn-red, #f7768e)' }}>− alt:</div>
+                <div style={{
+                  background: 'rgba(247,118,142,0.08)', border: '1px solid rgba(247,118,142,0.3)',
+                  borderRadius: 6, padding: '6px 8px', fontFamily: 'monospace', fontSize: 11,
+                  whiteSpace: 'pre-wrap', maxHeight: 120, overflowY: 'auto',
+                }}>{appr.input.old_string ?? ''}</div>
+                <div style={{ fontSize: 10, color: 'var(--tn-green, #9ece6a)' }}>+ neu:</div>
+                <div style={{
+                  background: 'rgba(158,206,106,0.08)', border: '1px solid rgba(158,206,106,0.3)',
+                  borderRadius: 6, padding: '6px 8px', fontFamily: 'monospace', fontSize: 11,
+                  whiteSpace: 'pre-wrap', maxHeight: 120, overflowY: 'auto',
+                }}>{appr.input.new_string}</div>
+              </div>
+            )}
+            {appr.input.edits && (
+              <div style={{ fontSize: 11, color: 'var(--tn-text-muted)' }}>
+                {appr.input.edits.length} Edits — Details siehe Tool-Call
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => void decideApproval(appr.approvalId, 'deny')}
+                style={{
+                  background: 'transparent', color: 'var(--tn-text-muted)',
+                  border: '1px solid var(--tn-border, #414868)', borderRadius: 6,
+                  padding: '6px 12px', fontSize: 12, cursor: 'pointer',
+                }}
+              >Ablehnen</button>
+              <button
+                onClick={() => void decideApproval(appr.approvalId, 'approve')}
+                style={{
+                  background: 'var(--tn-green, #9ece6a)', color: '#1a1b26',
+                  border: 'none', borderRadius: 6,
+                  padding: '6px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                }}
+              >Freigeben</button>
+            </div>
+          </div>
+        ))}
 
         <div ref={bottomRef} />
       </div>
