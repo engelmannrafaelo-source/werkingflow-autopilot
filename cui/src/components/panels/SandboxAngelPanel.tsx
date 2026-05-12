@@ -151,6 +151,7 @@ export default function SandboxAngelPanel({ mode }: Props) {
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [pendingApprovals, setPendingApprovals] = useState<ApprovalRequest[]>([]);
+  const [rawApprovals, setRawApprovals] = useState<Record<string, boolean>>({});
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<Session | null>(null);
@@ -515,7 +516,12 @@ export default function SandboxAngelPanel({ mode }: Props) {
           </div>
         )}
 
-        {pendingApprovals.map((appr) => (
+        {pendingApprovals.map((appr) => {
+          const path = appr.input.file_path ?? '?';
+          const isMd = /\.(md|markdown)$/i.test(path);
+          const showRaw = rawApprovals[appr.approvalId] ?? false;
+          const renderMd = isMd && !showRaw;
+          return (
           <div key={appr.approvalId} style={{
             alignSelf: 'stretch',
             background: 'var(--tn-surface2, #24283b)',
@@ -526,21 +532,37 @@ export default function SandboxAngelPanel({ mode }: Props) {
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--tn-text-muted)' }}>
               <span style={{ fontWeight: 600, color: 'var(--tn-accent, #7aa2f7)' }}>{appr.tool}</span>
-              <span>{appr.input.file_path ?? '?'}</span>
+              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{path}</span>
+              {isMd && (
+                <button
+                  onClick={() => setRawApprovals(prev => ({ ...prev, [appr.approvalId]: !showRaw }))}
+                  style={{
+                    background: 'transparent', color: 'var(--tn-text-muted)',
+                    border: '1px solid var(--tn-border, #414868)', borderRadius: 4,
+                    padding: '1px 6px', fontSize: 10, cursor: 'pointer',
+                  }}
+                  title="Toggle Markdown-Render"
+                >{showRaw ? 'Rendered' : 'Raw'}</button>
+              )}
             </div>
             {appr.input.content !== undefined && (
               <div style={{
                 background: 'var(--tn-bg-dark, #16161e)',
                 border: '1px solid var(--tn-border, #414868)',
                 borderRadius: 6,
-                padding: '6px 8px',
-                fontFamily: 'monospace',
-                fontSize: 11,
-                whiteSpace: 'pre-wrap',
-                maxHeight: 240,
+                padding: '8px 10px',
+                fontSize: renderMd ? 12 : 11,
+                fontFamily: renderMd ? 'inherit' : 'monospace',
+                whiteSpace: renderMd ? 'normal' : 'pre-wrap',
+                maxHeight: 320,
                 overflowY: 'auto',
+                lineHeight: renderMd ? 1.5 : undefined,
               }}>
-                {appr.input.content}
+                {renderMd ? (
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{appr.input.content}</ReactMarkdown>
+                ) : (
+                  appr.input.content
+                )}
               </div>
             )}
             {appr.input.new_string !== undefined && (
@@ -583,7 +605,8 @@ export default function SandboxAngelPanel({ mode }: Props) {
               >Freigeben</button>
             </div>
           </div>
-        ))}
+        );
+        })}
 
         <div ref={bottomRef} />
       </div>
