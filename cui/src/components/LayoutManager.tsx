@@ -574,6 +574,8 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         return wrapPanel('Privat-Assistent', withSuspense(<SandboxAngelPanel mode="private" />));
       case 'sandbox-business-angel':
         return wrapPanel('Business-Assistent', withSuspense(<SandboxAngelPanel mode="business" />));
+      case 'sandbox-rafael-angel':
+        return wrapPanel('Rafael-Assistent', withSuspense(<SandboxAngelPanel mode="rafael" />));
       default:
         return wrapPanel(`Unknown:${component}`,
           <div style={{ padding: 20, color: 'var(--tn-text-muted)' }}>

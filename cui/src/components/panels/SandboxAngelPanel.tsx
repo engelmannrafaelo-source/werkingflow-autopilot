@@ -43,7 +43,7 @@ interface Conversation {
 type Status = 'idle' | 'starting' | 'ready' | 'running' | 'error';
 
 interface Props {
-  mode: 'private' | 'business';
+  mode: 'private' | 'business' | 'rafael';
 }
 
 const CAPABILITIES_BLOCK =
@@ -74,6 +74,23 @@ const LABELS: Record<Props['mode'], { title: string; welcome: string }> = {
       '## Daten die ich kenne (`/work/sources/`)\n' +
       '- `shared/strategy/`, `finance/` — **read-only**\n' +
       '- `marketing/`, `sales/`, `customer-success/`, `products/`, `foerderung/`, `team/`, `drafts/`, `inbox/` — lese- und schreibbar\n\n' +
+      CAPABILITIES_BLOCK +
+      '\n\nWorum gehts?',
+  },
+  rafael: {
+    title: 'Rafael-Assistent',
+    welcome:
+      'Hi Rafael — ich kenne dein **ganzes Leben**: privates UND geschäftliches in einer Session.\n\n' +
+      '## Privates (`/work/sources/privat/`)\n' +
+      '- `rafael-*.md` — kuratiertes Persönlichkeitsprofil — **read-only**\n' +
+      '- `tagebuch/`, `inbox/` — schreibbar, sync zurück\n' +
+      '- `kalender-*`, `acro-festivals-*`, `ashtanga-*` — read-only Refs\n\n' +
+      '## Business (`/work/sources/business/`)\n' +
+      '- `shared/strategy/`, `finance/`, `legal/`, `foerderung/` — **read-only**\n' +
+      '- `marketing/`, `sales/proposals/`, `customer-success/`, `drafts/`, `inbox/` — schreibbar\n' +
+      '- `products/`, `team/`, `reports/` — read-only\n\n' +
+      '## Cross-Domain ist gewollt\n' +
+      'Wenn du gestresst bist wegen Cash UND Anouk — sag\'s, ich seh beides. Aber respektiere Tone: emotionale Konvo nicht in Business kippen.\n\n' +
       CAPABILITIES_BLOCK +
       '\n\nWorum gehts?',
   },

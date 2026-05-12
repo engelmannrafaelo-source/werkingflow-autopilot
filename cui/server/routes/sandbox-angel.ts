@@ -19,7 +19,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-type Mode = 'private' | 'business';
+type Mode = 'private' | 'business' | 'rafael';
 
 const SESSIONS_FILE = '/root/projekte/local-storage/sandbox-angel/sessions.json';
 
@@ -47,29 +47,34 @@ async function saveSessions(sessions: SessionsMap): Promise<void> {
 const ADAPTER_PATHS: Record<Mode, string> = {
   private: '/root/projekte/werkingflow-production/packages/agent-sandbox/adapters/private-daemon.mjs',
   business: '/root/projekte/werkingflow-production/packages/agent-sandbox/adapters/business-daemon.mjs',
+  rafael: '/root/projekte/werkingflow-production/packages/agent-sandbox/adapters/rafael-daemon.mjs',
 };
 
 const COOKIE_NAMES: Record<Mode, string> = {
   private: 'private-token',
   business: 'business-token',
+  rafael: 'rafael-token',
 };
 
 // Warn at startup if env vars are missing
 if (!process.env.SANDBOX_DAEMON_SECRET)    console.error('[sandbox-angel] MISSING required env: SANDBOX_DAEMON_SECRET');
 if (!process.env.PRIVATE_ADAPTER_TOKEN)    console.error('[sandbox-angel] MISSING required env: PRIVATE_ADAPTER_TOKEN');
 if (!process.env.BUSINESS_ADAPTER_TOKEN)   console.error('[sandbox-angel] MISSING required env: BUSINESS_ADAPTER_TOKEN');
+if (!process.env.RAFAEL_ADAPTER_TOKEN)     console.error('[sandbox-angel] MISSING required env: RAFAEL_ADAPTER_TOKEN');
 
 function requireEnv(): { daemonUrl: string; daemonSecret: string; tokens: Record<Mode, string> } {
   const daemonUrl = process.env.SANDBOX_DAEMON_URL ?? 'http://127.0.0.1:4090';
   const daemonSecret = process.env.SANDBOX_DAEMON_SECRET;
   const privateToken = process.env.PRIVATE_ADAPTER_TOKEN;
   const businessToken = process.env.BUSINESS_ADAPTER_TOKEN;
+  const rafaelToken = process.env.RAFAEL_ADAPTER_TOKEN;
 
   if (!daemonSecret) throw new Error('[sandbox-angel] SANDBOX_DAEMON_SECRET not set');
   if (!privateToken) throw new Error('[sandbox-angel] PRIVATE_ADAPTER_TOKEN not set');
   if (!businessToken) throw new Error('[sandbox-angel] BUSINESS_ADAPTER_TOKEN not set');
+  if (!rafaelToken) throw new Error('[sandbox-angel] RAFAEL_ADAPTER_TOKEN not set');
 
-  return { daemonUrl, daemonSecret, tokens: { private: privateToken, business: businessToken } };
+  return { daemonUrl, daemonSecret, tokens: { private: privateToken, business: businessToken, rafael: rafaelToken } };
 }
 
 const adapterCache = new Map<Mode, unknown>();
@@ -100,8 +105,8 @@ const router = Router();
 // POST /api/sandbox-angel/:mode/start
 router.post('/:mode/start', async (req: Request, res: Response) => {
   const mode = req.params.mode as Mode;
-  if (mode !== 'private' && mode !== 'business') {
-    res.status(400).json({ error: 'mode must be private or business' });
+  if (mode !== 'private' && mode !== 'business' && mode !== 'rafael') {
+    res.status(400).json({ error: 'mode must be private, business or rafael' });
     return;
   }
 

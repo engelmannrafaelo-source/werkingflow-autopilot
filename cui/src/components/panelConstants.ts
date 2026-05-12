@@ -49,6 +49,7 @@ export const PANEL_NAMES: Record<string, string> = {
   'partner-server': 'Partner Server Health',
   'sandbox-privat-angel': 'Privat-Assistent (Sandbox)',
   'sandbox-business-angel': 'Business-Assistent (Sandbox)',
+  'sandbox-rafael-angel': 'Rafael-Assistent',
 };
 
 export const PANEL_MENU_OPTIONS: PanelMenuGroup[] = [
@@ -103,8 +104,9 @@ export const PANEL_MENU_OPTIONS: PanelMenuGroup[] = [
       { value: 'admin-wr', label: 'Werking Report Admin', description: 'WerkING-Report Daten verwalten: User, Reports, Stammdaten.' },
       { value: 'business-angel', label: 'Business Angel', description: 'Geschäftliche Anfragen und To-Dos automatisch beantworten lassen.' },
       { value: 'privat-angel', label: 'Privat Angel', description: 'Privater Assistent für persönliche Aufgaben und Korrespondenz.' },
-      { value: 'sandbox-business-angel', label: 'Business-Assistent (Sandbox)', description: 'Business-Assistent mit direktem Daemon-Zugriff auf die Business-Wissensbase.' },
-      { value: 'sandbox-privat-angel', label: 'Privat-Assistent (Sandbox)', description: 'Persönlicher Assistent mit direktem Daemon-Zugriff auf die Privat-Wissensbase.' },
+      { value: 'sandbox-rafael-angel', label: 'Rafael-Assistent', description: 'Vereinter Assistent für Rafael: Privat + Business in einer Session, cross-domain Konversationen möglich.' },
+      { value: 'sandbox-business-angel', label: 'Business-Assistent (Sandbox)', description: 'Nur Business-Wissensbase. Empfehlung: stattdessen Rafael-Assistent nutzen.' },
+      { value: 'sandbox-privat-angel', label: 'Privat-Assistent (Sandbox)', description: 'Nur Privat-Wissensbase. Empfehlung: stattdessen Rafael-Assistent nutzen.' },
       { value: 'background-ops', label: 'Background Ops', description: 'Hintergrund-Jobs anschauen: Cron, Sync-Bots, periodische Tasks.' },
       { value: 'maintenance', label: 'Maintenance', description: 'Wartungs-Routinen ausführen: Dokumente, Caches, Aufräum-Skripte.' },
       { value: 'input-audit', label: 'Input Audit', description: 'Alle eigenen Eingaben über alle Sessions — Volltext-Suche, Zeitfilter.' },

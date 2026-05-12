@@ -193,6 +193,8 @@ export default function MobileLayout({ projectId, workDir }: MobileLayoutProps) 
         return wrapPanel('Privat-Assistent', S(<SandboxAngelPanel mode="private" />));
       case 'sandbox-business-angel':
         return wrapPanel('Business-Assistent', S(<SandboxAngelPanel mode="business" />));
+      case 'sandbox-rafael-angel':
+        return wrapPanel('Rafael-Assistent', S(<SandboxAngelPanel mode="rafael" />));
       default:
         return wrapPanel(`Unknown:${component}`, <div style={{ padding: 20, color: 'var(--tn-text-muted)' }}>Unknown: {component}</div>);
     }
