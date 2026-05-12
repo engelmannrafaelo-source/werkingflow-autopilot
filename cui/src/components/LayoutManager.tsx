@@ -1699,14 +1699,40 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
         const newlyMounted: Array<{ panelId: string; sessionId: string }> = [];
 
         for (const conv of missing) {
+          // Race-protection: re-verify session isn't already mounted on a tab.
+          // `mountedSessions` is built from a stale visitNodes snapshot — between
+          // that scan and now, FlexLayout may have hydrated a tab's config (so
+          // initialSessionId is now visible), or apply-layout may have arrived.
+          // Skip if any cui/cui-lite tab currently reports this session.
+          let alreadyMountedNow = false;
+          m.visitNodes((node) => {
+            if (alreadyMountedNow) return;
+            if (node.getType() !== 'tab') return;
+            const tab = node as TabNode;
+            const tcomp = tab.getComponent?.();
+            if (tcomp !== 'cui' && tcomp !== 'cui-lite') return;
+            const tcfg = tab.getConfig() || {};
+            if (tcfg.initialSessionId === conv.sessionId) { alreadyMountedNow = true; return; }
+            const troute = getNodeRoute(tab) || '';
+            if (troute === `/c/${conv.sessionId}`) alreadyMountedNow = true;
+          });
+          if (alreadyMountedNow) {
+            logCuiTelemetry({ ts: Date.now(), kind: 'lm-skip-already-mounted-race', projectId, sessionId: conv.sessionId?.slice(0, 8) });
+            continue;
+          }
+
           // Priority 1: Reuse an empty/stale CUI panel — just update its config
           // (always allowed — needed to show sessions on load and after sync)
           if (emptyPanels.length > 0) {
             const reuseNodeId = emptyPanels.shift()!;
-            // Skip panels that were just reserved by user (have _userReserved timestamp within last 60s)
             const existingCfg = (m.getNodeById(reuseNodeId) as TabNode)?.getConfig?.() ?? {};
+            // Skip panels that were just reserved by user (have _userReserved timestamp within last 60s)
             if (existingCfg._userReserved && Date.now() - existingCfg._userReserved < 60000) {
               emptyPanels.unshift(reuseNodeId); // put back, don't claim
+            } else if (existingCfg.initialSessionId && existingCfg.initialSessionId !== conv.sessionId) {
+              // Race: panel looked empty during visitNodes but now has a (different) session.
+              // Don't overwrite — that would silently steal a tab from another conversation.
+              logCuiTelemetry({ ts: Date.now(), kind: 'lm-skip-reuse-race', projectId, panelId: reuseNodeId, hadSession: existingCfg.initialSessionId?.slice(0, 8), wantedSession: conv.sessionId?.slice(0, 8) });
             } else {
               try {
                 m.doAction(Actions.updateNodeAttributes(reuseNodeId, {
