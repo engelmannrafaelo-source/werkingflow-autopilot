@@ -201,21 +201,67 @@ router.post('/:mode/stop', async (req: Request, res: Response) => {
   res.status(r.status).setHeader('content-type', ct).send(await r.text());
 });
 
+// Generic proxy for daemon GET endpoints that take ?sid=X&t=TOKEN auth.
+async function proxyDaemonGet(env: ReturnType<typeof requireEnv>, daemonPath: string, query: Record<string, string | undefined>, res: Response): Promise<void> {
+  const qp = new URLSearchParams();
+  for (const [k, v] of Object.entries(query)) if (v) qp.set(k, v);
+  const r = await fetch(`${env.daemonUrl}${daemonPath}?${qp.toString()}`, {
+    headers: { 'X-Daemon-Secret': env.daemonSecret },
+  });
+  const ct = r.headers.get('content-type') ?? 'application/json';
+  res.status(r.status).setHeader('content-type', ct).send(await r.text());
+}
+
+// Generic proxy for daemon POST endpoints (auth via x-sandbox-token header).
+async function proxyDaemonPost(env: ReturnType<typeof requireEnv>, daemonPath: string, body: Record<string, unknown>, sandboxToken: string, res: Response): Promise<void> {
+  const r = await fetch(`${env.daemonUrl}${daemonPath}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Daemon-Secret': env.daemonSecret,
+      'X-Sandbox-Token': sandboxToken,
+    },
+    body: JSON.stringify(body),
+  });
+  const ct = r.headers.get('content-type') ?? 'application/json';
+  res.status(r.status).setHeader('content-type', ct).send(await r.text());
+}
+
 // GET /api/sandbox-angel/:mode/history
 router.get('/:mode/history', async (req: Request, res: Response) => {
   let env: ReturnType<typeof requireEnv>;
   try { env = requireEnv(); }
   catch (e: unknown) { res.status(503).json({ error: (e as Error).message }); return; }
-
-  const { sid, t } = req.query as { sid?: string; t?: string };
+  const { sid, t, conversationId } = req.query as { sid?: string; t?: string; conversationId?: string };
   if (!sid || !t) { res.status(400).json({ error: 'sid + t required' }); return; }
+  await proxyDaemonGet(env, '/sandbox/history', { sid, t, conversationId }, res);
+});
 
-  const r = await fetch(
-    `${env.daemonUrl}/sandbox/history?sid=${encodeURIComponent(sid)}&t=${encodeURIComponent(t)}`,
-    { headers: { 'X-Daemon-Secret': env.daemonSecret } },
-  );
-  const ct = r.headers.get('content-type') ?? 'application/json';
-  res.status(r.status).setHeader('content-type', ct).send(await r.text());
+// GET /api/sandbox-angel/:mode/conversations
+router.get('/:mode/conversations', async (req: Request, res: Response) => {
+  let env: ReturnType<typeof requireEnv>;
+  try { env = requireEnv(); }
+  catch (e: unknown) { res.status(503).json({ error: (e as Error).message }); return; }
+  const { sid, t, includeArchived } = req.query as { sid?: string; t?: string; includeArchived?: string };
+  if (!sid || !t) { res.status(400).json({ error: 'sid + t required' }); return; }
+  await proxyDaemonGet(env, '/sandbox/conversations', { sid, t, includeArchived }, res);
+});
+
+// POST /api/sandbox-angel/:mode/conversation/:action
+// Wraps daemon's /sandbox/conversation/new|switch|archive. Sandbox token comes
+// from x-sandbox-token header; sid is in the body so daemon's auth helper
+// finds it without us repeating it.
+router.post('/:mode/conversation/:action', async (req: Request, res: Response) => {
+  let env: ReturnType<typeof requireEnv>;
+  try { env = requireEnv(); }
+  catch (e: unknown) { res.status(503).json({ error: (e as Error).message }); return; }
+  const { action } = req.params;
+  if (action !== 'new' && action !== 'switch' && action !== 'archive') {
+    res.status(404).json({ error: `unknown action: ${action}` });
+    return;
+  }
+  const tok = (req.headers['x-sandbox-token'] as string) ?? '';
+  await proxyDaemonPost(env, `/sandbox/conversation/${action}`, req.body as Record<string, unknown>, tok, res);
 });
 
 // GET /api/sandbox-angel/:mode/stream  (SSE proxy)

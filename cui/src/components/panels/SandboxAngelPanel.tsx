@@ -1,14 +1,22 @@
-// SandboxAngelPanel — Chat panel backed by the agent-sandbox daemon.
+// SandboxAngelPanel — Multi-conversation chat panel backed by the agent-sandbox daemon.
 //
-// Replaces the FullContext-Bridge logic in PrivatAngelPanel / BusinessAngelPanel.
-// Uses /api/sandbox-angel/:mode/{start,exec,stop,stream} as backend.
+// Each panel holds many independent threads. Switcher in the header lets the
+// user jump between them, archive old ones, or start a new one. Active
+// conversation's full Claude Code history is replayed on switch.
 //
-// SSE events expected from daemon:
-//   event: chat   — { role: 'assistant', text: '...' }
-//   event: status — { phase: 'running' | 'idle' | 'result', text?: string }
+// Endpoints (all rooted at /api/sandbox-angel/${mode}):
+//   POST /start                          — open or resume the sandbox session
+//   POST /exec                           — run a turn against conversationId
+//   POST /stop                           — stop on unmount
+//   GET  /stream                         — SSE for assistant deltas + status
+//   GET  /conversations                  — list { active, conversations[] }
+//   POST /conversation/new               — body { sid, title? } → returns conv
+//   POST /conversation/switch            — body { sid, conversationId }
+//   POST /conversation/archive           — body { sid, conversationId }
+//   GET  /history?conversationId=        — replay turns of one conversation
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Send, Loader2, Bot } from 'lucide-react';
+import { Send, Loader2, Bot, Plus, ChevronDown, Archive } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -21,6 +29,15 @@ interface Msg {
 interface Session {
   sid: string;
   token: string;
+}
+
+interface Conversation {
+  id: string;
+  title: string;
+  createdAt: string;
+  lastActivityAt: string;
+  messageCount: number;
+  archived: boolean;
 }
 
 type Status = 'idle' | 'starting' | 'ready' | 'running' | 'error';
@@ -44,34 +61,39 @@ const LABELS: Record<Props['mode'], { title: string; welcome: string }> = {
     welcome:
       'Hi Rafael — ich bin dein **Privat-Assistent**.\n\n' +
       '## Daten die ich kenne (`/work/sources/`)\n' +
-      '- `rafael-*.md` — dein kuratiertes Persönlichkeitsprofil (Philosophie, Psychologie, Beziehungen, Training, Biohacking, Coaching, Sexualität, Personen-Map) — **read-only**\n' +
-      '- `tagebuch/YYYY-MM/` — dein Tagebuch-Verlauf, lese- und schreibbar\n' +
-      '- `inbox/` — Rohnotizen + Voice-Transkripte, lese- und schreibbar\n' +
-      '- `kalender-*.md`, `acro-festivals-*.md`, `ashtanga-*` — Termin- und Trainingsplanung\n\n' +
+      '- `rafael-*.md` — dein kuratiertes Persönlichkeitsprofil — **read-only**\n' +
+      '- `tagebuch/YYYY-MM/` — Tagebuch-Verlauf, lese- und schreibbar\n' +
+      '- `inbox/`, `kalender-*.md`, `acro-festivals-*.md` — Notizen & Planung\n\n' +
       CAPABILITIES_BLOCK +
-      '\n\nWorum gehts heute?',
+      '\n\nWorum gehts?',
   },
   business: {
     title: 'Business-Assistent',
     welcome:
       'Hi Rafael — ich bin dein **Business-Assistent**.\n\n' +
       '## Daten die ich kenne (`/work/sources/`)\n' +
-      '- `shared/strategy/` — Vision, Businessplan, Strategy Insights — **read-only**\n' +
-      '- `marketing/`, `sales/`, `customer-success/` — lesbar, Drafts schreibbar\n' +
-      '- `finance/` — **read-only**\n' +
-      '- `products/` — Engelmann, WerkING Energy/Safety/Report/Noise Konzepte\n' +
-      '- `foerderung/` — FFG-Projektbeschreibungen, Gutachter-Reviews\n' +
-      '- `team/`, `legal/`, `reports/` — internes Material\n' +
-      '- `drafts/`, `inbox/` — schreibbare Arbeitsbereiche\n\n' +
+      '- `shared/strategy/`, `finance/` — **read-only**\n' +
+      '- `marketing/`, `sales/`, `customer-success/`, `products/`, `foerderung/`, `team/`, `drafts/`, `inbox/` — lese- und schreibbar\n\n' +
       CAPABILITIES_BLOCK +
-      '\n\nWorum gehts heute?',
+      '\n\nWorum gehts?',
   },
 };
 
 const S = {
   root: { display: 'flex', flexDirection: 'column' as const, height: '100%', background: 'var(--tn-surface, #1a1b26)', color: 'var(--tn-text, #c0caf5)', overflow: 'hidden' },
-  header: { padding: '10px 16px', borderBottom: '1px solid var(--tn-border, #414868)', fontWeight: 600 as const, fontSize: 13, display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 },
-  headerSub: { fontWeight: 400 as const, fontSize: 11, color: 'var(--tn-text-muted, #565f89)' },
+  header: { padding: '6px 10px 5px', borderBottom: '1px solid var(--tn-border, #414868)', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, fontSize: 12 },
+  headerTitle: { fontWeight: 600 as const, fontSize: 12, color: 'var(--tn-text)', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 },
+  headerSub: { fontWeight: 400 as const, fontSize: 10, color: 'var(--tn-text-muted, #565f89)' },
+  convSwitcher: { flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 4, position: 'relative' as const },
+  convButton: { background: 'var(--tn-surface2, #24283b)', color: 'var(--tn-text)', border: '1px solid var(--tn-border, #414868)', borderRadius: 6, padding: '3px 6px 3px 8px', fontSize: 11, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0, maxWidth: '100%' },
+  convTitle: { flex: 1, textAlign: 'left' as const, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const },
+  iconBtn: { background: 'var(--tn-surface2, #24283b)', color: 'var(--tn-text-muted)', border: '1px solid var(--tn-border, #414868)', borderRadius: 6, padding: '3px 5px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  dropdown: { position: 'absolute' as const, top: 'calc(100% + 4px)', left: 0, right: 0, background: 'var(--tn-bg-dark, #16161e)', border: '1px solid var(--tn-border, #414868)', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,0.4)', zIndex: 50, maxHeight: 280, overflowY: 'auto' as const },
+  dropdownItem: { display: 'flex', alignItems: 'center', gap: 6, padding: '6px 8px', cursor: 'pointer', fontSize: 11, borderBottom: '1px solid rgba(255,255,255,0.04)' },
+  dropdownItemActive: { background: 'var(--tn-accent, #7aa2f7)', color: '#fff' },
+  dropdownItemTitle: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const },
+  dropdownItemMeta: { fontSize: 9, color: 'var(--tn-text-muted)', flexShrink: 0 },
+  dropdownArchive: { padding: '2px 4px', cursor: 'pointer', opacity: 0.4, color: 'var(--tn-text-muted)' },
   messages: { flex: 1, overflowY: 'auto' as const, padding: '14px 16px', display: 'flex', flexDirection: 'column' as const, gap: 10 },
   msgUser: { alignSelf: 'flex-end' as const, background: 'var(--tn-accent, #7aa2f7)', color: '#fff', borderRadius: 12, borderBottomRightRadius: 4, padding: '8px 12px', maxWidth: '80%', fontSize: 13, whiteSpace: 'pre-wrap' as const, wordBreak: 'break-word' as const },
   msgAssistant: { alignSelf: 'flex-start' as const, background: 'var(--tn-surface2, #24283b)', color: 'var(--tn-text, #c0caf5)', borderRadius: 12, borderBottomLeftRadius: 4, padding: '8px 12px', maxWidth: '85%', fontSize: 13, whiteSpace: 'pre-wrap' as const, wordBreak: 'break-word' as const },
@@ -83,79 +105,98 @@ const S = {
   markdown: { lineHeight: 1.5 } as React.CSSProperties,
 } as const;
 
+const welcomeMsg = (mode: Props['mode']): Msg => ({ id: 'welcome', role: 'assistant', content: LABELS[mode].welcome });
+
 export default function SandboxAngelPanel({ mode }: Props) {
   const endpoint = `/api/sandbox-angel/${mode}`;
   const label = LABELS[mode];
 
-  const [messages, setMessages] = useState<Msg[]>([
-    { id: 'welcome', role: 'assistant', content: label.welcome },
-  ]);
+  const [messages, setMessages] = useState<Msg[]>([welcomeMsg(mode)]);
   const [input, setInput] = useState('');
   const [session, setSession] = useState<Session | null>(null);
   const [status, setStatus] = useState<Status>('idle');
   const [statusText, setStatusText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [activeConvId, setActiveConvId] = useState<string | null>(null);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+
   const bottomRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<Session | null>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Keep ref in sync for cleanup
   useEffect(() => { sessionRef.current = session; }, [session]);
 
-  // Start sandbox session on mount
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    if (!dropdownOpen) return;
+    const onClick = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) setDropdownOpen(false);
+    };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [dropdownOpen]);
+
+  const fetchConversations = useCallback(async (sess: Session): Promise<{ active: string | null; conversations: Conversation[] }> => {
+    const r = await fetch(`${endpoint}/conversations?sid=${encodeURIComponent(sess.sid)}&t=${encodeURIComponent(sess.token)}`);
+    if (!r.ok) throw new Error(`conversations ${r.status}`);
+    return r.json();
+  }, [endpoint]);
+
+  const fetchHistory = useCallback(async (sess: Session, convId?: string): Promise<Msg[]> => {
+    const url = new URL(`${endpoint}/history`, window.location.origin);
+    url.searchParams.set('sid', sess.sid);
+    url.searchParams.set('t', sess.token);
+    if (convId) url.searchParams.set('conversationId', convId);
+    const r = await fetch(url.toString());
+    if (!r.ok) throw new Error(`history ${r.status}`);
+    const { messages: hist } = await r.json() as { messages: Array<{ role: 'user' | 'assistant'; text: string }> };
+    return hist.map((m, i) => ({ id: `h-${i}-${Date.now()}`, role: m.role, content: m.text }));
+  }, [endpoint]);
+
+  // Start session on mount + load conversation list + history of active conv.
   useEffect(() => {
     let cancelled = false;
     setStatus('starting');
 
-    fetch(`${endpoint}/start`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ resourceId: 'main' }),
-    })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`start ${res.status}: ${await res.text()}`);
-        return res.json() as Promise<{ sid: string; token: string; resumed?: boolean }>;
-      })
-      .then(async (data) => {
+    (async () => {
+      try {
+        const startRes = await fetch(`${endpoint}/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ resourceId: 'main' }),
+        });
+        if (!startRes.ok) throw new Error(`start ${startRes.status}: ${await startRes.text()}`);
+        const startData = await startRes.json() as { sid: string; token: string; resumed?: boolean };
         if (cancelled) return;
-        setSession({ sid: data.sid, token: data.token });
-        setStatus('ready');
-        if (!data.resumed) return;
+        const sess: Session = { sid: startData.sid, token: startData.token };
+        setSession(sess);
 
-        // Resumed session — pull the actual conversation history from disk so
-        // the user sees what they discussed before, instead of just a stub
-        // "Willkommen zurück" with empty chat.
-        try {
-          const r = await fetch(
-            `${endpoint}/history?sid=${encodeURIComponent(data.sid)}&t=${encodeURIComponent(data.token)}`,
-          );
-          if (!r.ok) throw new Error(`history ${r.status}`);
-          const { messages: hist } = await r.json() as { messages: Array<{ role: 'user' | 'assistant'; text: string }> };
+        const { active, conversations: convs } = await fetchConversations(sess);
+        if (cancelled) return;
+        setConversations(convs);
+        setActiveConvId(active);
+
+        if (active) {
+          const hist = await fetchHistory(sess, active);
           if (cancelled) return;
-          if (hist.length === 0) {
-            setMessages(prev => prev.map(m =>
-              m.id === 'welcome' ? { ...m, content: 'Willkommen zurück — keine alten Nachrichten gefunden.' } : m,
-            ));
-            return;
-          }
-          setMessages(hist.map((m, i) => ({ id: `h-${i}`, role: m.role, content: m.text })));
-        } catch {
-          // Fallback: show stub welcome — better than nothing.
-          setMessages(prev => prev.map(m =>
-            m.id === 'welcome' ? { ...m, content: 'Willkommen zurück — wir machen weiter wo wir aufgehört haben.' } : m,
-          ));
+          setMessages(hist.length > 0 ? hist : [welcomeMsg(mode)]);
+        } else {
+          setMessages([welcomeMsg(mode)]);
         }
-      })
-      .catch((e: unknown) => {
+        setStatus('ready');
+      } catch (e: unknown) {
         if (cancelled) return;
         setError(e instanceof Error ? e.message : String(e));
         setStatus('error');
-      });
+      }
+    })();
 
     return () => { cancelled = true; };
-  }, [endpoint]);
+  }, [endpoint, mode, fetchConversations, fetchHistory]);
 
-  // SSE stream — reconnects whenever session changes
+  // SSE stream
   useEffect(() => {
     if (!session) return;
     const url = `${endpoint}/stream?sid=${encodeURIComponent(session.sid)}&t=${encodeURIComponent(session.token)}`;
@@ -173,7 +214,7 @@ export default function SandboxAngelPanel({ mode }: Props) {
           setStatus('ready');
           setStatusText(null);
         }
-      } catch { /* ignore malformed events */ }
+      } catch { /* ignore */ }
     });
 
     es.addEventListener('status', (ev) => {
@@ -192,7 +233,7 @@ export default function SandboxAngelPanel({ mode }: Props) {
     return () => { es.close(); };
   }, [session, endpoint]);
 
-  // Best-effort stop on unmount — reads from ref to avoid stale closure
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
       const s = sessionRef.current;
@@ -204,20 +245,27 @@ export default function SandboxAngelPanel({ mode }: Props) {
         keepalive: true,
       }).catch(() => {});
     };
-  // endpoint is stable (derived from mode prop which doesn't change)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Auto-scroll on new messages / status updates
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, statusText]);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, statusText]);
 
-  const callExec = useCallback(async (sess: Session, prompt: string): Promise<Response> => {
+  // Refresh conversation metadata (title, lastActivity, messageCount) after
+  // each turn so the switcher list stays in sync.
+  const refreshConvs = useCallback(async () => {
+    const s = sessionRef.current; if (!s) return;
+    try {
+      const { conversations: convs, active } = await fetchConversations(s);
+      setConversations(convs);
+      if (active) setActiveConvId(active);
+    } catch { /* ignore */ }
+  }, [fetchConversations]);
+
+  const callExec = useCallback(async (sess: Session, prompt: string, convId: string | null): Promise<Response> => {
     return fetch(`${endpoint}/exec`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Sandbox-Token': sess.token },
-      body: JSON.stringify({ sid: sess.sid, t: sess.token, prompt }),
+      body: JSON.stringify({ sid: sess.sid, t: sess.token, prompt, conversationId: convId ?? undefined }),
     });
   }, [endpoint]);
 
@@ -238,47 +286,157 @@ export default function SandboxAngelPanel({ mode }: Props) {
     const prompt = input.trim();
     if (!prompt || !session || status !== 'ready') return;
 
-    setMessages(prev => [...prev, {
-      id: `u-${Date.now()}`,
-      role: 'user',
-      content: prompt,
-    }]);
+    setMessages(prev => [...prev, { id: `u-${Date.now()}`, role: 'user', content: prompt }]);
     setInput('');
     setStatus('running');
     setStatusText('Sende…');
 
     try {
-      let res = await callExec(session, prompt);
+      let res = await callExec(session, prompt, activeConvId);
       if (res.status === 404) {
-        // Container is gone (idle-killed). Resume session and retry once.
         setStatusText('Session abgelaufen — starte neu…');
         const fresh = await restart();
-        res = await callExec(fresh, prompt);
+        res = await callExec(fresh, prompt, activeConvId);
       }
       if (!res.ok) throw new Error(`exec ${res.status}: ${await res.text()}`);
-      // Response comes back via SSE stream
+      const data = await res.json() as { conversationId?: string };
+      if (data.conversationId && data.conversationId !== activeConvId) {
+        setActiveConvId(data.conversationId);
+      }
+      // Re-fetch conv list shortly after — the daemon updates messageCount + title async.
+      setTimeout(() => { void refreshConvs(); }, 3000);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       setMessages(prev => [...prev, { id: `err-${Date.now()}`, role: 'assistant', content: `Fehler: ${msg}` }]);
       setStatus('ready');
       setStatusText(null);
     }
-  }, [input, session, status, callExec, restart]);
+  }, [input, session, status, callExec, restart, activeConvId, refreshConvs]);
+
+  const switchConv = useCallback(async (id: string) => {
+    const s = sessionRef.current; if (!s) return;
+    setDropdownOpen(false);
+    setMessages([welcomeMsg(mode)]);
+    try {
+      await fetch(`${endpoint}/conversation/switch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Sandbox-Token': s.token },
+        body: JSON.stringify({ sid: s.sid, conversationId: id }),
+      });
+      setActiveConvId(id);
+      const hist = await fetchHistory(s, id);
+      setMessages(hist.length > 0 ? hist : [welcomeMsg(mode)]);
+      void refreshConvs();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, [endpoint, mode, fetchHistory, refreshConvs]);
+
+  const newConv = useCallback(async () => {
+    const s = sessionRef.current; if (!s) return;
+    setDropdownOpen(false);
+    try {
+      const r = await fetch(`${endpoint}/conversation/new`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Sandbox-Token': s.token },
+        body: JSON.stringify({ sid: s.sid }),
+      });
+      if (!r.ok) throw new Error(`new ${r.status}`);
+      const conv = await r.json() as Conversation;
+      setActiveConvId(conv.id);
+      setMessages([welcomeMsg(mode)]);
+      void refreshConvs();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, [endpoint, mode, refreshConvs]);
+
+  const archiveConv = useCallback(async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const s = sessionRef.current; if (!s) return;
+    try {
+      await fetch(`${endpoint}/conversation/archive`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Sandbox-Token': s.token },
+        body: JSON.stringify({ sid: s.sid, conversationId: id }),
+      });
+      // Refresh — if we archived the active conv, daemon picks a new active.
+      const { conversations: convs, active } = await fetchConversations(s);
+      setConversations(convs);
+      setActiveConvId(active);
+      if (id === activeConvId) {
+        if (active) {
+          const hist = await fetchHistory(s, active);
+          setMessages(hist.length > 0 ? hist : [welcomeMsg(mode)]);
+        } else {
+          setMessages([welcomeMsg(mode)]);
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [endpoint, mode, fetchConversations, fetchHistory, activeConvId]);
 
   const onKey = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); }
   }, [send]);
 
   const isDisabled = status !== 'ready';
+  const activeConv = conversations.find((c) => c.id === activeConvId);
+  const activeTitle = activeConv?.title ?? (status === 'starting' ? 'lade…' : 'Neue Konversation');
 
   return (
     <div style={S.root}>
       <div style={S.header}>
-        <Bot size={15} />
-        {label.title}
-        {status === 'starting' && <span style={S.headerSub}> — starte Session…</span>}
-        {status === 'error' && <span style={{ ...S.headerSub, color: '#f7768e' }}> — Fehler</span>}
-        {status === 'running' && <span style={S.headerSub}> — läuft</span>}
+        <div style={S.headerTitle}>
+          <Bot size={13} />
+          {label.title}
+        </div>
+        <div style={S.convSwitcher} ref={dropdownRef}>
+          <button
+            style={S.convButton}
+            onClick={() => setDropdownOpen((v) => !v)}
+            title="Konversation wechseln"
+          >
+            <span style={S.convTitle}>{activeTitle}</span>
+            <ChevronDown size={11} />
+          </button>
+          <button style={S.iconBtn} onClick={() => void newConv()} title="Neue Konversation">
+            <Plus size={12} />
+          </button>
+          {dropdownOpen && (
+            <div style={S.dropdown}>
+              {conversations.length === 0 && (
+                <div style={{ ...S.dropdownItem, color: 'var(--tn-text-muted)', cursor: 'default' }}>
+                  Noch keine Konversationen
+                </div>
+              )}
+              {conversations
+                .slice()
+                .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt))
+                .map((c) => (
+                  <div
+                    key={c.id}
+                    style={c.id === activeConvId ? { ...S.dropdownItem, ...S.dropdownItemActive } : S.dropdownItem}
+                    onClick={() => void switchConv(c.id)}
+                  >
+                    <span style={S.dropdownItemTitle}>{c.title}</span>
+                    <span style={S.dropdownItemMeta}>{c.messageCount} msg</span>
+                    <span
+                      style={S.dropdownArchive}
+                      onClick={(e) => void archiveConv(c.id, e)}
+                      title="Archivieren"
+                    >
+                      <Archive size={11} />
+                    </span>
+                  </div>
+                ))}
+            </div>
+          )}
+        </div>
+        {status === 'starting' && <span style={S.headerSub}>starte…</span>}
+        {status === 'error' && <span style={{ ...S.headerSub, color: '#f7768e' }}>Fehler</span>}
+        {status === 'running' && <span style={S.headerSub}>läuft</span>}
       </div>
 
       <div style={S.messages}>
@@ -312,7 +470,7 @@ export default function SandboxAngelPanel({ mode }: Props) {
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={onKey}
-          placeholder={isDisabled ? 'Warte auf Session…' : 'Nachricht eingeben… (Enter = Senden, Shift+Enter = Zeilenumbruch)'}
+          placeholder={isDisabled ? 'Warte auf Session…' : 'Nachricht… (Enter = Senden)'}
           rows={2}
           disabled={isDisabled}
         />
