@@ -977,10 +977,52 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
             if (!target) throw new Error(`Panel ${shortId} nicht im DOM`);
             const rect = target.getBoundingClientRect();
             if (rect.width === 0 || rect.height === 0) throw new Error('Panel ist nicht sichtbar');
+
+            // Temporarily expand the panel + all scrollable descendants so
+            // html2canvas captures the full content, not just the viewport.
+            // Panel briefly grows + restores — acceptable for manual action.
+            type Saved = { el: HTMLElement; scrollTop: number; scrollLeft: number; cssText: string };
+            const saved: Saved[] = [];
+            const expand = (el: HTMLElement, isTarget: boolean) => {
+              saved.push({ el, scrollTop: el.scrollTop, scrollLeft: el.scrollLeft, cssText: el.style.cssText });
+              el.style.overflow = 'visible';
+              el.style.overflowX = 'visible';
+              el.style.overflowY = 'visible';
+              el.style.maxHeight = 'none';
+              if (isTarget) {
+                el.style.contain = 'none';
+                el.style.height = 'auto';
+              } else {
+                el.style.height = 'auto';
+                el.style.maxWidth = 'none';
+              }
+              el.scrollTop = 0;
+              el.scrollLeft = 0;
+            };
+            expand(target, true);
+            for (const child of Array.from(target.querySelectorAll<HTMLElement>('*'))) {
+              const cs = getComputedStyle(child);
+              const ov = `${cs.overflow}${cs.overflowX}${cs.overflowY}`;
+              if (ov.includes('auto') || ov.includes('scroll')) expand(child, false);
+            }
+            await new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+
+            const fullW = target.scrollWidth;
+            const fullH = target.scrollHeight;
             const html2canvas = (await import('html2canvas')).default;
-            const canvas = await html2canvas(target, {
-              backgroundColor: '#1a1b26', scale: 1, useCORS: true, logging: false, allowTaint: true,
-            });
+            let canvas: HTMLCanvasElement;
+            try {
+              canvas = await html2canvas(target, {
+                backgroundColor: '#1a1b26', scale: 1, useCORS: true, logging: false, allowTaint: true,
+                width: fullW, height: fullH, windowWidth: fullW, windowHeight: fullH,
+              });
+            } finally {
+              for (const s of saved) {
+                s.el.style.cssText = s.cssText;
+                s.el.scrollTop = s.scrollTop;
+                s.el.scrollLeft = s.scrollLeft;
+              }
+            }
             const dataUrl = canvas.toDataURL('image/png');
             const resp = await fetch(`/api/screenshot/${encodeURIComponent(fullId)}`, {
               method: 'POST',
