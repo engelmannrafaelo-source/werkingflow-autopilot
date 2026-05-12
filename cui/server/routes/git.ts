@@ -80,22 +80,21 @@ const PRUNE = new Set([
   '.stversions', '_archive', 'archive',
 ]);
 
-function discoverRepos(root: string, maxDepth = 5): string[] {
+function discoverRepos(root: string, maxDepth = 6): string[] {
   const result: string[] = [];
   function walk(dir: string, depth: number) {
     if (depth > maxDepth) return;
     let entries: string[];
     try { entries = readdirSync(dir); } catch { return; }
     if (entries.includes('.git')) {
-      // confirm it's actually a git repo (dir or file for worktrees)
       try {
-        const gitPath = join(dir, '.git');
-        statSync(gitPath);
+        statSync(join(dir, '.git'));
         result.push(dir);
-        return; // don't recurse into a repo
-      } catch { /* ignore */ }
+        // keep recursing — nested repos / git submodules are real repos too
+      } catch { /* not a real git path; ignore */ }
     }
     for (const name of entries) {
+      if (name === '.git') continue; // never descend into .git itself
       if (name.startsWith('.')) continue;
       if (PRUNE.has(name)) continue;
       const full = join(dir, name);
