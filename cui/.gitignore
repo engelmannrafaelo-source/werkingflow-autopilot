@@ -3,6 +3,9 @@ dist/
 dist-server/
 *.tsbuildinfo
 
+# Build-time generated from local accounts registry (per-server)
+src/types/accounts-generated.ts
+
 # Runtime data (user-specific)
 data/uploads/
 data/active/

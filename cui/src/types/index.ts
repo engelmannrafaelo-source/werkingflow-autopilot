@@ -19,14 +19,12 @@ export interface PanelConfig {
   watchPath?: string;
 }
 
-export const ACCOUNTS: Account[] = [
-  { id: 'auto', label: 'Auto (Best)', color: '#22c55e' },
-  { id: 'engelmann', label: 'Engelmann', color: '#bb9af7' },
-  { id: 'office', label: 'Office', color: '#9ece6a' },
-  { id: 'gmail', label: 'Gmail', color: '#7aa2f7' },
-  { id: 'werking', label: 'Werking', color: '#f7768e' },
-  { id: 'local', label: 'Lokal', color: '#e0af68' },
-];
+// Build-time generated from {claudeUserHome}/.claude/accounts/registry.json
+// by scripts/generate-accounts.cjs (runs as `prebuild` script). Each
+// deployment (dev / partner) bakes in its own real account list at build
+// time — no hardcoded names that drift between environments.
+import { GENERATED_ACCOUNTS } from './accounts-generated';
+export const ACCOUNTS: Account[] = GENERATED_ACCOUNTS;
 
 export type CuiState = 'idle' | 'processing' | 'done';
 export type CuiStates = Record<string, CuiState>;

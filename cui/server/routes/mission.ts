@@ -26,25 +26,43 @@ function isValidWorkDir(d: string): boolean {
 
 const IS_PARTNER = process.env.PARTNER_MODE === '1' || process.env.PARTNER_CUI === '1';
 
-/** On Partner: maps workspace workDirs (/opt/cui-workspace/data/workspaces/<ws>)
- *  to the user's actual project directory under /home/{userId}/projekte/.
+/** On Partner: maps workspace workDirs to the user's actual project directory
+ *  under /home/{userId}/projekte/. Accepts two equivalent workspace prefixes:
+ *    - {dataDir}/workspaces/<ws>            (partner-native)
+ *    - /root/orchestrator/workspaces/<ws>   (dev-style — still present in legacy
+ *                                            project configs that were seeded
+ *                                            from dev-server snapshots)
+ *  Falls back to the dataDir workspace path when the user has no home (e.g.
+ *  admin sessions on partner), so spawn() chdir() never hits ENOENT.
  *  Dev-server (no req.user / PARTNER_MODE off): returns workDir unchanged. */
 function resolveUserWorkDir(workDir: string | undefined, userId: string | undefined): string | undefined {
   if (!IS_PARTNER || !workDir || !userId) return workDir;
-  const wsPrefix = join(PATHS.dataDir, 'workspaces');
-  if (workDir.startsWith(wsPrefix + '/')) {
-    const wsName = workDir.slice(wsPrefix.length + 1).split('/')[0];
-    if (wsName === 'engelmann-dashboards') {
-      const dashDir = `/home/${userId}/projekte/dashboard-mockup`;
-      if (existsSync(dashDir)) return dashDir;
-    }
-    if (wsName === 'engelmann-developer') {
-      const workflowDir = `/home/${userId}/projekte/workflows`;
-      if (existsSync(workflowDir)) return workflowDir;
-    }
-    const userProjDir = `/home/${userId}/projekte/werkingflow-production`;
-    if (existsSync(userProjDir)) return userProjDir;
+  const dataWsPrefix = join(PATHS.dataDir, 'workspaces');
+  const devWsPrefix = '/root/orchestrator/workspaces';
+  let wsName: string | null = null;
+  if (workDir.startsWith(dataWsPrefix + '/')) {
+    wsName = workDir.slice(dataWsPrefix.length + 1).split('/')[0];
+  } else if (workDir.startsWith(devWsPrefix + '/')) {
+    wsName = workDir.slice(devWsPrefix.length + 1).split('/')[0];
   }
+  if (!wsName) return workDir;
+
+  if (wsName === 'engelmann-dashboards') {
+    const dashDir = `/home/${userId}/projekte/dashboard-mockup`;
+    if (existsSync(dashDir)) return dashDir;
+  }
+  if (wsName === 'engelmann-developer') {
+    const workflowDir = `/home/${userId}/projekte/workflows`;
+    if (existsSync(workflowDir)) return workflowDir;
+  }
+  const userProjDir = `/home/${userId}/projekte/werkingflow-production`;
+  if (existsSync(userProjDir)) return userProjDir;
+
+  // Admin / no user home: fall back to the partner-native workspace dir so
+  // spawn()'s chdir does not fail on a /root/orchestrator path that only
+  // exists on the dev-server filesystem.
+  const partnerWsDir = `${dataWsPrefix}/${wsName}`;
+  if (existsSync(partnerWsDir)) return partnerWsDir;
   return workDir;
 }
 import { IS_LOCAL_MODE, onSessionStateChange, setSessionState } from './state.js';
