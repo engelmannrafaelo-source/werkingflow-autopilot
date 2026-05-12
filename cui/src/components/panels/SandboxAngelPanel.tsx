@@ -420,14 +420,14 @@ export default function SandboxAngelPanel({ mode }: Props) {
     }
   }, [endpoint, mode, fetchConversations, fetchHistory, activeConvId]);
 
-  const decideApproval = useCallback(async (approvalId: string, decision: 'approve' | 'deny') => {
+  const decideApproval = useCallback(async (approvalId: string, decision: 'approve' | 'deny', trustTurn = false) => {
     const s = sessionRef.current; if (!s) return;
     setPendingApprovals(prev => prev.filter(a => a.approvalId !== approvalId));
     try {
       await fetch(`${endpoint}/approve-decision`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Sandbox-Token': s.token },
-        body: JSON.stringify({ approvalId, decision }),
+        body: JSON.stringify({ approvalId, decision, trustTurn }),
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -586,7 +586,7 @@ export default function SandboxAngelPanel({ mode }: Props) {
                 {appr.input.edits.length} Edits — Details siehe Tool-Call
               </div>
             )}
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
               <button
                 onClick={() => void decideApproval(appr.approvalId, 'deny')}
                 style={{
@@ -603,6 +603,15 @@ export default function SandboxAngelPanel({ mode }: Props) {
                   padding: '6px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer',
                 }}
               >Freigeben</button>
+              <button
+                onClick={() => void decideApproval(appr.approvalId, 'approve', true)}
+                style={{
+                  background: 'var(--tn-purple, #bb9af7)', color: '#1a1b26',
+                  border: 'none', borderRadius: 6,
+                  padding: '6px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                }}
+                title="Diese und alle weiteren Änderungen dieser Runde freigeben — gilt bis der Agent fertig ist"
+              >Alle freigeben</button>
             </div>
           </div>
         );
