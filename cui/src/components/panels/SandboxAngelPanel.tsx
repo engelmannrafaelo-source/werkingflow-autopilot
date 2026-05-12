@@ -582,8 +582,38 @@ export default function SandboxAngelPanel({ mode }: Props) {
               </div>
             )}
             {appr.input.edits && (
-              <div style={{ fontSize: 11, color: 'var(--tn-text-muted)' }}>
-                {appr.input.edits.length} Edits — Details siehe Tool-Call
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 480, overflowY: 'auto' }}>
+                <div style={{ fontSize: 11, color: 'var(--tn-text-muted)', fontWeight: 600 }}>
+                  {appr.input.edits.length} Änderungen in einer Datei:
+                </div>
+                {appr.input.edits.map((edit, idx) => (
+                  <div key={idx} style={{
+                    border: '1px solid var(--tn-border, #414868)',
+                    borderRadius: 6,
+                    padding: '6px 8px',
+                    display: 'flex', flexDirection: 'column', gap: 4,
+                  }}>
+                    <div style={{ fontSize: 10, color: 'var(--tn-text-muted)' }}>#{idx + 1}</div>
+                    <div style={{ fontSize: 10, color: 'var(--tn-red, #f7768e)' }}>− alt:</div>
+                    <div style={{
+                      background: 'rgba(247,118,142,0.08)',
+                      border: '1px solid rgba(247,118,142,0.3)',
+                      borderRadius: 4, padding: '5px 7px',
+                      fontFamily: 'monospace', fontSize: 11,
+                      whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                      maxHeight: 100, overflowY: 'auto',
+                    }}>{edit.old_string}</div>
+                    <div style={{ fontSize: 10, color: 'var(--tn-green, #9ece6a)' }}>+ neu:</div>
+                    <div style={{
+                      background: 'rgba(158,206,106,0.08)',
+                      border: '1px solid rgba(158,206,106,0.3)',
+                      borderRadius: 4, padding: '5px 7px',
+                      fontFamily: 'monospace', fontSize: 11,
+                      whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                      maxHeight: 100, overflowY: 'auto',
+                    }}>{edit.new_string}</div>
+                  </div>
+                ))}
               </div>
             )}
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
