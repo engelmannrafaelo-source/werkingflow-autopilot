@@ -77,7 +77,7 @@ export default function createScreenshotRoutes(deps: { broadcast: Function }) {
     panelScreenshots.set(panel, meta);
     broadcast({ type: 'screenshot-stored', panel, capturedAt: meta.capturedAt });
     console.log(`[Screenshot] Stored: ${panel} (${width}x${height}) → ${filePath}`);
-    res.json({ ok: true, panel, capturedAt: meta.capturedAt, url: `/api/screenshot/${panel}.png` });
+    res.json({ ok: true, panel, capturedAt: meta.capturedAt, url: `/api/screenshot/${panel}.png`, filePath });
   });
 
   // GET /api/screenshot/:panel.png — serve PNG image directly

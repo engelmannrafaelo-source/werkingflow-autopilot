@@ -956,6 +956,58 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       >{shortId}</span>
     );
 
+    // Screenshot button — captures panel content, returns server path
+    renderValues.buttons.push(
+      <span
+        key="screenshot"
+        title="Screenshot vom Panel"
+        onClick={async (e) => {
+          e.stopPropagation();
+          const btn = e.currentTarget;
+          const original = btn.textContent;
+          const setLabel = (text: string, color: string) => {
+            btn.textContent = text;
+            btn.style.color = color;
+          };
+          setLabel('⏳', 'var(--tn-yellow)');
+          try {
+            const target = document.querySelector<HTMLElement>(`[data-node-id="${fullId}"]`);
+            if (!target) throw new Error(`Panel ${shortId} nicht im DOM`);
+            const rect = target.getBoundingClientRect();
+            if (rect.width === 0 || rect.height === 0) throw new Error('Panel ist nicht sichtbar');
+            const html2canvas = (await import('html2canvas')).default;
+            const canvas = await html2canvas(target, {
+              backgroundColor: '#1a1b26', scale: 1, useCORS: true, logging: false, allowTaint: true,
+            });
+            const dataUrl = canvas.toDataURL('image/png');
+            const resp = await fetch(`/api/screenshot/${encodeURIComponent(fullId)}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ dataUrl, width: canvas.width, height: canvas.height }),
+              signal: AbortSignal.timeout(20000),
+            });
+            if (!resp.ok) throw new Error(`Server: ${resp.status}`);
+            const data = await resp.json() as { filePath?: string; url?: string };
+            const pathToCopy = data.filePath || data.url || '';
+            await copyToClipboard(pathToCopy);
+            setLabel('✓ kopiert', 'var(--tn-green)');
+            console.log(`[Screenshot] ${shortId}: ${pathToCopy}`);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            setLabel('✗', 'var(--tn-red)');
+            console.error(`[Screenshot] ${shortId}:`, msg);
+          }
+          setTimeout(() => setLabel(original || '📷', 'var(--tn-text-muted)'), 1800);
+        }}
+        style={{
+          fontSize: 11, color: 'var(--tn-text-muted)', opacity: 0.7,
+          marginLeft: 4, cursor: 'pointer',
+          padding: '1px 4px', borderRadius: 3,
+          background: 'var(--tn-surface-alt)',
+        }}
+      >📷</span>
+    );
+
     // Sync state is controlled from Tool Hub (not tab header)
     const tabComp = node.getComponent();
     if (tabComp !== 'cui' && tabComp !== 'cui-lite' && tabComp !== 'mission-chat') {
