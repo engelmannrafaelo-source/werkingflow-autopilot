@@ -6,7 +6,9 @@ import TenantsTab from './TenantsTab';
 import ActivityTab from './ActivityTab';
 import BillingTab from './BillingTab';
 import FeedbackTab from './FeedbackTab';
-import PlaceholderTab from './PlaceholderTab';
+import AuditTab from './AuditTab';
+import ApiTokensTab from './ApiTokensTab';
+import StammdatenTab from './StammdatenTab';
 
 // Central admin panel for the WerkingFlow platform.
 //
@@ -18,15 +20,18 @@ import PlaceholderTab from './PlaceholderTab';
 // to ship — they render a clear "what's coming" placeholder until then so the
 // shape of the future panel is visible from day one.
 
-type TabKey = 'usage' | 'users' | 'tenants' | 'billing' | 'activity' | 'feedback';
+type TabKey = 'usage' | 'users' | 'tenants' | 'billing' | 'activity' | 'feedback' | 'audit' | 'tokens' | 'stammdaten';
 
 const TABS: { key: TabKey; label: string }[] = [
-  { key: 'usage',    label: 'Usage' },
-  { key: 'users',    label: 'Users' },
-  { key: 'tenants',  label: 'Tenants' },
-  { key: 'billing',  label: 'Billing' },
-  { key: 'activity', label: 'Activity' },
-  { key: 'feedback', label: 'Feedback' },
+  { key: 'usage',      label: 'Usage' },
+  { key: 'users',      label: 'Users' },
+  { key: 'tenants',    label: 'Tenants' },
+  { key: 'billing',    label: 'Billing' },
+  { key: 'activity',   label: 'Activity' },
+  { key: 'feedback',   label: 'Feedback' },
+  { key: 'audit',      label: 'Audit' },
+  { key: 'tokens',     label: 'API Tokens' },
+  { key: 'stammdaten', label: 'Stammdaten' },
 ];
 
 export default function PlatformAdmin() {
@@ -74,6 +79,15 @@ export default function PlatformAdmin() {
         </div>
         <div style={{ display: active === 'feedback' ? 'block' : 'none', height: '100%' }}>
           <ErrorBoundary componentName="PlatformFeedbackTab"><FeedbackTab /></ErrorBoundary>
+        </div>
+        <div style={{ display: active === 'audit' ? 'block' : 'none', height: '100%' }}>
+          <ErrorBoundary componentName="PlatformAuditTab"><AuditTab /></ErrorBoundary>
+        </div>
+        <div style={{ display: active === 'tokens' ? 'block' : 'none', height: '100%' }}>
+          <ErrorBoundary componentName="PlatformApiTokensTab"><ApiTokensTab /></ErrorBoundary>
+        </div>
+        <div style={{ display: active === 'stammdaten' ? 'block' : 'none', height: '100%' }}>
+          <ErrorBoundary componentName="PlatformStammdatenTab"><StammdatenTab /></ErrorBoundary>
         </div>
       </div>
     </div>

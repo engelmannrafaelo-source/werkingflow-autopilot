@@ -992,6 +992,9 @@ const PLATFORM_ROUTE_PREFIXES = [
   '/v1/billing',
   '/v1/activity',
   '/v1/feedback',
+  '/v1/audit',
+  '/v1/developer-tokens',
+  '/v1/stammdaten',
   '/v1/db',
 ];
 const BRIDGE_SERVICE_TOKEN = process.env.BRIDGE_SERVICE_TOKEN || '';
