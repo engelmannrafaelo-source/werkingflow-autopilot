@@ -5,6 +5,7 @@ import UsersTab from './UsersTab';
 import TenantsTab from './TenantsTab';
 import ActivityTab from './ActivityTab';
 import BillingTab from './BillingTab';
+import FeedbackTab from './FeedbackTab';
 import PlaceholderTab from './PlaceholderTab';
 
 // Central admin panel for the WerkingFlow platform.
@@ -72,11 +73,7 @@ export default function PlatformAdmin() {
           <ErrorBoundary componentName="PlatformActivityTab"><ActivityTab /></ErrorBoundary>
         </div>
         <div style={{ display: active === 'feedback' ? 'block' : 'none', height: '100%' }}>
-          <PlaceholderTab
-            title="Feedback"
-            endpoint="GET /v1/feedback  (geplant)"
-            description="User-Feedback aus allen Apps zentral lesen. Endpoint ist noch nicht im Mirror — kommt mit Sprint B3 (Audit, Notifications, Feedback, Stammdaten)."
-          />
+          <ErrorBoundary componentName="PlatformFeedbackTab"><FeedbackTab /></ErrorBoundary>
         </div>
       </div>
     </div>
