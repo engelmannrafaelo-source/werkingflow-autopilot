@@ -2556,43 +2556,14 @@ router.post('/activate', (req, res) => {
 
 // 6. Start new conversation with subject (via claude-cli direct spawn)
 
-/** Build team context prefix for new conversations (~200-500 tokens) */
-function buildSessionContext(workDir: string): string | null {
-  const PROJECT_LEADERS: Record<string, string[]> = {
-    'engelmann': ['max', 'felix'],
-    'werking-report': ['max', 'herbert'],
-    'werking-safety': ['max', 'herbert'],
-    'werking-energy': ['max'],
-    'platform': ['max', 'herbert'],
-    'orchestrator': ['max'],
-    'werking-noise': ['max'],
-  };
-  const project = Object.keys(PROJECT_LEADERS).find(p => workDir.includes(p));
-  if (!project) return null;
-
-  const teamCtxFile = IS_LOCAL_MODE
-    ? join(homedir(), '.claude', 'team-context.md')
-    : join(PATHS.claudeUserHome, '.claude', 'team-context.md');
-  const teamCtx = existsSync(teamCtxFile) ? readFileSync(teamCtxFile, 'utf8').trim() : '';
-
-  const activeWorkFile = IS_LOCAL_MODE
-    ? join(homedir(), '.claude', 'active-work.md')
-    : join(PATHS.claudeUserHome, '.claude', 'active-work.md');
-  const hasActivePeers = existsSync(activeWorkFile)
-    && readFileSync(activeWorkFile, 'utf8').includes('AKTIV');
-
-  const isMissionWorkspace = workDir.includes('administration') || workDir.includes('orchestrator');
-  const parts = [
-    `[KONTEXT: Projekt="${project}", Leader: ${PROJECT_LEADERS[project]?.join(', ')}]`,
-    hasActivePeers ? '[PEERS: Andere Sessions aktiv — cat ~/.claude/active-work.md]' : '',
-    teamCtx ? `[TEAM]\n${teamCtx}` : '',
-    isMissionWorkspace ? `[MODEL-CONTROL: Du bist Mission Chat (Opus). Andere Sessions laufen default Sonnet.
-Zum Modell-Wechsel einer Session: curl -s -X POST http://localhost:4005/api/mission/model/SESSION_ID -H 'Content-Type: application/json' -d '{"model":"opus"}'
-Zum Zurueckschalten: curl -s -X POST http://localhost:4005/api/mission/model/SESSION_ID -H 'Content-Type: application/json' -d '{"model":"sonnet"}'
-Gueltige Modelle: opus, sonnet. Nur auf Opus eskalieren wenn Sonnet nicht ausreicht (komplexe Architektur, Multi-File-Refactoring, Security-Audit).]` : '',
-  ].filter(Boolean);
-
-  return parts.length > 0 ? parts.join('\n') : null;
+/**
+ * Team-system disabled (Rafael 2026-05-12): keine [KONTEXT/PEERS/TEAM]-Injects mehr.
+ * Sessions sollen direkt antworten statt "an max zu melden".
+ * Falls Team-Coordination je wieder gewollt: PROJECT_LEADERS-Map und Inject-Logik
+ * stand vorher hier — siehe git log mission.ts vor 2026-05-12.
+ */
+function buildSessionContext(_workDir: string): string | null {
+  return null;
 }
 
 router.post('/start', async (req, res) => {
