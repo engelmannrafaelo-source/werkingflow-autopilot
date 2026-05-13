@@ -1767,11 +1767,17 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           }
         });
         // Determine which conversations should be active.
-        // Single source of truth: only manualFinished decides. The server's
-        // status='completed' fires after every Claude reply (between turns) and
-        // therefore must NOT be used to evict tabs — would constantly remove
-        // tabs that the user is actively working in.
-        const active = conversations.filter((c: any) => !c.manualFinished);
+        // Rule 1: !manualFinished decides visibility.
+        // Rule 2: Sub-Sessions are NEVER shown in normal workspaces. The server filter
+        //         relies on convMeta.getParentSessionId() which can miss legacy subs —
+        //         fall back to name-prefix detection (mirrors App.tsx SUB_PREFIXES).
+        const SUB_PREFIXES = ['[Sub]', '[Arch-Fix]', '[Arch-App]', '[Fix]', '[Analysis]'];
+        const isSubConv = (c: any): boolean => {
+          if (c.isSubSession) return true;
+          const name = (c.customName || c.summary || '') as string;
+          return SUB_PREFIXES.some(p => name.startsWith(p));
+        };
+        const active = conversations.filter((c: any) => !c.manualFinished && !isSubConv(c));
         const activeSessionIds = new Set(active.map((c: any) => c.sessionId));
 
         // Duplicate-cleanup: same sessionId mounted on multiple cui tabs.
