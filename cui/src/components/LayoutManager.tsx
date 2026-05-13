@@ -251,9 +251,6 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
     return null;
   });
   const [showBuilder, setShowBuilder] = useState(false);
-  const [showSubSessions, setShowSubSessions] = useState<boolean>(() => {
-    try { return localStorage.getItem('cui-show-sub-sessions') === 'true'; } catch { return false; }
-  });
   const [attentionVersion, setAttentionVersion] = useState(0); // triggers re-evaluation of attention state
   // Ephemeral per-tab state — kept out of the persisted Tab-Config to prevent save-loops.
   // _attention (idle/working/needs_attention) flips multiple times per second and used to be
@@ -1666,6 +1663,12 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
   // Auto-mount ongoing (non-finished) conversations for this project as tabs
   // Continuous auto-sync: periodically mount missing conversations, close finished ones
   const syncNowRef = useRef<(() => void) | null>(null);
+  // Tracks whether syncConversations has run at least once for this LayoutManager mount.
+  // The FIRST sync after mount may claim empty panels (page-load recovery: re-mount sessions
+  // into panels that lost their initialSessionId after layout cache eviction). Subsequent
+  // periodic syncs only modify the model when the user explicitly clicks Layout
+  // (__cuiAutoLayoutActive). This preserves the user-promise: "auto-sync rührt nichts an".
+  const hasInitialSyncRunRef = useRef(false);
   useEffect(() => {
     if (!modelInitialized || !workDir) return;
     let disposed = false;
@@ -1713,12 +1716,18 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
               arr.push(tab.getId());
               allMountsBySid.set(sid, arr);
               // Ensure config has initialSessionId (triggers useEffect in CuiLitePanel to un-stuck Queue)
-              if (!cfgSid) {
-                try {
-                  m.doAction(Actions.updateNodeAttributes(tab.getId(), {
-                    config: { ...tab.getConfig(), initialSessionId: sid }
-                  }));
-                } catch {} // silent-ok: FlexLayout node attribute update is best-effort for session routing
+              // Gate: only patch when initial sync OR user explicitly clicked Layout — never overwrite
+              // a recently user-reserved panel (Rule 3: auto-sync rührt nichts an).
+              if (!cfgSid && (hasInitialSyncRunRef.current === false || window.__cuiAutoLayoutActive)) {
+                const existingCfg = tab.getConfig() ?? {};
+                const isUserReserved = existingCfg._userReserved && Date.now() - existingCfg._userReserved < 60000;
+                if (!isUserReserved) {
+                  try {
+                    m.doAction(Actions.updateNodeAttributes(tab.getId(), {
+                      config: { ...existingCfg, initialSessionId: sid }
+                    }));
+                  } catch {} // silent-ok: FlexLayout node attribute update is best-effort for session routing
+                }
               }
             } else {
               emptyPanels.push(tab.getId());
@@ -1821,8 +1830,10 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           }
 
           // Priority 1: Reuse an empty/stale CUI panel — just update its config
-          // (always allowed — needed to show sessions on load and after sync)
-          if (emptyPanels.length > 0) {
+          // Gated: only on initial sync (page-load recovery for layouts whose initialSessionId
+          // was lost) OR when user explicitly clicked Layout. Periodic auto-sync MUST NOT
+          // claim user-touched panels (Rule 3: "auto-sync rührt nichts an").
+          if (emptyPanels.length > 0 && (hasInitialSyncRunRef.current === false || window.__cuiAutoLayoutActive)) {
             const reuseNodeId = emptyPanels.shift()!;
             const existingCfg = (m.getNodeById(reuseNodeId) as TabNode)?.getConfig?.() ?? {};
             // Skip panels that were just reserved by user (have _userReserved timestamp within last 60s)
@@ -1911,6 +1922,11 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           console.log(`[LM] Auto-sync: mounted ${mounted} conversations`);
         }
       } catch (err) { console.warn('[LM] auto-sync error:', err); }
+      finally {
+        // Mark initial sync done — after this, Priority-1 reuse and config-patch require
+        // an explicit user click (Layout button) to mutate panels.
+        hasInitialSyncRunRef.current = true;
+      }
     };
 
     syncNowRef.current = syncConversations;

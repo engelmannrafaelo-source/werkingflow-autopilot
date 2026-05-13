@@ -278,15 +278,15 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
     }
   }, [refreshSignal, fetchConversations]);
 
-  // Split conversations
+  // Split conversations — Sub-Sessions are never shown here (Rule 2: Subs are filtered globally).
   const active = useMemo(
-    () => conversations.filter(c => c.status === 'ongoing').sort((a, b) =>
+    () => conversations.filter(c => c.status === 'ongoing' && !(c as any).isSubSession).sort((a, b) =>
       new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
     ),
     [conversations]
   );
   const completed = useMemo(
-    () => conversations.filter(c => c.status === 'completed').sort((a, b) =>
+    () => conversations.filter(c => c.status === 'completed' && !(c as any).isSubSession).sort((a, b) =>
       new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
     ),
     [conversations]
