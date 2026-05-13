@@ -9,6 +9,7 @@ import type { Project } from './types';
 import { useSessionStore } from './contexts/SessionStore';
 import { useAuth } from './contexts/AuthContext';
 import { IS_LOCAL, IS_MOBILE } from './env';
+import { isSubSession } from './utils/subSession';
 
 const API = '/api';
 
@@ -445,13 +446,11 @@ function AppContent() {
     const nameToId = new Map<string, string>();
     for (const p of projects) nameToId.set(p.name.toLowerCase(), p.id);
 
-    const SUB_PREFIXES = ['[Sub]', '[Arch-Fix]', '[Arch-App]', '[Fix]', '[Analysis]'];
     const now = Date.now();
     for (const conv of convCacheRef.current) {
       if (conv.manualFinished) continue;
-      // Detect sub-sessions by flag OR by name prefix (API doesn't always return isSubSession)
-      const subjectName = (conv as any).customName || (conv as any).subject || '';
-      const isEffectivelySub = conv.isSubSession || SUB_PREFIXES.some(p => subjectName.startsWith(p));
+      // Sub-Session detection — see utils/subSession.ts for the rule (Rule 2).
+      const isEffectivelySub = isSubSession(conv as any);
       // Sub-sessions belong to the sub-sessions workspace for attention tracking
       const projId = isEffectivelySub
         ? 'sub-sessions'

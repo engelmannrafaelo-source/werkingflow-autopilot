@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { ACCOUNTS } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
+import { isSubSession } from '../../utils/subSession';
 
 const API = '/api';
 
@@ -278,23 +279,15 @@ export default function QueueOverlay({ accountId, projectId, workDir, useLocal, 
     }
   }, [refreshSignal, fetchConversations]);
 
-  // Split conversations — Sub-Sessions are never shown here (Rule 2).
-  // Server's isSubSession flag is unreliable for legacy subs without parent-mapping
-  // → fall back to name-prefix (mirrors App.tsx / LayoutManager).
-  const SUB_PREFIXES = ['[Sub]', '[Arch-Fix]', '[Arch-App]', '[Fix]', '[Analysis]'];
-  const isSubConv = (c: any): boolean => {
-    if (c.isSubSession) return true;
-    const name = (c.customName || c.summary || '') as string;
-    return SUB_PREFIXES.some(p => name.startsWith(p));
-  };
+  // Split conversations — Sub-Sessions are never shown here (Rule 2, see utils/subSession.ts).
   const active = useMemo(
-    () => conversations.filter(c => c.status === 'ongoing' && !isSubConv(c)).sort((a, b) =>
+    () => conversations.filter(c => c.status === 'ongoing' && !isSubSession(c)).sort((a, b) =>
       new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
     ),
     [conversations]
   );
   const completed = useMemo(
-    () => conversations.filter(c => c.status === 'completed' && !isSubConv(c)).sort((a, b) =>
+    () => conversations.filter(c => c.status === 'completed' && !isSubSession(c)).sort((a, b) =>
       new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
     ),
     [conversations]
