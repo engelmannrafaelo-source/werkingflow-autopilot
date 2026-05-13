@@ -9,6 +9,7 @@ import FeedbackTab from './FeedbackTab';
 import AuditTab from './AuditTab';
 import ApiTokensTab from './ApiTokensTab';
 import StammdatenTab from './StammdatenTab';
+import InvoicesTab from './InvoicesTab';
 
 // Central admin panel for the WerkingFlow platform.
 //
@@ -20,13 +21,14 @@ import StammdatenTab from './StammdatenTab';
 // to ship — they render a clear "what's coming" placeholder until then so the
 // shape of the future panel is visible from day one.
 
-type TabKey = 'usage' | 'users' | 'tenants' | 'billing' | 'activity' | 'feedback' | 'audit' | 'tokens' | 'stammdaten';
+type TabKey = 'usage' | 'users' | 'tenants' | 'billing' | 'invoices' | 'activity' | 'feedback' | 'audit' | 'tokens' | 'stammdaten';
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'usage',      label: 'Usage' },
   { key: 'users',      label: 'Users' },
   { key: 'tenants',    label: 'Tenants' },
   { key: 'billing',    label: 'Billing' },
+  { key: 'invoices',   label: 'Invoices' },
   { key: 'activity',   label: 'Activity' },
   { key: 'feedback',   label: 'Feedback' },
   { key: 'audit',      label: 'Audit' },
@@ -73,6 +75,9 @@ export default function PlatformAdmin() {
         </div>
         <div style={{ display: active === 'billing' ? 'block' : 'none', height: '100%' }}>
           <ErrorBoundary componentName="PlatformBillingTab"><BillingTab /></ErrorBoundary>
+        </div>
+        <div style={{ display: active === 'invoices' ? 'block' : 'none', height: '100%' }}>
+          <ErrorBoundary componentName="PlatformInvoicesTab"><InvoicesTab /></ErrorBoundary>
         </div>
         <div style={{ display: active === 'activity' ? 'block' : 'none', height: '100%' }}>
           <ErrorBoundary componentName="PlatformActivityTab"><ActivityTab /></ErrorBoundary>
