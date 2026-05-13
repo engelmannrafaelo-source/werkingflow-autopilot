@@ -102,6 +102,11 @@ function ensureStyles() {
     .cq-row:hover .cq-actions { opacity: 1 !important; }
     @media (hover: none) { .cq-actions { opacity: 1 !important; } }
     .cq-actions button { min-height: 36px; }
+    .cq-row .cq-selectable { user-select: text; -webkit-user-select: text; -webkit-touch-callout: default; }
+    @media (hover: none) {
+      /* Long-press to select on touch — Safari needs callout enabled and click-handler ignored on the text node */
+      .cq-row .cq-selectable { -webkit-touch-callout: default; }
+    }
   `;
   document.head.appendChild(s);
 }
@@ -117,7 +122,7 @@ export default function ConversationQueuePanel({ projectId: _projectId }: { proj
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 600);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [timeFilter, setTimeFilter] = useState<TimeFilter>(() =>
-    typeof window !== 'undefined' && window.innerWidth < 600 ? 'week' : 'today'
+    typeof window !== 'undefined' && window.innerWidth < 600 ? 'all' : 'today'
   );
   const [accountFilter, setAccountFilter] = useState<string>('all');
   const [projectFilter, setProjectFilter] = useState<string>('all');
@@ -381,7 +386,7 @@ export default function ConversationQueuePanel({ projectId: _projectId }: { proj
       </div>
 
       {/* List */}
-      <div style={{ flex: 1, overflow: 'auto' }}>
+      <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', WebkitOverflowScrolling: 'touch' as React.CSSProperties['WebkitOverflowScrolling'], touchAction: 'pan-y', overscrollBehavior: 'contain' }}>
         {ongoing.length > 0 && ongoing.map(c => (
           <ConvRow key={c.sessionId} conv={c} expanded={expandedId === (c.sessionId)} snippet={snippets.get(c.sessionId)}
             isVisible={visibleSessionIds.has(c.sessionId)} isWrong={!KNOWN_PROJECTS.has(c.projectName ?? '')}
@@ -489,11 +494,22 @@ function ConvRow({ conv, expanded, snippet, isVisible, isWrong, isSelected, isCo
               {conv.messageCount ?? 0} msgs · {timeAgo(conv.lastPromptAt || conv.updatedAt || '')}
             </span>
           </div>
-          <div style={{ fontSize: 11, color: isCompleted ? '#565a6e' : 'var(--tn-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }}>{displayName}</div>
+          <div
+            className="cq-selectable"
+            onClick={e => e.stopPropagation()}
+            style={{ fontSize: 11, color: isCompleted ? '#565a6e' : 'var(--tn-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }}
+            title={displayName}
+          >{displayName}</div>
         </div>
 
         {/* Actions */}
         <div className="cq-actions" style={{ display: 'flex', gap: 3, opacity: 0.4, transition: 'opacity 0.15s', flexShrink: 0 }} onClick={e => e.stopPropagation()}>
+          <button
+            onClick={e => { e.stopPropagation(); navigator.clipboard.writeText(`${displayName}\n${conv.sessionId}`).then(() => showFeedback('Kopiert')).catch(() => showFeedback('Fehler')); }}
+            title="Titel + Session-ID kopieren"
+            style={{ background: 'rgba(86,90,110,0.2)', border: '1px solid rgba(255,255,255,0.15)', color: '#c0caf5', cursor: 'pointer', fontSize: 10, padding: '2px 8px', borderRadius: 3 }}>
+            📋
+          </button>
           <div style={{ position: 'relative' }}>
             <button onClick={(e) => { e.stopPropagation(); setOpenMenu(openMenu === 'move' ? null : 'move'); }}
               style={{ background: 'rgba(139,92,246,0.15)', border: '1px solid rgba(139,92,246,0.4)', color: '#A78BFA', cursor: 'pointer', fontSize: 10, padding: '2px 8px', borderRadius: 3, fontWeight: 600 }}>
