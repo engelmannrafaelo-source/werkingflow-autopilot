@@ -1792,8 +1792,9 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
 
         const missing = active.filter((c: any) => !mountedSessions.has(c.sessionId));
 
-        // Report missing sessions count to parent (for Layout button indicator)
-        onMissingSessionsRef.current?.(missing.length);
+        // Report TOTAL open sessions count to parent (Layout button shows all open chats,
+        // not just missing — user wants "see how many are open, click to arrange them all").
+        onMissingSessionsRef.current?.(active.length);
 
         if (missing.length === 0 && removed === 0 && duplicatesRemoved === 0) return;
         if (missing.length === 0) {

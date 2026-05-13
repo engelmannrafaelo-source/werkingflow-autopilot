@@ -1187,13 +1187,13 @@ export default memo(function ProjectTabs({ projects, activeId, attention, missin
 
       <button
         onClick={() => {
-          // Sync-only: mount all open chats into the current layout. No reset.
-          // (Factory reset lives in the Cache button — it wipes client + server layout.)
+          // Arrange all open chats in the current layout (mount missing, cleanup stale).
+          // Factory reset lives in the Cache button — it wipes client + server layout.
           window.dispatchEvent(new CustomEvent('cui-auto-layout', { detail: { projectId: activeId } }));
         }}
         title={missingSessions > 0
-          ? `${missingSessions} offene Session${missingSessions > 1 ? 's' : ''} ins Layout einblenden`
-          : 'Offene Chats ins Layout einblenden'}
+          ? `${missingSessions} offene Session${missingSessions === 1 ? '' : 's'} — Klick zum Anordnen`
+          : 'Keine offenen Sessions'}
         style={{
           background: missingSessions > 0 ? 'rgba(224,175,104,0.15)' : 'none',
           border: `1px solid ${missingSessions > 0 ? '#e0af68' : 'var(--tn-border)'}`,
