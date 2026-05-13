@@ -1679,6 +1679,38 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
       if (!m || disposed || window.__cuiServerAlive === false) return;
 
       try {
+        // Unstack: when user explicitly clicked Layout, move every cui/cui-lite tab that
+        // shares a tabset with another cui-tab into its own sibling tabset (split RIGHT).
+        // Goal: all open chats visible side-by-side, no hidden stacks.
+        if (window.__cuiAutoLayoutActive) {
+          const tabsetCuiTabs = new Map<string, string[]>();
+          m.visitNodes((node) => {
+            if (node.getType() !== 'tab') return;
+            const tab = node as TabNode;
+            const comp = tab.getComponent();
+            if (comp !== 'cui' && comp !== 'cui-lite') return;
+            const parent = tab.getParent();
+            if (!parent || parent.getType() !== 'tabset') return;
+            const arr = tabsetCuiTabs.get(parent.getId()) || [];
+            arr.push(tab.getId());
+            tabsetCuiTabs.set(parent.getId(), arr);
+          });
+          let unstacked = 0;
+          for (const [tsid, tabs] of tabsetCuiTabs) {
+            if (tabs.length <= 1) continue;
+            for (let i = 1; i < tabs.length; i++) {
+              try {
+                m.doAction(Actions.moveNode(tabs[i], tsid, DockLocation.RIGHT, -1));
+                unstacked++;
+              } catch (err) { console.warn('[LM] unstack moveNode failed:', err); }
+            }
+          }
+          if (unstacked > 0) {
+            saveLayoutRef.current(m);
+            console.log(`[LM] Unstacked ${unstacked} cui tabs into separate tabsets`);
+          }
+        }
+
         // Filter by projectId (precise — resolves multi-workspace users like David/Sahori).
         // Server accepts either projectId or workDir for backwards compat.
         const projFilter = projectId || workDir;
