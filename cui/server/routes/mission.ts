@@ -2601,6 +2601,27 @@ router.post('/start', async (req, res) => {
     }
   }
 
+  // Naming-convention guard: subjects starting with [Sub], [Arch-Fix], [Arch-App], [Fix], [Analysis]
+  // are reserved for sub-sessions per arch-worker/CLAUDE.md. Block spawning such a session
+  // without parentSessionId — otherwise it becomes an orphan: server sees isSubSession=false
+  // (no parent-mapping), so client-side filters and reminders treat it as a normal session
+  // even though the naming says otherwise. Forces spawn discipline at the source.
+  const SUB_SUBJECT_PREFIXES = ['[Sub]', '[Arch-Fix]', '[Arch-App]', '[Fix]', '[Analysis]'];
+  const subjectTrimmed = (subject || '').trim();
+  const looksLikeSub = SUB_SUBJECT_PREFIXES.some(p => subjectTrimmed.startsWith(p));
+  if (looksLikeSub) {
+    const hasParent = typeof parentSessionId === 'string' && parentSessionId.trim().length > 0;
+    if (!hasParent) {
+      res.status(400).json({
+        error: 'parentSessionId required for subjects with sub-session prefix',
+        subject: subjectTrimmed.slice(0, 80),
+        prefixes: SUB_SUBJECT_PREFIXES,
+        hint: 'These prefixes are reserved for sub-sessions per arch-worker/CLAUDE.md. Include parentSessionId in the POST body (your own sessionId, the spawning session), or change the subject if this is not a sub-session.',
+      });
+      return;
+    }
+  }
+
   // Auto account selection: pick least-loaded account (direct call, no HTTP).
   if (!accountId || accountId === 'auto') {
     const ranking = rankAccounts();
