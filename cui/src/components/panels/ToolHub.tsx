@@ -19,6 +19,7 @@ import {
   MyTasksPanel, ActivityFeedPanel, PartnerInboxPanel,
   FeedbackPanel, TeamStatusPanel, BusinessDocsPanel, UploadPanel,
   CalendarPanel, MailPanel, ErrorMonitor, PartnerServerPanel, SandboxAngelPanel,
+  PlatformAdmin,
 } from '../panelLazy';
 
 const API = '/api';
@@ -32,7 +33,7 @@ const TOOL_ICONS: Record<string, string> = {
   'report-builder': '📑', 'prompt-explorer': '🧪',
   'bridge-monitor': '🌉', 'repo-dashboard': '🔧',
   'infisical-monitor': '🔐', watchdog: '🐕',
-  'admin-wr': '📊', 'business-angel': '😇', 'privat-angel': '🪞', 'background-ops': '⏳',
+  'admin-wr': '📊', 'platform-admin': '🛰️', 'business-angel': '😇', 'privat-angel': '🪞', 'background-ops': '⏳',
   maintenance: '🔨', 'input-audit': '📥', linkedin: '💼',
   'business-docs': '📂', 'my-tasks': '✏️', 'activity-feed': '📰',
   'partner-inbox': '📬', feedback: '💡', 'team-status': '👥', uploads: '📤',
@@ -48,7 +49,7 @@ const SHORT_LABELS: Record<string, string> = {
   'report-builder': 'Report', 'prompt-explorer': 'Prompts',
   'bridge-monitor': 'Bridge', 'repo-dashboard': 'Repos',
   'infisical-monitor': 'Secrets', watchdog: 'Watch',
-  'admin-wr': 'WR Admin', 'business-angel': 'Angel', 'privat-angel': 'Privat', 'background-ops': 'BgOps',
+  'admin-wr': 'WR Admin', 'platform-admin': 'Platform', 'business-angel': 'Angel', 'privat-angel': 'Privat', 'background-ops': 'BgOps',
   maintenance: 'Maint', 'input-audit': 'Audit', linkedin: 'LinkedIn',
   'business-docs': 'BizDocs', 'my-tasks': 'Tasks', 'activity-feed': 'Feed',
   'partner-inbox': 'Inbox', feedback: 'Fdbk', 'team-status': 'Team', uploads: 'Upload',
@@ -148,6 +149,7 @@ export default function ToolHub({ projectId, workDir }: ToolHubProps) {
       case 'office': case 'virtual-office': return withSuspense(<OfficePanel projectId={projectId} workDir={workDir} />);
       case 'knowledge': case 'knowledge-fullscreen': return withSuspense(<KnowledgeFullscreen projectId={projectId} workDir={workDir} />);
       case 'admin-wr': return withSuspense(<WerkingReportAdmin />);
+      case 'platform-admin': return withSuspense(<PlatformAdmin />);
       case 'linkedin': return withSuspense(<LinkedInPanel />);
       case 'qa-dashboard': return withSuspense(<QADashboard />);
       case 'bridge-monitor': return withSuspense(<BridgeMonitor />);

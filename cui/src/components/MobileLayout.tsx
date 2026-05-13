@@ -18,6 +18,7 @@ import {
   MyTasksPanel, ActivityFeedPanel, PartnerInboxPanel,
   FeedbackPanel, TeamStatusPanel, BusinessDocsPanel, UploadPanel,
   CalendarPanel, MailPanel, SandboxAngelPanel,
+  PlatformAdmin,
   PANEL_NAMES, PANEL_MENU_OPTIONS,
 } from './panelRegistry';
 
@@ -141,6 +142,8 @@ export default function MobileLayout({ projectId, workDir }: MobileLayoutProps) 
         return wrapPanel('KnowledgeFullscreen', S(<KnowledgeFullscreen projectId={projectId} workDir={workDir} />));
       case 'admin-wr':
         return wrapPanel('WerkingReportAdmin', S(<WerkingReportAdmin />));
+      case 'platform-admin':
+        return wrapPanel('PlatformAdmin', S(<PlatformAdmin />));
       case 'linkedin':
         return wrapPanel('LinkedInPanel', S(<LinkedInPanel />));
       case 'qa-dashboard':

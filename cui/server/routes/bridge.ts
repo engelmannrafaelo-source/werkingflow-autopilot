@@ -978,14 +978,39 @@ router.get('/api/bridge/guard/status', async (_req, res) => {
 // Forwards any request from /api/bridge-proxy/* to the Bridge server.
 // This allows the frontend to call Bridge API endpoints through the CUI server
 // (required when browser can't reach Bridge IP directly, e.g., Mac → Hetzner).
+// Bridge platform-routes (Identity/Tenants/Budget/Billing/Activity/Admin-DB).
+// These endpoints reject the LLM-routing Bearer token and require either a
+// user JWT or the X-Bridge-Service-Token shared secret. CUI is trusted
+// infrastructure (server-to-server), so we inject the service token here —
+// the browser never sees it.
+const PLATFORM_ROUTE_PREFIXES = [
+  '/v1/users',
+  '/v1/tenants',
+  '/v1/app-licenses',
+  '/v1/auth',
+  '/v1/budget',
+  '/v1/billing',
+  '/v1/activity',
+  '/v1/db',
+];
+const BRIDGE_SERVICE_TOKEN = process.env.BRIDGE_SERVICE_TOKEN || '';
+
 router.use('/api/bridge-proxy', async (req: any, res: any) => {
   const bridgePath = req.path || '/';
   const qs = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
     const url = `${BRIDGE_URL}${bridgePath}${qs}`;
   try {
+    const isPlatformRoute = PLATFORM_ROUTE_PREFIXES.some((p) => bridgePath.startsWith(p));
     const headers: Record<string, string> = {
       'Authorization': `Bearer ${BRIDGE_API_KEY}`,
     };
+    if (isPlatformRoute && BRIDGE_SERVICE_TOKEN) {
+      // Service-token unlocks admin scope on the Bridge platform routes.
+      // We still send Authorization Bearer so the LLM-routing path keeps
+      // working for /v1/chat/* — the Bridge ignores Authorization on the
+      // platform routes when X-Bridge-Service-Token is present.
+      headers['X-Bridge-Service-Token'] = BRIDGE_SERVICE_TOKEN;
+    }
     if (req.headers['content-type']) headers['Content-Type'] = req.headers['content-type'] as string;
 
     const fetchOpts: RequestInit = {

@@ -19,6 +19,7 @@ export const PANEL_NAMES: Record<string, string> = {
   knowledge: 'Knowledge',
   'knowledge-fullscreen': 'Knowledge',
   'admin-wr': 'Werking Report Admin',
+  'platform-admin': 'Platform Admin',
   linkedin: 'LinkedIn Marketing',
   'qa-dashboard': 'QA Dashboard',
   'bridge-monitor': 'Bridge Monitor',
@@ -101,6 +102,7 @@ export const PANEL_MENU_OPTIONS: PanelMenuGroup[] = [
     category: 'Admin',
     color: '#f7768e',
     items: [
+      { value: 'platform-admin', label: 'Platform Admin', description: 'Zentrale Verwaltung aller Apps über die Bridge: Usage, Users, Tenants, Billing, Activity, Feedback.' },
       { value: 'admin-wr', label: 'Werking Report Admin', description: 'WerkING-Report Daten verwalten: User, Reports, Stammdaten.' },
       { value: 'business-angel', label: 'Business Angel', description: 'Geschäftliche Anfragen und To-Dos automatisch beantworten lassen.' },
       { value: 'privat-angel', label: 'Privat Angel', description: 'Privater Assistent für persönliche Aufgaben und Korrespondenz.' },

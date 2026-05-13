@@ -20,6 +20,7 @@ const PANEL_OPTIONS = [
   { value: 'mission', label: 'Mission Control' },
   { value: 'gmail', label: 'Virtual Office 👥' },
   { value: 'admin-wr', label: 'Werking Report Admin' },
+  { value: 'platform-admin', label: 'Platform Admin' },
   { value: 'linkedin', label: 'LinkedIn Marketing 🔗' },
   { value: 'bridge-monitor', label: 'Bridge Monitor' },
   { value: 'infisical-monitor', label: 'Infisical Monitor 🔐' },
@@ -118,6 +119,7 @@ function panelFromValue(value: string, workDir: string): PanelConfig {
     case 'mission':  return { component: 'mission', name: 'Mission Control', config: {} };
     case 'gmail':   return { component: 'gmail', name: 'Virtual Office', config: {} };
     case 'admin-wr': return { component: 'admin-wr', name: 'Werking Report Admin', config: {} };
+    case 'platform-admin': return { component: 'platform-admin', name: 'Platform Admin', config: {} };
     case 'linkedin':                return { component: 'linkedin', name: 'LinkedIn Marketing 🔗', config: {} };
     case 'bridge-monitor':          return { component: 'bridge-monitor', name: 'Bridge Monitor', config: {} };
     case 'infisical-monitor':       return { component: 'infisical-monitor', name: 'Infisical Monitor 🔐', config: {} };
