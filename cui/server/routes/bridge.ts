@@ -996,6 +996,7 @@ const PLATFORM_ROUTE_PREFIXES = [
   '/v1/developer-tokens',
   '/v1/stammdaten',
   '/v1/invoices',
+  '/v1/metrics',
   '/v1/system',
   '/v1/db',
 ];
