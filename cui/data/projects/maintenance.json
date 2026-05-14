@@ -1,6 +1,0 @@
-{
-  "id": "maintenance",
-  "name": "Maintenance",
-  "workDir": "/root/orchestrator/workspaces/maintenance",
-  "category": "maintenance"
-}

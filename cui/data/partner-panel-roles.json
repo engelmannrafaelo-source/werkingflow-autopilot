@@ -1,5 +1,0 @@
-{
-  "admin": "*",
-  "owner": ["cui","cui-lite","browser","preview","notes","images","mission","qa-dashboard","architecture","repo-dashboard","partner-inbox","business-docs","my-tasks","feedback","team-status","activity-feed"],
-  "partner": ["cui","cui-lite","browser","preview","notes","images","partner-inbox","business-docs","my-tasks","feedback","team-status","activity-feed"]
-}

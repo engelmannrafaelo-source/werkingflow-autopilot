@@ -1,6 +1,0 @@
-{
-  "id": "partner-server",
-  "name": "Partner Server",
-  "workDir": "/root/orchestrator/workspaces/partner-server",
-  "category": "devops"
-}
