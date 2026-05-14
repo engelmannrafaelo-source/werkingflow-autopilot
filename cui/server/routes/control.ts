@@ -275,52 +275,38 @@ export default function createControlRouter(deps: ControlDeps): Router {
       config: { initialSessionId: c.sessionId, accountId: c.accountId },
     }));
 
-    const utilityTabs = [
-      { type: 'tab' as const, id: nextId(), name: 'File Preview', component: 'preview', config: {} },
-      { type: 'tab' as const, id: nextId(), name: 'Notes', component: 'notes', config: {} },
-      { type: 'tab' as const, id: nextId(), name: 'Browser', component: 'browser', config: {} },
-      { type: 'tab' as const, id: nextId(), name: 'Images', component: 'images', config: {} },
+    // Tool Hub is the SINGLE right-column panel — it already contains
+    // preview/notes/browser/images, so a separate utility tabset would be
+    // redundant. Sub-sessions get their own panel when present.
+    const rightTabs: Array<{ type: 'tab'; id: string; name: string; component: string; config: Record<string, unknown> }> = [
+      { type: 'tab' as const, id: nextId(), name: 'Tool Hub', component: 'tool-hub', config: {} },
     ];
     if (subConvs.length > 0) {
-      utilityTabs.push({ type: 'tab' as const, id: nextId(), name: 'Sub-Sessions', component: 'sub-sessions', config: {} });
+      rightTabs.push({ type: 'tab' as const, id: nextId(), name: 'Sub-Sessions', component: 'sub-sessions', config: {} });
     }
 
     // Layout strategy: ALL children are tabsets at the SAME level (no nested rows!)
     // flexlayout alternates direction on nesting: row→horizontal, nested row→VERTICAL.
     // Keeping everything flat in one top-level row = all panels side by side horizontally.
-    let layoutChildren: any[];
-    const hasUtility = utilityTabs.length > 0;
+    const RIGHT_WEIGHT = 25;
+    const cuiTabsetWeight = (count: number) => count > 0 ? (100 - RIGHT_WEIGHT) / count : 100;
+    const layoutChildren: any[] = [];
 
-    if (cuiTabs.length <= 1) {
-      const cuiChild = { type: 'tabset', id: nextId(), weight: hasUtility ? 60 : 100, children: cuiTabs.length > 0 ? cuiTabs : [{ type: 'tab', id: nextId(), name: 'CUI', component: 'cui', config: {} }] };
-      layoutChildren = hasUtility
-        ? [cuiChild, { type: 'tabset', id: nextId(), weight: 40, children: utilityTabs }]
-        : [cuiChild];
-    } else if (cuiTabs.length === 2) {
-      layoutChildren = [
-        { type: 'tabset', id: nextId(), weight: hasUtility ? 35 : 50, children: [cuiTabs[0]] },
-        { type: 'tabset', id: nextId(), weight: hasUtility ? 35 : 50, children: [cuiTabs[1]] },
-      ];
-      if (hasUtility) layoutChildren.push({ type: 'tabset', id: nextId(), weight: 30, children: utilityTabs });
-    } else if (cuiTabs.length === 3) {
-      const w = hasUtility ? 25 : 33;
-      layoutChildren = [
-        { type: 'tabset', id: nextId(), weight: w, children: [cuiTabs[0]] },
-        { type: 'tabset', id: nextId(), weight: w, children: [cuiTabs[1]] },
-        { type: 'tabset', id: nextId(), weight: hasUtility ? 25 : 34, children: [cuiTabs[2]] },
-      ];
-      if (hasUtility) layoutChildren.push({ type: 'tabset', id: nextId(), weight: 25, children: utilityTabs });
+    if (cuiTabs.length === 0) {
+      // Defensive: no sessions — still produce a placeholder chat tabset
+      layoutChildren.push({ type: 'tabset', id: nextId(), weight: 100 - RIGHT_WEIGHT, children: [{ type: 'tab', id: nextId(), name: 'CUI', component: 'cui', config: {} }] });
+    } else if (cuiTabs.length <= 4) {
+      const w = cuiTabsetWeight(cuiTabs.length);
+      for (const t of cuiTabs) layoutChildren.push({ type: 'tabset', id: nextId(), weight: w, children: [t] });
     } else {
-      // 4+ CUI panels: group into pairs
-      const cuiTabsets: any[] = [];
-      const totalCuiWeight = hasUtility ? 70 : 100;
+      // 5+ CUI panels: group into pairs (tabs in same tabset)
+      const pairs = Math.ceil(cuiTabs.length / 2);
+      const w = (100 - RIGHT_WEIGHT) / pairs;
       for (let i = 0; i < cuiTabs.length; i += 2) {
-        const tabs = cuiTabs.slice(i, i + 2);
-        cuiTabsets.push({ type: 'tabset', id: nextId(), weight: Math.floor(totalCuiWeight / Math.ceil(cuiTabs.length / 2)), children: tabs });
+        layoutChildren.push({ type: 'tabset', id: nextId(), weight: w, children: cuiTabs.slice(i, i + 2) });
       }
-      layoutChildren = [...cuiTabsets];
-      if (hasUtility) layoutChildren.push({ type: 'tabset', id: nextId(), weight: 30, children: utilityTabs });
     }
+    layoutChildren.push({ type: 'tabset', id: nextId(), weight: RIGHT_WEIGHT, children: rightTabs });
 
     const newLayout = { global: { splitterSize: 4 }, borders: [], layout: { type: 'row', id: nextId(), weight: 100, children: layoutChildren } };
 
