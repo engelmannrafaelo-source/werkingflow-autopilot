@@ -64,14 +64,18 @@ interface ToolHubProps {
 }
 
 export default function ToolHub({ projectId, workDir }: ToolHubProps) {
-  const [activeTool, setActiveTool] = useState<string | null>(null);
+  // sessionStorage (not localStorage) — survives in-page re-mounts triggered
+  // by 409-layout-conflict setModel() (see LayoutManager:703-732), but a real
+  // browser-reload/new-tab still lands on Welcome. Bug before this fix: opening
+  // a heavy file in FilePreview while a parallel tab POSTed /api/layouts caused
+  // a 409 → setModel → ToolHub remount → activeTool back to null → user thrown
+  // back to Welcome mid-load.
+  const sessionKey = `cui-toolhub-active-${projectId}`;
+  const [activeTool, setActiveTool] = useState<string | null>(() => {
+    try { return sessionStorage.getItem(sessionKey); } catch { return null; }
+  });
   const [syncedComponents, setSyncedComponents] = useState<Set<string>>(new Set());
   const { canAccessPanel } = useAuth();
-
-  // Tool Hub always opens with the Welcome view. Persisted activeTool is
-  // intentionally NOT auto-restored — Welcome is the always-default landing.
-  // Selection is still persisted (POST below) so future server-driven views
-  // can read the last choice if needed, but on mount we start fresh.
 
   // Collect components from layout tree that are synced (have _synced: true config)
   const collectSyncedComponents = (node: any, acc: Set<string>) => {
@@ -111,12 +115,13 @@ export default function ToolHub({ projectId, workDir }: ToolHubProps) {
   // 1-click tool switch + persist
   const selectTool = useCallback((tool: string) => {
     setActiveTool(tool);
+    try { sessionStorage.setItem(sessionKey, tool); } catch { /* silent-ok: sessionStorage may be disabled */ }
     fetch(`${API}/toolhub/active`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ activeTool: tool }),
     }).catch(() => {}); // silent-ok: tool selection persistence is best-effort
-  }, []);
+  }, [sessionKey]);
 
   // Toggle sync for a tool: dispatches event to parent LayoutManager (projectId-filtered)
   const toggleSync = useCallback((component: string, displayName: string) => {
