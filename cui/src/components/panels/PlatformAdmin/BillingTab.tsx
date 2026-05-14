@@ -44,13 +44,30 @@ interface SimpleUser {
 
 const REFRESH_INTERVAL_MS = 60_000;
 
-type SubTab = 'overview' | 'per-user';
+type SubTab = 'overview' | 'per-user' | 'events';
+
+interface BillingEvent {
+  id: string;
+  timestamp: string;
+  eventType: string;
+  userId: string | null;
+  tenantId: string | null;
+  subscriptionId: string | null;
+  invoiceId: string | null;
+  molliePaymentId: string | null;
+  amountEur: number | null;
+  source: string;
+  payload: Record<string, unknown>;
+}
 
 export default function BillingTab() {
   const [subTab, setSubTab] = useState<SubTab>('overview');
 
   // Overview
   const [overview, setOverview] = useState<BillingOverview | null>(null);
+
+  // Events
+  const [events, setEvents] = useState<BillingEvent[] | null>(null);
 
   // Per-user
   const [users, setUsers] = useState<SimpleUser[]>([]);
@@ -71,6 +88,13 @@ export default function BillingTab() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function loadEvents() {
+    try {
+      const d = await platformJson<{ items: BillingEvent[]; count: number }>('/v1/billing/events?limit=200');
+      setEvents(d.items);
+    } catch (e: any) { setError(e?.message ?? String(e)); }
   }
 
   async function loadUsers() {
@@ -99,9 +123,11 @@ export default function BillingTab() {
   useEffect(() => {
     loadOverview();
     loadUsers();
+    loadEvents();
     const id = setInterval(() => {
       loadOverview();
       loadUsers();
+      loadEvents();
     }, REFRESH_INTERVAL_MS);
     return () => clearInterval(id);
   }, []);
@@ -145,9 +171,21 @@ export default function BillingTab() {
         >
           Per User
         </button>
+        <button
+          data-ai-id="billing-tab-events"
+          onClick={() => setSubTab('events')}
+          style={{
+            ...style.subBtn,
+            background: subTab === 'events' ? 'var(--tn-blue)' : 'transparent',
+            color: subTab === 'events' ? '#fff' : 'var(--tn-text-muted)',
+          }}
+        >
+          Events
+        </button>
       </nav>
 
       {subTab === 'overview' && overview && <OverviewView overview={overview} />}
+      {subTab === 'events' && <EventsView events={events ?? []} />}
       {subTab === 'per-user' && (
         <PerUserView
           users={users}
@@ -157,6 +195,48 @@ export default function BillingTab() {
           credits={credits}
         />
       )}
+    </div>
+  );
+}
+
+// ─── Events ──────────────────────────────────────────────────────────────
+
+function EventsView({ events }: { events: BillingEvent[] }) {
+  if (events.length === 0) {
+    return <div style={style.body}><div style={style.empty}>Keine Billing-Events. Sobald Mollie-Webhook feuert oder Admin Subscriptions/Customers anlegt, erscheinen sie hier.</div></div>;
+  }
+  const colors: Record<string, string> = {
+    'customer.created':         'var(--tn-cyan)',
+    'topup.credited':           'var(--tn-green)',
+    'subscription.activated':   'var(--tn-green)',
+    'subscription.cancelled':   'var(--tn-red)',
+    'invoice.issued':           'var(--tn-blue)',
+    'invoice.paid':             'var(--tn-green)',
+  };
+  return (
+    <div style={style.body}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+        <thead>
+          <tr>
+            <th style={{ padding: '6px 8px', textAlign: 'left', fontSize: 10, color: 'var(--tn-text-muted)', textTransform: 'uppercase', borderBottom: '1px solid var(--tn-border)' }}>Event</th>
+            <th style={{ padding: '6px 8px', textAlign: 'left', fontSize: 10, color: 'var(--tn-text-muted)', textTransform: 'uppercase', borderBottom: '1px solid var(--tn-border)' }}>User / Tenant</th>
+            <th style={{ padding: '6px 8px', textAlign: 'right', fontSize: 10, color: 'var(--tn-text-muted)', textTransform: 'uppercase', borderBottom: '1px solid var(--tn-border)' }}>Amount</th>
+            <th style={{ padding: '6px 8px', textAlign: 'left', fontSize: 10, color: 'var(--tn-text-muted)', textTransform: 'uppercase', borderBottom: '1px solid var(--tn-border)' }}>Source</th>
+            <th style={{ padding: '6px 8px', textAlign: 'right', fontSize: 10, color: 'var(--tn-text-muted)', textTransform: 'uppercase', borderBottom: '1px solid var(--tn-border)' }}>When</th>
+          </tr>
+        </thead>
+        <tbody>
+          {events.map((e) => (
+            <tr key={e.id}>
+              <td style={{ padding: '6px 8px', borderBottom: '1px solid var(--tn-border)', fontFamily: 'monospace', color: colors[e.eventType] ?? 'var(--tn-text)' }}>{e.eventType}</td>
+              <td style={{ padding: '6px 8px', borderBottom: '1px solid var(--tn-border)', fontSize: 10, color: 'var(--tn-text-muted)', fontFamily: 'monospace' }}>{e.tenantId ?? e.userId?.slice(0, 8) ?? '—'}</td>
+              <td style={{ padding: '6px 8px', borderBottom: '1px solid var(--tn-border)', textAlign: 'right', fontFamily: 'monospace' }}>{e.amountEur != null ? formatEur(e.amountEur) : '—'}</td>
+              <td style={{ padding: '6px 8px', borderBottom: '1px solid var(--tn-border)', fontSize: 10, color: 'var(--tn-text-muted)' }}>{e.source}</td>
+              <td style={{ padding: '6px 8px', borderBottom: '1px solid var(--tn-border)', fontSize: 10, color: 'var(--tn-text-muted)', textAlign: 'right' }}>{new Date(e.timestamp).toLocaleString()}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
