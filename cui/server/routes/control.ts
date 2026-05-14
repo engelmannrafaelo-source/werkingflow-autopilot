@@ -257,76 +257,116 @@ export default function createControlRouter(deps: ControlDeps): Router {
   }
 
   // --- Generate Layout (WRITE) — ONLY called by explicit Layout button click ---
-  // Generates a complete layout with ALL main sessions + sub-sessions panel + utilities
+  // Surgical update: replaces only the cui-only chat-tabsets in the existing
+  // layout with one tabset per main session. All other tabsets (Tool Hub,
+  // Browser, Notes, mixed tabsets the user manually arranged) are preserved.
   async function generateLayout(projectId: string): Promise<{ triggered: boolean; reason?: string; total?: number; subSessions?: number }> {
     const { mainConvs, subConvs, error } = await getWorkspaceConversations(projectId);
     if (error) return { triggered: false, reason: error };
-    if (mainConvs.length === 0 && subConvs.length === 0) {
-      return { triggered: false, reason: 'no active conversations for this workspace', total: 0 };
-    }
-
-    let idCounter = 1;
-    const nextId = () => `#auto-${idCounter++}`;
-
-    const cuiTabs = mainConvs.map((c) => ({
-      type: 'tab' as const, id: nextId(),
-      name: 'Chat',
-      component: 'cui',
-      config: { initialSessionId: c.sessionId, accountId: c.accountId },
-    }));
-
-    // Tool Hub is the SINGLE right-column panel — it already contains
-    // preview/notes/browser/images, so a separate utility tabset would be
-    // redundant. Sub-sessions get their own panel when present.
-    const rightTabs: Array<{ type: 'tab'; id: string; name: string; component: string; config: Record<string, unknown> }> = [
-      { type: 'tab' as const, id: nextId(), name: 'Tool Hub', component: 'tool-hub', config: {} },
-    ];
-    if (subConvs.length > 0) {
-      rightTabs.push({ type: 'tab' as const, id: nextId(), name: 'Sub-Sessions', component: 'sub-sessions', config: {} });
-    }
-
-    // Layout strategy: ALL children are tabsets at the SAME level (no nested rows!)
-    // flexlayout alternates direction on nesting: row→horizontal, nested row→VERTICAL.
-    // Keeping everything flat in one top-level row = all panels side by side horizontally.
-    const RIGHT_WEIGHT = 25;
-    const cuiTabsetWeight = (count: number) => count > 0 ? (100 - RIGHT_WEIGHT) / count : 100;
-    const layoutChildren: any[] = [];
-
-    if (cuiTabs.length === 0) {
-      // Defensive: no sessions — still produce a placeholder chat tabset
-      layoutChildren.push({ type: 'tabset', id: nextId(), weight: 100 - RIGHT_WEIGHT, children: [{ type: 'tab', id: nextId(), name: 'CUI', component: 'cui', config: {} }] });
-    } else if (cuiTabs.length <= 4) {
-      const w = cuiTabsetWeight(cuiTabs.length);
-      for (const t of cuiTabs) layoutChildren.push({ type: 'tabset', id: nextId(), weight: w, children: [t] });
-    } else {
-      // 5+ CUI panels: group into pairs (tabs in same tabset)
-      const pairs = Math.ceil(cuiTabs.length / 2);
-      const w = (100 - RIGHT_WEIGHT) / pairs;
-      for (let i = 0; i < cuiTabs.length; i += 2) {
-        layoutChildren.push({ type: 'tabset', id: nextId(), weight: w, children: cuiTabs.slice(i, i + 2) });
-      }
-    }
-    layoutChildren.push({ type: 'tabset', id: nextId(), weight: RIGHT_WEIGHT, children: rightTabs });
-
-    const newLayout = { global: { splitterSize: 4 }, borders: [], layout: { type: 'row', id: nextId(), weight: 100, children: layoutChildren } };
 
     const layoutPath = join(LAYOUTS_DIR, `${projectId}.json`);
+    let existingLayout: any = null;
     let currentVersion = 0;
     try {
       if (existsSync(layoutPath)) {
-        const current = JSON.parse(readFileSync(layoutPath, 'utf8'));
-        currentVersion = (current._v || 0);
+        existingLayout = JSON.parse(readFileSync(layoutPath, 'utf8'));
+        currentVersion = existingLayout._v || 0;
       }
-    } catch { /* new file */ }
+    } catch { /* parse failed — treat as missing */ }
 
-    const layoutWithVersion = { ...newLayout, _v: currentVersion + 1 };
-    try { mkdirSync(LAYOUTS_DIR, { recursive: true }); } catch { /* exists */ }
-    writeFileSync(layoutPath, JSON.stringify(layoutWithVersion, null, 2));
+    // No active sessions → nothing to arrange. Don't touch the layout.
+    if (mainConvs.length === 0) {
+      return { triggered: false, reason: 'no active main conversations to arrange', total: 0, subSessions: subConvs.length };
+    }
 
-    broadcast({ type: 'control:apply-layout', projectId, layout: layoutWithVersion });
-    console.log(`[AutoLayout] ${projectId}: Generated fresh layout with ${mainConvs.length} main + ${subConvs.length} sub-sessions`);
+    let idCounter = 1;
+    const nextId = () => `#auto-${Date.now()}-${idCounter++}`;
 
+    const buildCuiTabset = (sessionId: string, accountId: string, weight: number) => ({
+      type: 'tabset' as const, id: nextId(), weight,
+      children: [{
+        type: 'tab' as const, id: nextId(),
+        name: 'Chat', component: 'cui',
+        config: { initialSessionId: sessionId, accountId },
+      }],
+    });
+
+    // Identify all cui-only tabsets in the existing layout. A "cui-only" tabset
+    // is one whose children are exclusively cui tabs (chat panels). Mixed
+    // tabsets — e.g. user dragged a Browser tab into a Chat tabset — are
+    // treated as intentional and left alone.
+    type Located = { node: any; parent: any };
+    const cuiOnlyTabsets: Located[] = [];
+    const walk = (node: any, parent: any | null) => {
+      if (!node || typeof node !== 'object') return;
+      if (node.type === 'tabset' && Array.isArray(node.children) && node.children.length > 0
+          && node.children.every((t: any) => t?.component === 'cui')) {
+        cuiOnlyTabsets.push({ node, parent });
+        return; // don't recurse into a tabset's tabs
+      }
+      if (Array.isArray(node.children)) {
+        for (const child of node.children) walk(child, node);
+      }
+    };
+    if (existingLayout?.layout) walk(existingLayout.layout, null);
+
+    // Path A: existing chat-area found → surgical replace
+    if (existingLayout?.layout && cuiOnlyTabsets.length > 0) {
+      const totalWeight = cuiOnlyTabsets.reduce((s, t) => s + (typeof t.node.weight === 'number' ? t.node.weight : 0), 0);
+      const distributedWeight = totalWeight > 0 ? totalWeight / mainConvs.length : 25;
+      const newTabsets = mainConvs.map(c => buildCuiTabset(c.sessionId, c.accountId, distributedWeight));
+
+      // Replace FIRST cui-only tabset in-place with new tabsets, then delete the rest.
+      const first = cuiOnlyTabsets[0];
+      const firstParent = first.parent;
+      if (!firstParent) {
+        // first cui-only tabset is the root layout itself — wrap into a row
+        existingLayout.layout = { type: 'row', id: nextId(), weight: 100, children: newTabsets };
+      } else {
+        const idx = firstParent.children.indexOf(first.node);
+        firstParent.children.splice(idx, 1, ...newTabsets);
+        const restSet = new Set(cuiOnlyTabsets.slice(1).map(t => t.node));
+        const prune = (node: any) => {
+          if (!node || !Array.isArray(node.children)) return;
+          node.children = node.children.filter((c: any) => !restSet.has(c));
+          for (const c of node.children) prune(c);
+        };
+        prune(existingLayout.layout);
+      }
+
+      const newLayout = { ...existingLayout, _v: currentVersion + 1 };
+      try { mkdirSync(LAYOUTS_DIR, { recursive: true }); } catch { /* exists */ }
+      writeFileSync(layoutPath, JSON.stringify(newLayout, null, 2));
+      broadcast({ type: 'control:apply-layout', projectId, layout: newLayout });
+      console.log(`[AutoLayout] ${projectId}: Replaced ${cuiOnlyTabsets.length} chat-tabset(s) with ${newTabsets.length}, preserved ${Math.max(0, countTabsets(existingLayout.layout) - newTabsets.length)} other tabset(s)`);
+      return { triggered: true, total: mainConvs.length + subConvs.length, subSessions: subConvs.length };
+    }
+
+    // Path B: no existing chat-tabsets to replace — fall back to a fresh layout
+    // with N chats + Tool Hub on the right.
+    const RIGHT_WEIGHT = 25;
+    const perChat = (100 - RIGHT_WEIGHT) / mainConvs.length;
+    const chatTabsets = mainConvs.map(c => buildCuiTabset(c.sessionId, c.accountId, perChat));
+    const rightTabs: any[] = [{ type: 'tab', id: nextId(), name: 'Tool Hub', component: 'tool-hub', config: {} }];
+    if (subConvs.length > 0) rightTabs.push({ type: 'tab', id: nextId(), name: 'Sub-Sessions', component: 'sub-sessions', config: {} });
+    const newLayout = {
+      global: { splitterSize: 4 }, borders: [],
+      layout: { type: 'row', id: nextId(), weight: 100,
+        children: [...chatTabsets, { type: 'tabset', id: nextId(), weight: RIGHT_WEIGHT, children: rightTabs }] },
+      _v: currentVersion + 1,
+    };
+    writeFileSync(layoutPath, JSON.stringify(newLayout, null, 2));
+    broadcast({ type: 'control:apply-layout', projectId, layout: newLayout });
+    console.log(`[AutoLayout] ${projectId}: Fresh layout (no prior chat-tabsets) with ${mainConvs.length} main + ${subConvs.length} sub-sessions`);
     return { triggered: true, total: mainConvs.length + subConvs.length, subSessions: subConvs.length };
+  }
+
+  // Count tabsets (any type) under a layout node — used for log diagnostics.
+  function countTabsets(node: any): number {
+    if (!node || typeof node !== 'object') return 0;
+    let n = node.type === 'tabset' ? 1 : 0;
+    if (Array.isArray(node.children)) for (const c of node.children) n += countTabsets(c);
+    return n;
   }
 
   // Backwards-compat wrapper — project/switch checks status and prunes zombie tabs.
