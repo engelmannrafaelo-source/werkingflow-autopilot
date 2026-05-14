@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { platformJson, formatNumber } from './shared';
+import { usePlatformMode } from './ModeContext';
 
 interface AppLicense {
   app_id?: string;
@@ -29,10 +30,11 @@ export default function UsersTab() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
+  const { mode, withMode } = usePlatformMode();
 
   async function load() {
     try {
-      const data = await platformJson<User[]>('/v1/users?limit=200');
+      const data = await platformJson<User[]>(withMode('/v1/users?limit=500'));
       setUsers(data);
       setError(null);
     } catch (e: any) {
@@ -43,10 +45,12 @@ export default function UsersTab() {
   }
 
   useEffect(() => {
+    setLoading(true);
     load();
     const id = setInterval(load, REFRESH_INTERVAL_MS);
     return () => clearInterval(id);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
 
   const filtered = useMemo(() => {
     if (!users) return [];

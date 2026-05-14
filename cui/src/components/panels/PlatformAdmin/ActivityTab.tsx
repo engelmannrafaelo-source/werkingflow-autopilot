@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { platformJson, formatNumber } from './shared';
+import { usePlatformMode } from './ModeContext';
 
 interface Activity {
   id: string;
@@ -43,6 +44,7 @@ export default function ActivityTab() {
   const [category, setCategory] = useState('');
   const [appId, setAppId] = useState('');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const { mode, withMode } = usePlatformMode();
 
   async function load() {
     try {
@@ -50,7 +52,7 @@ export default function ActivityTab() {
       if (category) qs.set('category', category);
       if (appId) qs.set('appId', appId);
       qs.set('limit', '200');
-      const data = await platformJson<ActivityResponse>(`/v1/activity/query?${qs.toString()}`);
+      const data = await platformJson<ActivityResponse>(withMode(`/v1/activity/query?${qs.toString()}`));
       setResp(data);
       setError(null);
     } catch (e: any) {
@@ -61,10 +63,12 @@ export default function ActivityTab() {
   }
 
   useEffect(() => {
+    setLoading(true);
     load();
     const id = setInterval(load, REFRESH_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [category, appId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [category, appId, mode]);
 
   const grouped = useMemo(() => {
     if (!resp) return null;

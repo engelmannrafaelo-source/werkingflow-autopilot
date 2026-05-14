@@ -11,16 +11,7 @@ import ApiTokensTab from './ApiTokensTab';
 import StammdatenTab from './StammdatenTab';
 import InvoicesTab from './InvoicesTab';
 import SystemHealthTab from './SystemHealthTab';
-
-// Central admin panel for the WerkingFlow platform.
-//
-// All data comes from the Bridge (Single Source of Truth) — apps are not
-// queried directly. The Bridge's /v1/* endpoints back each tab.
-//
-// Today only the Usage tab is live (against Hetzner /v1/metrics/usage-breakdown).
-// Users / Tenants / Billing / Activity / Feedback wait for their Bridge endpoints
-// to ship — they render a clear "what's coming" placeholder until then so the
-// shape of the future panel is visible from day one.
+import { ModeProvider, usePlatformMode, type PlatformMode } from './ModeContext';
 
 type TabKey = 'usage' | 'users' | 'tenants' | 'billing' | 'invoices' | 'activity' | 'feedback' | 'audit' | 'tokens' | 'stammdaten' | 'system';
 
@@ -38,14 +29,65 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'system',     label: 'System' },
 ];
 
+const MODES: { key: PlatformMode; label: string; color: string }[] = [
+  { key: 'all',     label: 'All',     color: '#6b7280' },
+  { key: 'prod',    label: 'Prod',    color: 'var(--tn-red, #ef4444)' },
+  { key: 'staging', label: 'Staging', color: 'var(--tn-yellow, #d97706)' },
+  { key: 'local',   label: 'Local',   color: 'var(--tn-green, #16a34a)' },
+];
+
 export default function PlatformAdmin() {
+  return (
+    <ModeProvider>
+      <PlatformAdminInner />
+    </ModeProvider>
+  );
+}
+
+function PlatformAdminInner() {
   const [active, setActive] = useState<TabKey>('usage');
+  const { mode, setMode } = usePlatformMode();
+  const activeModeColor = MODES.find((m) => m.key === mode)?.color || '#6b7280';
 
   return (
     <div data-ai-id="platform-admin-panel" style={style.root}>
       <header style={style.header}>
-        <div style={style.title}>Platform Admin</div>
-        <div style={style.subtitle}>Bridge ist Single Source of Truth — cross-app, cross-tenant.</div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+          <div>
+            <div style={style.title}>
+              Platform Admin
+              <span
+                data-ai-id={`platform-admin-mode-indicator-${mode}`}
+                style={{
+                  marginLeft: 10, padding: '2px 8px', borderRadius: 3,
+                  fontSize: 9, fontWeight: 700, letterSpacing: '0.08em',
+                  textTransform: 'uppercase', background: activeModeColor, color: '#fff',
+                }}
+              >
+                {mode}
+              </span>
+            </div>
+            <div style={style.subtitle}>Bridge ist Single Source of Truth — cross-app, cross-tenant.</div>
+          </div>
+          <div data-ai-id="platform-admin-mode-toggle" style={style.modeToggle}>
+            <span style={style.modeLabel}>Mode:</span>
+            {MODES.map((m) => (
+              <button
+                key={m.key}
+                data-ai-id={`platform-admin-mode-${m.key}`}
+                onClick={() => setMode(m.key)}
+                style={{
+                  ...style.modeBtn,
+                  background: mode === m.key ? m.color : 'transparent',
+                  color: mode === m.key ? '#fff' : 'var(--tn-text)',
+                  borderColor: mode === m.key ? m.color : 'var(--tn-border)',
+                }}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+        </div>
       </header>
 
       <nav data-ai-id="platform-admin-tabs" style={style.tabs}>
@@ -107,8 +149,11 @@ export default function PlatformAdmin() {
 const style: Record<string, React.CSSProperties> = {
   root: { display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--tn-bg)' },
   header: { padding: '10px 12px', borderBottom: '1px solid var(--tn-border)', flexShrink: 0 },
-  title: { fontSize: 14, fontWeight: 700, color: 'var(--tn-text)', letterSpacing: '0.02em' },
+  title: { fontSize: 14, fontWeight: 700, color: 'var(--tn-text)', letterSpacing: '0.02em', display: 'flex', alignItems: 'center' },
   subtitle: { fontSize: 10, color: 'var(--tn-text-muted)', marginTop: 2 },
+  modeToggle: { display: 'flex', alignItems: 'center', gap: 4 },
+  modeLabel: { fontSize: 10, color: 'var(--tn-text-muted)', marginRight: 4, textTransform: 'uppercase', letterSpacing: '0.05em' },
+  modeBtn: { padding: '3px 9px', borderRadius: 3, fontSize: 11, fontWeight: 600, border: '1px solid var(--tn-border)', cursor: 'pointer', transition: 'all 0.15s' },
   tabs: { display: 'flex', gap: 4, padding: '6px 12px', borderBottom: '1px solid var(--tn-border)', flexShrink: 0 },
   tabBtn: { padding: '4px 12px', borderRadius: 4, fontSize: 11, fontWeight: 600, border: 'none', cursor: 'pointer', transition: 'all 0.15s' },
   body: { flex: 1, overflow: 'hidden', minHeight: 0 },

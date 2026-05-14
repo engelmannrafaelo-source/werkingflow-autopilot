@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { platformJson, formatEur, formatNumber } from './shared';
+import { usePlatformMode } from './ModeContext';
 
 interface Invoice {
   id: string;
@@ -36,17 +37,19 @@ export default function InvoicesTab() {
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState('');
   const [selected, setSelected] = useState<Invoice | null>(null);
+  const { mode, withMode } = usePlatformMode();
 
   async function load() {
     try {
       const qs = new URLSearchParams();
       if (statusFilter) qs.set('status', statusFilter);
       qs.set('limit', '200');
-      const d = await platformJson<{ items: Invoice[]; count: number }>(`/v1/invoices?${qs}`);
+      const d = await platformJson<{ items: Invoice[]; count: number }>(withMode(`/v1/invoices?${qs}`));
       setItems(d.items); setError(null);
     } catch (e: any) { setError(e?.message ?? String(e)); }
   }
-  useEffect(() => { load(); }, [statusFilter]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [statusFilter, mode]);
 
   async function patchStatus(id: string, status: string) {
     if (!confirm(`Invoice auf "${status}" setzen?`)) return;

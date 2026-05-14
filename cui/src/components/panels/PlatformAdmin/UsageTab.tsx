@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import { platformJson, formatNumber, formatEur, estimateEur, ModelKey } from './shared';
+import { usePlatformMode } from './ModeContext';
 
 // Legacy per-app endpoint shape (kept — drives the "Apps" view).
 interface AppBreakdown {
@@ -79,16 +80,18 @@ export default function UsageTab() {
   const [lastFetch, setLastFetch] = useState<number | null>(null);
   const [model, setModel] = useState<ModelKey>('sonnet');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const { mode, withMode } = usePlatformMode();
 
   async function loadAll() {
     try {
       if (view === 'apps') {
+        // Legacy endpoint doesn't support mode — keep as-is.
         const d = await platformJson<UsageBreakdownResponse>('/v1/metrics/usage-breakdown');
         setAppsData(d);
       } else {
         const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
         const d = await platformJson<MetricsResponse>(
-          `/v1/metrics/usage?groupBy=${view}&since=${encodeURIComponent(since)}`,
+          withMode(`/v1/metrics/usage?groupBy=${view}&since=${encodeURIComponent(since)}`),
         );
         setMetricsData(d);
       }
@@ -107,7 +110,7 @@ export default function UsageTab() {
     const id = setInterval(loadAll, REFRESH_INTERVAL_MS);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view]);
+  }, [view, mode]);
 
   if (loading && !appsData && !metricsData) {
     return <div data-ai-id="platform-usage-loading" style={style.empty}>Lade Bridge-Daten …</div>;
