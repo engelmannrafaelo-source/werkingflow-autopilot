@@ -996,6 +996,7 @@ const PLATFORM_ROUTE_PREFIXES = [
   '/v1/developer-tokens',
   '/v1/stammdaten',
   '/v1/invoices',
+  '/v1/system',
   '/v1/db',
 ];
 const BRIDGE_SERVICE_TOKEN = process.env.BRIDGE_SERVICE_TOKEN || '';
