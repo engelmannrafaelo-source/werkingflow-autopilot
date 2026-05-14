@@ -66,6 +66,24 @@ export default function InvoicesTab() {
     window.open(`/api/bridge-proxy/v1/invoices/${id}/html`, '_blank');
   }
 
+  async function sendInvoice(id: string) {
+    if (!confirm('Rechnung per Email versenden? Empfänger ist die im User-Profil hinterlegte Adresse.')) return;
+    try {
+      const res = await platformJson<{ recipient: string; resendId: string }>(
+        `/v1/invoices/${id}/send`,
+        { method: 'POST' },
+      );
+      alert(`✓ An ${res.recipient} versendet (Resend-ID ${res.resendId})`);
+      load();
+      if (selected?.id === id) {
+        const fresh = await platformJson<Invoice>(`/v1/invoices/${id}`);
+        setSelected(fresh);
+      }
+    } catch (e: any) {
+      alert(`✗ Versand fehlgeschlagen: ${e?.message ?? e}`);
+    }
+  }
+
   if (error && !items) return <div style={S.err}><strong>Bridge unreachable:</strong><pre style={{ fontSize: 11 }}>{error}</pre></div>;
   if (!items) return <div style={S.empty}>Lade Invoices …</div>;
 
@@ -158,11 +176,19 @@ export default function InvoicesTab() {
 
               <div style={S.actions}>
                 <button onClick={() => openHtml(selected.id)} style={S.btnPrimary}>📄 HTML / Print</button>
+                <button onClick={() => sendInvoice(selected.id)} style={S.btn} disabled={selected.status === 'cancelled'}>
+                  ✉ {selected.sentAt ? `Erneut senden` : 'Per Email senden'}
+                </button>
                 {selected.status === 'draft' && <button onClick={() => patchStatus(selected.id, 'issued')} style={S.btn}>Issue</button>}
                 {selected.status === 'issued' && <button onClick={() => patchStatus(selected.id, 'paid')} style={S.btnGreen}>Mark Paid</button>}
                 {(selected.status === 'draft' || selected.status === 'issued') && <button onClick={() => patchStatus(selected.id, 'cancelled')} style={S.btnRed}>Cancel</button>}
                 {selected.status === 'paid' && <button onClick={() => patchStatus(selected.id, 'refunded')} style={S.btnRed}>Refund</button>}
               </div>
+              {selected.sentAt && (
+                <div style={{ fontSize: 10, color: 'var(--tn-text-muted)', marginTop: 6 }}>
+                  Zuletzt versendet: {new Date(selected.sentAt).toLocaleString()}
+                </div>
+              )}
             </div>
           )}
         </div>
