@@ -1798,6 +1798,49 @@ export default function LayoutManager({ projectId, workDir, cuiStates = {}, onAt
           console.log(`[LM] Removed ${duplicatesRemoved} duplicate cui tabs`);
         }
 
+        // Singleton-component cleanup: certain panel types should exist at most ONCE per
+        // workspace (Platform Admin, Tool Hub, Watchdog, etc.). Duplicates accumulate via
+        // racy `control:ensure-panel` broadcasts and `synced-tab-added` echoes — each
+        // adds a new tab with a random UUID before the previous addNode has settled.
+        // Multi-instance panels (cui, browser, preview, notes, images) are NEVER deduped.
+        const SINGLETON_COMPONENTS = new Set([
+          'platform-admin', 'tool-hub', 'admin-wr', 'system-health', 'watchdog',
+          'repo-dashboard', 'infisical-monitor', 'bridge-monitor', 'mission',
+          'mission-chat', 'conversation-queue', 'background-ops', 'maintenance',
+          'input-audit', 'qa-dashboard', 'peer-awareness', 'architecture',
+          'report-builder', 'prompt-explorer', 'sub-sessions', 'business-docs',
+          'my-tasks', 'activity-feed', 'partner-inbox', 'feedback', 'team-status',
+          'uploads', 'linkedin', 'gmail', 'partner-server', 'knowledge', 'virtual-office',
+        ]);
+        const singletonsByComp = new Map<string, string[]>(); // component -> nodeIds (insertion order)
+        m.visitNodes((node) => {
+          if (node.getType() !== 'tab') return;
+          const tab = node as TabNode;
+          const comp = tab.getComponent?.() || '';
+          if (!SINGLETON_COMPONENTS.has(comp)) return;
+          const arr = singletonsByComp.get(comp) || [];
+          arr.push(tab.getId());
+          singletonsByComp.set(comp, arr);
+        });
+        let singletonsRemoved = 0;
+        for (const [comp, ids] of singletonsByComp) {
+          if (ids.length <= 1) continue;
+          for (let i = 1; i < ids.length; i++) {
+            try {
+              m.doAction(Actions.deleteTab(ids[i]));
+              singletonsRemoved++;
+            } catch (err) { console.warn('[LM] singleton deleteTab failed:', err); }
+          }
+          logCuiTelemetry({
+            ts: Date.now(), kind: 'lm-singleton-dupe', projectId,
+            component: comp, totalMounts: ids.length, kept: ids[0], removed: ids.slice(1),
+          });
+        }
+        if (singletonsRemoved > 0) {
+          saveLayoutRef.current(m);
+          console.log(`[LM] Removed ${singletonsRemoved} duplicate singleton tab(s)`);
+        }
+
         // Cleanup: remove tabs whose session is no longer active (finished or too old)
         // ONLY when user explicitly clicked Layout button (prevents sessions from disappearing)
         let removed = 0;
